@@ -792,6 +792,7 @@ ok("extractPhrases ignores the keyword rows",
 const oneSection = buildSectionPrompt(briefInput, {
   key: "t",
   title: "T",
+  heading: "T",
   instruction: () => "the long version",
   brief: () => "the short version",
 });
@@ -3607,6 +3608,128 @@ import * as visionT from "../src/lib/hub/skin-vision";
   ok("a drafted letter's faults block approval", /doc\.source === "drafted" && doc\.faults\.length/.test(letterSrc));
   ok("the letter is filed without touching output_ref", /storeGeneratedDoc/.test(letterSrc) && !/deliverArtifact/.test(letterSrc));
   ok("the drafting prompt itself forbids em dashes", /No em dashes, no en dashes, no double hyphens/.test(letterSrc));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ---- C4 ---- the avatar and offer framework at step 11 (2026-09-15)
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const fw = require("../src/lib/clients/avatar-framework") as typeof import("../src/lib/clients/avatar-framework");
+  const cfg = require("../src/config/avatar-framework") as typeof import("../src/config/avatar-framework");
+  const drr = require("../src/lib/clients/artifacts/deep-research-run") as typeof import("../src/lib/clients/artifacts/deep-research-run");
+  const intake = require("../src/lib/clients/research-intake") as typeof import("../src/lib/clients/research-intake");
+
+  // ‼️ THE BLANK TEMPLATE HAS EVERY HEADING AND ANSWERS NOTHING. A sheet the chat sent back unfilled must
+  // never read as a filled one: every placeholder is "[...]" and every one is ignored.
+  const blankSheet = fw.readAvatarSheet(cfg.renderTemplate(cfg.AVATAR_SHEET));
+  ok("the rendered avatar sheet parses with every heading found", blankSheet.ok && blankSheet.parsed.missingHeadings.length === 0);
+  ok("and its placeholders answer nothing", blankSheet.ok && blankSheet.parsed.answered.length === 0);
+  const blankOffer = fw.readShortOffer(cfg.renderTemplate(cfg.SHORT_OFFER));
+  ok("the rendered short offer parses with every heading found", blankOffer.ok && blankOffer.parsed.missingHeadings.length === 0);
+  ok("and \"Low / High\" is a placeholder, not an answer", blankOffer.ok && !blankOffer.parsed.answered.includes("consciousness_level"));
+
+  // A chat answer the way Slack delivers it: shortcodes for emoji, bold headings, content on the heading line.
+  const sheetPaste = [
+    ":mag: **Demographics and General Information:**",
+    "Age range: 35 to 55",
+    "Gender: mostly women",
+    "**Typical identities:** busy moms, nurses who went independent",
+    "",
+    "🚩 Main Challenges and Pain Points",
+    "Pain point 1: patients book once and never return",
+    ...cfg.AVATAR_SHEET.slice(2).map((s, i) => `${i % 2 ? ":sparkles: " : "## "}${s.heading}: ${i === 3 ? "not found in the research" : `real answer ${i}`}`),
+  ].join("\n");
+  const sheet = fw.readAvatarSheet(sheetPaste);
+  ok("a Slack-formatted sheet finds every heading", sheet.ok && sheet.parsed.missingHeadings.length === 0);
+  ok("a labelled line is its own field", sheet.ok && sheet.parsed.subs["demographics.age_range"] === "35 to 55");
+  ok("a bold label with its answer on the same line is read", sheet.ok && /busy moms/.test(sheet.parsed.subs["demographics.identities"] ?? ""));
+  ok("a label the chat left out is not answered", sheet.ok && !sheet.parsed.answered.includes("demographics.income"));
+  ok("\"not found in the research\" is not an answer", sheet.ok && !sheet.parsed.answered.includes(cfg.AVATAR_SHEET[5].key));
+  ok("an answered section is answered", sheet.ok && sheet.parsed.answered.includes(cfg.AVATAR_SHEET[4].key));
+
+  // ‼️ HALF A DOCUMENT IS REFUSED WITH THE MISSING HEADINGS NAMED, NEVER STORED AS "the research did not answer".
+  const half = fw.readAvatarSheet(cfg.AVATAR_SHEET.slice(0, 4).map((s) => `${s.heading}:\nreal`).join("\n"));
+  ok("a sheet missing most headings is refused", !half.ok);
+  ok("and the refusal names a missing heading", !half.ok && half.error.includes(cfg.AVATAR_SHEET[12].heading));
+
+  const offerPaste = cfg.SHORT_OFFER.map((s) =>
+    s.key === "discovery_story" ? `${s.heading}:\nnone yet`
+      : s.key === "ump" ? "⚠️ Unique Mechanism of the Problem: the reminders stop after one visit"
+      : s.key === "notes" ? `${s.heading}:\nProduct: a note that mentions the word\nPrice: $399`
+      : `${s.heading}:\nreal ${s.key}`
+  ).join("\n\n");
+  const offer = fw.readShortOffer(offerPaste);
+  ok("\"none yet\" is the honest answer, so it counts", offer.ok && offer.parsed.answered.includes("discovery_story"));
+  ok("a heading without its parenthetical still opens it", offer.ok && /reminders stop/.test(offer.parsed.sections.ump ?? ""));
+  ok("a \"Product:\" line inside Other Notes does not reopen Product", offer.ok && offer.parsed.sections.product === "real product" && /Price: \$399/.test(offer.parsed.sections.notes ?? ""));
+
+  // Beliefs: 1 to 6, each "I believe that".
+  const six = Array.from({ length: 6 }, (_, i) => `${i + 1}. **I believe that** reason ${i + 1} is true`).join("\n");
+  const readSix = fw.readBeliefs(`Necessary beliefs:\n${six}`);
+  ok("six numbered, bold beliefs under a heading are read", readSix.ok && readSix.beliefs.length === 6 && readSix.beliefs[0] === "I believe that reason 1 is true");
+  ok("a seventh belief is refused", !fw.readBeliefs(`${six}\n- I believe that one more`).ok);
+  const stray = fw.readBeliefs("I believe that pages work\nThis one matters most because it drives the rest.");
+  ok("a line of commentary is refused by name", !stray.ok && /This one matters most/.test(stray.error));
+  ok("no belief at all is refused", !fw.readBeliefs("Here you go:").ok);
+
+  // ‼️ THE RESEARCH SECTIONS ARE APPENDED, AND THE SCRIPT-ONLY ONES ARE A TAIL. The heading contract numbers
+  // every section as RESEARCH_SECTION_KEYS does, and the compact prompt still asks for the first nine only.
+  const contract = drr.researchHeadingContract(briefInput);
+  const numbered = contract.filter((l) => /^## \d+\. /.test(l));
+  eq("the contract numbers every research section", numbered.length, drr.RESEARCH_SECTION_KEYS.length);
+  ok("every printed number is its key's position", numbered.every((l, i) => l.startsWith(`## ${i + 1}. `)));
+  ok("the sixteen sections include the framework's seven", drr.RESEARCH_SECTION_KEYS.length === 16 && drr.RESEARCH_SECTION_KEYS.indexOf("awareness") === 15);
+  const closeAt = contract.findIndex((l) => /^## Phrases worth building pages around/.test(l));
+  ok("the ranked phrases close under an unnumbered heading after section 16", closeAt > contract.indexOf(numbered[numbered.length - 1]));
+  ok("the KEYWORDS worked rows are in the contract", contract.includes("KEYWORDS") && contract.some((l) => l.split("|").length === 4));
+  const compactNumbers = brief.split("\n").filter((l) => /^\d+\. /.test(l)).map((l) => Number(l.split(".")[0]));
+  eq("the compact prompt still asks for sections 1 to 9", compactNumbers, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  const drrSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "artifacts", "deep-research-run.ts"), "utf8");
+  ok("`run` fans out over the compact sections only", /COMPACT_SECTIONS\.map\(\(spec\) => runSection/.test(drrSrc));
+
+  // The script itself.
+  const scriptInput = {
+    clientName: "Acme Med Spa",
+    offer: "Morpheus8",
+    terms: ["microneedling", "skin tightening"],
+    outcome: "more appointments",
+    audienceLabel: "women 35 to 55",
+    city: "Greensboro",
+    letter: "## The Letter Headline\nThe letter body.",
+    headingContract: contract,
+  };
+  const script = fw.buildFrameworkScript(scriptInput);
+  eq("the script is deterministic", script === fw.buildFrameworkScript(scriptInput), true);
+  ok("no em or en dash anywhere in the script", !/[—–]/.test(script));
+  ok("no template placeholder or empty value survives", !/\{|\bundefined\b|\bnull\b|\$\{/.test(script));
+  ok("message 1 carries the approved letter inline", script.includes("## The Letter Headline\nThe letter body."));
+  ok("message 3a carries every numbered heading", numbered.every((l) => script.includes(l)));
+  ok("message 4 carries every avatar sheet heading", cfg.AVATAR_SHEET.every((s) => script.includes(`${s.heading}:`)));
+  ok("message 5 carries every short offer heading", cfg.SHORT_OFFER.every((s) => script.includes(`${s.heading}:`)));
+  ok("messages 1 to 7 are all there, in order", ["1", "2", "3a", "3b", "4", "5", "6", "7"].map((n) => script.indexOf(`MESSAGE ${n}:`)).every((at, i, all) => at >= 0 && (i === 0 || at > all[i - 1])));
+  ok("it tells Matthew all four prefixes", ["research:", "avatar sheet:", "short offer:", "beliefs:"].every((p) => script.includes(p)));
+  ok("the framework config carries no em dash, including the text handed to the AI",
+    !/[—–]/.test(fs.readFileSync(path.join(__dirname, "..", "src", "config", "avatar-framework.ts"), "utf8")));
+  const noCity = fw.buildFrameworkScript({ ...scriptInput, city: null, outcome: null, terms: [] });
+  ok("a client with no city, outcome or terms reads cleanly", !/ in \.| promising |call it: \)/.test(noCity));
+
+  // ‼️ THE PREFIXES CARRY DOCUMENTS, SO NO SECOND-LINE CHECK: a short offer is full of "Price" and "Product" lines.
+  eq("avatar sheet: routes to the sheet", fw.readFrameworkPaste("Avatar Sheet:\nDemographics")?.kind, "avatar_sheet");
+  const so = fw.readFrameworkPaste("short offer:\n```\nProduct:\nx\nPrice: $399\noffer: yes\n```");
+  ok("short offer: keeps its Price and offer lines and loses the fence", so?.kind === "short_offer" && so.body === "Product:\nx\nPrice: $399\noffer: yes");
+  eq("beliefs: routes to the beliefs", fw.readFrameworkPaste("  beliefs: I believe that x")?.kind, "necessary_beliefs");
+  eq("research: is not a framework document", fw.readFrameworkPaste("research: ## 1. x"), null);
+  eq("and a sentence mentioning beliefs is conversation", fw.readFrameworkPaste("the beliefs look good"), null);
+
+  // ‼️ B4: framework research carries this client's letter, so it does not overwrite the SHARED avatar research.
+  ok("research replace: is a research paste", intake.isResearchPaste("research replace: ## 1. x") && intake.isResearchReplace("Research Replace: x"));
+  eq("and its prefix is stripped whole", intake.stripPrefix("research replace: ## 1. x"), "## 1. x");
+  ok("a plain research: paste is not a replace", !intake.isResearchReplace("research: ## 1. x"));
+  const intakeSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "research-intake.ts"), "utf8");
+  ok("the shared research is written only when empty or on replace", /!replace &&\s*\(await avatarBriefFor\(/.test(intakeSrc));
+  const threadSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "framework-thread.ts"), "utf8");
+  ok("a sheet reaches the shared avatar only when the shared one is empty", /shareSheetIfEmpty/.test(threadSrc));
+  ok("the script is not recorded as the avatar's prompt", !/recordAvatarPrompt/.test(threadSrc));
 }
 
 // ‼️ EVERY LANE APPENDS ABOVE THIS SUMMARY, NEVER BELOW IT. scripts/_probe-dm-pitch.ts

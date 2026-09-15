@@ -127,6 +127,7 @@ const snap: DatasetSnapshot = {
     vocQuotes: 0, approvedNumbers: 0, keywordRows: 0, keywordRowsWithUrl: 0,
   },
   offer: { applies: false, treatment: null, terms: 0, positioning: null, magnetKey: null, lockedAt: null, outcomePromise: null, price: null },
+  documents: { avatarSheet: null, shortOffer: null, beliefs: 0, letterApproved: false },
   audit: { linked: false, pickedAvatar: false, buyerMap: false },
   reviews: 0,
 };
@@ -134,7 +135,25 @@ const reports = evaluateDatasets(snap, RESEARCH_SECTION_KEYS);
 const avatar = reports.find((r) => r.dataset === "avatar")!;
 const offer = reports.find((r) => r.dataset === "offer")!;
 check("the eight answered sections count as present", ["who_buys", "beliefs", "blame", "headline_ideas"].every((k) => !avatar.gaps.some((g) => g.field.key === k)));
-check("fears is missing because the prompt does not ask", avatar.gaps.find((g) => g.field.key === "fears")?.reason === "the research prompt does not ask for this yet");
+// ‼️ UPDATED 2026-09-15. Fears used to be "not asked"; the framework's avatar sheet asks now.
+check("fears is missing until the avatar sheet is pasted, and says where it comes from",
+  /avatar sheet:/.test(avatar.gaps.find((g) => g.field.key === "fears")?.reason ?? ""));
+check("a script-only research section says only the framework script asks",
+  avatar.gaps.find((g) => g.field.key === "hopes_and_dreams")?.reason === "only step 11's framework script asks for this");
+check("objections moved from the avatar to the offer",
+  !DATASET_FIELDS.some((f) => f.dataset === "avatar" && f.key === "objections") &&
+    DATASET_FIELDS.some((f) => f.dataset === "offer" && f.key === "objections"));
+
+// The avatar sheet fills the story-tuning fields; fantasies take either of its two sources.
+const withSheet: DatasetSnapshot = {
+  ...snap,
+  documents: { avatarSheet: ["fears", "emotional_journey", "emotional_journey.journey_relief"], shortOffer: null, beliefs: 0, letterApproved: false },
+};
+const sheetAvatar = evaluateDatasets(withSheet, RESEARCH_SECTION_KEYS).find((r) => r.dataset === "avatar")!;
+check("an answered fears heading fills fears", !sheetAvatar.gaps.some((g) => g.field.key === "fears"));
+check("the relief stage alone fills fantasies", !sheetAvatar.gaps.some((g) => g.field.key === "fantasies"));
+check("an unanswered heading on a sheet that IS on file says so",
+  /leaves this heading empty/.test(sheetAvatar.gaps.find((g) => g.field.key === "pain_points")?.reason ?? ""));
 check("search phrases is missing for want of KEYWORDS rows", /KEYWORDS/.test(avatar.gaps.find((g) => g.field.key === "search_phrases")?.reason ?? ""));
 check("an option audience is not charged the primary's offer", offer.total === 0);
 const lines = formatDatasetReport("women over 60 wanting a lift", false, reports, false);

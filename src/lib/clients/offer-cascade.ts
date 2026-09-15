@@ -43,12 +43,18 @@ export async function reaimDownstream(
   // The research brief and its KEYWORDS block are written about the treatment, so a new treatment
   // gets a new prompt. New terms alone do not: the brief does not change enough to re-run it.
   if (change.treatmentChanged && ran(status.get("avatar_harvest"))) {
-    const { postResearchPrompt } = await import("./artifacts/deep-research-run");
-    const res = await postResearchPrompt(clientId).catch((e) => ({ ok: false, error: (e as Error).message }));
+    // ‼️ A NEW TREATMENT MAKES THE APPROVED SALES LETTER STALE (its fingerprint is the treatment and the
+    // outcome), so step 11's framework script usually cannot be re-posted until the letter is approved
+    // again. Say which of the two happened: "posted again" when it was not would send somebody looking
+    // for a file that is not in the thread.
+    const { postFrameworkScript } = await import("./framework-thread");
+    const res = await postFrameworkScript(clientId).catch((e) => ({ ok: false as const, error: (e as Error).message }));
     did.push(
-      res.ok
-        ? `Step ${stepNumber("avatar_harvest")}'s research prompt was posted again, written about the new offer.`
-        : `Step ${stepNumber("avatar_harvest")}'s research prompt could not be posted again: ${res.error ?? "unknown"}.`
+      !res.ok
+        ? `Step ${stepNumber("avatar_harvest")}'s framework script could not be posted again: ${res.error}.`
+        : res.posted
+          ? `Step ${stepNumber("avatar_harvest")}'s framework script was posted again, written about the new offer.`
+          : `Step ${stepNumber("avatar_harvest")}'s framework script waits for the sales letter to be approved again for the new offer (\`letter approve\` at step ${stepNumber("offer_locked")}).`
     );
   }
 

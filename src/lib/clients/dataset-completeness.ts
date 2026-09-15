@@ -80,6 +80,53 @@ async function avatarState(audience: ResolvedAudience | null): Promise<DatasetSn
   };
 }
 
+const NO_DOCUMENTS: DatasetSnapshot["documents"] = { avatarSheet: null, shortOffer: null, beliefs: 0, letterApproved: false };
+
+/**
+ * The framework documents on file for one audience, and this client's own research if it pasted one.
+ *
+ * ‼️ THE CLIENT'S OWN RESEARCH OUTRANKS THE SHARED ONE ON ITS OWN CARD. Framework research lands on the
+ * audience first and reaches the shared avatar_briefs only when that was empty or on `share research`, so
+ * the shared copy can be another client's. This audience's card says what THIS audience has.
+ *
+ * Degrades to nothing on any read error, the table missing included: a card that errors tells less than a
+ * card that says a document is not on file.
+ */
+async function documentsState(
+  audience: ResolvedAudience | null,
+  offer: import("./offers").StoredOffer
+): Promise<{ documents: DatasetSnapshot["documents"]; ownResearch: string | null }> {
+  if (!audience) return { documents: NO_DOCUMENTS, ownResearch: null };
+  const { currentDocument, offerFingerprint } = await import("./audience-documents");
+  const answeredOf = (doc: { parsed: Record<string, unknown> | null } | null) =>
+    doc && Array.isArray(doc.parsed?.answered) ? (doc.parsed!.answered as string[]) : doc ? [] : null;
+
+  const [research, sheet] = await Promise.all([
+    currentDocument({ audienceId: audience.id, offerId: null, kind: "deep_research" }),
+    currentDocument({ audienceId: audience.id, offerId: null, kind: "avatar_sheet" }),
+  ]);
+  const byOffer = offer.id
+    ? await Promise.all(
+        (["short_offer", "necessary_beliefs", "sales_letter"] as const).map((kind) =>
+          currentDocument({ audienceId: audience.id, offerId: offer.id, kind })
+        )
+      )
+    : null;
+  const pick = (r: Awaited<ReturnType<typeof currentDocument>> | undefined) => (r && r.ok ? r.doc : null);
+
+  const letter = pick(byOffer?.[2]);
+  const beliefs = pick(byOffer?.[1]);
+  return {
+    ownResearch: pick(research)?.content ?? null,
+    documents: {
+      avatarSheet: answeredOf(pick(sheet)),
+      shortOffer: answeredOf(pick(byOffer?.[0])),
+      beliefs: beliefs && Array.isArray(beliefs.parsed?.beliefs) ? (beliefs.parsed!.beliefs as unknown[]).length : 0,
+      letterApproved: Boolean(letter && letter.status === "approved" && letter.offerFingerprint === offerFingerprint(offer)),
+    },
+  };
+}
+
 /** Every audience this client has, each with its completeness. A client with none gets one empty report. */
 export async function completenessFor(clientId: string): Promise<AudienceCompleteness[]> {
   const [audiences, primaryOffer, audit, reviews] = await Promise.all([
@@ -105,6 +152,8 @@ export async function completenessFor(clientId: string): Promise<AudienceComplet
     const own = audience ? await loadOfferForAudience(audience.id) : null;
     const offer = audience && !audience.isPrimary ? (own ?? EMPTY_OFFER) : (own ?? primaryOffer);
     const offerApplies = audience === null || audience.isPrimary || own !== null;
+    const { documents, ownResearch } = await documentsState(audience, offer);
+    const avatar = await avatarState(audience);
     const snapshot: DatasetSnapshot = {
       audience: audience
         ? {
@@ -117,7 +166,8 @@ export async function completenessFor(clientId: string): Promise<AudienceComplet
             confirmedAt: audience.confirmedAt,
           }
         : null,
-      avatar: await avatarState(audience),
+      avatar: { ...avatar, researchText: ownResearch ?? avatar.researchText },
+      documents,
       offer: {
         applies: offerApplies,
         treatment: offer.treatment,

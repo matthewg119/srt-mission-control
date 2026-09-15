@@ -2237,23 +2237,22 @@ async function avatarResearchAction(args: {
         // design before last: there is no brief and there are no three messages. It re-posts the
         // prompt now, which is the thing the step actually hands over.
         const cached = await avatarBriefFor(resolved.vertical, avatar.slug);
-        const { buildContext, buildCompactPrompt } = await import(
-          "@/lib/clients/artifacts/deep-research-run"
-        );
-        const built = await buildContext(args.clientId);
+        // ‼️ SINCE 2026-09-15 THIS RE-POSTS STEP 11's FRAMEWORK SCRIPT, the same thing the runner hands over,
+        // or the note saying it waits for an approved sales letter. `prompt short` still gives the compact
+        // prompt for anybody who wants to start without the letter.
+        const { postFrameworkScript } = await import("@/lib/clients/framework-thread");
+        const posted = await postFrameworkScript(args.clientId);
 
         await slack.postThreadReply(
           args.channel,
           args.slackTs,
           [
             `:arrows_counterclockwise: Running it again for *${avatar.label}*, asked by ${actor}.`,
-            built.ok
-              ? "Paste this into claude.com deep research and bring the answer back into this " +
-                "thread, with `research:` in front of it or as a PDF dropped straight in."
-              : `:warning: The prompt could not be rebuilt: ${built.error}`,
-            built.ok ? "```" : "",
-            built.ok ? buildCompactPrompt(built.ctx) : "",
-            built.ok ? "```" : "",
+            !posted.ok
+              ? `:warning: The framework script could not be posted: ${posted.error}`
+              : posted.posted
+                ? "The framework script is posted in step 11's thread. Bring the four answers back there."
+                : "The framework script waits for an approved sales letter (see step 11's thread). `prompt short` there gives the short research prompt now.",
             cached?.researchText
               ? "What is already stored is left alone until the new answer lands. It belongs to every client in this vertical, not just this one."
               : "",

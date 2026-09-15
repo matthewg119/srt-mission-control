@@ -59,6 +59,7 @@ import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { callClaudeText, type ClaudeModel } from "@/lib/claude-calls";
 import * as pdf from "@/lib/pdf/kit";
 import { deliverArtifact } from "./deliver";
+import { AWARENESS_STAGES } from "@/lib/audit-engine/awareness";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The swap points
@@ -173,12 +174,29 @@ export interface SectionSpec {
    * cost the run its wall clock for no gain on the six that do not need it.
    */
   searches?: number;
+  /**
+   * The section's heading in ENGLISH, for the framework script's heading contract (step 11).
+   *
+   * ‼️ NOT `title`, WHICH IS SPANISH AND STAYS SO FOR THE PDF. The framework chat runs in English, and a
+   * contract that handed it Spanish headings would come back with headings the parser cannot pair with
+   * the sections they fill.
+   */
+  heading: string;
+  /**
+   * Asked only by the step 11 framework script, never by the compact prompt or by `run`.
+   *
+   * ‼️ THESE MUST FORM A TAIL. The compact prompt and `run` number what they include from 1, and the
+   * parser maps section N to RESEARCH_SECTION_KEYS[N - 1]. An excluded section followed by an included
+   * one would shift every number after it. _probe-avatar-framework.ts asserts the tail.
+   */
+  scriptOnly?: boolean;
 }
 
 const SECTIONS: SectionSpec[] = [
   {
     key: "demographics",
     title: "Demografía del comprador",
+    heading: "Who buys",
     // ‼️ NOT val(). This one is interpolated MID-SENTENCE, and val() renders "not recorded",
     // which turns the first line of the prompt into "Who BUYS not recorded". A missing treatment
     // has to degrade to a word the sentence survives, not to a status.
@@ -190,11 +208,14 @@ const SECTIONS: SectionSpec[] = [
       `and the buyer is the one the pages get written for. Age, gender split, income band, where ` +
       `they live, marital and family situation, what they do for a living. What is happening in ` +
       `their life in the week before they start looking for ${val(spoken(c.primaryTreatment))}. What they ` +
-      `call themselves, and what they would never let anybody call them.`,
+      `call themselves, and what they would never let anybody call them. Their attitudes: religious, ` +
+      `political, social and economic (spenders or savers, retired or working). Then their core beliefs about ` +
+      `life, love and family, summed up in one to three sentences.`,
   },
   {
     key: "current_solutions",
     title: "Qué soluciones ya está usando el mercado",
+    heading: "What they use now",
     brief: () =>
       "What they use now, including the DIY version, the cheap substitute and doing nothing. "
       + "Name real brands.",
@@ -206,6 +227,7 @@ const SECTIONS: SectionSpec[] = [
   {
     key: "what_they_like",
     title: "Qué les gusta de esas soluciones",
+    heading: "What they like about those solutions",
     brief: () => "What they like about those. Quote it.",
     instruction: () =>
       `What people say they LIKE about each of those solutions, in their words. This is what the ` +
@@ -215,6 +237,7 @@ const SECTIONS: SectionSpec[] = [
   {
     key: "what_they_hate",
     title: "Qué problemas tienen con esas soluciones",
+    heading: "What goes wrong and why they quit",
     brief: () => "What goes wrong and why they quit. Quote it.",
     instruction: () =>
       `What goes wrong with each one and why people stop. The complaints, the abandonment ` +
@@ -224,6 +247,7 @@ const SECTIONS: SectionSpec[] = [
   {
     key: "beliefs",
     title: "Creencias del mercado",
+    heading: "What they believe",
     brief: () => "What they believe, true or false, uncorrected.",
     instruction: (c) =>
       `What ${c.avatarLabel} BELIEVES about this problem and its solutions. ` +
@@ -235,6 +259,7 @@ const SECTIONS: SectionSpec[] = [
   {
     key: "external_forces",
     title: "Fuerzas externas que culpan",
+    heading: "Who and what they blame",
     // ‼️ NO EXAMPLES HERE ON PURPOSE. "their body, their age" was written for a patient avatar
     // and this prompt also runs for B2B ones, where it steers the answer somewhere wrong.
     brief: () => "Who or what they blame for being stuck on it.",
@@ -247,6 +272,7 @@ const SECTIONS: SectionSpec[] = [
   {
     key: "verbatim_language",
     title: "Lenguaje literal del cliente",
+    heading: "Their exact words",
     brief: () =>
       "Their EXACT words: 30+ verbatim phrases and questions, each with a link. Typos kept. "
       + "This is the point of the report.",
@@ -279,6 +305,7 @@ const SECTIONS: SectionSpec[] = [
   {
     key: "headline_ideas",
     title: "Ideas de titulares y asuntos",
+    heading: "Headline and subject line ideas",
     brief: () => "Headlines and subject lines, each traceable to something above.",
     instruction: (c) =>
       `Headline and email-subject ideas built from the highest-interest topics you found for ` +
@@ -298,6 +325,7 @@ const SECTIONS: SectionSpec[] = [
   {
     key: "keywords",
     title: "Las 100 frases de busqueda del comprador",
+    heading: "Search phrases",
     brief: (c) =>
       // The pipe format is NOT described here any more. It is shown as a worked row at the foot
       // of buildCompactPrompt instead, because a format described in prose comes back as prose
@@ -349,7 +377,130 @@ const SECTIONS: SectionSpec[] = [
       `commentary between the rows. A row missing its pipes is a row we cannot read.`,
     searches: 8,
   },
+
+  // ‼️ SECTIONS 10 TO 16 ARE ASKED ONLY BY THE STEP 11 FRAMEWORK SCRIPT, AND THEY ARE APPENDED, NEVER
+  // INSERTED. They are the parts of Matthew's research method (Investigacion parte 1 and 2) the eight
+  // above did not cover, plus W4's awareness stages. `scriptOnly` keeps them out of the compact prompt
+  // (1,841 of its 2,000 characters were already spent) and out of `run`, whose acknowledgement promises
+  // eight sections at roughly a dollar. They must stay a TAIL: see scriptOnly on SectionSpec.
+  //
+  // No pipe characters in a brief: extractKeywords runs over whole prompts.
+  {
+    key: "hopes_and_dreams",
+    title: "Esperanzas y sueños",
+    heading: "Hopes and dreams",
+    scriptOnly: true,
+    brief: () => "Their hopes and dreams in life, not only about the product. Quote them.",
+    instruction: (c) =>
+      `What ${c.avatarLabel} hopes for and dreams about in their life, not only about this problem: the ` +
+      `life they want, who they want to be, how they want others to see them. Be specific: "wants her ` +
+      `husband to be proud of her" is worth more than "wants to feel better". Quote what they write.`,
+  },
+  {
+    key: "victories_and_failures",
+    title: "Victorias y fracasos",
+    heading: "Victories and failures",
+    scriptOnly: true,
+    brief: () => "Their victories and failures around the main problem, as they tell them.",
+    instruction: (c) =>
+      `The victories and failures ${c.avatarLabel} describes around this problem: what they tried and it ` +
+      `worked, what they tried and it failed, and how each one made them feel. In their own words, with links.`,
+  },
+  {
+    key: "prejudices",
+    title: "Prejuicios",
+    heading: "Prejudices",
+    scriptOnly: true,
+    brief: () => "Their prejudices: the shared attitudes, stereotypes and judgements they hold.",
+    instruction: (c) =>
+      `The prejudices ${c.avatarLabel} holds: shared attitudes, stereotypes and judgements about other ` +
+      `people, providers, products or the industry. Report them as they are held, without correcting them.`,
+  },
+  {
+    key: "horror_stories",
+    title: "Historias de terror",
+    heading: "Horror stories about existing solutions",
+    scriptOnly: true,
+    brief: () => "Horror stories about the solutions they already tried, word for word, with links.",
+    instruction: (c) =>
+      `Horror stories ${c.avatarLabel} tells about the solutions they already tried: what went wrong, what it ` +
+      `cost them, how they felt. Word for word, with the link. Never invent one: an invented horror story is ` +
+      `the most dangerous thing a copywriter can be handed.`,
+  },
+  {
+    key: "curiosity",
+    title: "Curiosidad: soluciones antiguas o perdidas",
+    heading: "Curiosity: old or lost solutions",
+    scriptOnly: true,
+    brief: () => "Any old, unusual or lost way this problem was once solved.",
+    instruction: (c) =>
+      `Has anyone tried to solve this problem for ${c.avatarLabel} in a unique way before: an old, unusual or ` +
+      `"lost" solution, a method that fell out of use, a discovery that never went mainstream? Cite the source. ` +
+      `If you find none, say so.`,
+  },
+  {
+    key: "corruption",
+    title: "Corrupción: qué creen que lo arruinó",
+    heading: "Corruption: what they believe ruined things",
+    scriptOnly: true,
+    brief: () => "What they believe used to be better, and what force ruined it.",
+    instruction: (c) =>
+      `What ${c.avatarLabel} believes used to be better about this, and which force they believe ruined it: an ` +
+      `industry, a company, a regulation, a trend. Report the belief as they hold it, with their words and a link.`,
+  },
+  {
+    key: "awareness",
+    title: "Nivel de conciencia del comprador",
+    heading: "Awareness stage",
+    scriptOnly: true,
+    brief: () =>
+      "Where this buyer sits on awareness, from 5 (unaware of the problem) to 1 (knows the offer), with a quote showing each.",
+    // W4, 2026-09-15. Matthew numbers the stages 5 (unaware) to 1 (most aware). No percentages or shares:
+    // a model asked for a split produces a plausible one nobody measured.
+    instruction: (c) =>
+      `Place ${c.avatarLabel} on the five stages of awareness, numbered the way we number them, where 5 is ` +
+      `least aware and 1 is most aware:\n` +
+      AWARENESS_STAGES.map((s) => `${s.stage} ${s.name}: ${s.means}.`).join("\n") +
+      `\n\nFor each stage, give at least one verbatim quote, with its link, from somebody clearly at that ` +
+      `stage. Then say which stage most of them are at when they first go looking for ` +
+      `${val(spoken(c.primaryTreatment))}, and what they would have to learn to move one stage closer. No ` +
+      `percentages or shares: nobody measured them. If you found nobody at a stage, say so.`,
+  },
 ];
+
+/**
+ * The sections the compact prompt and `run` ask for. Sections 1 to 9, numbered as RESEARCH_SECTION_KEYS
+ * numbers them because the script-only sections are a tail.
+ */
+const COMPACT_SECTIONS: readonly SectionSpec[] = SECTIONS.filter((s) => !s.scriptOnly);
+
+/**
+ * The step 11 script's heading contract: every section, numbered, in English, with the KEYWORDS rows
+ * placed under section 9 and the ranked phrases closed under an UNNUMBERED heading.
+ *
+ * ‼️ WHERE THE KEYWORDS GO MATTERS. The parser closes a section only on an unnumbered heading
+ * (avatar-profile.ts), so a KEYWORDS block written at the very end would sit inside section 16's body and
+ * make section 16 read as answered. Rows go under 9, where they belong, and the close goes after 16.
+ */
+export function researchHeadingContract(ctx: ResearchContext): string[] {
+  const keywordsAt = SECTIONS.findIndex((s) => s.key === "keywords") + 1;
+  return [
+    ...SECTIONS.map((s, i) => `## ${i + 1}. ${s.heading}: ${s.brief(ctx)}`),
+    `## Phrases worth building pages around: the 25 most urgent, each with its source and one line on why.`,
+    "",
+    `Under heading ${keywordsAt}, the search phrases are literal rows, not prose. Four pipes per row, "unknown" where you have no number:`,
+    ...keywordWorkedRows(ctx),
+  ];
+}
+
+/** The two worked KEYWORDS rows every prompt shows, so the block comes back in a shape the parser reads. */
+export function keywordWorkedRows(ctx: ResearchContext): string[] {
+  return [
+    "KEYWORDS",
+    `${termExample(ctx)} | unknown | ready | https://example.com/where-you-saw-it`,
+    `${termExample(ctx)} cost | 1900 | price | https://example.com/page-with-the-number`,
+  ];
+}
 
 /**
  * The section keys in the order the prompt numbers them, so section N is RESEARCH_SECTION_KEYS[N - 1].
@@ -586,7 +737,7 @@ export function buildCompactPrompt(ctx: ResearchContext): string {
     "",
     RULES,
     "",
-    ...SECTIONS.map((s, i) => `${i + 1}. ${s.brief(ctx)}`),
+    ...COMPACT_SECTIONS.map((s, i) => `${i + 1}. ${s.brief(ctx)}`),
     "",
     "Finish with the 25 phrases worth building pages around, most urgent first, each with its " +
       "source and one line on why.",
@@ -997,7 +1148,8 @@ export async function runDeepResearch(clientId: string): Promise<AutoResult> {
   const started = Date.now();
 
   // Parallel — see the header. Wall clock is the slowest section, not the sum of eight.
-  const sections = await Promise.all(SECTIONS.map((spec) => runSection(ctx, spec)));
+  // Only the compact sections: the script-only tail is asked by the step 11 script, not by `run`.
+  const sections = await Promise.all(COMPACT_SECTIONS.map((spec) => runSection(ctx, spec)));
   const harvested = await harvestedPhrases(ctx.vertical, ctx.avatarSlug);
   const ranked = await rankPhrases(ctx, sections, harvested);
 
@@ -1079,51 +1231,33 @@ export async function postResearchPrompt(clientId: string): Promise<AutoResult> 
   if (!built.ok) return { ok: false, error: built.error };
   const ctx = built.ctx;
 
-  const prompt = buildCompactPrompt(ctx);
+  // ‼️ SINCE 2026-09-15 STEP 11 HANDS OVER MATTHEW'S FRAMEWORK SCRIPT, NOT THIS COMPACT PROMPT. The script
+  // is one file of seven messages for one chat, opening with the approved sales letter, and it asks for all
+  // sixteen sections plus the avatar sheet, the short offer and the beliefs. Without an approved letter it
+  // posts a waiting note instead, and `letter approve` posts it later. The compact prompt stays available
+  // as `prompt short`, for starting the research without a letter.
+  const { postFrameworkScript } = await import("../framework-thread");
+  const res = await postFrameworkScript(clientId);
+  if (!res.ok) return { ok: false, error: res.error };
 
-  // notifyStep rather than slack.postThreadReply: it creates the step's anchor if the runner got
-  // here before the card exists, and it refuses to fall back to the header thread. See its
-  // docstring — a message in the wrong place is harder to notice than a missing one.
-  const { notifyStep } = await import("../step-board");
-  const posted = await notifyStep(
-    clientId,
-    "avatar_harvest",
-    [
-      `:brain: Deep research prompt for *${ctx.avatarLabel}*. Copy the block and run it in ` +
-        "claude.com deep research.",
-      "",
-      "```",
-      prompt,
-      "```",
-      "",
-      "Bring the answer back into this thread: paste it with `research:` in front of it, or drop " +
-        "the PDF straight in. Then press Done.",
-      "`prompt` shows this again. `run` has this step do the pass itself on Haiku, which is " +
-        "cheaper than your time and thinner than your answer.",
-    ].join("\n")
-  );
-
-  // Filed against the AVATAR, not the client: the next client in this vertical aiming at the same
-  // buyer is handed the same prompt instead of it being re-derived. recordAvatarPrompt only fills
-  // prompt_text when it is empty and never touches research_text, so this is safe to repeat.
+  // Filed against the AVATAR, not the client: the next client in this vertical aiming at the same buyer is
+  // handed the same prompt. The COMPACT prompt, never the script: the script embeds this client's sales
+  // letter and offer, which must not become another client's starting point. recordAvatarPrompt only fills
+  // prompt_text when it is empty, so this is safe to repeat.
   const { recordAvatarPrompt } = await import("../avatars");
   await recordAvatarPrompt({
     vertical: ctx.vertical,
     avatarSlug: ctx.avatarSlug,
     avatarLabel: ctx.avatarLabel,
-    promptText: prompt,
+    promptText: buildCompactPrompt(ctx),
     clientId,
   });
 
-  if (!posted.ok) {
-    return { ok: false, error: `the prompt could not be posted to the thread: ${posted.error}` };
-  }
-
   return {
     ok: true,
-    note:
-      `The deep-research prompt for *${ctx.avatarLabel}* is in this thread, ${prompt.length} ` +
-      "characters. Nothing was spent on it: run it yourself and paste the answer back.",
+    note: res.posted
+      ? `The framework script for *${ctx.avatarLabel}* is in this thread. Nothing was spent on it: run the chat and paste the four answers back.`
+      : "Waiting on an approved sales letter at the prep call. `prompt short` gives the short research prompt in the meantime.",
   };
 }
 /** The thread note. Says what ran, what did not, and what got filed. */

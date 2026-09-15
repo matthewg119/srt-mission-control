@@ -939,14 +939,16 @@ export async function POST(request: NextRequest) {
           client &&
           parentThreadTs &&
           client.stepKey === "avatar_harvest" &&
-          /^\s*prompt\s*$/i.test(userText)
+          // ‼️ `prompt short` SINCE 2026-09-15. Bare `prompt` re-posts the framework script now (the
+          // framework handler below); the compact prompt is the way to start without a sales letter.
+          /^\s*prompt\s+short\s*$/i.test(userText)
         ) {
           const { buildContext, buildCompactPrompt } = await import(
             "@/lib/clients/artifacts/deep-research-run"
           );
           const built = await buildContext(client.id);
           const reply = built.ok
-            ? `Here is the prompt for this step. Paste it whole into claude.com deep research.\n\n\`\`\`\n${buildCompactPrompt(built.ctx)}\n\`\`\``
+            ? `Here is the short research prompt (sections 1 to 9, no sales letter needed). Paste it whole into claude.com deep research. The full framework script asks for more; \`prompt\` posts it.\n\n\`\`\`\n${buildCompactPrompt(built.ctx)}\n\`\`\``
             : `:warning: Cannot build the prompt: ${built.error}`;
 
           const posted = await slack.postThreadReply(channel, parentThreadTs, reply);
@@ -1000,6 +1002,27 @@ export async function POST(request: NextRequest) {
             )
           );
           return NextResponse.json({ ok: true });
+        }
+
+        // 1a-bis-2. The framework's paste-backs in step 11's thread: `avatar sheet:`, `short offer:`,
+        // `beliefs:`, plus `prompt` (the script again) and `share research` / `share sheet`.
+        //
+        // ‼️ ABOVE pastedListPointer, WHICH WOULD SWALLOW A BELIEFS LIST: six short "I believe that" lines
+        // under a `beliefs:` line match its shape, and it answers "nothing was saved". And above the
+        // assistant, because a pasted avatar sheet answered as a chat message is a sheet lost.
+        if (client && parentThreadTs && client.stepKey === "avatar_harvest" && userText.trim().length > 0) {
+          const { handleFrameworkThreadReply } = await import("@/lib/clients/framework-thread");
+          const framed = await handleFrameworkThreadReply({
+            clientId: client.id,
+            stepKey: client.stepKey,
+            text: userText,
+            by: event.user ? `<@${event.user as string}>` : "someone in Slack",
+          });
+          if (framed) {
+            const posted = await slack.postThreadReply(channel, parentThreadTs, framed.message);
+            if (!slackOk(posted)) console.error("[slack/events] framework reply failed");
+            return NextResponse.json({ ok: true });
+          }
         }
 
         // 1a-ter. `template clinic` / `skin` / `skin reset` in step 15's or 16's thread.
@@ -2220,8 +2243,27 @@ async function captureOnboardingUploads(args: {
   if (args.client.stepKey === "avatar_harvest") {
     const { ingestResearchPdf, formatIntakeReply } = await import("@/lib/clients/research-intake");
 
+    // ‼️ THE FRAMEWORK'S ANSWERS ARRIVE AS FILES TOO, AND A LONG ONE CAN ONLY ARRIVE AS A FILE. Slack turns a
+    // paste over its message limit into a text snippet, and this branch used to read PDFs only, so a
+    // snippet carrying `avatar sheet:` was filed and nothing else happened. A file whose first line (or
+    // the text typed with it) carries a framework prefix is stored as that document, whatever its type.
+    const { storeFrameworkFile } = await import("@/lib/clients/framework-thread");
+    const handled = new Set<string>();
+    for (const file of args.files) {
+      const framed = await storeFrameworkFile({
+        clientId: args.client.id,
+        slackFileId: file.id,
+        messageText: args.text,
+        by: "someone in Slack",
+      }).catch((e) => ({ message: `:warning: *${file.name ?? "That file"}* could not be read: ${(e as Error).message}` }));
+      if (!framed) continue;
+      handled.add(file.id);
+      const said = await slack.postThreadReply(args.channel, args.threadTs, framed.message);
+      if (!slackOk(said)) console.error("[slack/events] framework file reply failed");
+    }
+
     const pdfs = args.files.filter(
-      (f) => /pdf/i.test(f.mimetype ?? "") || /\.pdf$/i.test(f.name ?? "")
+      (f) => !handled.has(f.id) && (/pdf/i.test(f.mimetype ?? "") || /\.pdf$/i.test(f.name ?? ""))
     );
     if (pdfs.length === 0) return;
 

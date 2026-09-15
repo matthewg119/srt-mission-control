@@ -59,9 +59,18 @@ async function main(): Promise<void> {
     const BOLD = [1, 2, 3, 4, 5]
       .map((n) => `**${n}. Section ${n}**\n${filler(`finding ${n}`)} https://example.com/some_page_${n}`)
       .join("\n\n");
-    const boldReply = await afterResearchPaste(clientId, `research: ${BOLD}`);
+
+    // ‼️ 2026-09-15: A SECOND FULL PASTE NO LONGER OVERWRITES THE SHARED RESEARCH ON ITS OWN. Framework
+    // research carries this client's sales letter in its prompt, so the shared avatar record is written
+    // only when it is empty or on `research replace:`. The plain paste is locked out; the replace goes in.
+    const locked = await afterResearchPaste(clientId, `research: ${BOLD}`);
+    const lockedBrief = await avatarBriefFor("med-spa", slug);
+    check("a second plain paste leaves the shared research alone", lockedBrief?.researchText === expected, locked.join(" | "));
+    check("and says how to replace it", locked.some((l) => /research replace:/.test(l)));
+
+    const boldReply = await afterResearchPaste(clientId, `research replace: ${BOLD}`);
     const boldBrief = await avatarBriefFor("med-spa", slug);
-    check("a bold-headed answer is saved", boldReply.some((l) => /Saved as/.test(l)), boldReply.join(" | "));
+    check("`research replace:` saves a bold-headed answer as the shared research", boldReply.some((l) => /Saved as/.test(l)), boldReply.join(" | "));
     check("the bold headings are still in the stored text", /\*\*3\. Section 3\*\*/.test(boldBrief?.researchText ?? ""));
     check("an underscored URL is intact", (boldBrief?.researchText ?? "").includes("https://example.com/some_page_4"));
 

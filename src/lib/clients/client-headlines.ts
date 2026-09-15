@@ -551,7 +551,8 @@ export async function generateKeywordHeadlines(args: {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Where a headline came from. Matches the check constraint on client_headlines.origin. */
-export type HeadlineOrigin = "weekly" | "pre_call" | "manual" | "keyword";
+/** `framework`: a headline idea from the short offer pasted at step 11 (docs/2026-09-15-offers-and-framework.sql). */
+export type HeadlineOrigin = "weekly" | "pre_call" | "manual" | "keyword" | "framework";
 
 export interface StoredHeadline {
   id: string;
@@ -594,6 +595,12 @@ export async function storeHeadlines(args: {
   headlines: readonly string[];
   origin: HeadlineOrigin;
   isoWeek?: string | null;
+  /**
+   * The audience these were written for. Written ONLY when given: the column arrived with
+   * docs/2026-09-15-offers-and-framework.sql, and naming it on every insert would fail every other
+   * headline lane on a database that has not run it.
+   */
+  audienceId?: string | null;
 }): Promise<{ ok: true; stored: StoredHeadline[]; duplicates: number } | { ok: false; error: string }> {
   const rows = args.headlines
     .map((h) => h.trim())
@@ -604,6 +611,7 @@ export async function storeHeadlines(args: {
       normalized: normalizeHeadline(headline),
       origin: args.origin,
       iso_week: args.isoWeek ?? null,
+      ...(args.audienceId ? { audience_id: args.audienceId } : {}),
     }))
     .filter((r) => r.normalized !== "");
 

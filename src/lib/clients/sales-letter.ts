@@ -489,7 +489,11 @@ export async function approvedLetterFor(clientId: string): Promise<
 > {
   const offer = await loadOffer(clientId);
   if (!offer.id || !offer.audienceId) {
-    return { ok: false, reason: "no_offer", message: "no offer is stored under an audience yet" };
+    // ‼️ A TREATMENT WITH NO ROW ID IS THE LEGACY FALLBACK: the offer exists, the client_offers table does not.
+    // "no offer yet" would send somebody to lock an offer that is already locked.
+    return offer.treatment
+      ? { ok: false, reason: "unreadable", message: "the offers table is not in the database yet (docs/2026-09-15-offers-and-framework.sql has not run)" }
+      : { ok: false, reason: "no_offer", message: "no offer is stored under an audience yet" };
   }
   const cur = await currentDocument({ audienceId: offer.audienceId, offerId: offer.id, kind: "sales_letter" });
   if (!cur.ok) return { ok: false, reason: "unreadable", message: cur.error };
@@ -505,13 +509,9 @@ export async function approvedLetterFor(clientId: string): Promise<
 export async function letterStatusLine(clientId: string): Promise<string> {
   const approved = await approvedLetterFor(clientId);
   if (approved.ok) return `:page_facing_up: Sales letter approved: ${describe(approved.doc)}.`;
-  if (approved.reason === "no_offer") {
-    // Locked but with no client_offers id means the offer is still read from the old column: the
-    // migration has not run. "Lock the offer first" would send somebody to re-lock a locked offer.
-    return isLocked(await loadOffer(clientId))
-      ? ":page_facing_up: Sales letter: waiting on docs/2026-09-15-offers-and-framework.sql, which gives the offer somewhere to keep it."
-      : ":page_facing_up: Sales letter: lock the offer first.";
-  }
+  // An offer read from the old column (the migration has not run) is "unreadable", not "no_offer", so
+  // this line never tells somebody to lock an offer that is already locked.
+  if (approved.reason === "no_offer") return ":page_facing_up: Sales letter: lock the offer first.";
   return `:page_facing_up: Sales letter: ${approved.message}. Step 11's script waits for an approved one.`;
 }
 
@@ -645,6 +645,22 @@ export async function handleLetterThreadReply(input: {
           `:white_check_mark: Sales letter approved: ${describe(doc)}, by ${input.by}.`,
           "It is message 1 of step 11's framework script, for this treatment and outcome. A new treatment or outcome asks for it to be approved again.",
         ].join("\n"),
+        // ‼️ STEP 11 USUALLY RAN ALREADY. Its runner fires when the prep call is marked done, typically
+        // before any letter exists, and it posted a waiting note. Nothing else would ever post the script,
+        // so approving does, when that step has run. No model call.
+        after: async () => {
+          const { data } = await supabaseAdmin
+            .from("client_delivery_steps")
+            .select("status")
+            .eq("client_id", input.clientId)
+            .eq("step_key", "avatar_harvest")
+            .maybeSingle();
+          const status = (data as { status?: string } | null)?.status;
+          if (!status || status === "pending" || status === "blocked") return;
+          const { postFrameworkScript } = await import("./framework-thread");
+          const res = await postFrameworkScript(input.clientId);
+          if (!res.ok) console.error("[sales-letter] framework script not posted after approval:", res.error);
+        },
       };
     }
   }

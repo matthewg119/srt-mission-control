@@ -36,12 +36,22 @@ import { filterPhrases, droppedLine, DEBRIS_FAULTS } from "./phrase-quality";
 /** What a message has to start with to be treated as research. Case-insensitive. */
 export const RESEARCH_PREFIX = /^\s*research\s*:/i;
 
+/**
+ * `research replace:` also makes this paste the SHARED research for the avatar, and replaces a stored one
+ * that answered more sections. Without it, framework research stays on the client that pasted it.
+ */
+export const RESEARCH_REPLACE_PREFIX = /^\s*research\s+replace\s*:/i;
+
 export function isResearchPaste(text: string): boolean {
-  return RESEARCH_PREFIX.test(text);
+  return RESEARCH_PREFIX.test(text) || RESEARCH_REPLACE_PREFIX.test(text);
+}
+
+export function isResearchReplace(text: string): boolean {
+  return RESEARCH_REPLACE_PREFIX.test(text);
 }
 
 export function stripPrefix(text: string): string {
-  return text.replace(RESEARCH_PREFIX, "").trim();
+  return text.replace(RESEARCH_REPLACE_PREFIX, "").replace(RESEARCH_PREFIX, "").trim();
 }
 
 /**
@@ -386,11 +396,55 @@ export async function afterResearchPaste(clientId: string, rawText: string): Pro
     const lines: string[] = [];
     const answered = profile.parseResearchSections(body).filter(profile.sectionAnswered).length;
 
+    const replace = isResearchReplace(rawText);
+    const countAnswered = (text: string | null | undefined) =>
+      text ? profile.parseResearchSections(text).filter(profile.sectionAnswered).length : 0;
+
+    // ‼️ THE CLIENT'S OWN COPY FIRST (audience_documents), BECAUSE FRAMEWORK RESEARCH WAS WRITTEN WITH THIS
+    // CLIENT'S SALES LETTER IN THE PROMPT. Storing it straight into the SHARED avatar_briefs would hand one
+    // client's letter-derived material to every other client targeting the same avatar. Below, the shared
+    // row is written only when it is empty or on `research replace:`.
+    let ownNote: string | null = null;
+    if (answered >= profile.FULL_RESEARCH_MIN_SECTIONS) {
+      const { currentDocument, storeDocument } = await import("./audience-documents");
+      const own = await currentDocument({ audienceId: audience.id, offerId: null, kind: "deep_research" });
+      const ownAnswered = own.ok ? countAnswered(own.doc?.content) : 0;
+      if (own.ok && ownAnswered > answered && !replace) {
+        ownNote =
+          `:paperclip: This client's stored research answers ${ownAnswered} sections and this paste answers ${answered}, ` +
+          "so the stored one was kept. Send it as `research replace:` to replace it anyway.";
+      } else if (own.ok) {
+        const saved = await storeDocument({
+          clientId,
+          audienceId: audience.id,
+          offerId: null,
+          kind: "deep_research",
+          content: body,
+          parsed: { answered },
+          source: "pasted",
+          by: "research paste",
+        });
+        ownNote = saved.ok
+          ? `:floppy_disk: Kept on this client as *${audience.label}*'s research, ${answered} sections answered.`
+          : `:warning: The research could not be kept on this client: ${saved.error}`;
+      }
+      // own.ok false: audience_documents is not there yet. The shared path below still runs as before.
+    }
+    if (ownNote) lines.push(ownNote);
+
     if (answered < profile.FULL_RESEARCH_MIN_SECTIONS) {
       lines.push(
         `:paperclip: Not saved as *${audience.label}*'s research: this paste answers ${answered} numbered ` +
           `section${answered === 1 ? "" : "s"}, and a full answer answers at least ${profile.FULL_RESEARCH_MIN_SECTIONS}. ` +
           "What was already stored is untouched. That is expected for a KEYWORDS block pasted on its own."
+      );
+    } else if (
+      !replace &&
+      (await avatarBriefFor(audience.researchVertical, audience.researchAvatarSlug))?.researchText
+    ) {
+      lines.push(
+        `:lock: The shared research every client targeting *${audience.label}* reads was left as it was. ` +
+          "`research replace:` (or `share research`) makes this paste the shared one."
       );
     } else {
       const before = await avatarBriefFor(audience.researchVertical, audience.researchAvatarSlug);
