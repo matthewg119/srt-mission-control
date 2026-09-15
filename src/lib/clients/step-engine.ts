@@ -408,15 +408,29 @@ async function instructionsFor(
 
       const body = found.candidates.length
         ? [
-            // ‼️ THE CAVEAT STAYS. These are cached per NICHE, not per business, so every client
-            // audited in this niche this month has the same three. They are candidates and never
-            // a default, and rejecting all three is an available answer.
-            `Three candidates from the \`${found.nicheKey}\` brief. They are cached per NICHE, not`,
-            "per business, so every client audited in this niche this month has the same three.",
-            "Candidates, never a default. Rejecting all three is a real answer.",
+            ...(found.matchedBy === "loom_pick"
+              ? [
+                  // The menu this client was pitched on as a prospect, frozen when the Loom was made.
+                  // Still candidates: the Loom pick is the preferred one, not a decision.
+                  "The three customers offered when this client's Loom was recorded, as they were then.",
+                  "The :dart: one is who the Loom was aimed at. Still candidates: rejecting all three is a real answer.",
+                ]
+              : [
+                  // ‼️ THE CAVEAT STAYS. These are cached per NICHE, not per business, so every client
+                  // audited in this niche this month has the same three. They are candidates and never
+                  // a default, and rejecting all three is an available answer.
+                  `Three candidates from the \`${found.nicheKey}\` brief. They are cached per NICHE, not`,
+                  "per business, so every client audited in this niche this month has the same three.",
+                  "Candidates, never a default. Rejecting all three is a real answer.",
+                ]),
             "",
             ...found.candidates.flatMap((a) => [
-              `*${a.slot} — ${a.label}*`,
+              `*${a.slot}: ${a.label}*` +
+                (a.loomPick === "picked"
+                  ? "  :dart: _picked for the Loom_"
+                  : a.loomPick === "considered"
+                    ? "  _considered for the Loom_"
+                    : ""),
               ...(a.ticket ? [`     ${a.ticket}`] : []),
               ...(a.why ? [`     ${a.why}`] : []),
             ]),

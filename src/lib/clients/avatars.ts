@@ -57,6 +57,11 @@ export interface AvatarCandidate {
   ticket: string | null;
   /** The question this buyer types into an engine. */
   aiQuestion: string | null;
+  /**
+   * What happened to this customer on the prospect's Loom: the one it was recorded for, or one that
+   * was picked and then moved off. Null when the menu did not come from a Loom.
+   */
+  loomPick?: "picked" | "considered" | null;
 }
 
 export interface AvatarCandidates {
@@ -66,7 +71,7 @@ export interface AvatarCandidates {
   /** Which niche brief these came from, so the card can say it out loud. */
   nicheKey: string | null;
   /** How that brief was found. `vertical` is the clean case; the rest are the fallback ladder. */
-  matchedBy: "vertical" | "business_type" | "niche_key_is_business_type" | "none";
+  matchedBy: "loom_pick" | "vertical" | "business_type" | "niche_key_is_business_type" | "none";
   candidates: AvatarCandidate[];
 }
 
@@ -103,6 +108,16 @@ export async function avatarCandidatesFor(clientId: string): Promise<AvatarCandi
     .maybeSingle();
 
   const businessType = ((client?.business_type as string | null) ?? "").trim();
+
+  // ‼️ THE LOOM'S MENU FIRST, WHEN THIS CLIENT WAS A PROSPECT WHO GOT ONE (2026-09-15). Matthew: "if
+  // I do an AI visibility audit and I select the type of avatar I want to mention in the loom I want
+  // to be able to save that data and have it connected to that customer so we know that's the
+  // preferred avatar or at least one of the options". The audit follows the prospect into the client
+  // at intake (adopt-audit.ts), and the Loom froze the menu it was picked from (loom_state.buyerMap).
+  // That frozen menu is what the prospect was pitched, so it is what this step offers, with the
+  // pick marked. niche_briefs below is regenerated every 30 days and may no longer contain it.
+  const loom = await loomMenuFor(clientId);
+  if (loom) return { ok: true, vertical, nicheKey: loom.nicheKey, matchedBy: "loom_pick", candidates: loom.candidates };
 
   const pick = async (
     column: "niche_key" | "business_type",
@@ -144,10 +159,60 @@ export async function avatarCandidatesFor(clientId: string): Promise<AvatarCandi
       why: str(a.whyHighRoi) ?? str(a.why),
       ticket: str(a.ticket),
       aiQuestion: str(a.aiQuestion),
+      loomPick: null,
     };
   });
 
   return { ok: true, vertical, nicheKey: found.row.niche_key, matchedBy: found.matchedBy, candidates };
+}
+
+/**
+ * The customer menu frozen on this client's most recent Loom, with the pick marked, or null.
+ *
+ * Reads only audits already linked to this client (client_id is set by adopt-audit.ts or by a run
+ * fired for the client). Rows from before the snapshot existed carry no buyerMap and are skipped,
+ * because their avatarIndex points into a menu that may have been rewritten since.
+ */
+async function loomMenuFor(
+  clientId: string
+): Promise<{ nicheKey: string | null; candidates: AvatarCandidate[] } | null> {
+  const { data, error } = await supabaseAdmin
+    .from("audit_reports")
+    .select("loom_state, created_at")
+    .eq("client_id", clientId)
+    .order("created_at", { ascending: false })
+    .limit(5);
+  if (error || !data) return null;
+
+  for (const row of data as Array<{ loom_state: Record<string, unknown> | null }>) {
+    const state = row.loom_state as {
+      buyerMap?: { best?: Array<Record<string, unknown>>; nicheKey?: string | null };
+      pickedAvatar?: { label?: string };
+      picks?: Array<{ label?: string }>;
+    } | null;
+    const best = state?.buyerMap?.best;
+    if (!Array.isArray(best) || !best.length) continue;
+
+    const norm = (v: unknown) => (typeof v === "string" ? v.trim().toLowerCase() : "");
+    const picked = norm(state?.pickedAvatar?.label);
+    const considered = new Set((state?.picks ?? []).map((p) => norm(p.label)).filter(Boolean));
+
+    const candidates: AvatarCandidate[] = best.slice(0, 3).map((a, i) => {
+      const label = (typeof a.label === "string" && a.label.trim()) || `Candidate ${i + 1}`;
+      const key = norm(label);
+      return {
+        slot: AVATAR_SLOTS[i],
+        label,
+        slug: slugifyAvatar(label),
+        why: (typeof a.whyHighRoi === "string" && a.whyHighRoi.trim()) || null,
+        ticket: (typeof a.ticket === "string" && a.ticket.trim()) || null,
+        aiQuestion: (typeof a.aiQuestion === "string" && a.aiQuestion.trim()) || null,
+        loomPick: key && key === picked ? "picked" : considered.has(key) ? "considered" : null,
+      };
+    });
+    return { nicheKey: state?.buyerMap?.nicheKey ?? null, candidates };
+  }
+  return null;
 }
 
 export interface ConfirmedAvatar {
