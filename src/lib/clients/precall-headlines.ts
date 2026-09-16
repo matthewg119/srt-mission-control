@@ -413,7 +413,13 @@ export async function shortlist(clientId: string): Promise<ShortlistRow[]> {
     .eq("client_id", clientId)
     .eq("origin", "pre_call")
     .is("dropped_at", null)
-    .order("created_at", { ascending: true });
+    // ‼️ TIE-BROKEN ON id, AND WITHOUT IT THE NUMBERS LIE. All thirty three are inserted by one
+    // statement, so they share a created_at to the microsecond and Postgres is free to return them in
+    // any order. The number beside a headline on the card IS its position in this list, and
+    // `headlines pick 4` resolves position four from a second call to this function: two different
+    // orders means a person keeps a line they never read.
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true });
 
   return ((data ?? []) as Array<Record<string, unknown>>).map((r) => {
     const kw = (Array.isArray(r.client_keywords) ? r.client_keywords[0] : r.client_keywords) as
