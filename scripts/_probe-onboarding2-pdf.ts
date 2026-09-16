@@ -118,10 +118,35 @@ async function main(): Promise<void> {
     `got ${live.sections.length}`
   );
 
+  // ‼️ A ONE-CLAUSE DOCUMENT STOPS HERE, AND IT STOPS LOUDLY.
+  // Everything below rebuilds a seven-clause v3 snapshot out of three real ones, and the
+  // free plan is a single page of service terms. It is never signed, never rendered for a
+  // signer, and has no predecessor to replay, so there is nothing here for it to prove.
+  // Skipping and saying so beats inventing a degenerate case that passes and means nothing.
+  //
+  // It sits ABOVE check 2 rather than below it because check 2 is already multi-clause: it
+  // overwrites one clause with a sentinel and asserts a DIFFERENT clause's wording is gone,
+  // which needs at least two to be a statement about anything.
+  if (live.sections.length < 3) {
+    console.log(
+      `\nSKIPPED  everything past the snapshot check: ${OFFER} is a ${live.sections.length} clause document.`
+    );
+    console.log(
+      "         It is never signed, so there is no historical snapshot of it to render."
+    );
+    console.log(failures ? `\n${failures} FAILED` : "\nAll checks passed.");
+    process.exit(failures ? 1 : 0);
+  }
+
   // ── 2. THE ONE THAT MATTERS. An edited template must not reach an old row. ──
   const old: AgreementSnapshot = JSON.parse(JSON.stringify(live)) as AgreementSnapshot;
   old.version = "v-probe-old";
-  old.sections[2] = { ...old.sections[2], body: [SENTINEL] };
+  // ‼️ THE LAST CLAUSE, NOT THE THIRD. This was `old.sections[2]`, which assumed the document has
+  // at least three clauses. The free plan is one page of service terms, so index 2 is undefined
+  // and the renderer died on a TypeError rather than reporting anything. Any clause proves the
+  // same point: the renderer must read the ROW and not the live template.
+  const lastIdx = old.sections.length - 1;
+  old.sections[lastIdx] = { ...old.sections[lastIdx], body: [SENTINEL] };
 
   const oldPdf = renderAgreementPdf(old, fakeSignature(old));
   const oldText = await textOf(oldPdf);
@@ -132,11 +157,15 @@ async function main(): Promise<void> {
     oldText.includes(SENTINEL) ? "" : "the sentinel is missing, so the PDF is not reading the row"
   );
 
-  const liveSection3 = AGREEMENT_SECTIONS[2].body[0].slice(0, 60).replace(/\s+/g, " ");
+  // ‼️ THE SAME CLAUSE THE SENTINEL REPLACED, AND IT HAS TO BE. This read AGREEMENT_SECTIONS[2]
+  // while the sentinel above overwrote the LAST clause, so it was asserting that some untouched
+  // clause's wording was absent, which it never would be. A check whose two halves point at
+  // different clauses passes or fails for reasons unrelated to what it claims to test.
+  const overwritten = AGREEMENT_SECTIONS[lastIdx].body[0].slice(0, 60).replace(/\s+/g, " ");
   check(
-    "the live template's section 3 wording is ABSENT from the old snapshot's PDF",
-    !oldText.includes(liveSection3),
-    oldText.includes(liveSection3)
+    "the live template's wording for that clause is ABSENT from the old snapshot's PDF",
+    !oldText.includes(overwritten),
+    oldText.includes(overwritten)
       ? "agreement-pdf.ts is reaching for the live template. That breaks the entire design."
       : ""
   );
@@ -156,12 +185,28 @@ async function main(): Promise<void> {
     "SRT Agency LLC, srtagency.com, Greensboro, NC",
     "v3, includes AI Skin Concierge deliverable and privacy clauses.",
   ];
-  // !! PICKED BY KEY, NEVER BY POSITION. These three are the clauses that really did occupy 1,
-  // 2 and 3 in v3, and they still exist under different numbers. Reading them off the front of
-  // the array is what silently broke when v5 inserted two clauses at the top.
-  const v3Head = ["what_we_do", "after_five", "guarantee"].map((key, i) => {
+  // !! PICKED BY KEY, NEVER BY POSITION. Reading them off the front of the array is what silently
+  // broke when v5 inserted two clauses at the top, and picking by position would break again on
+  // every restructure.
+  //
+  // !! THE THREE KEYS THEMSELVES RETIRED IN v6 AND THAT IS NOT A BUG IN THIS PROBE. `what_we_do`,
+  // `after_five` and `guarantee` were the v3 names for clauses that now exist per offer, because
+  // the yearly and monthly documents say different things in those three places and one key may
+  // never carry two texts. So the probe asks the VARIANT it is running against for its own
+  // equivalents. The old names are deliberately not resurrected: onboarding2_initials rows still
+  // reference them and they must keep meaning exactly what they meant.
+  //
+  // What these three are FOR is borrowing a real heading, body and sha to hang a synthetic v3
+  // snapshot on. The substance being tested is the four invented clauses below, which exist
+  // nowhere in the codebase and can only come off a stored row.
+  const HEAD_KEYS: Record<string, [string, string, string]> = {
+    year_3300: ["what_we_do_yearly", "fee_yearly", "guarantee_yearly"],
+    month_349: ["what_we_do_monthly", "fee_monthly", "client_reviews"],
+    review_free: ["free_terms", "free_terms", "free_terms"],
+  };
+  const v3Head = HEAD_KEYS[OFFER].map((key, i) => {
     const sec = live.sections.find((s) => s.key === key);
-    if (!sec) throw new Error(`[probe] v3 replay needs section "${key}" and the template has none`);
+    if (!sec) throw new Error(`[probe] v3 replay needs section "${key}" and ${OFFER} has none`);
     return { ...sec, n: i + 1 };
   });
   v3.sections = [

@@ -37,6 +37,8 @@ import { PresenceSweepForm } from "./presence-sweep-form";
 import { AvatarForm } from "./avatar-form";
 import { avatarCandidatesFor, confirmedAvatarFor } from "@/lib/clients/avatars";
 import { PaymentForm, type PaymentView } from "./payment-form";
+import { AgreementForm, type AgreementView } from "@/components/clients/agreement-form";
+import { isOfferKey } from "@/config/pitch";
 import { loadCandidates, REQUIRED_SELECTIONS } from "@/lib/clients/competitors";
 import { loadReviewAudit, reviewPlatformLabel } from "@/lib/clients/review-audit";
 import { loadSweep } from "@/lib/clients/presence-sweep";
@@ -242,6 +244,25 @@ export default async function ClientDetailPage({
     note: (client.payment_note as string | null) ?? null,
     accessOutstanding:
       (delivery ?? []).find((d) => d.step_key === "access_granted")?.status !== "complete",
+  };
+
+  // ‼️ THE MOST RECENT SIGNATURE, IF THERE IS ONE, AND IT DECIDES WHETHER THE PANEL OFFERS TO
+  // SEND ANYTHING. A second link minted over an executed contract is how one client ends up with
+  // two signed agreements, which somebody then reconciles by hand. Read here rather than in the
+  // component because the component is a client one and this is a service-role query.
+  const { data: signedRow } = await supabaseAdmin
+    .from("onboarding2_signings")
+    .select("signed_at, template_version")
+    .eq("client_id", id)
+    .not("signed_at", "is", null)
+    .order("signed_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  const agreementView: AgreementView = {
+    offerKey: isOfferKey(client.offer_key) ? client.offer_key : null,
+    signedAt: (signedRow?.signed_at as string | null) ?? null,
+    templateVersion: (signedRow?.template_version as string | null) ?? null,
   };
 
   // The twenty questions this client's most recent audit actually ran, which are what a
@@ -655,6 +676,24 @@ export default async function ClientDetailPage({
           </span>
         </div>
         <PaymentForm clientId={id} view={paymentView} />
+      </div>
+
+      {/* ── The agreement. id="agreement" so the step card can link straight here. ── */}
+      <div
+        id="agreement"
+        className="mb-8 rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-5"
+      >
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-sm font-medium text-white">Agreement</h2>
+          <span className="text-xs text-[rgba(255,255,255,0.4)]">
+            {agreementView.signedAt
+              ? `signed ${agreementView.signedAt.slice(0, 10)}`
+              : agreementView.offerKey
+                ? "not signed yet"
+                : "no offer recorded"}
+          </span>
+        </div>
+        <AgreementForm clientId={id} view={agreementView} />
       </div>
 
       {/* ── DNS ── */}
