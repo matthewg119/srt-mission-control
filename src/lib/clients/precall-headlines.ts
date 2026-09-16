@@ -79,9 +79,12 @@ export async function emotionalLayer(clientId: string): Promise<EmotionalLayer> 
     .eq("objection_phrase", true);
 
   const found = count ?? 0;
-  // Beliefs alone are not enough and neither are objections alone: the ladder claims come off the
-  // beliefs and the doors come off the objections, so a rung written from one of the two is half a rung.
-  return { vertical, count: found, beliefs, ok: found >= EMOTIONAL_FLOOR && beliefs > 0 };
+  // ‼️ THE OBJECTIONS BLOCK AND THE BELIEFS ONLY WARN (2026-09-16). Requiring both refused SRT, whose
+  // vertical carries 47 objections and whose necessary_beliefs document has never been pasted: the ladder
+  // had already been written and anchored without them, and the headline prompt treats beliefs as one
+  // block among several. Matthew asked for the twenty emotional questions per vertical, which is what
+  // this gate is, and a missing framework document is a thing to say on the card rather than a wall.
+  return { vertical, count: found, beliefs, ok: found >= EMOTIONAL_FLOOR };
 }
 
 /** What to post when a vertical has never been given its emotional layer. */
@@ -579,12 +582,18 @@ export async function handlePreCallHeadlineReply(input: {
 
   const layer = await emotionalLayer(input.clientId);
   if (!layer.ok) return { message: emotionalAskLines(layer).join("\n") };
+  // Not a refusal: the prompt is weaker without them and the thread should say so once.
+  const thin = layer.beliefs === 0;
 
   const rung = state.ladder.rungs.find((r) => r.stage === stage);
   if (!rung) return { message: `:warning: The stored ladder has no stage ${stage}. \`ladder\` rewrites it.` };
 
   return {
-    message: `:hourglass_flowing_sand: Writing ${PRE_CALL_HEADLINES} headlines at stage ${stage}, ${stageName(stage)}, one approved search each. About a minute.`,
+    message:
+      `:hourglass_flowing_sand: Writing ${PRE_CALL_HEADLINES} headlines at stage ${stage}, ${stageName(stage)}, one approved search each. About a minute.` +
+      (thin
+        ? "\n:warning: No necessary beliefs are on file for this audience, so the lines are written from the objections and the offer alone. `beliefs:` at the prep call step sharpens the next run."
+        : ""),
     after: async () => {
       const got = await generatePreCallHeadlines({
         clientId: input.clientId,

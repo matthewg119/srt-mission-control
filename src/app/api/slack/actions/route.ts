@@ -147,7 +147,7 @@ async function logButtonPress(
 }
 
 async function handleBlockAction(payload: SlackInteractivePayload): Promise<NextResponse> {
-  const action = payload.actions?.[0];
+  let action = payload.actions?.[0];
   console.log("[slack/actions] hit", { type: payload.type, action: action?.action_id });
   if (!action) return NextResponse.json({ ok: true });
 
@@ -166,7 +166,17 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
   // falls back to the thread. A press on something that is not about a client logs nothing.
   void logButtonPress(action, channel, slackTs, userId);
 
-  switch (action.action_id) {
+  // ‼️ AN action_id MAY CARRY A "#n" SUFFIX, AND THE SWITCH MUST NOT SEE IT (2026-09-16).
+  // Slack rejects a whole message when two buttons in one block share an action_id, with
+  // invalid_blocks and nothing rendered. Step 21 offers one button per pillar candidate and one per
+  // rung, so every one of those cards was refused: the card body posted, the buttons did not, and the
+  // only sign was a line in a server log. That is why the ladder card said "Press [Anchor at N]" next
+  // to no such button. Builders that emit a set now suffix "#0", "#1", and the suffix is stripped here
+  // so forty existing cases keep matching on the name they always had.
+  const actionId = action.action_id.replace(/#\d+$/, "");
+  action = { ...action, action_id: actionId };
+
+  switch (actionId) {
     case "ai_approve":
     case "apply_check":
       // "Check" on a standalone /apply card resolves + executes the pending

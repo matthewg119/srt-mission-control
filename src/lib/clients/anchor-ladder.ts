@@ -467,9 +467,11 @@ async function headlineCardLines(clientId: string, stage: AwarenessStage): Promi
 export async function step21Actions(clientId: string): Promise<Array<{ label: string; actionId: string; value: string }>> {
   const st = await ladderState(clientId);
   if (st.ladder && !(st.approved && st.anchorStage)) {
-    return st.ladder.rungs.map((r) => ({
+    // The "#n" suffix keeps every action_id in the message unique, which Slack requires; the
+    // dispatcher strips it. Without it Slack refuses the whole card and renders no buttons at all.
+    return st.ladder.rungs.map((r, i) => ({
       label: `Anchor at ${r.stage}${st.ladder!.recommendedStage === r.stage ? " (recommended)" : ""}`,
-      actionId: "ladder_pick",
+      actionId: `ladder_pick#${i}`,
       value: `${clientId}:${r.stage}`,
     }));
   }
@@ -479,10 +481,14 @@ export async function step21Actions(clientId: string): Promise<Array<{ label: st
     if ("error" in ps) return [];
     const out: Array<{ label: string; actionId: string; value: string }> = [];
     if (!ps.pillar) {
-      for (const r of ps.pillarCandidates) {
+      ps.pillarCandidates.forEach((r, i) => {
         const label = `Pillar ${r.rank}: ${r.phrase}`;
-        out.push({ label: label.length > 70 ? `${label.slice(0, 67)}...` : label, actionId: "kw_pillar", value: `${clientId}:${r.id}` });
-      }
+        out.push({
+          label: label.length > 70 ? `${label.slice(0, 67)}...` : label,
+          actionId: `kw_pillar#${i}`,
+          value: `${clientId}:${r.id}`,
+        });
+      });
     }
     if (!ps.supports.length) out.push({ label: "Supports: pick for me", actionId: "kw_supports_auto", value: clientId });
     return out;

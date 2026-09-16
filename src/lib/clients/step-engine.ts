@@ -1891,9 +1891,11 @@ async function extraActionsFor(step: DeliveryStep, c: ClientFacts): Promise<Step
   // A label over 75 characters is rejected by Slack, and these come from a niche brief that
   // routinely writes "The New-Build Neighborhood HOA Property Manager". Truncated for the BUTTON
   // only; the card body prints every one of them in full.
-  return found.candidates.map((cand) => ({
+  return found.candidates.map((cand, i) => ({
     label: cand.label.length > 70 ? `${cand.label.slice(0, 67)}...` : cand.label,
-    actionId: "avatar_pick",
+    // Unique per message, because Slack refuses a card whose buttons share an action_id. The
+    // dispatcher strips the suffix. See src/app/api/slack/actions/route.ts.
+    actionId: `avatar_pick#${i}`,
     value: `${c.id}:${cand.slot}:${cand.label}`.slice(0, 2000),
   }));
 }
