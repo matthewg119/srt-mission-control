@@ -23,6 +23,7 @@ import { supabaseAdmin } from "@/lib/db";
 import {
   CHAT_FACTS,
   CHAT_FAQS,
+  type Faq,
   CHAT_HARD_LINES,
   QUALIFYING_QUESTIONS,
   QUALIFYING_INTRO,
@@ -68,6 +69,56 @@ export const GROUNDED_TOOLS = [
   },
 ];
 
+
+/**
+ * The FAQs that apply to THIS signer's document, with clause numbers filled in.
+ *
+ * Two jobs, and the second is the one that matters.
+ *
+ * ‼️ IT DROPS FAQs WHOSE CLAUSE IS NOT IN THIS VARIANT, WHICH IS HOW THE ASSISTANT STOPS
+ * DESCRIBING A GUARANTEE THE MONTHLY PLAN DOES NOT HAVE. The v6 offer split means a question
+ * like "how do I claim the refund" has a correct answer on one document and no answer at all on
+ * another. Filtering by key gets that right structurally: `guarantee_yearly` is simply not among
+ * the monthly snapshot's sections, so those six answers never reach the prompt, and the model
+ * falls through to the agreement text, which says no guarantee, rather than to a helpful
+ * paraphrase of a clause somebody else signed.
+ *
+ * This is the same posture the whole grounded path takes. "Absent beats forbidden": a fact the
+ * model never sees cannot be leaked by an instruction it decides to reinterpret.
+ *
+ * ‼️ AND IT SUBSTITUTES "{s:key}" WITH THE NUMBER THAT CLAUSE HAS HERE. Clause numbers differ
+ * between the two paid documents, so a hardcoded "Section 5" is right once and wrong once.
+ *
+ * ‼️ AN UNRESOLVED TOKEN DROPS THE WHOLE FAQ RATHER THAN SHIPPING "{s:foo}" INTO A PROMPT.
+ * A stray token is a typo in a key, and the failure modes are not equal: a dropped FAQ costs one
+ * scripted answer and the model answers from the agreement instead, while a leaked token teaches
+ * it that braces are a thing it may emit to a customer reading a contract.
+ */
+export function faqsFor(snapshot: AgreementSnapshot): Faq[] {
+  const numberOf = new Map(snapshot.sections.map((s) => [s.key, s.n]));
+  const out: Faq[] = [];
+
+  for (const faq of CHAT_FAQS) {
+    if (faq.sectionKey && !numberOf.has(faq.sectionKey)) continue;
+
+    let unresolved = false;
+    const a = faq.a.replace(/\{s:([a-z0-9_]+)\}/g, (_m, key: string) => {
+      const n = numberOf.get(key);
+      if (n === undefined) {
+        unresolved = true;
+        return "";
+      }
+      return String(n);
+    });
+    if (unresolved) {
+      console.error(`[onboarding2/chat] FAQ "${faq.q}" cites a clause absent from ${snapshot.version}`);
+      continue;
+    }
+    out.push({ ...faq, a });
+  }
+  return out;
+}
+
 /**
  * ‼️ THE AGREEMENT COMES OFF THE SNAPSHOT, NOT OFF THE CONFIG. The assistant answers questions
  * about the document THIS PERSON IS READING. After a template edit those are different
@@ -87,7 +138,7 @@ export function groundedPrompt(snapshot: AgreementSnapshot): string {
     ...CHAT_FACTS.map((f) => `- ${f}`),
     "",
     "COMMON QUESTIONS AND THEIR ANSWERS. Where one of these and a section disagree, THE SECTION WINS:",
-    ...CHAT_FAQS.map((f) => `Q: ${f.q}\nA: ${f.a}`),
+    ...faqsFor(snapshot).map((f) => `Q: ${f.q}\nA: ${f.a}`),
     "",
     "THE AGREEMENT, IN FULL. This is the only source of terms you have:",
     "",

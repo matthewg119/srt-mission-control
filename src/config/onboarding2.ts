@@ -20,6 +20,15 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { guard } from "@/lib/copy-guard";
+import {
+  GUARANTEE_COUNT,
+  GUARANTEE_WINDOW,
+  PRICE_CONCIERGE,
+  PRICE_MONTH,
+  PRICE_YEAR_AMOUNT,
+  PRICE_YEAR_EQUIV,
+  REFUND_AMOUNT,
+} from "@/config/pitch";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Screen 1. THE WHOLE IDENTITY, IN ONE PLACE, ONCE.
@@ -579,10 +588,33 @@ export const CHAT_HARD_LINES: string[] = [
 ];
 
 export interface Faq {
+  /**
+   * WHICH CLAUSE this is drawn from, by key rather than by number.
+   *
+   * ‼️ IT WAS A NUMBER UNTIL 2026-09-16 AND THAT IS THE BUG THIS FIXES. Clause numbers move every
+   * time the document is restructured: v4 renumbered fourteen clauses to nine, v5 shifted
+   * everything after 1 by two, and v6 split one document into three that number DIFFERENTLY from
+   * each other. A number stored here is a promise about a layout, and the layout is the thing
+   * most likely to change.
+   *
+   * ‼️ AND IT IS WHAT FILTERS THE LIST PER OFFER, WHICH IS THE BETTER HALF. An FAQ keyed
+   * `guarantee_yearly` simply is not in the monthly document, so faqsFor() drops it and the
+   * assistant never sees a question about a guarantee that does not exist. Answering "there is no
+   * guarantee on this plan" is then the only thing it can do, and it comes for free from the key
+   * being absent rather than from a rule somebody has to remember to write.
+   *
+   * null means the answer does not rest on any one clause.
+   */
+  sectionKey: string | null;
   q: string;
+  /**
+   * The answer.
+   *
+   * ‼️ WRITE "{s:some_key}" WHERE A CLAUSE NUMBER BELONGS, NEVER A DIGIT. faqsFor() substitutes
+   * the number that clause actually has in THIS signer's document. A literal "Section 5" here is
+   * correct in one of three documents and confidently wrong in the other two.
+   */
   a: string;
-  /** The section this is drawn from. Printed so the assistant can cite it. */
-  section: number | null;
 }
 
 /**
@@ -593,11 +625,16 @@ export interface Faq {
  * a consistent answer, NOT a second source of terms: the assistant is told that where an FAQ and
  * a section disagree, the section wins.
  *
- * ‼️ THIRTY BECAME TWENTY WHEN THE AGREEMENT WENT FROM FOURTEEN CLAUSES TO NINE (v4).
- * Fourteen of the thirty cited a clause that no longer exists, and an assistant quoting a
- * deleted section number confidently is worse than one that says it does not know.
+ * ‼️ THIRTY BECAME TWENTY AT v4, AND v6 REBUILT THEM AGAINST KEYS. The v4 note is kept below
+ * because it is the reason ten of them do not exist. What changed at v6 is that an FAQ no longer
+ * claims a clause NUMBER, so a renumber cannot desync it, and an FAQ belonging to a clause this
+ * offer does not have removes itself from the prompt.
  *
- *   DELETED, ten, because nothing in the document supports them any more:
+ * ‼️ NO PRICE IS TYPED IN AN ANSWER. The fee answers interpolate from config/pitch.ts, which is
+ * the single home for a figure. faq5a used to read "$499 per month" as a literal and went on
+ * saying it after the offer changed.
+ *
+ *   DELETED AT v4, ten, because nothing in the document supports them any more:
  *     faq13, faq14   old 4, the access list and the pause on the timeline
  *     faq15          patient records, old 6
  *     faq19, faq20, faq21  old 5, HIPAA scope, transcript ownership, software ownership
@@ -605,51 +642,72 @@ export interface Faq {
  *     faq24          old 11, the 3-month walk-away remedy
  *     faq26, faq27   old 6, fake reviews and changing the site without asking
  *
- *   REWRITTEN, four, because the text they draw on survived in a shorter form:
- *     faq16, faq17, faq18  now answer from the section 1 Concierge disclosure bullet
- *     faq25                now answers from the section 8 liability cap
- *
- * ‼️ THE `section` NUMBER AND THE "Section N" STRING INSIDE EACH ANSWER MUST AGREE, and both
- * must be 1 to 9. _probe-onboarding2-chat.ts asserts exactly that, because the two drifting
- * apart is how the assistant ends up citing a real section under the wrong number.
+ *   DELETED AT v6, because the arrangement they describe no longer exists on any offer:
+ *     faq1, faq7     "you owe nothing until the 5th qualified appointment". Both paid plans are
+ *                    paid up front, so these are now false rather than merely out of date.
  */
 export const CHAT_FAQS: Faq[] = [
-  { section: 5, q: guard("faq1q", "When do I start paying?"), a: guard("faq1a", "You owe nothing until ChatGPT has sent you 5 new qualified appointments. Section 5. Your fee starts the month after the 5th one lands.") },
-  { section: 5, q: guard("faq2q", "What counts as a qualified appointment?"), a: guard("faq2a", "Section 5 gives three tests, and all three have to be true. They book with you, they tell you they found you through ChatGPT or an AI recommendation or AI search or a similar phrase, and they actually show up.") },
-  { section: 5, q: guard("faq3q", "Who decides whether a booking qualifies?"), a: guard("faq3a", "You do. Section 5 says if we disagree, we default to your judgment.") },
-  { section: 5, q: guard("faq4q", "How do we track the 5?"), a: guard("faq4a", "Together, in your monthly AI Visibility Report. You confirm each one. Section 5.") },
-  { section: 4, q: guard("faq5q", "What is the monthly fee?"), a: guard("faq5a", "$499 per month, starting the month after the 5th qualified appointment. Section 4.") },
-  { section: 4, q: guard("faq6q", "What does the $499 cover?"), a: guard("faq6a", "Ongoing page updates, reviews, NAP maintenance, AI Skin Concierge hosting and improvements, and the monthly report. Section 4.") },
-  { section: 5, q: guard("faq7q", "Is there a setup fee?"), a: guard("faq7a", "No. Section 5 says no setup fee, no monthly fee and no hidden costs until the 5th qualified appointment lands.") },
-  { section: 4, q: guard("faq8q", "Am I locked into a year?"), a: guard("faq8a", "No. Section 4 says no annual contract, and you can cancel with 30 days written notice at any time.") },
-  { section: 9, q: guard("faq9q", "How do I cancel?"), a: guard("faq9a", "In writing, with 30 days notice, from either side. Section 9. Before the 5-appointment threshold you owe nothing. After it, you owe your final month prorated.") },
-  { section: 4, q: guard("faq10q", "Is there a cancellation fee?"), a: guard("faq10a", "No. Section 4 says no cancellation fee and no clawback of the free work.") },
-  { section: 1, q: guard("faq11q", "What exactly do you do for me?"), a: guard("faq11a", "Section 1 lists five things: rewrite key pages so ChatGPT can quote them, turn happy patients into review evidence, fix NAP mismatches across directories, install the AI Skin Concierge on your site, and send a monthly AI Visibility Report.") },
-  { section: 1, q: guard("faq12q", "What is NAP?"), a: guard("faq12a", "Name, Address and Phone. Section 1 says we fix every mismatch across every directory we can find you on.") },
-  // ‼️ FIVE NEW IN v5, FOR THE TWO NEW CLAUSES. Reviews and the booking path are the two things
-  // in this agreement that ask the CLIENT to do something, so they are the two a signer pushes
-  // back on. Without these the assistant has nothing grounded to answer with and falls through
-  // to flag_for_human on the most predictable questions in the document.
+  // ── What we do. One per variant, because the Concierge differs. ──
+  { sectionKey: "what_we_do_yearly", q: guard("faq11qy", "What exactly do you do for me?"), a: guard("faq11ay", "Section {s:what_we_do_yearly} lists five things: rewrite key pages so ChatGPT can quote them, turn happy patients into review evidence, fix NAP mismatches across directories, install the AI Skin Concierge on your site at no extra charge, and send a monthly AI Visibility Report.") },
+  { sectionKey: "what_we_do_monthly", q: guard("faq11qm", "What exactly do you do for me?"), a: guard("faq11am", "Section {s:what_we_do_monthly} lists five things: rewrite key pages so ChatGPT can quote them, turn happy patients into review evidence, fix NAP mismatches across directories, the AI Skin Concierge if you choose to add it, and send a monthly AI Visibility Report.") },
+  { sectionKey: "what_we_do_yearly", q: guard("faq12qy", "What is NAP?"), a: guard("faq12ay", "Name, Address and Phone. Section {s:what_we_do_yearly} says we fix every mismatch across every directory we can find you on.") },
+  { sectionKey: "what_we_do_monthly", q: guard("faq12qm", "What is NAP?"), a: guard("faq12am", "Name, Address and Phone. Section {s:what_we_do_monthly} says we fix every mismatch across every directory we can find you on.") },
+
+  // ── The Concierge. Answers only what the disclosure bullet says, and no more. ──
   //
-  // ‼️ THE SHORTFALL ANSWERS SAY "PAUSE THE ONGOING WORK", NEVER "PAUSE THE GUARANTEE CLOCK".
-  // There is no clock in this agreement. See point 1 of the v5 note in config/onboarding2-agreement.ts.
-  { section: 2, q: guard("faq31q", "Why do I have to get 5 reviews a month?"), a: guard("faq31a", "Section 2. Fresh reviews are what AI systems cite, and only your patients can leave them. We set up the automation, write the scripts, give your front desk a one tap request link and monitor your profiles weekly, but your team has to do the asking.") },
-  { section: 2, q: guard("faq32q", "What if I miss the 5 reviews in a month?"), a: guard("faq32a", "Nothing is charged and nothing is clawed back. Section 2 gives you a 30 day catch up window and we help you close it. If you fall short two months in a row, we can pause the ongoing work until you are back at 5 a month.") },
-  { section: 3, q: guard("faq33q", "Do I have to stop using my current booking system?"), a: guard("faq33a", "No. Section 3 says your existing system keeps running exactly as it does today for returning patients and phone bookings. The Concierge is the booking path for new patients arriving from your website and the new pages we write.") },
-  { section: 3, q: guard("faq34q", "Why does the booking have to go through the Concierge?"), a: guard("faq34a", "So it can be counted. Section 5 only counts an appointment where the patient tells you they found you through AI. The Concierge asks that question and records the answer, which is why Section 3 makes it the primary booking path on your website.") },
-  { section: 3, q: guard("faq35q", "Does the Concierge work with Vagaro or Boulevard?"), a: guard("faq35a", "Yes. Section 3 names Vagaro, Boulevard, Mindbody and Zenoti. The Concierge carries the visitor into whichever one you run and the booking is completed there, so the appointment shows up in the same calendar your front desk already works from.") },
-  // ‼️ THESE THREE WERE REWRITTEN, NOT DELETED, WHEN v4's SECTION 5 WENT. They now answer ONLY what
-  // the section 1 disclosure bullet says, which is less than old section 5 said. Anything beyond
-  // it (HIPAA posture, transcript ownership, who owns the software) is no longer in the document
-  // and the assistant must fall through to flag_for_human rather than answer from memory.
-  { section: 1, q: guard("faq16q", "What is the AI Skin Concierge?"), a: guard("faq16a", "Section 1. A skin analysis widget we install on your site. It captures high-intent visitors, gives them a personalized skin assessment, and books qualified consultations into your calendar.") },
-  { section: 1, q: guard("faq17q", "Is the Concierge a medical device?"), a: guard("faq17a", "No. Section 1 states it is not a medical device and it does not diagnose or treat.") },
-  { section: 1, q: guard("faq18q", "What happens to the photos?"), a: guard("faq18a", "Section 1: any facial photo a visitor submits is used only for that analysis and deleted within 24 hours.") },
-  { section: 6, q: guard("faq23q", "Do you work with my competitors?"), a: guard("faq23a", "Section 6: while you are an active client we will not take on another clinic offering the same primary service within a 10-mile radius of your primary location. If you cancel, that ends.") },
-  // Re-pointed at section 10, where the cap now lives. The 3-month walk-away remedy that used to
-  // sit beside it in old section 11 is gone, so this answer no longer mentions one.
-  { section: 10, q: guard("faq25q", "What is your liability capped at?"), a: guard("faq25a", "Section 10 caps it at the total you have paid us in the previous 3 months, which starts at $0 until the 5-appointment mark. It excludes lost revenue, lost patients, third-party downtime and indirect damages.") },
-  { section: 8, q: guard("faq28q", "How do we communicate?"), a: guard("faq28a", "Section 8: email or WhatsApp, whichever you prefer, and we respond to any message within one business day.") },
-  { section: 10, q: guard("faq29q", "Which state's law applies?"), a: guard("faq29a", "North Carolina. Section 10. Any dispute goes to mediation in Guilford County before any lawsuit.") },
-  { section: 11, q: guard("faq30q", "Does anything said on a call override this?"), a: guard("faq30a", "No. Section 11 says this document is the entire agreement, nothing said in a Loom, a call, an email or a text supersedes it, and changes have to be in writing signed by both sides.") },
+  // ‼️ THESE WERE REWRITTEN, NOT DELETED, WHEN v4's SECTION 5 WENT. They answer ONLY what the
+  // what-we-do disclosure bullet says, which is less than old section 5 said. Anything beyond it
+  // (HIPAA posture, transcript ownership, who owns the software) is no longer in the document and
+  // the assistant must fall through to flag_for_human rather than answer from memory.
+  { sectionKey: "what_we_do_yearly", q: guard("faq16qy", "What is the AI Skin Concierge?"), a: guard("faq16ay", "Section {s:what_we_do_yearly}. A skin analysis widget we install on your site. It captures high-intent visitors, gives them a personalized skin assessment, and books qualified consultations into your calendar. On this plan it is included at no extra charge.") },
+  { sectionKey: "what_we_do_monthly", q: guard("faq16qm", "What is the AI Skin Concierge?"), a: guard("faq16am", `Section {s:what_we_do_monthly}. A skin analysis widget we install on your site. It captures high-intent visitors, gives them a personalized skin assessment, and books qualified consultations into your calendar. On this plan it is optional and billed separately at ${PRICE_CONCIERGE}.`) },
+  { sectionKey: "what_we_do_yearly", q: guard("faq17qy", "Is the Concierge a medical device?"), a: guard("faq17ay", "No. Section {s:what_we_do_yearly} states it is not a medical device and it does not diagnose or treat.") },
+  { sectionKey: "what_we_do_monthly", q: guard("faq17qm", "Is the Concierge a medical device?"), a: guard("faq17am", "No. Section {s:what_we_do_monthly} states it is not a medical device and it does not diagnose or treat.") },
+  { sectionKey: "what_we_do_yearly", q: guard("faq18qy", "What happens to the photos?"), a: guard("faq18ay", "Section {s:what_we_do_yearly}: any facial photo a visitor submits is used only for that analysis and deleted within 24 hours.") },
+  { sectionKey: "what_we_do_monthly", q: guard("faq18qm", "What happens to the photos?"), a: guard("faq18am", "Section {s:what_we_do_monthly}: any facial photo a visitor submits is used only for that analysis and deleted within 24 hours.") },
+
+  // ── The money. Interpolated, never typed. ──
+  { sectionKey: "fee_yearly", q: guard("faq5qy", "What does this cost?"), a: guard("faq5ay", `Section {s:fee_yearly}. ${PRICE_YEAR_AMOUNT} for twelve months, due on signing. That works out at ${PRICE_YEAR_EQUIV}, and there is nothing else to pay for the rest of the year.`) },
+  { sectionKey: "fee_monthly", q: guard("faq5qm", "What does this cost?"), a: guard("faq5am", `Section {s:fee_monthly}. ${PRICE_MONTH}, billed on the same day each month. No setup fee and no cancellation fee.`) },
+  { sectionKey: "fee_yearly", q: guard("faq6qy", "What does that cover?"), a: guard("faq6ay", "Section {s:fee_yearly}: ongoing page updates, reviews, NAP maintenance, AI Skin Concierge hosting and improvements, and the monthly report. No setup fee, no per-page fee and no hidden costs.") },
+  { sectionKey: "fee_monthly", q: guard("faq6qm", "What does that cover?"), a: guard("faq6am", `Section {s:fee_monthly}: ongoing page updates, reviews, NAP maintenance and the monthly report. The AI Skin Concierge is not included. If you want it, it is ${PRICE_CONCIERGE} on top and you can add or drop it at any time.`) },
+  { sectionKey: "fee_yearly", q: guard("faq8qy", "Am I locked into a year?"), a: guard("faq8ay", "Yes, and that is the trade. Section {s:fee_yearly} is a twelve month arrangement paid once up front, which is what pays for the guarantee. If you would rather not commit, the month to month plan has no term and no guarantee.") },
+  { sectionKey: "fee_monthly", q: guard("faq8qm", "Am I locked into a year?"), a: guard("faq8am", "No. Section {s:fee_monthly}: no annual contract, and you can cancel with 30 days written notice at any time.") },
+
+  // ── The guarantee. YEARLY ONLY, and it removes itself from the monthly prompt. ──
+  { sectionKey: "guarantee_yearly", q: guard("faq1q6", "What is the guarantee?"), a: guard("faq1a6", `Section {s:guarantee_yearly}. We bring you ${String(GUARANTEE_COUNT)} qualified appointments inside your first ${GUARANTEE_WINDOW}. If we do not, you get your first 3 months back, which is ${REFUND_AMOUNT}, and we keep working for the rest of the year at no charge.`) },
+  { sectionKey: "guarantee_yearly", q: guard("faq2q6", "What counts as a qualified appointment?"), a: guard("faq2a6", "Section {s:guarantee_yearly} gives three tests and all three have to be true. They book with you, they tell you they found you through ChatGPT or an AI recommendation or AI search or a similar phrase, and they actually show up.") },
+  { sectionKey: "guarantee_yearly", q: guard("faq3q6", "Who decides whether a booking qualifies?"), a: guard("faq3a6", "You do. Section {s:guarantee_yearly} says if we disagree, we default to your judgment.") },
+  { sectionKey: "guarantee_yearly", q: guard("faq4q6", "How do we track them?"), a: guard("faq4a6", "Together, in your monthly AI Visibility Report. You confirm each one. Section {s:guarantee_yearly}.") },
+  { sectionKey: "guarantee_yearly", q: guard("faq36q", "How do I claim the refund?"), a: guard("faq36a", `Section {s:guarantee_yearly}. You tell us, and we refund ${REFUND_AMOUNT}. There is nothing to fill in and you do not have to ask twice. You do not have to end the agreement to claim it: we carry on working for the remaining nine months at no further charge.`) },
+  { sectionKey: "guarantee_yearly", q: guard("faq37q", "Can anything pause the 90 days?"), a: guard("faq37a", "Two things, and they are the two only you can do. Section {s:guarantee_yearly}: the 5 reviews a month, and new patient bookings running through the Concierge so an appointment can be counted at all. If either stops, the days it is stopped for do not count toward the 90.") },
+  { sectionKey: "fee_monthly", q: guard("faq38q", "Is there a guarantee on this plan?"), a: guard("faq38a", "No. Section {s:fee_monthly} says this plan carries no performance guarantee and no refunds. Months already served are not returned. What you keep is everything we built. If you would rather we carried some of that risk, the annual plan does, and you can ask to move onto it at any time.") },
+
+  // ── What we need from you. client_reviews is shared, so one entry covers both plans. ──
+  { sectionKey: "client_reviews", q: guard("faq31q", "Why do I have to get 5 reviews a month?"), a: guard("faq31a", "Section {s:client_reviews}. Fresh reviews are what AI systems cite, and only your patients can leave them. We set up the automation, write the scripts, give your front desk a one tap request link and monitor your profiles weekly, but your team has to do the asking.") },
+  { sectionKey: "client_reviews", q: guard("faq32q", "What if I miss the 5 reviews in a month?"), a: guard("faq32a", "Nothing is charged and nothing is clawed back. Section {s:client_reviews} gives you a 30 day catch up window and we help you close it. If you fall short two months in a row, we can pause the ongoing work until you are back at 5 a month.") },
+
+  { sectionKey: "client_booking_yearly", q: guard("faq33qy", "Do I have to stop using my current booking system?"), a: guard("faq33ay", "No. Section {s:client_booking_yearly} says your existing system keeps running exactly as it does today for returning patients and phone bookings. The Concierge is the booking path for new patients arriving from your website and the new pages we write.") },
+  { sectionKey: "client_booking_yearly", q: guard("faq34q", "Why does the booking have to go through the Concierge?"), a: guard("faq34a", "So it can be counted. The guarantee only counts an appointment where the patient tells you they found you through AI, and Section {s:client_booking_yearly} is what makes sure that question gets asked and the answer gets kept.") },
+  { sectionKey: "client_booking_yearly", q: guard("faq35q", "Does the Concierge work with Vagaro or Boulevard?"), a: guard("faq35a", "Yes. Section {s:client_booking_yearly} names Vagaro, Boulevard, Mindbody and Zenoti. The Concierge carries the visitor into whichever one you run and the booking is completed there, so the appointment shows up in the same calendar your front desk already works from.") },
+  { sectionKey: "client_booking_monthly", q: guard("faq33qm", "Do I have to change how I take bookings?"), a: guard("faq33am", "No. Section {s:client_booking_monthly} does not ask you to change your booking system. What it asks is that new patients are asked how they heard about you and that the answer is recorded, so your monthly report can tell a good month from a bad one.") },
+
+  // ── NEW IN v6. The implementation clause, shared by both paid plans. ──
+  { sectionKey: "client_implementation", q: guard("faq39q", "Do I have to do everything you tell me?"), a: guard("faq39a", "No. Section {s:client_implementation} says recommendations are ours to make and yours to decide on, and declining one costs you no fee and no penalty. One thing is not optional: your new patient forms have to ask how they heard about you, because everything else is counted from it.") },
+  { sectionKey: "client_implementation", q: guard("faq40q", "Why does my form have to ask how they heard about me?"), a: guard("faq40a", "Because it is the only way either of us finds out that an AI answer sent them. Section {s:client_implementation}. Without it the work still happens and nobody can see whether it landed.") },
+  { sectionKey: "client_implementation", q: guard("faq41q", "What happens if I say no to a recommendation?"), a: guard("faq41a", "Nothing is charged and nothing is held against you. Section {s:client_implementation}: what it does mean is that where a result depended on something you chose not to implement, that result is not something we can be held to.") },
+
+  // ── Exclusivity, confidentiality, comms, termination, law. ──
+  { sectionKey: "exclusivity_yearly", q: guard("faq23qy", "Do you work with my competitors?"), a: guard("faq23ay", "Section {s:exclusivity_yearly}: while you are an active client we will not take on another clinic offering the same primary service within 10 miles of your primary location. On this plan it locks in the day you sign and holds for the full twelve months.") },
+  { sectionKey: "exclusivity_monthly", q: guard("faq23qm", "Do you work with my competitors?"), a: guard("faq23am", "Section {s:exclusivity_monthly}: while you are an active client we will not take on another clinic offering the same primary service within 10 miles of your primary location. Because this plan is month to month, the exclusivity is too.") },
+  { sectionKey: "confidentiality", q: guard("faq42q", "Is what I tell you confidential?"), a: guard("faq42a", "Yes, and it runs both ways. Section {s:confidentiality}: anything you share that is not already public stays confidential, and our systems, prompts, scripts and methods stay confidential too.") },
+  { sectionKey: "communication", q: guard("faq28q", "How do we communicate?"), a: guard("faq28a", "Section {s:communication}: email or WhatsApp, whichever you prefer, and we respond to any message within one business day.") },
+  { sectionKey: "termination_yearly", q: guard("faq9qy", "How do I cancel?"), a: guard("faq9ay", "You can tell us in writing at any time and we will stop working. Section {s:termination_yearly}: the fee covers the twelve months and is not refundable on cancellation. The guarantee is the one circumstance where money comes back, and you do not have to cancel to claim it.") },
+  { sectionKey: "termination_monthly", q: guard("faq9qm", "How do I cancel?"), a: guard("faq9am", "In writing, with 30 days notice, from either side. Section {s:termination_monthly}. You owe the 30 days and nothing beyond it. No cancellation fee and no clawback.") },
+  { sectionKey: "termination_yearly", q: guard("faq43q", "Does it renew automatically?"), a: guard("faq43a", "No. Section {s:termination_yearly}: at the end of the twelve months it does not renew on its own. We ask you in writing before the term ends and nothing is charged unless you say yes.") },
+  { sectionKey: "governing_law_yearly", q: guard("faq25qy", "What is your liability capped at?"), a: guard("faq25ay", `Section {s:governing_law_yearly} caps it at ${REFUND_AMOUNT}, being the value of three months of service at ${PRICE_YEAR_EQUIV}.`) },
+  { sectionKey: "governing_law_monthly", q: guard("faq25qm", "What is your liability capped at?"), a: guard("faq25am", "Section {s:governing_law_monthly} caps it at the total you have paid us in the previous 3 months.") },
+  { sectionKey: "governing_law_yearly", q: guard("faq29qy", "Which state law applies?"), a: guard("faq29ay", "North Carolina. Section {s:governing_law_yearly}. Any dispute goes to mediation in Guilford County before any lawsuit.") },
+  { sectionKey: "governing_law_monthly", q: guard("faq29qm", "Which state law applies?"), a: guard("faq29am", "North Carolina. Section {s:governing_law_monthly}. Any dispute goes to mediation in Guilford County before any lawsuit.") },
+  { sectionKey: "whole_deal", q: guard("faq30q", "Does anything said on a call override this?"), a: guard("faq30a", "No. Section {s:whole_deal} says this document is the entire agreement, and nothing said in a Loom, a call, an email or a text supersedes it. Changes have to be in writing and signed by both sides.") },
 ];
