@@ -193,6 +193,18 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
         value: action.value ?? "",
       });
 
+    // ── The contract, sent from the step card during the call (2026-09-16) ──
+    // Appended rather than folded into an existing arm, which is the rule for this file.
+    case "agreement_draft":
+    case "agreement_link":
+      return sendAgreementAction({
+        actionId: action.action_id,
+        channel,
+        messageTs: payload.container?.message_ts ?? "",
+        userId,
+        value: action.value ?? "",
+      });
+
     case "client_msg_sent":
       return clientMessageSentAction({
         channel,
@@ -1460,6 +1472,61 @@ function recheckBlocks(
       ],
     },
   ];
+}
+
+
+/**
+ * Draft the agreement email, or mint the signing link.
+ *
+ * ‼️ THE ANSWER IS EPHEMERAL AND THE SIDE EFFECT IS NOT. A signing link is a bearer credential:
+ * anybody who can read it can sign as that client. Posting it into the ops thread would put it in
+ * a log several people read and Slack keeps forever, so it goes back only to the person who
+ * pressed the button, and they paste it where it belongs.
+ *
+ * ‼️ EVERY FAILURE IS SAID OUT LOUD RATHER THAN SWALLOWED. The whole value of this button is that
+ * it is pressed mid-call, so a silent failure is Matthew reading out a URL that does not exist.
+ */
+async function sendAgreementAction(args: {
+  actionId: string;
+  channel: string;
+  messageTs: string;
+  userId: string;
+  value: string;
+}): Promise<NextResponse> {
+  // Same `clientId:stepKey` value shape the step buttons use, so the card builds them the same way.
+  const clientId = (args.value || "").split(":")[0];
+  if (!clientId) {
+    await tellActor(args, clientId, "That button carried no client id.");
+    return NextResponse.json({ ok: true });
+  }
+
+  const { draftAgreementEmail, mintSigningLink } = await import("@/lib/clients/send-agreement");
+
+  if (args.actionId === "agreement_draft") {
+    const res = await draftAgreementEmail(clientId);
+    await tellActor(
+      args,
+      clientId,
+      res.ok
+        ? `Draft created in your Outlook. ${res.webLink ? `<${res.webLink}|Open it>` : "Check your Drafts folder."} It has the unsigned PDF attached and the signing link in the body. Nothing has sent.`
+        : `Could not draft it: ${res.error ?? "unknown error"}`
+    );
+    return NextResponse.json({ ok: true });
+  }
+
+  const res = await mintSigningLink(clientId);
+  await tellActor(
+    args,
+    clientId,
+    res.ok && res.url
+      ? `Signing link for this client, ${res.templateVersion}:
+
+${res.url}
+
+Only you can see this message. Paste it to them. When they sign, this step ticks itself.`
+      : `Could not create a link: ${res.error ?? "unknown error"}`
+  );
+  return NextResponse.json({ ok: true });
 }
 
 /**
