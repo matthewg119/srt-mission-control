@@ -442,8 +442,14 @@ export interface Offer {
 export const OFFERS: readonly Offer[] = [
   {
     key: "review_free",
-    name: "Review Engine",
-    tagline: "The reviews AI actually quotes, set up for you.",
+    // ‼️ ALL THREE NAMES START "AI VISIBILITY" ON PURPOSE (Matthew, 2026-09-16). The free one was
+    // called "Review Engine" and the paid ones "The Year" and "Month to Month", which read as
+    // three different products and made the free one look like a side offer somebody could take
+    // instead of buying. It is not a side offer, it is the second pillar of the same mechanism,
+    // and naming it so the shared half comes first is what makes it a LEAD MAGNET rather than a
+    // fork in the road: you are already doing AI visibility, this is how much of it you want.
+    name: "AI Visibility Review Engine",
+    tagline: "Pillar 2 of the method, Familiar, done for you.",
     price: null,
     anchor: null,
     priceNote: "No card. Keep it either way.",
@@ -459,16 +465,16 @@ export const OFFERS: readonly Offer[] = [
   },
   {
     key: "year_3300",
-    name: "The Year",
-    tagline: "Everything we do, and we carry the risk.",
+    name: "Full AI Visibility, Yearly",
+    tagline: "All three pillars, and we carry the risk.",
     price: PRICE_YEAR,
     anchor: PRICE_YEAR_ANCHOR,
     priceNote: `Works out at ${PRICE_YEAR_EQUIV}.`,
     includes: [
-      "Everything in the Review Engine",
-      "We rewrite your key pages so AI can quote them",
-      "We fix every NAP mismatch we can find you on",
-      "Your monthly AI Visibility Report",
+      "Familiar: everything in the Review Engine",
+      "Findable: your key pages rewritten so AI can quote them",
+      "Findable: every NAP mismatch across the web, fixed",
+      "Fresh: your monthly AI Visibility Report",
       `AI Skin Concierge included free, normally ${PRICE_CONCIERGE}`,
       `${GUARANTEE_COUNT} qualified appointments in ${GUARANTEE_WINDOW}, or your first 3 months back`,
     ],
@@ -478,16 +484,16 @@ export const OFFERS: readonly Offer[] = [
   },
   {
     key: "month_349",
-    name: "Month to Month",
-    tagline: "The same work, no commitment, no guarantee.",
+    name: "Full AI Visibility, Month to Month",
+    tagline: "All three pillars, no commitment, no guarantee.",
     price: PRICE_MONTH,
     anchor: null,
     priceNote: "Cancel with 30 days notice.",
     includes: [
-      "Everything in the Review Engine",
-      "We rewrite your key pages so AI can quote them",
-      "We fix every NAP mismatch we can find you on",
-      "Your monthly AI Visibility Report",
+      "Familiar: everything in the Review Engine",
+      "Findable: your key pages rewritten so AI can quote them",
+      "Findable: every NAP mismatch across the web, fixed",
+      "Fresh: your monthly AI Visibility Report",
       `AI Skin Concierge available at ${PRICE_CONCIERGE}`,
       "No guarantee and no refunds",
     ],
