@@ -4,6 +4,7 @@
 // nullable in the same way the column is, so a `select("*")` result assigns without a cast and a
 // missing column shows up as a type error rather than as undefined at runtime.
 
+import type { OfferKey } from "@/config/pitch";
 import type { AgreementSnapshot } from "./snapshot";
 
 /**
@@ -45,6 +46,28 @@ export interface Onboarding2SigningRow {
   website: string | null;
   is_demo: boolean;
 
+
+  /**
+   * Which of the three offers this signing is for.
+   *
+   * ‼️ NULLABLE, AND IT STAYS NULLABLE. Every row written before 2026-09-16 was taken when there
+   * was one offer, and back-filling those with one of today's three would be inventing a fact
+   * about a deal somebody already signed. A null means "before the split", which is true.
+   *
+   * ‼️ THIS IS NOT WHAT BINDS THE OFFER TO THE DOCUMENT. It is a column, so it is editable. What
+   * binds it is the preamble text inside agreement_snapshot, which names the plan and is hashed
+   * into agreement_sha256. Filter on this; verify on that.
+   */
+  offer_key: OfferKey | null;
+  /**
+   * They tapped the Concierge price rather than a plan button.
+   *
+   * ‼️ IT LIVES ON THE SIGNING AND NOT ONLY ON THE LEAD, BECAUSE THE LEAD DOES NOT EXIST YET. The
+   * pick happens at /start and the lead row is not created until the email step, four questions
+   * later. Without somewhere to park it the flag would be lost on every visitor who answers the
+   * first three questions and stops.
+   */
+  concierge_interest: boolean;
 
   agreement_snapshot: AgreementSnapshot;
   template_version: string;
@@ -126,6 +149,16 @@ export interface Onboarding2LeadRow {
   signing_id: string | null;
   signed_at: string | null;
   is_demo: boolean;
+  offer_key: OfferKey | null;
+  /**
+   * They tapped the Concierge price rather than a plan button.
+   *
+   * ‼️ A SEPARATE FACT FROM THE OFFER, NOT A FOURTH OFFER KEY. Somebody asking what the Concierge
+   * costs has not agreed to a year of AI visibility work, so the row records review_free plus
+   * this flag. The Slack card reads it and titles the lead a Concierge enquiry, which is what
+   * makes the distinction legible on the call rather than only in the database.
+   */
+  concierge_interest: boolean;
   qualifying: QualifyingAnswer[];
   qualifying_answered: number;
   qualifying_completed_at: string | null;

@@ -80,6 +80,7 @@ function fakeLead(answered: number): Onboarding2LeadRow {
     id: "lead", created_at: "", updated_at: "", email: "probe@example.com",
     phone: null, business_name: null, contact_name: null, signer_title: null,
     website: null, city: null, state: null, signing_id: null, signed_at: null, is_demo: true,
+    offer_key: "year_3300", concierge_interest: false,
     qualifying: QUALIFYING_QUESTIONS.slice(0, answered).map((q) => ({
       key: q.key, question: q.question, answer: "something", askedAt: "", sourceTurnOrdinals: [0],
     })),

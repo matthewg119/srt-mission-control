@@ -16,6 +16,7 @@ import type { SlackBlock } from "@/lib/slack-bot";
 import type { ProvisionResult } from "./provision";
 import type { Onboarding2LeadRow, Onboarding2SigningRow } from "./types";
 import { QUALIFYING_QUESTIONS } from "@/config/onboarding2";
+import { OFFERS, PRICE_CONCIERGE } from "@/config/pitch";
 
 function section(text: string): SlackBlock {
   return { type: "section", text: { type: "mrkdwn", text } };
@@ -119,6 +120,32 @@ export function signedCard(args: {
   return { text, blocks };
 }
 
+
+/**
+ * How this lead should be titled, which is the offer unless they came in on the Concierge link.
+ *
+ * ‼️ A CONCIERGE ENQUIRY IS NOT A REVIEW ENGINE SIGNUP AND THE CARD MUST NOT SAY IT IS. Tapping
+ * the $199 figure records `review_free` on the row, because somebody asking what the Concierge
+ * costs has not agreed to anything. That is the right thing to store and the wrong thing to
+ * print: whoever opens this card is about to ring them, and "Review Engine, free" would send
+ * them into the call pitching the wrong product entirely.
+ *
+ * So the column stays honest and the LABEL says what actually happened.
+ */
+function offerLabel(row: Onboarding2SigningRow, lead: Onboarding2LeadRow | null): string {
+  const interested = row.concierge_interest === true || lead?.concierge_interest === true;
+  if (interested) return `AI Concierge enquiry, tapped ${PRICE_CONCIERGE}`;
+
+  const key = row.offer_key ?? lead?.offer_key ?? null;
+  // ‼️ NULL IS A REAL ANSWER. Every row taken before 2026-09-16 has no offer, and guessing one
+  // would put a figure on a card describing a deal nobody was quoted.
+  if (!key) return "Not recorded, signed before the offer split";
+
+  const offer = OFFERS.find((o) => o.key === key);
+  if (!offer) return `Unknown offer \`${key}\``;
+  return offer.price ? `${offer.name}, ${offer.price}` : `${offer.name}, free`;
+}
+
 /**
  * The top-level card for a BOOKED call, which is what starts a client now.
  *
@@ -153,6 +180,10 @@ export function bookedCard(args: {
         { type: "mrkdwn", text: `*When*\n${orDash(lead?.call_choice_label)}` },
       ],
     },
+    // ‼️ ITS OWN FULL-WIDTH ROW, ABOVE THE LEDGER, BECAUSE IT DECIDES HOW THE CALL OPENS.
+    // Everything above is who they are. This is what they came for, and it is the one fact on
+    // the card that changes what gets said in the first thirty seconds.
+    section(`*Offer taken*  ${offerLabel(row, lead)}`),
   ];
 
   // ‼️ THE CONFIRMATION EMAIL IS CALENDLY'S AND WE DID NOT SEND IT. Said out loud because the

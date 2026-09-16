@@ -103,6 +103,7 @@ export async function POST(req: NextRequest) {
       template_version: snapshot.version,
       agreement_sha256: snapshot.documentSha256,
       offer_key: offer,
+      concierge_interest: body.conciergeInterest === true,
       started_ip_hash: ipHash,
       is_demo: isDemo,
       ...attributionForSigning(attribution),
