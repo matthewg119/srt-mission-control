@@ -167,16 +167,41 @@ interface Candidate {
   keyword: StoredKeyword;
 }
 
-/** The approved keywords bucketed at the anchored rung, best ranked first. */
-async function keywordsAtStage(clientId: string, stage: AwarenessStage): Promise<StoredKeyword[]> {
+interface KeywordPool {
+  rows: StoredKeyword[];
+  /** How many of them are already bucketed at the anchored rung. They come first. */
+  atRung: number;
+  /** The category a pillar keyword comes from, so the card can say which picks are offer pages. */
+  naming: string | null;
+}
+
+/**
+ * The searches the headlines are written for: this rung's first, then the rest of the approved set.
+ *
+ * ‼️ THE RUNG DECIDES HOW A HEADLINE SPEAKS, NOT WHICH SEARCHES EXIST, and filtering the pool by
+ * stage was wrong (measured on SRT, 2026-09-16). Its approved set buckets 340 queries at stage 3, 30 at
+ * stage 2 and SIX at stage 4, so anchoring at problem aware left six searches to build seven pages on and
+ * the pick could never be satisfied: keeping seven headlines needs seven distinct keywords, because two
+ * pages answering one search is the single thing the plan exists to prevent. Nothing else in the lane
+ * filters keywords by stage either; `awareness_stage` is a label on a query, and the anchor is a decision
+ * about the reader. So the rung's own searches lead the list, the rest follow, and the prompt says which
+ * is which so the model writes to the rung either way.
+ */
+async function headlineKeywordPool(clientId: string, stage: AwarenessStage): Promise<KeywordPool> {
   const { planKeywords } = await import("./client-keywords");
   const { isRelevantKeyword } = await import("./keyword-expansion");
   const pk = await planKeywords(clientId);
-  if ("error" in pk) return [];
-  return [...pk.rows]
+  if ("error" in pk) return { rows: [], atRung: 0, naming: null };
+  const relevant = [...pk.rows]
     .filter((r) => isRelevantKeyword(r, pk.vocab))
-    .filter((r) => r.awarenessStage === stage)
     .sort((a, b) => (a.rank ?? 1e9) - (b.rank ?? 1e9));
+  const here = relevant.filter((r) => r.awarenessStage === stage);
+  const rest = relevant.filter((r) => r.awarenessStage !== stage);
+  return {
+    rows: [...here, ...rest],
+    atRung: here.length,
+    naming: pk.ctx.categories.find((c) => c.naming)?.key ?? null,
+  };
 }
 
 interface Generated {
@@ -198,11 +223,14 @@ export async function generatePreCallHeadlines(args: {
   count?: number;
 }): Promise<{ ok: true; candidates: Candidate[] } | { ok: false; error: string }> {
   const count = args.count ?? PRE_CALL_HEADLINES;
-  const keywords = await keywordsAtStage(args.clientId, args.stage);
-  if (keywords.length === 0) {
+  const pool = await headlineKeywordPool(args.clientId, args.stage);
+  const keywords = pool.rows;
+  if (keywords.length < PRE_CALL_PAGES) {
     return {
       ok: false,
-      error: `no approved keyword sits at stage ${args.stage} (${stageName(args.stage)}), so there is nothing at this rung to write about. \`keywords more\` at the keyword step, or anchor at another rung.`,
+      error:
+        `only ${keywords.length} approved search is about this offer, and seven pages need seven. ` +
+        "`keywords more` at the keyword step, then approve them.",
     };
   }
 
@@ -226,10 +254,16 @@ export async function generatePreCallHeadlines(args: {
     "category, or already knows us, belongs to a lower rung and is wrong here however good it reads.",
     "",
     "THE SEARCHES, NUMBERED",
-    ...numbered.map((k, i) => `  ${i + 1}. ${k.phrase}`),
+    ...numbered.map(
+      (k, i) =>
+        `  ${i + 1}. ${k.phrase}` +
+        (k.awarenessStage === args.stage ? "  (already at this rung)" : "") +
+        (pool.naming && k.category === pool.naming ? "  (names the offer itself)" : "")
+    ),
     "",
     "Each headline carries exactly one of these, by its number, in her phrasing rather than welded in",
-    "whole. Spread them: no search takes more than three of the set.",
+    "whole. A search marked as being at another rung is still legal: write it in THIS rung's voice, which",
+    "is the door, not the wording of the query. Spread them: no search takes more than three of the set.",
   ].join("\n");
 
   try {
