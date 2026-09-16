@@ -1357,6 +1357,21 @@ async function instructionsFor(
       const url = cfg ? await conciergeDemoUrlFor(c.id) : null;
       const addon = cfg ? await addonStatusFor(c.id) : null;
 
+      const { mascotCatalogue, SHORTLIST, CONCEPT_COUNT } = await import("./mascot-studio");
+      const { data: look } = await supabaseAdmin
+        .from("concierge_configs")
+        .select("mascot, mascot_candidates")
+        .eq("client_id", c.id)
+        .maybeSingle();
+      const chosen = typeof look?.mascot === "string" ? look.mascot : null;
+      const shortlist = Array.isArray(look?.mascot_candidates) ? (look.mascot_candidates as string[]) : [];
+      const named = chosen ? (await mascotCatalogue(c.id)).find((o) => o.key === chosen)?.name ?? chosen : null;
+      const mascotLine = !cfg
+        ? "*The character in the corner is not set up yet.* Hit Retry on the board."
+        : shortlist.length
+          ? `:art: *Character: ${named ?? "not chosen"}*, shortlisted ${shortlist.length} for the call (\`mascot\` reposts the links). \`mascot <key>\` keeps the one they pick.`
+          : `:art: *Character: ${named ?? "the default"}.* \`mascot\` lists them, \`mascot concepts\` writes ${CONCEPT_COUNT} new ones for this client, \`mascot pick a, b, c\` shortlists ${SHORTLIST} to show on the call. \`mascot skip\` keeps the default and blocks nothing.`;
+
       return [
         `*${lane}.*`,
         // ‼️ AN ADD-ON, DECIDED ON THE CALL (2026-09-16). Matthew charges for it separately and may skip it.
@@ -1383,6 +1398,12 @@ async function instructionsFor(
             `us. It decides which lead magnets exist, whether competitor evidence is offered at ` +
             `all, and where booking hands off. Press [Patient lane] or [Owner lane] below. ` +
             `concierge_live refuses until you do.`,
+        "",
+        // ‼️ THE CHARACTER IS A DECISION AND THE CARD HAS TO SAY SO, because the default is silent.
+        // Every widget wears whatever mascot the row was created with unless somebody chooses, and a
+        // client meeting a mascot for the first time on their own live site is the failure this line
+        // prevents. See src/lib/clients/mascot-studio.ts.
+        mascotLine,
         "",
         audience === "owner"
           ? "*Walk it on the call. The answer is the demo, not a slide.* Open it on your screen, ask"
@@ -1833,6 +1854,9 @@ async function extraActionsFor(step: DeliveryStep, c: ClientFacts): Promise<Step
         actionId: "concierge_addon_decline",
         value: c.id,
       },
+      // The character menu, and the door out of it. Both do exactly what the thread commands do.
+      { label: "Character menu", actionId: "mascot_menu", value: c.id },
+      { label: "Skip, keep the default", actionId: "mascot_skip", value: c.id },
     ];
   }
 

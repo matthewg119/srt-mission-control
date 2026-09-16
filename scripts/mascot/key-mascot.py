@@ -1,10 +1,10 @@
 """
 Turn a generated mascot video with a baked-in checkerboard into a transparent, looping animated WebP.
 
-    python scripts/mascot/key-mascot.py <video.mp4> <out-name> [--height 240] [--fps 12]
+    python scripts/mascot/key-mascot.py <video.mp4> <out-name> [--height 240] [--fps 12] [--no-still]
 
-Writes src/lib/concierge/mascot/<out-name>.webp (ping-pong loop) and, for the first video, a still PNG
-for prefers-reduced-motion.
+Writes src/lib/concierge/mascot/<out-name>.webp (ping-pong loop) and, unless --no-still, a still PNG
+for prefers-reduced-motion. Name a flourish <mascot>-<state>, e.g. wizard-cat-wand-throw.
 
 WHY A FLOOD FILL AND NOT A COLOUR KEY (measured 2026-09-16): the Veo clips of the wizard cat are 1280x720
 with a fake transparency checkerboard of pure white (255) and light grey (~238) painted into the frame.
@@ -12,6 +12,15 @@ A global colour key on those two values would also eat the whites of the cat's e
 sparkles. The background is the near-white region CONNECTED TO THE FRAME'S EDGE, so that is what is
 removed: a flood fill from the border over near-white, low-saturation pixels. The cat's dark outline stops
 it, and everything inside the outline keeps its colour.
+
+‼️ THE BACKGROUND TONES ARE SAMPLED PER FRAME, NOT HARDCODED TO NEAR-WHITE (2026-09-16). The blue alien
+clips generated the same afternoon carry a DARK grey checkerboard (~128/150), and two of the three start
+on a near-white frame and switch to it partway through. A fixed `lo >= 214` floor left the checkerboard
+baked into every one of those frames. What actually identifies the background is that it is low
+saturation AND the tone found along the frame's own border, so that is what is measured, on each frame
+independently. The lightness band keeps the flood off the subject's dark outline exactly as the old
+floor did: the cat's outline is near-black, the alien's trousers are near-black, and neither is within
+tolerance of a border tone.
 """
 
 import subprocess
@@ -40,12 +49,38 @@ def frames_of(video: str, fps: int, tmp: Path) -> list[Path]:
     return sorted(tmp.glob("f*.png"))
 
 
-def background_mask(rgb: np.ndarray) -> np.ndarray:
+SAT_TOL = 18
+TONE_TOL = 26
+
+
+def background_band(rgb: np.ndarray) -> tuple[int, int]:
+    """
+    The lightness band the frame's own border sits in, as (low, high).
+
+    Measured from the border because that is the only part of the frame we know is background. Only
+    low-saturation border pixels count, so a subject that happens to touch an edge cannot widen the
+    band into its own colours. Percentiles rather than min/max: a single stray pixel of the subject
+    or of codec noise on the border should not open the band by forty levels.
+    """
+    border = np.concatenate(
+        [rgb[0, :, :], rgb[-1, :, :], rgb[:, 0, :], rgb[:, -1, :]]
+    ).astype(int)
+    hi = border.max(axis=1)
+    lo = border.min(axis=1)
+    flat = lo[(hi - lo) <= SAT_TOL]
+    if flat.size == 0:
+        # No flat border at all. Fall back to the near-white floor this script shipped with, which is
+        # right for every wizard-cat clip and simply keys nothing when it is wrong.
+        return 214, 255
+    return int(np.percentile(flat, 2)) - TONE_TOL, int(np.percentile(flat, 98)) + TONE_TOL
+
+
+def background_mask(rgb: np.ndarray, band: tuple[int, int]) -> np.ndarray:
     """True where the pixel is checkerboard, reachable from the frame's edge."""
     r, g, b = rgb[..., 0].astype(int), rgb[..., 1].astype(int), rgb[..., 2].astype(int)
     hi = np.maximum(np.maximum(r, g), b)
     lo = np.minimum(np.minimum(r, g), b)
-    candidate = (lo >= 214) & ((hi - lo) <= 18)
+    candidate = (lo >= band[0]) & (lo <= band[1]) & ((hi - lo) <= SAT_TOL)
 
     reach = np.zeros_like(candidate)
     reach[0, :] = candidate[0, :]
@@ -70,16 +105,20 @@ def background_mask(rgb: np.ndarray) -> np.ndarray:
 
 def keyed(path: Path) -> Image.Image:
     rgb = np.array(Image.open(path).convert("RGB"))
-    bg = background_mask(rgb)
+    band = background_band(rgb)
+    bg = background_mask(rgb, band)
     alpha = np.where(bg, 0, 255).astype(np.uint8)
 
-    # A one pixel fringe of light pixels touching the removed region is compression halo, half alpha.
+    # A one pixel fringe touching the removed region is compression halo, half alpha. "Halo" means a
+    # pixel part way between the subject and the background, so the test is relative to the band that
+    # was just measured rather than to a fixed brightness: on the dark alien checkerboard a halo pixel
+    # is mid-grey, and a >= 190 test found none of them.
     fg = ~bg
     edge = fg & (
         np.roll(bg, 1, 0) | np.roll(bg, -1, 0) | np.roll(bg, 1, 1) | np.roll(bg, -1, 1)
     )
-    light = rgb.min(axis=2) >= 190
-    alpha[edge & light] = 90
+    near = (rgb.min(axis=2) >= band[0] - 40) & (rgb.min(axis=2) <= band[1] + 40)
+    alpha[edge & near] = 90
 
     rgba = np.dstack([rgb, alpha])
     return Image.fromarray(rgba, "RGBA")
@@ -129,7 +168,13 @@ def main() -> None:
         out.append(q)
 
     # Ping-pong: forward then back, so a 4 second clip loops with no jump.
-    loop = out + out[-2:0:-1]
+    #
+    # ‼️ --once SKIPS IT, AND A FLOURISH ALWAYS WANTS IT SKIPPED. Ping-pong exists so a RESTING loop has
+    # no visible jump. A flourish is a gesture the widget plays once before going back to idle, so
+    # playing it backwards afterwards shows the cat un-throwing its wand, and it doubles the file for
+    # the privilege. These ship onto a client's website, so the halved size is the point as much as
+    # the look is.
+    loop = out if "--once" in sys.argv else out + out[-2:0:-1]
     webp = OUT_DIR / f"{name}.webp"
     loop[0].save(
         webp,
@@ -141,10 +186,15 @@ def main() -> None:
         quality=int(arg("--quality", "75")),
         method=6,
     )
-    still = OUT_DIR / f"{name}-still.png"
-    out[0].save(still, optimize=True)
     print(f"{webp.name}: {len(loop)} frames, {out[0].width}x{height}, {webp.stat().st_size // 1024} KB")
-    print(f"{still.name}: {still.stat().st_size // 1024} KB")
+
+    # ‼️ ONE STILL PER MASCOT, AND IT IS THE IDLE ONE. The still is what prefers-reduced-motion gets and
+    # what holds the corner until the animation has loaded, so it must be the mascot at rest. A flourish
+    # writing its own still would leave the reduced-motion reader looking at a cat mid-throw.
+    if "--no-still" not in sys.argv:
+        still = OUT_DIR / f"{name}-still.png"
+        out[0].save(still, optimize=True)
+        print(f"{still.name}: {still.stat().st_size // 1024} KB")
 
 
 if __name__ == "__main__":

@@ -319,6 +319,40 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
         })().catch((e) => console.error("[slack/actions] concierge addon failed:", e))
       );
       return NextResponse.json({ ok: true });
+    // ── Step 18: which character sits in the corner ──
+    //
+    // ‼️ NEITHER BUTTON TICKS THE STEP, unlike the add-on pair above. [Done] for step 18 verifies the
+    // config row, the embed allowlist and a live probe of the demo link, and a character is none of
+    // those. Skipping records the default so the decision is on the row, and that is all it does.
+    case "mascot_menu":
+    case "mascot_skip":
+      waitUntil(
+        (async () => {
+          const clientId = (action.value ?? "").trim();
+          const actor = payload.user?.username ? `@${payload.user.username}` : userId;
+          const studio = await import("@/lib/clients/mascot-studio");
+          if (action.action_id === "mascot_skip") {
+            const res = await studio.skipMascot(clientId, actor);
+            await slack.postThreadReply(channel, slackTs, res.message);
+          } else {
+            const lines = await studio.mascotMenu(clientId);
+            await slack.postThreadReply(
+              channel,
+              slackTs,
+              [
+                "*The characters this client can have in the corner:*",
+                ...lines,
+                "",
+                `\`mascot concepts\` writes ${studio.CONCEPT_COUNT} new ones for this client. \`mascot pick a, b, c\` shortlists ${studio.SHORTLIST} for the call.`,
+                "`mascot skip` keeps the default. `mascot corner bottom-left` moves where it sits.",
+              ].join("\n")
+            );
+          }
+          const { postStep } = await import("@/lib/clients/step-engine");
+          await postStep(clientId, "concierge_preview");
+        })().catch((e) => console.error("[slack/actions] mascot button failed:", e))
+      );
+      return NextResponse.json({ ok: true });
     // ── Step 21: the awareness ladder's rung, then the pillar keyword ──
     case "ladder_write":
     case "ladder_pick":
