@@ -378,6 +378,25 @@ export const PRICE_CONCIERGE_AMOUNT = "$199";
  * Change the two together.
  */
 export const GUARANTEE_COUNT = 5;
+
+/**
+ * What the optimization program is worth over a year, and what the Concierge is worth beside it.
+ *
+ * ‼️ WRITTEN OUT, NOT COMPUTED, FOR THE REASON THE HEADER OF THIS FILE GIVES. $4,188 is
+ * PRICE_MONTH twelve times and $2,388 is PRICE_CONCIERGE twelve times, and both are exactly the
+ * kind of figure the no-arithmetic rule exists to stop being derived at render time. If
+ * PRICE_MONTH or PRICE_CONCIERGE moves, move these by hand and say the new numbers out loud.
+ *
+ * ‼️ $4,188 IS THE PROGRAM ALONE AND DOES NOT INCLUDE THE CONCIERGE. Matthew's call, 2026-09-16,
+ * chosen over the $6,576 that includes it. That means the funnel card must never call it a TOTAL:
+ * it sits on the optimization line, and the Concierge and the Review Tool are shown underneath as
+ * free additions on top of it. A card that said "total value $4,188" directly above a line
+ * valuing the Concierge at $199 a month would be inviting the reader to check the arithmetic and
+ * find it wrong, which is the one thing the value stack must never do.
+ */
+export const VALUE_PROGRAM_YEAR = "$4,188 / year value";
+export const VALUE_CONCIERGE_YEAR = "$2,388 / year value";
+
 export const GUARANTEE_WINDOW = "90 days";
 export const GUARANTEE_WINDOW_DAY = "90";
 
@@ -408,6 +427,24 @@ export const REFUND_LINE =
  */
 export const GUARANTEE_MONTH_LINE: string | null = null;
 
+/**
+ * One ticked line on a funnel card.
+ *
+ * ‼️ `was` IS A VALUE BEING GIVEN AWAY, NEVER A PRICE BEING CHARGED. It renders struck through
+ * with `tag` after it, which is the only place a figure appears on the picker at all. A price the
+ * visitor would actually PAY must not go in here: the whole point of the screen is that they pick
+ * on what they get and the number is discussed on the call.
+ */
+export interface FunnelLine {
+  text: string;
+  /** Struck through. What this would cost bought on its own. */
+  was?: string;
+  /** After the strike. "FREE", or a value. */
+  tag?: string;
+  /** Carries the weight of the card. One per card at most. */
+  strong?: boolean;
+}
+
 export interface Offer {
   key: OfferKey;
   /** The plan name on the card. */
@@ -428,6 +465,28 @@ export interface Offer {
   guarantee: string | null;
   /** Whether signing a document is part of taking this offer. */
   needsAgreement: boolean;
+
+  // ── How the /onboarding2 picker shows it, which is NOT how it is sold ──────
+  //
+  // ‼️ THE PICKER SHOWS NO PLAN PRICE AT ALL (Matthew, 2026-09-16). That link is now primarily
+  // for new clients arriving off a VSL, where the number is discussed on the call and a figure on
+  // the screen only invites a decision before the argument has been made. `price`, `anchor` and
+  // `priceNote` above are untouched and still true: the Slack card, the client board and the
+  // agreement all read them, and they are what the contract is written from. This is a separate
+  // presentation of the same offer, not a second version of it.
+
+  /** Shown on the picker. false means the card does not render there at all. */
+  inFunnel: boolean;
+  /**
+   * What sits where the price used to, in the largest type on the card.
+   *
+   * ‼️ IT IS THE PROMISE, NOT THE PLAN NAME. On the paid card this is the guarantee, because the
+   * guarantee is the reason to pick it and a headline that repeated the plan name would waste the
+   * one line everybody actually reads.
+   */
+  funnelHeadline: string;
+  funnelCta: string;
+  funnelIncludes: readonly FunnelLine[];
 }
 
 /**
@@ -462,6 +521,19 @@ export const OFFERS: readonly Offer[] = [
     cta: "Start free",
     guarantee: null,
     needsAgreement: false,
+    inFunnel: true,
+    funnelHeadline: "Free",
+    funnelCta: "Start with the free tool",
+    funnelIncludes: [
+      // ‼️ THE TOOL IS NAMED ON ITS OWN LINE AND TAGGED FREE, rather than being left implicit in
+      // the four lines describing what it does. Matthew's ask: a visitor has to be able to see
+      // that the thing they are being given is a real, named product.
+      { text: "The AI Review Tool, set up on your site", tag: "FREE", strong: true },
+      { text: "Automatic review requests after every visit" },
+      { text: "The words your front desk says at checkout" },
+      { text: "A one tap request link for the counter" },
+      { text: "We watch your review profiles weekly" },
+    ],
   },
   {
     key: "year_3300",
@@ -481,6 +553,22 @@ export const OFFERS: readonly Offer[] = [
     cta: "Take the year",
     guarantee: GUARANTEE_YEAR_LINE,
     needsAgreement: true,
+    inFunnel: true,
+    // The guarantee IS the headline. It is the whole reason this card wins.
+    funnelHeadline: `${GUARANTEE_COUNT} booked appointments guaranteed in ${GUARANTEE_WINDOW}`,
+    funnelCta: "Get my 5 appointments guaranteed",
+    funnelIncludes: [
+      // ‼️ THE VALUE SITS ON THE OPTIMIZATION LINE AND IS NOT CALLED A TOTAL. See the note over
+      // VALUE_PROGRAM_YEAR: $4,188 excludes the Concierge, so the two lines below it are additions
+      // on top rather than components of it.
+      { text: "ChatGPT Client Optimization, all three pillars", tag: VALUE_PROGRAM_YEAR },
+      { text: "AI Skin Concierge on your site", was: PRICE_CONCIERGE, tag: "FREE" },
+      { text: "The AI Review Tool", tag: "FREE" },
+      {
+        text: `${GUARANTEE_COUNT} booked appointments in ${GUARANTEE_WINDOW}, or your money back`,
+        strong: true,
+      },
+    ],
   },
   {
     key: "month_349",
@@ -500,8 +588,32 @@ export const OFFERS: readonly Offer[] = [
     cta: "Go month to month",
     guarantee: GUARANTEE_MONTH_LINE,
     needsAgreement: true,
+    // ‼️ NOT ON THE PICKER, AND IT STILL EXISTS EVERYWHERE ELSE (Matthew, 2026-09-16). It is on
+    // /pricing, it has a contract, and it is sold on the call. What it is not is a third door on
+    // the screen a new client lands on from a VSL: a cheaper option with no guarantee, offered
+    // before anybody has explained the guarantee, only splits the decision.
+    //
+    // ‼️ A DIRECT LINK TO IT STILL WORKS. /pricing links /onboarding2?offer=month_349 and that
+    // must keep resolving, so presetOffer does not check inFunnel. Somebody who chose it
+    // deliberately on the pricing page is not shown a picker that has stopped offering it.
+    inFunnel: false,
+    funnelHeadline: "Month to month",
+    funnelCta: "Go month to month",
+    funnelIncludes: [
+      { text: "ChatGPT Client Optimization, all three pillars", tag: VALUE_PROGRAM_YEAR },
+      { text: "No AI Skin Concierge" },
+      { text: "No appointments guaranteed" },
+    ],
   },
 ] as const;
+
+/**
+ * What the /onboarding2 picker offers, in order.
+ *
+ * Derived from `inFunnel` rather than being a second hand-written list, so an offer cannot be
+ * added to the picker and forgotten in the contract, or the other way round.
+ */
+export const FUNNEL_OFFERS: readonly Offer[] = OFFERS.filter((o) => o.inFunnel);
 
 /**
  * The only way to turn a key into an offer.

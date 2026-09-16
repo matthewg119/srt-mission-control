@@ -1,26 +1,34 @@
 "use client";
 
-// The three offers, picked before anything else happens.
+// The offers, picked before anything else happens.
 //
 // ‼️ THIS SCREEN EXISTS SO THE LEAD IS LABELLED FROM THE FIRST ROW WRITTEN. Before it, every
 // /onboarding2 visitor was the same undifferentiated lead and the offer was discovered on the
 // call. The whole point of asking here is that the Slack card, the delivery board, the contract
 // variant and the call itself all know what was chosen before anybody picks up the phone.
 //
-// ‼️ EVERY FIGURE COMES FROM config/pitch.ts AND NOT ONE IS TYPED HERE. That file is the single
-// home for a price, and its header records what happened the last time a number was copied into
-// a second file: /chatgpt-ads quoted $499 while pitch.ts said $349, both reached one prospect,
-// and the fix was one price or a contradiction. Read OFFERS, render OFFERS, add nothing.
+// ‼️ NO PLAN PRICE APPEARS ANYWHERE ON THIS SCREEN (Matthew, 2026-09-16). The link is now
+// primarily for new clients arriving off a VSL, where the number belongs in the conversation and
+// a figure on the screen only invites a decision before the argument has been made. What IS shown
+// is VALUE: the program's worth over a year, and the Concierge struck through and given away.
+// `price` and `anchor` still exist on every Offer and are still read by the Slack card, the client
+// board and the agreement. This is a different presentation of the same offer, not a second
+// version of it, which is why the funnel fields live beside the commercial ones on one object.
 //
-// ‼️ MOBILE REORDERS, AND IT IS NOT A STYLE PREFERENCE. The house order on a phone is title,
-// then tagline, then the CTA, then the detail. A card that puts six ticked bullets above its
-// button means the button is below the fold on every one of the three, and the visitor scrolls
-// past the thing they came to do. `order-*` classes do this at the flex level so the DOM order
-// stays reading order for anything that does not paint: the button follows the price it belongs
-// to, which is also the correct tab order.
+// ‼️ EVERY FIGURE COMES FROM config/pitch.ts AND NOT ONE IS TYPED HERE. That file is the single
+// home for a price, and its header records what happened the last time a number was copied into a
+// second file: /chatgpt-ads quoted $499 while pitch.ts said $349, both reached one prospect, and
+// the fix was one price or a contradiction.
+//
+// ‼️ MOBILE REORDERS, AND IT IS NOT A STYLE PREFERENCE. The house order on a phone is headline,
+// then tagline, then the CTA, then the detail. A card that puts six ticked lines above its button
+// means the button is below the fold on every card, and the visitor scrolls past the thing they
+// came to do. `order-*` classes do this at the flex level so the DOM order stays reading order for
+// anything that does not paint: the button follows the headline it belongs to, which is also the
+// correct tab order.
 
 import { useState } from "react";
-import { OFFERS, PRICE_CONCIERGE, type Offer, type OfferKey } from "@/config/pitch";
+import { FUNNEL_OFFERS, PRICE_CONCIERGE, type FunnelLine, type Offer, type OfferKey } from "@/config/pitch";
 
 const REEF = "#00C9A7";
 
@@ -47,16 +55,27 @@ export function OfferCards({
   }
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-10 sm:py-16">
+    <div className="mx-auto w-full max-w-5xl px-4 py-10 sm:py-16">
       <header className="mb-8 text-center sm:mb-12">
         <h1 className="text-2xl font-bold text-white sm:text-3xl">Pick how you want to start.</h1>
         <p className="mx-auto mt-3 max-w-xl text-sm text-white/60 sm:text-base">
-          You can change your mind on the call. This just tells us what to walk you through.
+          Pick one and we will book your onboarding call, get your campaign set up, and take it
+          live with your approval.
         </p>
       </header>
 
-      <div className="grid gap-4 sm:gap-5 lg:grid-cols-3">
-        {OFFERS.map((offer) => (
+      {/*
+        Two cards today, and the grid asks the array rather than being told. `lg:grid-cols-2` is
+        wrong the moment a third offer is put back in the funnel, and the failure would be silent:
+        three cards in a two column grid just wraps the last one underneath.
+      */}
+      <div
+        className="grid gap-4 sm:gap-5"
+        style={{
+          gridTemplateColumns: `repeat(${Math.min(FUNNEL_OFFERS.length, 3)}, minmax(0, 1fr))`,
+        }}
+      >
+        {FUNNEL_OFFERS.map((offer) => (
           <Card
             key={offer.key}
             offer={offer}
@@ -69,8 +88,8 @@ export function OfferCards({
       </div>
 
       <p className="mx-auto mt-8 max-w-xl text-center text-xs text-white/40">
-        Nothing is charged here and no card is taken. Whatever you pick, we go through it together
-        on the call before anything is signed.
+        Nothing is charged here and no card is taken. We go through everything together on the call
+        before anything is signed.
       </p>
     </div>
   );
@@ -89,8 +108,8 @@ function Card({
   disabled: boolean;
   onChoose: (offer: OfferKey, conciergeInterest?: boolean) => void;
 }) {
-  // The middle card is the one being recommended, so it carries the border and the badge.
-  const featured = offer.key === "year_3300";
+  // The guaranteed plan is the one being recommended, so it carries the border and the badge.
+  const featured = offer.guarantee !== null;
 
   return (
     <section
@@ -103,7 +122,7 @@ function Card({
       ].join(" ")}
       aria-busy={pending}
     >
-      {/* ── Price block. First on every breakpoint, like the plan cards this copies. ── */}
+      {/* ── The headline. Where the price used to be, and the biggest thing on the card. ── */}
       <div className="order-1 text-center">
         {featured ? (
           <span
@@ -114,32 +133,24 @@ function Card({
           </span>
         ) : null}
 
-        {offer.anchor ? (
-          <div className="text-sm text-white/35 line-through">{offer.anchor}</div>
-        ) : null}
-
-        <div className="text-3xl font-bold text-white sm:text-4xl">
-          {offer.price ?? "Free"}
+        <div className="text-2xl font-bold leading-tight text-white sm:text-[26px]">
+          {offer.funnelHeadline}
         </div>
 
-        <h2 className="mt-2 text-lg font-semibold" style={{ color: REEF }}>
+        <h2 className="mt-2 text-base font-semibold" style={{ color: REEF }}>
           {offer.name}
         </h2>
       </div>
 
-      {/* ── Tagline, second on mobile per the house order. ── */}
       <p className="order-2 mt-3 text-center text-sm text-white/70">{offer.tagline}</p>
-      {offer.priceNote ? (
-        <p className="order-3 mt-1 text-center text-xs text-white/40">{offer.priceNote}</p>
-      ) : null}
 
       {/*
         ── The button. THIRD ON MOBILE, LAST ON DESKTOP. ──
-        order-4 on a phone puts it directly under the tagline, above the bullets, which is the
-        whole reason this component orders at the flex level. lg:order-last drops it back to the
-        bottom on a wide screen, where three cards sit side by side and the buttons should line
-        up along one baseline. `mt-auto` only applies once it is last, which is why it is inside
-        the lg: prefix set rather than always on.
+        order-4 on a phone puts it directly under the tagline, above the list, which is the whole
+        reason this component orders at the flex level. lg:order-last drops it back to the bottom
+        on a wide screen, where the cards sit side by side and the buttons should line up along
+        one baseline. `mt-auto` only applies once it is last, which is why it is inside the lg:
+        prefix set rather than always on.
       */}
       <div className="order-4 mt-5 lg:order-last lg:mt-auto lg:pt-6">
         <button
@@ -153,16 +164,16 @@ function Card({
               : "bg-white/10 text-white hover:bg-white/15",
           ].join(" ")}
         >
-          {pending ? "One moment" : offer.cta}
+          {pending ? "One moment" : offer.funnelCta}
         </button>
       </div>
 
       {/* ── What is in it. Last on mobile, above the button on desktop. ── */}
-      <ul className="order-5 mt-6 space-y-2.5 lg:order-4 lg:mt-6">
-        {offer.includes.map((line) => (
-          <li key={line} className="flex gap-2.5 text-sm text-white/80">
+      <ul className="order-5 mt-6 space-y-3 lg:order-4 lg:mt-6">
+        {offer.funnelIncludes.map((line) => (
+          <li key={line.text} className="flex gap-2.5 text-sm">
             <Tick />
-            <span>{renderLine(line, () => onChoose(offer.key, true), busy || disabled)}</span>
+            <Line line={line} onConcierge={() => onChoose(offer.key, true)} disabled={busy || disabled} />
           </li>
         ))}
       </ul>
@@ -171,38 +182,58 @@ function Card({
 }
 
 /**
- * The Concierge price, made tappable wherever it appears in a bullet.
+ * One ticked line, with its struck-through value where it has one.
  *
- * ‼️ MATTHEW'S ASK, AND THE REASON IS A REAL SEGMENT: some clinics only want the Concierge and
- * nothing else. A figure they cannot tap is a dead end for exactly the person most ready to buy
- * something, so it takes them into the booking with the question attached.
+ * ‼️ THE STRIKE IS THE ARGUMENT ON THE PAID CARD. "AI Skin Concierge, $199 / month, FREE" says in
+ * one line what a paragraph would say worse: this is a real product with a real price and you are
+ * not paying it. The figure is struck rather than omitted precisely because a reader has to see
+ * the number to know what was given up.
  *
- * ‼️ IT DOES NOT SELL THEM THE CARD IT IS PRINTED ON. Tapping it records `review_free` plus
- * Concierge interest, because somebody asking what the Concierge costs has not agreed to a year
- * of AI visibility work and must not be recorded as though they had. What makes this legible on
- * our side is the Slack card, which reads the interest flag and titles the lead as a Concierge
- * enquiry rather than as a Review Engine signup.
- *
- * The split is on the literal PRICE_CONCIERGE string rather than on a marker in the copy, so a
- * bullet in pitch.ts stays plain readable text with no markup language invented for it.
+ * ‼️ AND IT IS STILL TAPPABLE. Matthew's ask, and the reason is a real segment: some clinics only
+ * want the Concierge. A figure they cannot tap is a dead end for exactly the person most ready to
+ * buy something. Tapping records `review_free` plus Concierge interest, because somebody asking
+ * about the Concierge has not agreed to a year of AI visibility work and must not be recorded as
+ * though they had. The Slack card reads the flag and titles them a Concierge enquiry.
  */
-function renderLine(line: string, onConcierge: () => void, disabled: boolean): React.ReactNode {
-  const at = line.indexOf(PRICE_CONCIERGE);
-  if (at === -1) return line;
+function Line({
+  line,
+  onConcierge,
+  disabled,
+}: {
+  line: FunnelLine;
+  onConcierge: () => void;
+  disabled: boolean;
+}) {
+  const conciergePrice = line.was === PRICE_CONCIERGE;
   return (
-    <>
-      {line.slice(0, at)}
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={onConcierge}
-        className="underline decoration-dotted underline-offset-2 disabled:no-underline"
-        style={{ color: REEF }}
-      >
-        {PRICE_CONCIERGE}
-      </button>
-      {line.slice(at + PRICE_CONCIERGE.length)}
-    </>
+    <span className={line.strong ? "font-semibold text-white" : "text-white/80"}>
+      {line.text}
+      {line.was ? (
+        <>
+          {", "}
+          {conciergePrice ? (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={onConcierge}
+              className="text-white/40 line-through decoration-white/40 disabled:no-underline"
+            >
+              {line.was}
+            </button>
+          ) : (
+            <span className="text-white/40 line-through">{line.was}</span>
+          )}
+        </>
+      ) : null}
+      {line.tag ? (
+        <span
+          className="ml-1.5 whitespace-nowrap text-xs font-bold uppercase tracking-wide"
+          style={{ color: REEF }}
+        >
+          {line.tag}
+        </span>
+      ) : null}
+    </span>
   );
 }
 
@@ -211,7 +242,7 @@ function Tick() {
     <svg
       viewBox="0 0 20 20"
       aria-hidden="true"
-      className="mt-0.5 h-4 w-4 shrink-0"
+      className="mt-1 h-4 w-4 shrink-0"
       fill="none"
       stroke={REEF}
       strokeWidth="2.5"
