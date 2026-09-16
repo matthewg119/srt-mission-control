@@ -475,36 +475,17 @@ async function instructionsFor(
     }
 
     case "agreement_signed": {
-      // ‼️ THE STEP THAT HAD NO CARD, WHICH IS WHY IT NEEDED ONE. It arrived on 2026-09-04 when
-      // the signature moved off the funnel and onto the call, and test-onboarding-artifacts.ts has
-      // been failing "every step that waits for a person has an instruction card" ever since. A
-      // manual step with no arm posts a bare title and three buttons, so the person looking at it
-      // has to already know what the evidence is. This one especially: the thing it wants in the
-      // thread is not the thing the step is named after.
+      // ‼️ THE CARD THAT USED TO SAY "NOTHING IN THE FUNNEL SIGNS THIS ANY MORE". That was true
+      // between 2026-09-04 and 2026-09-16, when the e-sign screens had been deleted and the only
+      // path left was a pen. /sign/<token> brought it back as a link sent from here, so the card
+      // leads with the two buttons and keeps paper as the fallback rather than the default.
       //
-      // ‼️ IT IS A THREAD-TIER STEP AND THE CARD SAYS SO OUT LOUD. The verifier reads replies in
-      // this thread; it cannot read a signature. So the tick means "somebody recorded the signing",
-      // never "this was signed", and a card that let anybody believe otherwise would be the green
-      // tick over unchecked work that the whole verified_source split exists to prevent.
-      return [
-        "*Nothing in the funnel signs this any more.* /onboarding2 books the call and asks the",
-        "questions; the agreement is signed here, with you, once the preview has been walked and",
-        "the pages are picked. That is what `call_held` above attests to, and it is why this step",
-        "sits last in the phase rather than first.",
-        "",
-        "The blank counterpart: `bun scripts/_render-agreement-blank.ts`.",
-        "",
-        "*Then put the evidence in this thread and press Done.* Any one of:",
-        "  • the countersigned PDF",
-        "  • a photo of the signed page",
-        "  • a note saying where it is filed",
-        "",
-        ":ballot_box_with_check: *This step can only ever be a thread-tier tick.* It records that",
-        "somebody filed the signing, not that a signature exists. The e-signature path",
-        "(`onboarding2_signings`, per-page initials, the document hash) is still in the schema and",
-        "the funnel no longer reaches it, so nothing here is cryptographic and the card will not",
-        "pretend it is.",
-      ];
+      // ‼️ IT NAMES THE OFFER, AND REFUSES TO OFFER A BUTTON WHEN IT CANNOT. Three offers means
+      // three different documents, and "send the agreement" is not a well-formed instruction
+      // until somebody has said which one. A client with no offer recorded gets told to set it
+      // rather than handed a guess, for the same reason mintSigningLink() refuses.
+      const { offerForClientCard } = await import("./send-agreement-card");
+      return offerForClientCard(c.id);
     }
 
     case "access_granted": {
@@ -1793,6 +1774,23 @@ function blocks(
  * kept out of blocks() because blocks() is synchronous and this needs a database read.
  */
 async function extraActionsFor(step: DeliveryStep, c: ClientFacts): Promise<StepAction[]> {
+  // ‼️ THE TWO CONTRACT BUTTONS, AND THEY ARE OFFERED ONLY WHEN THERE IS A CONTRACT TO SEND.
+  // A client with no offer recorded, or one on the free plan, gets no buttons at all: the card
+  // body explains which of the two it is and what to do about it. A button that minted a
+  // document for somebody who was told there was no contract, or guessed which of three
+  // documents an unrecorded client signed up for, is worse than no button.
+  if (step.key === "agreement_signed") {
+    const { loadClientForAgreement, offerOfClient } = await import("./send-agreement");
+    const { offerFor } = await import("@/config/pitch");
+    const client = await loadClientForAgreement(c.id).catch(() => null);
+    const offer = client ? offerOfClient(client) : null;
+    if (!offer || !offerFor(offer).needsAgreement) return [];
+    return [
+      { label: "Draft the email", actionId: "agreement_draft", value: `${c.id}:${step.key}` },
+      { label: "Send signing link", actionId: "agreement_link", value: `${c.id}:${step.key}` },
+    ];
+  }
+
   // ‼️ [Reuse it] IS ONLY OFFERED WHEN THERE IS SOMETHING TO REUSE. A button that says research
   // exists, over an avatar_briefs row carrying only a prompt, would be a promise the next press
   // cannot keep. Both halves are checked: a row AND research_text on it.

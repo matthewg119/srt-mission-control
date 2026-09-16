@@ -122,6 +122,20 @@ export async function POST(req: NextRequest) {
   // page_sections; this call site and missingSections() are unchanged. A page was accepted only
   // after the browser echoed a hash computed over every clause on it, so the text attested to is
   // identical to what nine section initials attested to. `missing` is a list of SECTION numbers.
+  // ‼️ A SECTIONLESS SNAPSHOT WALKS STRAIGHT THROUGH THE CHECK BELOW, SO IT IS REFUSED HERE.
+  // missingSections(rows, []) returns [], and [].length is 0, so a snapshot with no sections
+  // satisfies the coverage check with NO INITIALS AT ALL. Everything after this point would then
+  // stamp signed_at, render a PDF of an empty document, email it to the signer as their executed
+  // contract, and fire provisionFromSigning.
+  //
+  // Nothing produces such a snapshot today and resolveVariant() throws on one, which is where
+  // this should be caught. This is the second line of defence, at the point where the damage
+  // would actually be done, because the failure is silent and the artefact is a signed contract.
+  if (!row.agreement_snapshot?.sections?.length) {
+    console.error("[onboarding2/sign] sectionless snapshot on signing", row.id);
+    return NextResponse.json({ ok: false, error: "empty_agreement" }, { status: 409 });
+  }
+
   const initialRows = await loadInitials(row.id);
   const missing = missingSections(
     initialRows,

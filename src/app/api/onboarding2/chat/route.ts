@@ -476,6 +476,12 @@ async function handleScheduling(args: {
           is_demo: row.is_demo,
           call_daypart: draft.daypart ?? null,
           call_timezone: draft.timezone ?? null,
+          // ‼️ COPIED FROM THE SIGNING ROW, NOT RE-ASKED AND NOT RE-DERIVED. The offer was chosen
+          // before the session existed and is frozen into that row's agreement snapshot. The lead
+          // carries it so a Slack card, a board and a CRM query can all answer "which offer" from
+          // the row they already have, without joining back through the signing every time.
+          offer_key: row.offer_key,
+          concierge_interest: row.concierge_interest === true,
         })) ?? null;
       if (lead) await patchOpenSigning(row.id, { lead_id: lead.id });
     }

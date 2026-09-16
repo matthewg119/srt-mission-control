@@ -102,13 +102,20 @@ import {
   FRESHNESS_STAT,
   GUARANTEE_LINE,
   GUARANTEE_RESTATE,
+  GUARANTEE_YEAR_LINE,
   KEEP_WORKING_FREE_LINE,
   LOOM_CLIENT_COUNT_CLAIM,
   LOOM_START_WINDOW,
   LOOM_TEXT_NUMBER,
   OFFER_INCLUDES,
   ONBOARDING_WINDOW,
+  PRICE_CONCIERGE,
+  PRICE_MONTH,
   PRICE_RETAINER,
+  PRICE_YEAR_AMOUNT,
+  PRICE_YEAR_ANCHOR,
+  PRICE_YEAR_EQUIV,
+  REFUND_LINE,
   PRICE_RETAINER_AMOUNT,
   QUALIFIED_INQUIRY_DEF,
   VALUE_MONTH_ONE,
@@ -705,8 +712,16 @@ export async function buildLoomScript(
     `${company}${report.city ? ` · ${report.city}` : ""}`,
     `Customer this is aimed at: ${avatar.label}`,
     `Customers block: ${aesthetics ? "AESTHETICS (hand-written patient types, with figures)" : "generated niche set"}`,
-    `Selling: ${opts.price ? `${opts.price}, quoted by hand` : PRICE_RETAINER}, free until the first 5 qualified AI-sourced inquiries`,
-    `GUARANTEE: ${sentence(GUARANTEE_RESTATE)} Only record this if we will actually chase those 5 queries.`,
+    opts.price
+      ? `Selling: ${opts.price}, quoted by hand. The three standard plans and the guarantee do NOT apply and the script does not mention them.`
+      : `Selling: THREE plans. Free review engine, ${PRICE_YEAR_AMOUNT} for the year, ${PRICE_MONTH}.`,
+    // ‼️ THE GUARANTEE IS ON ONE PLAN AND THE PRE-FLIGHT SAYS SO BEFORE RECORDING.
+    // It used to print one guarantee unconditionally, which was right when there was one offer.
+    // Reading it over the monthly plan would be selling a remedy that plan does not carry, which
+    // is the same mistake as promising a return with no mechanism behind it.
+    opts.price
+      ? `GUARANTEE: NONE on a hand-quoted number. Do not say it.`
+      : `GUARANTEE: ${sentence(GUARANTEE_YEAR_LINE)} ON THE ANNUAL PLAN ONLY. The monthly plan carries none and the script says so out loud.`,
     rival
       ? `Competitor named on camera: ${rival.name}${rival.gap === null ? " (name only, no gap count is said)" : `, in ${rival.gap} of the questions they are missing from`}`
       : `NO COMPETITOR FOUND in this run. The script says nothing about a rival and does not invent one.`,
@@ -901,10 +916,16 @@ export async function buildLoomScript(
   say("");
   say(`You will not win all of them. But if you are fast, you will win more than you don't.`);
 
-  // 9. THE GUARANTEE. It sits after the pillars rather than in the open: it is an answer, and it
-  // only lands as one once they have watched their own name fail to come back on camera.
-  say(...rule("THE GUARANTEE"));
-  say(`So here is my guarantee.`, "", `${sentence(GUARANTEE_LINE)}`);
+  // 9. THE GUARANTEE BEAT IS GONE FROM HERE AND THE REASON IS THE 2026-09-16 OFFER SPLIT.
+  //
+  // It used to say GUARANTEE_LINE on its own, in its own section, before any price. That worked
+  // while there was one offer and one guarantee that came with it. There are three offers now and
+  // only ONE of them carries a guarantee, so a guarantee announced before the offers is a promise
+  // attached to whichever one they happen to pick, which is two thirds wrong.
+  //
+  // It now lives inside THE INVESTMENT, spoken as part of the yearly offer, because that is what
+  // it actually is: the thing the annual plan buys. Same rule Promise 2 had in v3, where the ads
+  // beat and the guarantee were "one decision, and it is the tier".
 
   // 10. The value stack, then the price, then the free period. Order matters: the stack has to be
   // in the room before the number is, or the number is the only thing they have to react to.
@@ -929,20 +950,78 @@ export async function buildLoomScript(
     say(`Total delivered value: ${VALUE_RECURRING} every month.`);
   }
 
-  say(
-    "",
-    `But today, we will do that for free.`,
-    "",
-    `${sentence(FREE_UNTIL_LINE)}`,
-    ...(QUALIFIED_INQUIRY_DEF ? ["", QUALIFIED_INQUIRY_DEF] : []),
-    "",
-    // ‼️ THE SECOND BEAT ATTACHES THE PRICE AND DOES NOT RESTATE THE TERMS. It used to say
-    // "So you start free" one line under a sentence that had just said exactly that, which
-    // reads as a stutter out loud. What the listener still needs at this point is the number.
-    //
-    // PRICE_RETAINER_AMOUNT, not PRICE_RETAINER: the sentence already says "monthly".
-    `And if we hit that, the monthly retainer is ${opts.price ?? PRICE_RETAINER_AMOUNT}.`
-  );
+  // ‼️ THREE OFFERS, READ IN THIS ORDER, AND THE ORDER IS THE ARGUMENT.
+  //
+  // Free first, because it is the only one that costs them nothing to believe and it is what
+  // makes the next two credible: somebody who has watched us do the review work for nothing has
+  // evidence, not a claim. Then the year, which is the one being recommended and the only one
+  // that carries the guarantee. Then month to month, last, as the answer to "I do not want to
+  // commit" rather than as a thing anybody is steered toward.
+  //
+  // ‼️ THE HAND-QUOTED OVERRIDE DROPS ALL THREE. `loom $499` means a number agreed by hand,
+  // and a hand-agreed number does not drag a guarantee, a refund and a free tier along with it.
+  // Same rule the old script held: "a number agreed by hand does not drag the standard guarantee
+  // and free period along".
+  if (opts.price) {
+    say(
+      "",
+      `Your price for all of that is ${opts.price}.`,
+      "",
+      `That is a number we agreed, so the standard plans and the guarantee do not apply to it.`
+    );
+  } else {
+    say("", `There are three ways to do this, and I will be quick.`, "");
+
+    // 1. The free one. Said as a real deliverable they keep, never as a trial.
+    say(
+      `The first one is free, and I mean actually free.`,
+      "",
+      `We set up your review engine. The automation that asks every patient after a visit, the`,
+      `scripts your front desk reads, the one tap link for the counter.`,
+      "",
+      `No card, no contract, and you keep it whether or not you ever pay me a penny.`,
+      ""
+    );
+
+    // 2. The year. The anchor, the price, then the guarantee attached to it.
+    say(
+      `The second one is the whole thing, for a year.`,
+      "",
+      `At ${PRICE_RETAINER}, twelve months of this is ${PRICE_YEAR_ANCHOR}.`,
+      "",
+      `I am doing it for ${PRICE_YEAR_AMOUNT}. That is ${PRICE_YEAR_EQUIV}.`,
+      "",
+      `That includes the AI Concierge on your site, which on its own is ${PRICE_CONCIERGE}.`,
+      ""
+    );
+
+    // ‼️ THE GUARANTEE AND THE REFUND ARE SPOKEN AS THE EXACT CONSTANTS AND NOTHING ELSE.
+    // Both are masked by name in delivery-guards.ts, so a paraphrase of either fails the ban
+    // list and gets flagged in the transcript review. Do not reword them here to make them
+    // scan better out loud: the wording IS the commitment, and the video, the email and the
+    // contract have to be holdable to the same one.
+    say(
+      `And on that one, ${sentence(GUARANTEE_YEAR_LINE)}`,
+      "",
+      `${sentence(REFUND_LINE)}`,
+      "",
+      `So the worst case is you get three months back and we carry on working for nine more.`,
+      ""
+    );
+
+    // 3. Month to month. The absence is said out loud rather than left to be discovered.
+    say(
+      `And the third one, if you would rather not commit to a year, is ${PRICE_MONTH}.`,
+      "",
+      `Same work, cancel with thirty days notice.`,
+      "",
+      // ‼️ SAID, NOT OMITTED. A prospect who finds out on the invoice that the cheaper plan
+      // had no guarantee has been handled badly, and it costs the guarantee its credibility on
+      // the plan that does carry one.
+      `No guarantee on that one though, and no refunds. The guarantee is what the year buys.`,
+      ""
+    );
+  }
 
   // 11. Founding cohort. The scarcity is real and countable, which is the only reason it is said
   // out loud at all — see the note over FOUNDING_BONUS in config/pitch.ts.
@@ -985,7 +1064,16 @@ export async function buildLoomScript(
     say(
       `So here is what happens next.`,
       "",
+      // ‼️ IT NAMES THE BUTTON ON THEIR OWN REPORT, NOT A BARE BOOKING PAGE. That is main's
+      // wording and it stays: the Get Started button opens /onboarding2, and a booking made on a
+      // bare Calendly page reaches none of this app, so there is no offer, no client and no board.
       `The link to book the onboarding call is the Get Started button at the bottom of your report.`,
+      "",
+      // ‼️ "WHICH ONE", NOT "WHICH OF THE THREE". The picker shows TWO cards: the free Review
+      // Engine and the guaranteed plan. Month to month is still sold, on /pricing and on the call,
+      // but it is not a door on that screen, and a script that counted the options out loud would
+      // be wrong the moment one is added or removed.
+      `It will ask which one you want, then find you a time.`,
       "",
       screen(`the report's Get Started button, ${bookingUrl}`),
       "",

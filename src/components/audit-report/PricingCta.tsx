@@ -39,7 +39,9 @@
 // ‼️ EVERY PROP IS OPTIONAL AND THE COMPONENT STILL RENDERS WITHOUT THEM. A pending or failed
 // report has no score, no competitor and no counts. A missing param renders the generic hero on
 // the destination, which is documented behaviour over there, so there is nothing to guard here.
-import { buildOnboarding2Url, scaleToSample } from "@/lib/onboarding2-link";
+// BOOKING_LINK is gone with the second button, which main deleted on 2026-09-15: it pointed at a
+// bare Calendly page and a booking made there reached this app not at all. One door now.
+import { buildOnboarding2Url, scaleToSample, type ReportUtm } from "@/lib/onboarding2-link";
 
 export function PricingCta({
   score,
@@ -49,6 +51,7 @@ export function PricingCta({
   mentioned,
   totalPrompts,
   reportSlug,
+  utm,
 }: {
   score?: number | null;
   city?: string | null;
@@ -57,6 +60,15 @@ export function PricingCta({
   mentioned?: number;
   totalPrompts?: number;
   reportSlug?: string | null;
+  /**
+   * The campaign that produced this report, so Get Started carries it into the funnel.
+   *
+   * ‼️ THIS IS NOT A PRICE OR A TERM AND THE BAN AT THE TOP OF THIS FILE DOES NOT REACH IT.
+   * What was stripped on 2026-09-03 was OFFER COPY: a price and a guarantee stated in a document
+   * already sent, which could then contradict the agreement. A campaign id states nothing to the
+   * reader and appears nowhere on the page.
+   */
+  utm?: ReportUtm;
 } = {}) {
   const userShowed =
     typeof mentioned === "number" && typeof totalPrompts === "number"
@@ -80,7 +92,7 @@ export function PricingCta({
   return (
     <div className="rounded-lg border border-surface-border bg-surface p-4">
       <a
-        href={buildOnboarding2Url(params)}
+        href={buildOnboarding2Url(params, undefined, utm)}
         className="mb-3 block w-full rounded-lg bg-reef py-3 text-center text-sm font-semibold text-midnight transition hover:opacity-90"
       >
         Get Started

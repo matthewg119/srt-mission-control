@@ -102,6 +102,11 @@ export const OFFER_INCLUDES = [
   { work: "We re-write your current pages", value: "$2,400 value" },
   { work: "We turn your happy customers into the evidence", value: "$499 / month value" },
   { work: "We fix any NAP mismatches online", value: "$800 value, one-time build" },
+  // ‼️ PRICED ON 2026-09-16, HAVING BEEN THE ONE UNPRICED LINE ON PURPOSE. The reason it had no
+  // figure was that inventing a fifth one to fill the gap is what the note above forbids. It has
+  // a figure now because Matthew set one, not because the gap was filled. See PRICE_CONCIERGE,
+  // and note the SMS Live Agent gave this number up rather than sharing it.
+  { work: "Install the AI Skin Concierge on your site", value: "$199 / month value" },
   { work: "Your monthly AI Visibility Report", value: "$400 / month value" },
 ] as const;
 
@@ -112,8 +117,13 @@ export const OFFER_INCLUDES = [
  * written as a literal rather than summed at runtime on purpose: these are copy, not data, and a
  * total that silently changes when somebody edits a line item is exactly the drift the price rules
  * exist to stop. If OFFER_INCLUDES changes, change this by hand and say the new number out loud.
+ *
+ * ‼️ RE-STATED BY HAND ON 2026-09-16, WHICH IS WHAT THE PARAGRAPH ABOVE DEMANDS. The Concierge
+ * line was added to OFFER_INCLUDES at $199 / month, so the recurring stack is now
+ * $2,400 + $499 + $199 + $400 = $3,498. Said out loud, as required, rather than left to be
+ * discovered by somebody adding the column up in a meeting.
  */
-export const VALUE_RECURRING = "$3,299";
+export const VALUE_RECURRING = "$3,498";
 
 /**
  * ‼️ NULL, AND DELIBERATELY, UNTIL MATTHEW PICKS THE FIGURE (2026-08-25).
@@ -279,6 +289,344 @@ export const OFFER_EXIT_LINE = "Leave anytime, keep everything: pages, profiles,
 
 /** The offer in one line, for a script or a brief that needs the terms in a sentence. */
 export const OFFER_LABEL = `free until the first 5 qualified AI-sourced inquiries, then ${PRICE_RETAINER}`;
+
+// ── THREE OFFERS (2026-09-16) ──────────────────────────────────────────────
+/**
+ * ‼️ THE OFFER IS NO LONGER ONE THING, AND TWO DOCUMENTED DECISIONS ARE REVERSED HERE.
+ * Matthew's call, 2026-09-16. Both reversals are written down rather than edited past, because
+ * both have their reasons recorded above and an implementer who does not see the reversal will
+ * "fix" the new copy back to the old rule.
+ *
+ * REVERSAL 1: THE GUARANTEE IS NOW A MONEY GUARANTEE ON ONE OFFER.
+ * The note over GUARANTEE_LINE says "IT IS A VISIBILITY COMMITMENT, NOT A MONEY ONE ... Never
+ * restate it as money, a refund, or 'risk free'." That held while there was one offer and nothing
+ * was charged up front. `year_3300` is paid in full on the call, so the thing at risk is the
+ * client's money, and a remedy that is not money would be a worse promise, not a safer one.
+ *
+ * The ban is NOT loosened. GUARANTEE_YEAR_LINE and REFUND_LINE below are added to the
+ * exact-literal allow-list that spokenPromises() strips before running DELIVERY_BANNED_PROMISES,
+ * which is the same mechanism FREE_UNTIL_LINE already uses. A paraphrase still fails. Never
+ * replace that with a loosened pattern: the reasoning is over DELIVERY_BANNED_PROMISES.
+ *
+ * REVERSAL 2: "YOU DON'T PAY A DOLLAR UNTIL..." IS FALSE ON BOTH PAID OFFERS.
+ * FREE_UNTIL_LINE, OFFER_LABEL and PRICE_RETAINER describe an arrangement nobody is sold any
+ * more. They are kept, not deleted, because PRICE_RETAINER is the multiplicand behind
+ * PRICE_YEAR_ANCHOR and the cold pipeline still quotes it. What changed is that they are no
+ * longer the terms of a deal. Anything NEW states its terms from OFFERS.
+ */
+
+/** Stable keys. Written to onboarding2_signings, onboarding2_leads and clients. Never renamed. */
+export type OfferKey = "review_free" | "year_3300" | "month_349";
+
+export const OFFER_KEYS: readonly OfferKey[] = ["review_free", "year_3300", "month_349"] as const;
+
+export function isOfferKey(v: unknown): v is OfferKey {
+  return typeof v === "string" && (OFFER_KEYS as readonly string[]).includes(v);
+}
+
+/**
+ * ‼️ EVERY FIGURE BELOW IS A LITERAL AND NONE OF THEM IS COMPUTED, INCLUDING THE TWO THAT LOOK
+ * LIKE ARITHMETIC. The rule at the top of this file forbids turning a price into another figure
+ * by arithmetic, and PRICE_YEAR_EQUIV ($3,300 / 12) and REFUND_AMOUNT ($275 x 3) are exactly the
+ * shape it forbids deriving. They are written out because they are the founder's figures, said
+ * out loud and printed in a contract, and a total that silently changes when somebody edits the
+ * annual price is the drift that rule exists to stop. Same treatment VALUE_RECURRING gets.
+ *
+ * If PRICE_YEAR changes, change all three BY HAND and say the new numbers out loud.
+ */
+export const PRICE_YEAR = "$3,300 / year";
+export const PRICE_YEAR_AMOUNT = "$3,300";
+
+/**
+ * The crossed-out number on the yearly card. $499 x 12.
+ *
+ * ‼️ AN ANCHOR IS A REAL PRICE OR IT IS A LIE. This one is: PRICE_RETAINER is what the monthly
+ * retainer genuinely was, and twelve of them is what a year at that rate genuinely cost. Do not
+ * inflate it to widen the gap, and do not keep it once PRICE_RETAINER stops being a real figure.
+ */
+export const PRICE_YEAR_ANCHOR = "$5,988";
+
+/** What the year works out to a month. Said on the card, and the basis of the refund. */
+export const PRICE_YEAR_EQUIV = "$275 / month";
+export const PRICE_YEAR_EQUIV_AMOUNT = "$275";
+
+/** The month-to-month offer. Not the old $349 tier, which was deleted on 2026-08-31. */
+export const PRICE_MONTH = "$349 / month";
+export const PRICE_MONTH_AMOUNT = "$349";
+
+/**
+ * The AI Concierge, priced for the first time.
+ *
+ * ‼️ IT USED TO BE THE ONE DELIVERABLE WITH NO FIGURE, DELIBERATELY. config/onboarding2.ts said
+ * "The one deliverable OFFER_INCLUDES does not price. Listed without a figure, on purpose."
+ * Matthew priced it on 2026-09-16 so the yearly card can show what is being given away.
+ *
+ * ‼️ $199 WAS ALREADY TAKEN BY THE SMS LIVE AGENT in agreement section 8, and two products at one
+ * figure in one signed document is a question the signer has to ask. Matthew's call: the
+ * Concierge takes the figure and the SMS Live Agent loses it. Do not put it back.
+ */
+export const PRICE_CONCIERGE = "$199 / month";
+export const PRICE_CONCIERGE_AMOUNT = "$199";
+
+/**
+ * How many qualified appointments the yearly guarantee promises, and by when.
+ *
+ * ‼️ THE WINDOW IS WRITTEN TWICE, AS A PHRASE AND AS A NUMBER, RATHER THAN ONE BEING SLICED OUT
+ * OF THE OTHER. The contract needs both "inside your first 90 days" and "on day 90", and
+ * GUARANTEE_WINDOW.replace(" days", "") is the kind of string surgery that survives until
+ * somebody writes "three months" here and a clause silently renders "on day three months".
+ * Change the two together.
+ */
+export const GUARANTEE_COUNT = 5;
+
+/**
+ * What the optimization program is worth over a year, and what the Concierge is worth beside it.
+ *
+ * ‼️ WRITTEN OUT, NOT COMPUTED, FOR THE REASON THE HEADER OF THIS FILE GIVES. $4,188 is
+ * PRICE_MONTH twelve times and $2,388 is PRICE_CONCIERGE twelve times, and both are exactly the
+ * kind of figure the no-arithmetic rule exists to stop being derived at render time. If
+ * PRICE_MONTH or PRICE_CONCIERGE moves, move these by hand and say the new numbers out loud.
+ *
+ * ‼️ $4,188 IS THE PROGRAM ALONE AND DOES NOT INCLUDE THE CONCIERGE. Matthew's call, 2026-09-16,
+ * chosen over the $6,576 that includes it. That means the funnel card must never call it a TOTAL:
+ * it sits on the optimization line, and the Concierge and the Review Tool are shown underneath as
+ * free additions on top of it. A card that said "total value $4,188" directly above a line
+ * valuing the Concierge at $199 a month would be inviting the reader to check the arithmetic and
+ * find it wrong, which is the one thing the value stack must never do.
+ */
+export const VALUE_PROGRAM_YEAR = "$4,188 / year value";
+export const VALUE_CONCIERGE_YEAR = "$2,388 / year value";
+
+export const GUARANTEE_WINDOW = "90 days";
+export const GUARANTEE_WINDOW_DAY = "90";
+
+/**
+ * ‼️ THE YEARLY GUARANTEE. FIXED WORDING, FOR THE REASON GUARANTEE_LINE GIVES.
+ * A model merely asked to "mention the guarantee" rewrites it every take, and a guarantee worded
+ * differently in the video, the email and the contract is three commitments a client can hold us
+ * to. This is the one that may be said, and only on `year_3300`.
+ *
+ * ‼️ IT COUNTS QUALIFIED APPOINTMENTS, WHICH IS THE EXISTING TEST AND NOT A NEW ONE. Booked, plus
+ * they say they found you through AI, plus they show up. That definition lives in the agreement
+ * and nothing here may restate it loosely: "5 new patients" is a different, larger promise.
+ */
+export const GUARANTEE_YEAR_LINE =
+  "we will bring you 5 qualified appointments inside your first 90 days";
+
+/** The remedy, and the only refund that exists anywhere in this business. */
+export const REFUND_AMOUNT = "$825";
+export const REFUND_LINE =
+  "if we do not, you get your first 3 months back and we keep working for the rest of the year at no charge";
+
+/**
+ * ‼️ NULL ON PURPOSE AND THE MONTHLY OFFER SAYS SO OUT LOUD.
+ *
+ * `month_349` has no guarantee and no refund. That is a fact the buyer is told at the card, not
+ * something discovered later, and the agreement states it in its own words. A null here is what
+ * stops a caller rendering the yearly guarantee against a monthly client by falling back.
+ */
+export const GUARANTEE_MONTH_LINE: string | null = null;
+
+/**
+ * One ticked line on a funnel card.
+ *
+ * ‼️ `was` IS A VALUE BEING GIVEN AWAY, NEVER A PRICE BEING CHARGED. It renders struck through
+ * with `tag` after it, which is the only place a figure appears on the picker at all. A price the
+ * visitor would actually PAY must not go in here: the whole point of the screen is that they pick
+ * on what they get and the number is discussed on the call.
+ */
+export interface FunnelLine {
+  text: string;
+  /** Struck through. What this would cost bought on its own. */
+  was?: string;
+  /** After the strike. "FREE", or a value. */
+  tag?: string;
+  /** Carries the weight of the card. One per card at most. */
+  strong?: boolean;
+}
+
+export interface Offer {
+  key: OfferKey;
+  /** The plan name on the card. */
+  name: string;
+  /** One line under the name. What this offer is for. */
+  tagline: string;
+  /** What they pay, or null when nothing is charged. */
+  price: string | null;
+  /** The struck-through number above the price, or null. */
+  anchor: string | null;
+  /** Under the price. The per-month reading of an annual figure, or the term. */
+  priceNote: string | null;
+  /** Ticked lines on the card. */
+  includes: readonly string[];
+  /** The button. */
+  cta: string;
+  /** The approved guarantee sentence, or null when there is none. */
+  guarantee: string | null;
+  /** Whether signing a document is part of taking this offer. */
+  needsAgreement: boolean;
+
+  // ── How the /onboarding2 picker shows it, which is NOT how it is sold ──────
+  //
+  // ‼️ THE PICKER SHOWS NO PLAN PRICE AT ALL (Matthew, 2026-09-16). That link is now primarily
+  // for new clients arriving off a VSL, where the number is discussed on the call and a figure on
+  // the screen only invites a decision before the argument has been made. `price`, `anchor` and
+  // `priceNote` above are untouched and still true: the Slack card, the client board and the
+  // agreement all read them, and they are what the contract is written from. This is a separate
+  // presentation of the same offer, not a second version of it.
+
+  /** Shown on the picker. false means the card does not render there at all. */
+  inFunnel: boolean;
+  /**
+   * What sits where the price used to, in the largest type on the card.
+   *
+   * ‼️ IT IS THE PROMISE, NOT THE PLAN NAME. On the paid card this is the guarantee, because the
+   * guarantee is the reason to pick it and a headline that repeated the plan name would waste the
+   * one line everybody actually reads.
+   */
+  funnelHeadline: string;
+  funnelCta: string;
+  funnelIncludes: readonly FunnelLine[];
+}
+
+/**
+ * ‼️ THE SINGLE SOURCE FOR WHAT EACH OFFER IS. The cards, the agreement variants, the Slack card
+ * and the Loom all read this. A second list anywhere is the bug, the same way a second price is.
+ *
+ * ‼️ `review_free` IS A REAL DELIVERABLE AND NOT A TRIAL. They keep the review workflow whether or
+ * not anything paid follows, and nothing expires. Do not attach scarcity to it: the ban over
+ * FREE_FIRST_BUILD applies here for the same reason, and FOUNDING_SPOTS is not a counter-example
+ * because a founding cohort is a countable thing and this is not.
+ */
+export const OFFERS: readonly Offer[] = [
+  {
+    key: "review_free",
+    // ‼️ ALL THREE NAMES START "AI VISIBILITY" ON PURPOSE (Matthew, 2026-09-16). The free one was
+    // called "Review Engine" and the paid ones "The Year" and "Month to Month", which read as
+    // three different products and made the free one look like a side offer somebody could take
+    // instead of buying. It is not a side offer, it is the second pillar of the same mechanism,
+    // and naming it so the shared half comes first is what makes it a LEAD MAGNET rather than a
+    // fork in the road: you are already doing AI visibility, this is how much of it you want.
+    name: "AI Visibility Review Engine",
+    tagline: "Pillar 2 of the method, Familiar, done for you.",
+    price: null,
+    anchor: null,
+    priceNote: "No card. Keep it either way.",
+    includes: [
+      "Automatic review requests after every visit",
+      "The words your front desk says at checkout",
+      "A one tap request link for the counter",
+      "We watch your review profiles weekly",
+    ],
+    cta: "Start free",
+    guarantee: null,
+    needsAgreement: false,
+    inFunnel: true,
+    funnelHeadline: "Free",
+    funnelCta: "Start with the free tool",
+    funnelIncludes: [
+      // ‼️ THE TOOL IS NAMED ON ITS OWN LINE AND TAGGED FREE, rather than being left implicit in
+      // the four lines describing what it does. Matthew's ask: a visitor has to be able to see
+      // that the thing they are being given is a real, named product.
+      { text: "The AI Review Tool, set up on your site", tag: "FREE", strong: true },
+      { text: "Automatic review requests after every visit" },
+      { text: "The words your front desk says at checkout" },
+      { text: "A one tap request link for the counter" },
+      { text: "We watch your review profiles weekly" },
+    ],
+  },
+  {
+    key: "year_3300",
+    name: "Full AI Visibility, Yearly",
+    tagline: "All three pillars, and we carry the risk.",
+    price: PRICE_YEAR,
+    anchor: PRICE_YEAR_ANCHOR,
+    priceNote: `Works out at ${PRICE_YEAR_EQUIV}.`,
+    includes: [
+      "Familiar: everything in the Review Engine",
+      "Findable: your key pages rewritten so AI can quote them",
+      "Findable: every NAP mismatch across the web, fixed",
+      "Fresh: your monthly AI Visibility Report",
+      `AI Skin Concierge included free, normally ${PRICE_CONCIERGE}`,
+      `${GUARANTEE_COUNT} qualified appointments in ${GUARANTEE_WINDOW}, or your first 3 months back`,
+    ],
+    cta: "Take the year",
+    guarantee: GUARANTEE_YEAR_LINE,
+    needsAgreement: true,
+    inFunnel: true,
+    // The guarantee IS the headline. It is the whole reason this card wins.
+    funnelHeadline: `${GUARANTEE_COUNT} booked appointments guaranteed in ${GUARANTEE_WINDOW}`,
+    funnelCta: "Get my 5 appointments guaranteed",
+    funnelIncludes: [
+      // ‼️ THE VALUE SITS ON THE OPTIMIZATION LINE AND IS NOT CALLED A TOTAL. See the note over
+      // VALUE_PROGRAM_YEAR: $4,188 excludes the Concierge, so the two lines below it are additions
+      // on top rather than components of it.
+      { text: "ChatGPT Client Optimization, all three pillars", tag: VALUE_PROGRAM_YEAR },
+      { text: "AI Skin Concierge on your site", was: PRICE_CONCIERGE, tag: "FREE" },
+      { text: "The AI Review Tool", tag: "FREE" },
+      {
+        text: `${GUARANTEE_COUNT} booked appointments in ${GUARANTEE_WINDOW}, or your money back`,
+        strong: true,
+      },
+    ],
+  },
+  {
+    key: "month_349",
+    name: "Full AI Visibility, Month to Month",
+    tagline: "All three pillars, no commitment, no guarantee.",
+    price: PRICE_MONTH,
+    anchor: null,
+    priceNote: "Cancel with 30 days notice.",
+    includes: [
+      "Familiar: everything in the Review Engine",
+      "Findable: your key pages rewritten so AI can quote them",
+      "Findable: every NAP mismatch across the web, fixed",
+      "Fresh: your monthly AI Visibility Report",
+      `AI Skin Concierge available at ${PRICE_CONCIERGE}`,
+      "No guarantee and no refunds",
+    ],
+    cta: "Go month to month",
+    guarantee: GUARANTEE_MONTH_LINE,
+    needsAgreement: true,
+    // ‼️ NOT ON THE PICKER, AND IT STILL EXISTS EVERYWHERE ELSE (Matthew, 2026-09-16). It is on
+    // /pricing, it has a contract, and it is sold on the call. What it is not is a third door on
+    // the screen a new client lands on from a VSL: a cheaper option with no guarantee, offered
+    // before anybody has explained the guarantee, only splits the decision.
+    //
+    // ‼️ A DIRECT LINK TO IT STILL WORKS. /pricing links /onboarding2?offer=month_349 and that
+    // must keep resolving, so presetOffer does not check inFunnel. Somebody who chose it
+    // deliberately on the pricing page is not shown a picker that has stopped offering it.
+    inFunnel: false,
+    funnelHeadline: "Month to month",
+    funnelCta: "Go month to month",
+    funnelIncludes: [
+      { text: "ChatGPT Client Optimization, all three pillars", tag: VALUE_PROGRAM_YEAR },
+      { text: "No AI Skin Concierge" },
+      { text: "No appointments guaranteed" },
+    ],
+  },
+] as const;
+
+/**
+ * What the /onboarding2 picker offers, in order.
+ *
+ * Derived from `inFunnel` rather than being a second hand-written list, so an offer cannot be
+ * added to the picker and forgotten in the contract, or the other way round.
+ */
+export const FUNNEL_OFFERS: readonly Offer[] = OFFERS.filter((o) => o.inFunnel);
+
+/**
+ * The only way to turn a key into an offer.
+ *
+ * Throws rather than returning undefined, for the reason value() in onboarding2-agreement.ts
+ * throws: a missing offer must fail the build or the request, never render a card with blank
+ * prices on it.
+ */
+export function offerFor(key: OfferKey): Offer {
+  const found = OFFERS.find((o) => o.key === key);
+  if (!found) throw new Error(`[pitch] no offer for key "${key}"`);
+  return found;
+}
 
 // ── ChatGPT Ads, the accelerator ────────────────────────────────────────────
 /**

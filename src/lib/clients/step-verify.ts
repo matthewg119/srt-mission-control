@@ -1534,6 +1534,36 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
   // ‼️ IT IS `not_yet`, NEVER `broken`. There is real work owed and the step keeps its [Re-check]
   // button; broken gets none, and a missing signature is not a code fault.
   agreement_signed: async (ctx) => {
+    // ‼️ THIS STEP CAN NOW BE A SYSTEM TICK, AND UNTIL 2026-09-16 IT COULD NOT BE. The old
+    // verdict said out loud that a thread reply "is evidence somebody recorded the signing, not a
+    // cryptographic record of it", because the funnel had stopped reaching the e-signature path
+    // and the only thing anybody could produce was a photo of a page.
+    //
+    // /sign/<token> reaches it again. When a signing row for this client carries signed_at, the
+    // app has OBSERVED a signature: a session token was redeemed, every page was initialled
+    // against a hash the browser recomputed over the text it rendered, and the document sha was
+    // echoed back and compared. That is real state, so it is `verified` and not `confirmed`.
+    //
+    // ‼️ THE THREAD TIER IS KEPT, NOT REPLACED, because the paper path still exists. A contract
+    // signed in a room with a pen is a real contract and this step must not start refusing it.
+    // What changed is that the two are no longer the same claim, and the card says which happened.
+    const { data: signed } = await supabaseAdmin
+      .from("onboarding2_signings")
+      .select("id, signed_at, template_version, agreement_sha256")
+      .eq("client_id", ctx.clientId)
+      .not("signed_at", "is", null)
+      .order("signed_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (signed?.signed_at) {
+      return verified(
+        `onboarding2_signings.signed_at ${String(signed.signed_at).slice(0, 10)}`,
+        `${signed.template_version ?? "unknown template"}, document ${String(signed.agreement_sha256 ?? "").slice(0, 12)}`,
+        "Signed through the link, with per-page initials and a document hash the browser echoed back."
+      );
+    }
+
     const replies = await humanReplies(ctx);
     if (replies === null) return threadUnreadable;
 
@@ -1541,17 +1571,17 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
       return notYet(
         "replies in this step's thread",
         "nothing in the thread yet",
-        "Put the evidence in this thread, then press Done: the countersigned PDF, a photo of " +
-          "the signed page, or a note saying where it is filed. The blank counterpart comes " +
-          "from scripts/_render-agreement-blank.ts. Nothing in the funnel signs this any more."
+        "Send the signing link from this card and the tick happens by itself when they sign. " +
+          "If it was signed on paper instead, put the evidence in this thread and press Done: " +
+          "the countersigned PDF, a photo of the signed page, or a note saying where it is filed."
       );
     }
 
     return confirmed(
       `${replies.length} ${replies.length === 1 ? "reply" : "replies"} in this step's thread`,
-      "That is evidence somebody recorded the signing, not a cryptographic record of it. The " +
-        "e-signature path (onboarding2_signings, per-page initials, document hash) still exists " +
-        "and is unreferenced by the funnel."
+      "That is evidence somebody recorded the signing, not a cryptographic record of it. No " +
+        "signed onboarding2_signings row exists for this client, so this was signed on paper or " +
+        "filed elsewhere. Sending the link instead makes this a system tick."
     );
   },
 

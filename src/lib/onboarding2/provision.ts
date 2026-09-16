@@ -68,6 +68,26 @@ export async function reportForSlug(slug: string | null | undefined): Promise<Bo
   };
 }
 
+
+/**
+ * Record which offer this client came in on.
+ *
+ * ‼️ A FAILURE IS A WARNING AND NEVER A THROW, because the signature is already committed by the
+ * time this runs. Same posture as every other side effect on this path: a client whose offer did
+ * not stamp is a Slack problem, and a signer shown an error over one is a signer who thinks their
+ * contract did not go through.
+ *
+ * A null offer is a row frozen before the split. It is left alone rather than guessed at.
+ */
+async function stampOffer(clientId: string, offer: string | null): Promise<void> {
+  if (!clientId || !offer) return;
+  const { error } = await supabaseAdmin
+    .from("clients")
+    .update({ offer_key: offer })
+    .eq("id", clientId);
+  if (error) console.error("[onboarding2/provision] offer stamp failed:", error.message);
+}
+
 /** The contact ingestLead created or matched, looked up by the address we just signed. */
 async function contactIdFor(email: string): Promise<string | null> {
   const { data } = await supabaseAdmin
@@ -112,6 +132,7 @@ export async function provisionFromSigning(row: Onboarding2SigningRow): Promise<
 
   if (existing?.id) {
     const clientId = existing.id as string;
+    await stampOffer(clientId, row.offer_key);
     const { data: channel } = await supabaseAdmin
       .from("clients")
       .select("ops_channel_id")
@@ -151,8 +172,15 @@ export async function provisionFromSigning(row: Onboarding2SigningRow): Promise<
     city: row.address_city || report?.city?.split(",")[0]?.trim() || null,
     state: row.address_state,
     postalCode: row.address_postal,
-    // ‼️ 'pilot'. The signature starts the free period the agreement promises. 'active' would
-    // tell every board in Mission Control this client is billing, which contradicts Section 3.
+    // ‼️ 'pilot' ON EVERY OFFER, AND THE REASON CHANGED ON 2026-09-16 EVEN THOUGH THE VALUE DID
+    // NOT. It used to mean "the signature starts the free period the agreement promises", which
+    // was true when there was one offer and nothing was charged until 5 appointments landed.
+    // Two of the three offers are now paid, so there is no free period to start.
+    //
+    // It stays 'pilot' because MONEY IS TAKEN ON THE CALL, AFTER SIGNING, and this runs at
+    // signature. Marking a client 'active' here would tell every board in Mission Control they
+    // are billing before anybody has charged them. Whatever flips this to 'active' should be the
+    // thing that takes the payment, and that thing does not exist yet.
     billingStatus: BILLING_STATUS,
   });
 
@@ -180,6 +208,7 @@ export async function provisionFromSigning(row: Onboarding2SigningRow): Promise<
   }
 
   warnings.push(...result.warnings);
+  await stampOffer(result.clientId, row.offer_key);
 
   // ‼️ NO INTAKE LINK IS RE-ISSUED FOR A BOOKING (2026-09-15). The client is asked for nothing
   // before the call; the confirmation email is the only thing they get. startPilot still mints a

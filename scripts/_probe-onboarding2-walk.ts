@@ -25,11 +25,24 @@
 //   delete from public.onboarding2_signings where is_demo;
 
 import { canonicalPage, sha256Hex } from "../src/lib/onboarding2/canonical";
-import {
-  AGREEMENT_PAGE_COUNT,
-  AGREEMENT_SECTION_COUNT,
-  TEMPLATE_VERSION,
-} from "../src/config/onboarding2-agreement";
+import { agreementFor } from "../src/config/onboarding2-agreement";
+import { isOfferKey, type OfferKey } from "../src/config/pitch";
+
+// ‼️ THE COUNTS COME FROM A RESOLVED VARIANT NOW, NOT FROM MODULE CONSTANTS. v6 split one
+// agreement into three, so "how many sections are there" is only answerable once you say which
+// document. The probe still READS the counts rather than hardcoding them, which is the property
+// the note above is about: a probe that hardcodes a count tests the count, a probe that reads it
+// tests the invariant.
+//
+// Defaults to the yearly plan because that is the document with the guarantee, the refund and the
+// most clauses, so it is the one where a page-model bug has the most room to hide. Pass an offer
+// key as the last argument to probe another.
+const OFFER: OfferKey = isOfferKey(process.argv[3]) ? (process.argv[3] as OfferKey) : "year_3300";
+const DOC = agreementFor(OFFER);
+const AGREEMENT_SECTION_COUNT = DOC.sectionCount;
+const AGREEMENT_PAGE_COUNT = DOC.pageCount;
+const TEMPLATE_VERSION = DOC.templateVersion;
+
 
 const BASE = (process.argv[2] ?? "http://localhost:3399").replace(/\/$/, "");
 

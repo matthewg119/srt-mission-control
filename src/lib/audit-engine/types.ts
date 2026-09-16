@@ -71,6 +71,20 @@ export interface LoomBuyerMap {
 }
 
 export interface AuditReportRow {
+  /**
+   * Which campaign produced this report, stamped at scan time.
+   *
+   * ‼️ NULLABLE AND USUALLY NULL. Most reports come from somebody typing a URL into the homepage
+   * with no campaign behind it at all, and that is a real answer rather than a gap. They are here
+   * so the Get Started link at the bottom of the report can carry the campaign into
+   * onboarding2_leads, which is the only thing that ever catches a prospect who books without
+   * replying to the email that brought them.
+   */
+  utm_source?: string | null;
+  utm_medium?: string | null;
+  utm_campaign?: string | null;
+  utm_content?: string | null;
+
   id: string;
   slug: string;
   client_name: string | null;

@@ -24,6 +24,22 @@
 // component can import it without failing the browser bundle.
 
 /** What the report knows about this business that a funnel can open on. */
+/**
+ * The campaign that produced this report, carried forward to the funnel.
+ *
+ * ‼️ WITHOUT THIS THE utm ON A COLD EMAIL MEASURES NOTHING, and that was true until
+ * 2026-09-16. readAttribution() in lib/medspa/pixel.ts reads utm_campaign only from the page it
+ * is running on, and /onboarding2/page.tsx does read all four off its own query string, so the
+ * destination always worked. The break was in the middle: the report lives at a NEW url, reached
+ * days later from an email, and the Get Started link did not carry them.
+ */
+export interface ReportUtm {
+  utmSource?: string | null;
+  utmMedium?: string | null;
+  utmCampaign?: string | null;
+  utmContent?: string | null;
+}
+
 export interface ReportLinkParams {
   score: number | null;
   city: string | null;
@@ -66,9 +82,16 @@ function buildUrl(
   path: string,
   p: Partial<ReportLinkParams>,
   showedKeys: { user: string; comp: string },
-  origin: string
+  origin: string,
+  utm?: ReportUtm
 ): string {
   const q = new URLSearchParams();
+  // Written first so they read left to right in the order a person expects, and so a missing
+  // report param never separates the campaign from the link it belongs to.
+  if (utm?.utmSource) q.set("utm_source", utm.utmSource);
+  if (utm?.utmMedium) q.set("utm_medium", utm.utmMedium);
+  if (utm?.utmCampaign) q.set("utm_campaign", utm.utmCampaign);
+  if (utm?.utmContent) q.set("utm_content", utm.utmContent);
   if (p.score !== null && p.score !== undefined) q.set("score", String(p.score));
   if (p.city) q.set("city", p.city);
   if (p.business) q.set("business", p.business);
@@ -92,9 +115,10 @@ function buildUrl(
  */
 export function buildOnboarding2Url(
   p: Partial<ReportLinkParams>,
-  origin = FUNNEL_ORIGIN
+  origin = FUNNEL_ORIGIN,
+  utm?: ReportUtm
 ): string {
-  return buildUrl("/onboarding2", p, { user: "userShowed", comp: "compShowed" }, origin);
+  return buildUrl("/onboarding2", p, { user: "userShowed", comp: "compShowed" }, origin, utm);
 }
 
 /**

@@ -86,6 +86,16 @@ export default async function ReportPage({ params }: { params: { slug: string } 
         mentioned={view.totalMentioned}
         totalPrompts={view.totalPrompts}
         reportSlug={params.slug}
+        // ‼️ THE LAST HOP OF THE CAMPAIGN, AND WITHOUT IT THE FIRST THREE WERE POINTLESS.
+        // These four were stamped onto this row when the scan ran. The report is opened from an
+        // email days later, so nothing in the browser remembers the link that started it: the
+        // row is the only thing that does.
+        utm={{
+          utmSource: row.utm_source,
+          utmMedium: row.utm_medium,
+          utmCampaign: row.utm_campaign,
+          utmContent: row.utm_content,
+        }}
       />
       <MethodologyFooter createdAt={row.created_at} />
     </main>

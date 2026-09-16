@@ -47,6 +47,22 @@ export async function sendSignerCopy(args: {
   if (!to) return false;
 
   const name = args.row.print_name?.split(" ")[0] || "there";
+  // ‼️ TWO OF THESE THREE LINES WERE WRONG AND ONE HAD BEEN WRONG SINCE v4.
+  //
+  // "Section 4 of the agreement lists everything" pointed at the ACCESS clause, which was deleted
+  // in v4. Section 4 has been the fee clause ever since, so every executed contract went out
+  // telling its signer to read the wrong section, and after the v6 split it would have named a
+  // third different clause again. Nothing now cites a clause by NUMBER here, for the same reason
+  // CHAT_FAQS stopped: this file cannot know which of three documents was signed.
+  //
+  // "You owe nothing until ChatGPT has sent you 5 new qualified appointments" described the
+  // pay-on-performance arrangement that both paid offers replaced on 2026-09-16. It is not stale
+  // wording, it is a false statement about money, sent to somebody who has just paid.
+  //
+  // ‼️ WHAT REPLACES IT SAYS NOTHING ABOUT TERMS AT ALL. The attached PDF is the terms, it is
+  // the document they just initialled page by page, and it is the only thing that binds. A
+  // covering email that restates the deal is a second source of terms that can disagree with the
+  // first, which is exactly why PricingCta.tsx had its price and guarantee stripped out.
   const lines = [
     `Hi ${name},`,
     "",
@@ -55,8 +71,8 @@ export async function sendSignerCopy(args: {
     "What happens now:",
     "",
     "1. We start on your AI visibility straight away.",
-    "2. We will ask you for access to your Google Business Profile and your website. Section 4 of the agreement lists everything.",
-    "3. You owe nothing until ChatGPT has sent you 5 new qualified appointments.",
+    "2. We will ask you for access to your Google Business Profile and your website. The agreement says what we need and when.",
+    "3. Everything we owe you, and everything you owe us, is in the attached document.",
     "",
   ];
 

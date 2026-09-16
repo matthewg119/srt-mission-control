@@ -27,14 +27,22 @@ export const maxDuration = 300;
 // The four checks and the pipeline live in lib/scan/start-claim.ts since 2026-09-16, shared with the
 // concierge's audit button. This route is the scan page's door to them and nothing else.
 export async function POST(req: NextRequest) {
-  let body: { url?: string };
+  let body: { url?: string } & Partial<Record<string, unknown>>;
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ ok: false, error: "bad_json" }, { status: 400 });
   }
 
-  const res = await startScan({ url: body.url ?? "", ipHash: hashIp(clientIpFrom(req)) });
+  // The four utm params the scan form read off its own location. Clamped, and absent keys are
+  // omitted rather than sent blank, so a visit with no campaign writes no campaign.
+  const utm: Record<string, string> = {};
+  for (const k of ["utm_source", "utm_medium", "utm_campaign", "utm_content"] as const) {
+    const v = body?.[k];
+    if (typeof v === "string" && v.trim()) utm[k] = v.trim().slice(0, 120);
+  }
+
+  const res = await startScan({ url: body.url ?? "", ipHash: hashIp(clientIpFrom(req)), utm });
   if (!res.ok) {
     return NextResponse.json(
       { ok: false, error: res.error, ...(res.message ? { message: res.message } : {}) },

@@ -25,7 +25,25 @@ export type StartScanResult =
   | { ok: true; id: string; domain: string; cached: boolean }
   | { ok: false; status: number; error: string; message?: string };
 
-export async function startScan(args: { url: string; ipHash: string }): Promise<StartScanResult> {
+export async function startScan(args: {
+  url: string;
+  ipHash: string;
+  /**
+   * The campaign that sent them, if this visit carried one.
+   *
+   * ‼️ WITHOUT THIS A COLD EMAIL MEASURES NOTHING, AND NOTHING FAILS WHILE IT DOES NOT. A prospect
+   * is only created in the CRM when they REPLY. Somebody who clicks a campaign link, runs the
+   * scan and books without ever writing back is invisible, and that is the BEST outcome a campaign
+   * has. The chain is: the scan form, this row, the Get Started link on the report, then
+   * onboarding2_leads.utm_campaign.
+   *
+   * It rides on the audit_reports ROW rather than in the browser because the report is emailed and
+   * opened days later, usually on another device, by which time any browser-side value is gone.
+   *
+   * Optional, because the concierge's audit button shares this function and carries no campaign.
+   */
+  utm?: Record<string, string>;
+}): Promise<StartScanResult> {
   const normalized = normalizeTarget(args.url ?? "");
   if (!normalized.ok) {
     return { ok: false, status: 400, error: normalized.error, message: normalizeErrorMessage(normalized.error) };
@@ -38,6 +56,12 @@ export async function startScan(args: { url: string; ipHash: string }): Promise<
   }
 
   // 3. Already scanned recently? Hand back that run rather than paying again.
+  //
+  // ‼️ A CACHED HIT KEEPS THE FIRST VISIT'S CAMPAIGN AND DOES NOT TAKE THIS ONE. The report
+  // already exists and already carries whoever brought it into being. Overwriting would let the
+  // last person to scan a domain claim a report somebody else's campaign produced, which is a
+  // worse lie than an unattributed one. Two campaigns reaching one clinic is a real thing and the
+  // honest answer is that the first one found them.
   const cached = await findCachedSession(domain);
   if (cached) return { ok: true, id: cached.id, domain, cached: true };
 
@@ -74,6 +98,17 @@ export async function startScan(args: { url: string; ipHash: string }): Promise<
           allowLowConfidenceCity: true,
           onReportCreated: async (reportId) => {
             await updateSession(session.id, { status: "running", report_id: reportId });
+            // Stamped here because this is the first moment the row exists: the pipeline owns the
+            // insert and this is the earliest hook after it. A failure is logged and swallowed, as
+            // an unattributed report is a reporting gap and killing a running audit over one would
+            // cost the prospect the thing they actually came for.
+            if (args.utm && Object.keys(args.utm).length) {
+              const { error } = await supabaseAdmin
+                .from("audit_reports")
+                .update(args.utm)
+                .eq("id", reportId);
+              if (error) console.error("[scan/start] utm stamp failed:", error.message);
+            }
           },
           onError: async (message) => {
             console.error("[scan/start] pipeline error:", message);

@@ -14,6 +14,7 @@ import path from "path";
 import {
   makeExecutor,
   groundedPrompt,
+  faqsFor,
   qualifyingPrompt,
   GROUNDED_TOOLS,
   QUALIFYING_TOOLS,
@@ -46,14 +47,27 @@ import {
 // pages" as literals, so the v5 cut broke six checks that were all describing the same two
 // facts the template already exports. A probe that hardcodes a count tests the count; a probe
 // that reads it tests the INVARIANT, which is what the page model actually needs proving.
-import {
-  AGREEMENT_PAGE_COUNT,
-  AGREEMENT_SECTION_COUNT,
-  TEMPLATE_VERSION,
-} from "../src/config/onboarding2-agreement";
+import { agreementFor } from "../src/config/onboarding2-agreement";
+import { isOfferKey, OFFER_KEYS, type OfferKey } from "../src/config/pitch";
 import { intakePatchFrom, answeredCount } from "../src/lib/onboarding2/delivery";
 import { modeFor } from "../src/lib/onboarding2/chat-store";
 import type { Onboarding2LeadRow, Onboarding2SigningRow } from "../src/lib/onboarding2/types";
+
+// ‼️ THE COUNTS COME FROM A RESOLVED VARIANT NOW, NOT FROM MODULE CONSTANTS. v6 split one
+// agreement into three, so "how many sections are there" is only answerable once you say which
+// document. The probe still READS the counts rather than hardcoding them, which is the property
+// the note above is about: a probe that hardcodes a count tests the count, a probe that reads it
+// tests the invariant.
+//
+// Defaults to the yearly plan because that is the document with the guarantee, the refund and the
+// most clauses, so it is the one where a page-model bug has the most room to hide. Pass an offer
+// key as the last argument to probe another.
+const OFFER: OfferKey = isOfferKey(process.argv[2]) ? (process.argv[2] as OfferKey) : "year_3300";
+const DOC = agreementFor(OFFER);
+const AGREEMENT_SECTION_COUNT = DOC.sectionCount;
+const AGREEMENT_PAGE_COUNT = DOC.pageCount;
+const TEMPLATE_VERSION = DOC.templateVersion;
+
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = ""): void {
@@ -66,6 +80,7 @@ function fakeLead(answered: number): Onboarding2LeadRow {
     id: "lead", created_at: "", updated_at: "", email: "probe@example.com",
     phone: null, business_name: null, contact_name: null, signer_title: null,
     website: null, city: null, state: null, signing_id: null, signed_at: null, is_demo: true,
+    offer_key: "year_3300", concierge_interest: false,
     qualifying: QUALIFYING_QUESTIONS.slice(0, answered).map((q) => ({
       key: q.key, question: q.question, answer: "something", askedAt: "", sourceTurnOrdinals: [0],
     })),
@@ -91,7 +106,7 @@ function fakeInitial(pageNo: number, sections: number[], at: string): InitialRow
 }
 
 async function main(): Promise<void> {
-  const snapshot = await buildSnapshot();
+  const snapshot = await buildSnapshot(OFFER);
 
   // !! `unsigned` AND `signed` NOW MEAN "BEFORE AND AFTER SCREEN ONE", NOT BEFORE AND AFTER A
   // SIGNATURE. modeFor() keys on `email` since 2026-09-04, because nothing sets signed_at any
@@ -472,62 +487,102 @@ async function main(): Promise<void> {
     `got ${snapshot.sections.length}`
   );
 
-  const badSectionField = CHAT_FAQS.filter(
-    (f) => f.section !== null && (f.section < 1 || f.section > snapshot.sections.length)
-  );
+  // ‼️ THE THREE CHECKS THAT USED TO LIVE HERE ARE GONE BECAUSE v6 MADE THEM UNSTATEABLE, AND
+  // WHAT REPLACES THEM IS STRICTLY STRONGER. They asserted that an FAQ's `section` NUMBER was in
+  // range, that its prose cited that same number, and that the two obligation clauses had FAQs.
+  // The first two were guarding drift between a stored number and a sentence; there is no stored
+  // number any more, because an FAQ names a section KEY and faqsFor() substitutes whatever number
+  // that clause has in the document being read. The drift is not detected now, it is impossible.
+  //
+  // What can still go wrong is a MISSPELLED KEY, which the old model had no equivalent of, so
+  // that is what these check.
+  const allKeys = new Set<string>();
+  for (const o of OFFER_KEYS) for (const s of agreementFor(o).sections) allKeys.add(s.key);
+
+  const orphanKeys = CHAT_FAQS.filter((f) => f.sectionKey && !allKeys.has(f.sectionKey));
   check(
-    `no FAQ carries a section number outside 1 to ${AGREEMENT_SECTION_COUNT}`,
-    badSectionField.length === 0,
-    badSectionField.map((f) => `${f.q} -> ${f.section}`).join("\n      ")
+    "every FAQ names a section key that exists in some variant",
+    orphanKeys.length === 0,
+    orphanKeys.map((f) => `${f.q} -> ${f.sectionKey}`).join("\n      ")
   );
 
-  const badCitation: string[] = [];
+  const orphanTokens: string[] = [];
   for (const f of CHAT_FAQS) {
-    for (const m of f.a.matchAll(/Section (\d+)/g)) {
-      const n = Number(m[1]);
-      if (n < 1 || n > snapshot.sections.length) badCitation.push(`${f.q} -> Section ${n}`);
+    for (const m of f.a.matchAll(/\{s:([a-z0-9_]+)\}/g)) {
+      if (!allKeys.has(m[1])) orphanTokens.push(`${f.q} -> {s:${m[1]}}`);
     }
   }
   check(
-    `no FAQ answer cites a section outside 1 to ${AGREEMENT_SECTION_COUNT}`,
-    badCitation.length === 0,
-    badCitation.join("\n      ")
+    "every {s:key} token in an answer names a real section key",
+    orphanTokens.length === 0,
+    orphanTokens.join("\n      ")
   );
 
-  // !! THE `section` FIELD AND THE PROSE HAVE TO AGREE, AND UNTIL v5 NOTHING CHECKED IT.
-  // config/onboarding2.ts's own header claimed this probe asserted it; it asserted only the
-  // RANGE, so the v5 renumber (which moves every one of them) could have re-pointed a field and
-  // left the sentence citing the old number, with both halves still in range. That is exactly
-  // the failure that header warns about: a real clause cited under the wrong number.
-  //
-  // The rule is MEMBERSHIP, not equality, because one answer legitimately cites two clauses
-  // (faq34 explains the booking path by pointing at the guarantee that makes it countable).
-  // What is banned is an answer whose `section` appears nowhere in the words it says.
-  const citedIn = (a: string) => Array.from(a.matchAll(/Section (\d+)/g)).map((m) => Number(m[1]));
-  const fieldProseMismatch = CHAT_FAQS.filter((f) => {
-    if (f.section === null) return false;
-    const cited = citedIn(f.a);
-    return cited.length > 0 && !cited.includes(f.section);
-  });
+  // ‼️ A LITERAL CLAUSE NUMBER IN AN ANSWER IS THE BUG THIS WHOLE REFACTOR REMOVED. It is right
+  // in at most one of the three documents and silently wrong in the others, which is precisely
+  // how the assistant ends up citing a real clause under the wrong number to somebody reading a
+  // contract. Answers say {s:key} and nothing else.
+  const literalCitations = CHAT_FAQS.filter((f) => /Section \d/.test(f.a));
   check(
-    "every FAQ's section field is one of the sections its answer actually cites",
-    fieldProseMismatch.length === 0,
-    fieldProseMismatch
-      .map((f) => `${f.q} -> field ${f.section}, prose cites ${citedIn(f.a).join("/")}`)
-      .join("\n      ")
+    "no FAQ answer hardcodes a clause number",
+    literalCitations.length === 0,
+    literalCitations.map((f) => f.q).join("\n      ")
   );
 
-  // !! THE TWO v5 CLAUSES HAVE TO BE ANSWERABLE. They are the only two things in this document
-  // that ask the CLIENT to do something, so they are the two a signer argues with, and an
-  // unanswerable one falls through to flag_for_human on the most predictable question there is.
-  for (const [n, label] of [
-    [2, "the reviews obligation"],
-    [3, "the booking path"],
-  ] as const) {
+  // ‼️ EVERY FAQ MUST RESOLVE CLEANLY IN EVERY VARIANT THAT KEEPS IT. faqsFor() drops an FAQ
+  // whose token cannot be resolved rather than shipping braces into a prompt, so a broken one
+  // disappears QUIETLY. This is what makes that silence visible.
+  for (const offer of OFFER_KEYS) {
+    const doc = agreementFor(offer);
+    const snap = await buildSnapshot(offer);
+    const kept = faqsFor(snap);
+    const expected = CHAT_FAQS.filter(
+      (f) => !f.sectionKey || doc.sections.some((s) => s.key === f.sectionKey)
+    );
     check(
-      `at least two FAQs answer ${label} (section ${n})`,
-      CHAT_FAQS.filter((f) => f.section === n).length >= 2,
-      `${CHAT_FAQS.filter((f) => f.section === n).length} found`
+      `${offer}: every applicable FAQ survives resolution`,
+      kept.length === expected.length,
+      `${kept.length} kept, ${expected.length} applicable`
+    );
+    check(
+      `${offer}: no brace token survives into the prompt`,
+      kept.every((f) => !/\{s:/.test(f.a)),
+      kept.filter((f) => /\{s:/.test(f.a)).map((f) => f.q).join("\n      ")
+    );
+    check(
+      `${offer}: no FAQ describes a clause this document does not have`,
+      kept.every((f) => !f.sectionKey || doc.sections.some((s) => s.key === f.sectionKey))
+    );
+  }
+
+  // ‼️ THE OBLIGATION CLAUSES HAVE TO BE ANSWERABLE, PER VARIANT. They are the things in this
+  // document that ask the CLIENT to do something, so they are what a signer argues with, and an
+  // unanswerable one falls through to flag_for_human on the most predictable question there is.
+  // Checked by key against each document rather than by a fixed clause number, because the two
+  // paid variants number them differently and the free one has neither.
+  for (const offer of ["year_3300", "month_349"] as const) {
+    const doc = agreementFor(offer);
+    for (const label of ["reviews", "booking", "implementation"]) {
+      const keys = doc.sections.map((s) => s.key).filter((k) => k.includes(label));
+      const n = CHAT_FAQS.filter((f) => f.sectionKey && keys.includes(f.sectionKey)).length;
+      check(`${offer}: the ${label} obligation has at least one FAQ`, n >= 1, `${n} found`);
+    }
+  }
+
+  // ‼️ THE MONTHLY DOCUMENT MUST NOT CARRY A SINGLE GUARANTEE ANSWER. This is the one-line
+  // version of why the filter exists at all: six answers describe a refund, and a monthly signer
+  // asking "what is the guarantee" must reach the agreement text, which says there is none,
+  // rather than a scripted paragraph describing somebody else's deal.
+  {
+    const monthlySnap = await buildSnapshot("month_349");
+    const leaked = faqsFor(monthlySnap).filter((f) =>
+      /refund|guarantee|qualified appointment|90 days/i.test(f.a)
+    );
+    const onlyDisclaimers = leaked.every((f) => /no performance guarantee and no refunds/.test(f.a));
+    check(
+      "the monthly prompt carries no guarantee answer except the one that denies it",
+      onlyDisclaimers,
+      leaked.filter((f) => !/no performance guarantee and no refunds/.test(f.a)).map((f) => f.q).join("\n      ")
     );
   }
 
