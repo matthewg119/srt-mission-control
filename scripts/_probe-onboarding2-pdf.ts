@@ -40,12 +40,26 @@ import { extractText, getDocumentProxy } from "unpdf";
 import { buildSnapshot, pagesOf, verifySnapshot, type AgreementSnapshot } from "../src/lib/onboarding2/snapshot";
 import { renderAgreementPdf, type SignedRecord } from "../src/lib/onboarding2/agreement-pdf";
 import { freezeInitials, type InitialRow } from "../src/lib/onboarding2/initials";
-import {
-  AGREEMENT_FOOTER,
-  AGREEMENT_SECTIONS,
-  AGREEMENT_SECTION_COUNT,
-  TEMPLATE_VERSION,
-} from "../src/config/onboarding2-agreement";
+import { agreementFor } from "../src/config/onboarding2-agreement";
+import { isOfferKey, type OfferKey } from "../src/config/pitch";
+
+// ‼️ THE COUNTS COME FROM A RESOLVED VARIANT NOW, NOT FROM MODULE CONSTANTS. v6 split one
+// agreement into three, so "how many sections are there" is only answerable once you say which
+// document. The probe still READS the counts rather than hardcoding them, which is the property
+// the note above is about: a probe that hardcodes a count tests the count, a probe that reads it
+// tests the invariant.
+//
+// Defaults to the yearly plan because that is the document with the guarantee, the refund and the
+// most clauses, so it is the one where a page-model bug has the most room to hide. Pass an offer
+// key as the last argument to probe another.
+const OFFER: OfferKey = isOfferKey(process.argv[2]) ? (process.argv[2] as OfferKey) : "year_3300";
+const DOC = agreementFor(OFFER);
+const AGREEMENT_SECTION_COUNT = DOC.sectionCount;
+const AGREEMENT_PAGE_COUNT = DOC.pageCount;
+const TEMPLATE_VERSION = DOC.templateVersion;
+const AGREEMENT_SECTIONS = DOC.sections;
+const AGREEMENT_FOOTER = DOC.footer;
+
 
 const SENTINEL = "SENTINEL OLD WORDING THAT IS NOT IN THE LIVE TEMPLATE";
 
@@ -91,7 +105,7 @@ async function textOf(pdf: Buffer): Promise<string> {
 
 async function main(): Promise<void> {
   // ── 1. The live template hashes consistently ──
-  const live = await buildSnapshot();
+  const live = await buildSnapshot(OFFER);
   const verified = await verifySnapshot(live);
   check(
     "buildSnapshot and verifySnapshot agree on the document hash",

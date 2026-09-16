@@ -13,6 +13,7 @@
 // src/lib/calendly.ts belongs to another lane and is untouched; this page simply stopped calling it.
 
 import type { Metadata } from "next";
+import { isOfferKey, type OfferKey } from "@/config/pitch";
 import { Onboarding2Funnel } from "./onboarding2-client";
 
 export const dynamic = "force-dynamic";
@@ -50,6 +51,15 @@ export default async function Onboarding2Page({
           compShowed: num(sp.compShowed),
           reportSlug: one(sp.r) || null,
         }}
+        /*
+          ‼️ PRE-PICKED FROM THE URL, WHICH IS HOW THE FREE TOOL BUTTON ON srtagency.com WORKS.
+          The public site links /onboarding2?offer=review_free, so somebody who already chose on
+          the marketing page is not asked the same question twice the moment they arrive. Any
+          other value, including a typo or a hand-edited URL, falls through to null and the picker
+          renders as normal: isOfferKey is the closed list, and an unknown offer must never become
+          a session on terms nobody sells.
+        */
+        presetOffer={isOfferKey(one(sp.offer)) ? (one(sp.offer) as OfferKey) : null}
         utm={{
           source: one(sp.utm_source),
           medium: one(sp.utm_medium),

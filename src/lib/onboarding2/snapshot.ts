@@ -13,16 +13,8 @@
 // start and the session is pinned to the bytes it opened with, so a mid-session edit is DETECTED
 // by the hash echo rather than silently absorbed.
 
-import {
-  AGREEMENT_CLOSING,
-  AGREEMENT_FOOTER,
-  AGREEMENT_PAGES,
-  AGREEMENT_PREAMBLE,
-  AGREEMENT_PROMISE,
-  AGREEMENT_SECTIONS,
-  AGREEMENT_TITLE,
-  TEMPLATE_VERSION,
-} from "@/config/onboarding2-agreement";
+import { agreementFor } from "@/config/onboarding2-agreement";
+import type { OfferKey } from "@/config/pitch";
 import { CANON, canonicalDocument, canonicalPage, canonicalSection, sha256Hex } from "./canonical";
 
 export interface SnapshotSection {
@@ -46,7 +38,7 @@ export interface SnapshotSection {
 /**
  * One rendered page: the sections on it, and the hash of all of them together.
  *
- * ‼️ THIS IS WHAT AN INITIAL ATTESTS TO. Frozen at POST /start from AGREEMENT_PAGES, so the
+ * ‼️ THIS IS WHAT AN INITIAL ATTESTS TO. Frozen at POST /start from the resolved variant's own layout, so the
  * grouping a signer initialled cannot move under them mid-session any more than the wording can.
  */
 export interface SnapshotPage {
@@ -60,6 +52,20 @@ export interface SnapshotPage {
 
 export interface AgreementSnapshot {
   version: string;
+  /**
+   * Which offer this document is for.
+   *
+   * ‼️ OPTIONAL FOR EXACTLY THE REASON `pages` IS OPTIONAL: every row frozen before the v6
+   * offer split has no such field, and a required one would make every stored snapshot fail to
+   * assign. offerOf() below is the single reader and it answers "legacy_v5" for those rows, so
+   * nothing else in the codebase has to know this was ever absent.
+   *
+   * ‼️ IT IS NOT WHAT BINDS THE OFFER TO THE SIGNATURE. canonicalDocument() does not hash this
+   * field, so on its own it is an editable label. What binds the offer is the PREAMBLE, which
+   * names the plan in text and is hashed. Do not add this to canonicalDocument(): that changes
+   * the joining rule, which canonical.ts forbids doing in place.
+   */
+  offer?: OfferKey;
   canon: string;
   title: string;
   preamble: string[];
@@ -78,10 +84,18 @@ export interface AgreementSnapshot {
   documentSha256: string;
 }
 
-/** Read the live template and freeze it. Called once per signing and nowhere else. */
-export async function buildSnapshot(): Promise<AgreementSnapshot> {
+/**
+ * Read the live template for ONE OFFER and freeze it. Called once per signing and nowhere else.
+ *
+ * ‼️ THE OFFER IS REQUIRED AND HAS NO DEFAULT, DELIBERATELY. A default would hand whichever
+ * variant it named to every caller that forgot to pass one, silently, and "forgot" would surface
+ * as a client signed onto terms nobody quoted them. Required means the compiler enumerates the
+ * call sites instead.
+ */
+export async function buildSnapshot(offer: OfferKey): Promise<AgreementSnapshot> {
+  const doc = agreementFor(offer);
   const sections: SnapshotSection[] = [];
-  for (const s of AGREEMENT_SECTIONS) {
+  for (const s of doc.sections) {
     sections.push({
       n: s.n,
       key: s.key,
@@ -93,10 +107,10 @@ export async function buildSnapshot(): Promise<AgreementSnapshot> {
     });
   }
 
-  // The page hashes. Built from AGREEMENT_PAGES, which is derived from the same `page` fields,
-  // so the grouping cannot be declared in two places and disagree with itself.
+  // The page hashes. Built from the same resolved document as the sections above, so the
+  // grouping cannot be declared in two places and disagree with itself.
   const pages: SnapshotPage[] = [];
-  for (const pg of AGREEMENT_PAGES) {
+  for (const pg of doc.pages) {
     pages.push({
       p: pg.p,
       sections: pg.sections.map((s) => s.n),
@@ -106,28 +120,41 @@ export async function buildSnapshot(): Promise<AgreementSnapshot> {
 
   const documentSha256 = await sha256Hex(
     canonicalDocument({
-      title: AGREEMENT_TITLE,
-      preamble: AGREEMENT_PREAMBLE,
-      promise: AGREEMENT_PROMISE,
-      sections: AGREEMENT_SECTIONS,
-      closing: AGREEMENT_CLOSING,
-      footer: AGREEMENT_FOOTER,
+      title: doc.title,
+      preamble: doc.preamble,
+      promise: doc.promise,
+      sections: doc.sections,
+      closing: doc.closing,
+      footer: doc.footer,
     })
   );
 
   return {
-    version: TEMPLATE_VERSION,
+    version: doc.templateVersion,
+    offer: doc.offer,
     canon: CANON,
-    title: AGREEMENT_TITLE,
-    preamble: AGREEMENT_PREAMBLE,
-    promise: AGREEMENT_PROMISE,
+    title: doc.title,
+    preamble: doc.preamble,
+    promise: doc.promise,
     sections,
     pages,
-    closing: AGREEMENT_CLOSING,
-    footer: AGREEMENT_FOOTER,
+    closing: doc.closing,
+    footer: doc.footer,
     capturedAt: new Date().toISOString(),
     documentSha256,
   };
+}
+
+/**
+ * Which offer a stored snapshot was frozen under.
+ *
+ * ‼️ "legacy_v5" IS A REAL ANSWER AND NOT A FALLBACK. Rows written before the v6 offer split
+ * were frozen when there was exactly one document and one set of terms, so the honest answer for
+ * them is the name of that document, not a guess at which of today's three it most resembles.
+ * Never map it onto one of the live OfferKeys: a v5 row is not a yearly client.
+ */
+export function offerOf(snapshot: AgreementSnapshot): OfferKey | "legacy_v5" {
+  return snapshot.offer ?? "legacy_v5";
 }
 
 /**

@@ -102,6 +102,11 @@ export const OFFER_INCLUDES = [
   { work: "We re-write your current pages", value: "$2,400 value" },
   { work: "We turn your happy customers into the evidence", value: "$499 / month value" },
   { work: "We fix any NAP mismatches online", value: "$800 value, one-time build" },
+  // ‼️ PRICED ON 2026-09-16, HAVING BEEN THE ONE UNPRICED LINE ON PURPOSE. The reason it had no
+  // figure was that inventing a fifth one to fill the gap is what the note above forbids. It has
+  // a figure now because Matthew set one, not because the gap was filled. See PRICE_CONCIERGE,
+  // and note the SMS Live Agent gave this number up rather than sharing it.
+  { work: "Install the AI Skin Concierge on your site", value: "$199 / month value" },
   { work: "Your monthly AI Visibility Report", value: "$400 / month value" },
 ] as const;
 
@@ -112,8 +117,13 @@ export const OFFER_INCLUDES = [
  * written as a literal rather than summed at runtime on purpose: these are copy, not data, and a
  * total that silently changes when somebody edits a line item is exactly the drift the price rules
  * exist to stop. If OFFER_INCLUDES changes, change this by hand and say the new number out loud.
+ *
+ * ‼️ RE-STATED BY HAND ON 2026-09-16, WHICH IS WHAT THE PARAGRAPH ABOVE DEMANDS. The Concierge
+ * line was added to OFFER_INCLUDES at $199 / month, so the recurring stack is now
+ * $2,400 + $499 + $199 + $400 = $3,498. Said out loud, as required, rather than left to be
+ * discovered by somebody adding the column up in a meeting.
  */
-export const VALUE_RECURRING = "$3,299";
+export const VALUE_RECURRING = "$3,498";
 
 /**
  * ‼️ NULL, AND DELIBERATELY, UNTIL MATTHEW PICKS THE FIGURE (2026-08-25).
@@ -279,6 +289,226 @@ export const OFFER_EXIT_LINE = "Leave anytime, keep everything: pages, profiles,
 
 /** The offer in one line, for a script or a brief that needs the terms in a sentence. */
 export const OFFER_LABEL = `free until the first 5 qualified AI-sourced inquiries, then ${PRICE_RETAINER}`;
+
+// ── THREE OFFERS (2026-09-16) ──────────────────────────────────────────────
+/**
+ * ‼️ THE OFFER IS NO LONGER ONE THING, AND TWO DOCUMENTED DECISIONS ARE REVERSED HERE.
+ * Matthew's call, 2026-09-16. Both reversals are written down rather than edited past, because
+ * both have their reasons recorded above and an implementer who does not see the reversal will
+ * "fix" the new copy back to the old rule.
+ *
+ * REVERSAL 1: THE GUARANTEE IS NOW A MONEY GUARANTEE ON ONE OFFER.
+ * The note over GUARANTEE_LINE says "IT IS A VISIBILITY COMMITMENT, NOT A MONEY ONE ... Never
+ * restate it as money, a refund, or 'risk free'." That held while there was one offer and nothing
+ * was charged up front. `year_3300` is paid in full on the call, so the thing at risk is the
+ * client's money, and a remedy that is not money would be a worse promise, not a safer one.
+ *
+ * The ban is NOT loosened. GUARANTEE_YEAR_LINE and REFUND_LINE below are added to the
+ * exact-literal allow-list that spokenPromises() strips before running DELIVERY_BANNED_PROMISES,
+ * which is the same mechanism FREE_UNTIL_LINE already uses. A paraphrase still fails. Never
+ * replace that with a loosened pattern: the reasoning is over DELIVERY_BANNED_PROMISES.
+ *
+ * REVERSAL 2: "YOU DON'T PAY A DOLLAR UNTIL..." IS FALSE ON BOTH PAID OFFERS.
+ * FREE_UNTIL_LINE, OFFER_LABEL and PRICE_RETAINER describe an arrangement nobody is sold any
+ * more. They are kept, not deleted, because PRICE_RETAINER is the multiplicand behind
+ * PRICE_YEAR_ANCHOR and the cold pipeline still quotes it. What changed is that they are no
+ * longer the terms of a deal. Anything NEW states its terms from OFFERS.
+ */
+
+/** Stable keys. Written to onboarding2_signings, onboarding2_leads and clients. Never renamed. */
+export type OfferKey = "review_free" | "year_3300" | "month_349";
+
+export const OFFER_KEYS: readonly OfferKey[] = ["review_free", "year_3300", "month_349"] as const;
+
+export function isOfferKey(v: unknown): v is OfferKey {
+  return typeof v === "string" && (OFFER_KEYS as readonly string[]).includes(v);
+}
+
+/**
+ * ‼️ EVERY FIGURE BELOW IS A LITERAL AND NONE OF THEM IS COMPUTED, INCLUDING THE TWO THAT LOOK
+ * LIKE ARITHMETIC. The rule at the top of this file forbids turning a price into another figure
+ * by arithmetic, and PRICE_YEAR_EQUIV ($3,300 / 12) and REFUND_AMOUNT ($275 x 3) are exactly the
+ * shape it forbids deriving. They are written out because they are the founder's figures, said
+ * out loud and printed in a contract, and a total that silently changes when somebody edits the
+ * annual price is the drift that rule exists to stop. Same treatment VALUE_RECURRING gets.
+ *
+ * If PRICE_YEAR changes, change all three BY HAND and say the new numbers out loud.
+ */
+export const PRICE_YEAR = "$3,300 / year";
+export const PRICE_YEAR_AMOUNT = "$3,300";
+
+/**
+ * The crossed-out number on the yearly card. $499 x 12.
+ *
+ * ‼️ AN ANCHOR IS A REAL PRICE OR IT IS A LIE. This one is: PRICE_RETAINER is what the monthly
+ * retainer genuinely was, and twelve of them is what a year at that rate genuinely cost. Do not
+ * inflate it to widen the gap, and do not keep it once PRICE_RETAINER stops being a real figure.
+ */
+export const PRICE_YEAR_ANCHOR = "$5,988";
+
+/** What the year works out to a month. Said on the card, and the basis of the refund. */
+export const PRICE_YEAR_EQUIV = "$275 / month";
+export const PRICE_YEAR_EQUIV_AMOUNT = "$275";
+
+/** The month-to-month offer. Not the old $349 tier, which was deleted on 2026-08-31. */
+export const PRICE_MONTH = "$349 / month";
+export const PRICE_MONTH_AMOUNT = "$349";
+
+/**
+ * The AI Concierge, priced for the first time.
+ *
+ * ‼️ IT USED TO BE THE ONE DELIVERABLE WITH NO FIGURE, DELIBERATELY. config/onboarding2.ts said
+ * "The one deliverable OFFER_INCLUDES does not price. Listed without a figure, on purpose."
+ * Matthew priced it on 2026-09-16 so the yearly card can show what is being given away.
+ *
+ * ‼️ $199 WAS ALREADY TAKEN BY THE SMS LIVE AGENT in agreement section 8, and two products at one
+ * figure in one signed document is a question the signer has to ask. Matthew's call: the
+ * Concierge takes the figure and the SMS Live Agent loses it. Do not put it back.
+ */
+export const PRICE_CONCIERGE = "$199 / month";
+export const PRICE_CONCIERGE_AMOUNT = "$199";
+
+/**
+ * How many qualified appointments the yearly guarantee promises, and by when.
+ *
+ * ‼️ THE WINDOW IS WRITTEN TWICE, AS A PHRASE AND AS A NUMBER, RATHER THAN ONE BEING SLICED OUT
+ * OF THE OTHER. The contract needs both "inside your first 90 days" and "on day 90", and
+ * GUARANTEE_WINDOW.replace(" days", "") is the kind of string surgery that survives until
+ * somebody writes "three months" here and a clause silently renders "on day three months".
+ * Change the two together.
+ */
+export const GUARANTEE_COUNT = 5;
+export const GUARANTEE_WINDOW = "90 days";
+export const GUARANTEE_WINDOW_DAY = "90";
+
+/**
+ * ‼️ THE YEARLY GUARANTEE. FIXED WORDING, FOR THE REASON GUARANTEE_LINE GIVES.
+ * A model merely asked to "mention the guarantee" rewrites it every take, and a guarantee worded
+ * differently in the video, the email and the contract is three commitments a client can hold us
+ * to. This is the one that may be said, and only on `year_3300`.
+ *
+ * ‼️ IT COUNTS QUALIFIED APPOINTMENTS, WHICH IS THE EXISTING TEST AND NOT A NEW ONE. Booked, plus
+ * they say they found you through AI, plus they show up. That definition lives in the agreement
+ * and nothing here may restate it loosely: "5 new patients" is a different, larger promise.
+ */
+export const GUARANTEE_YEAR_LINE =
+  "we will bring you 5 qualified appointments inside your first 90 days";
+
+/** The remedy, and the only refund that exists anywhere in this business. */
+export const REFUND_AMOUNT = "$825";
+export const REFUND_LINE =
+  "if we do not, you get your first 3 months back and we keep working for the rest of the year at no charge";
+
+/**
+ * ‼️ NULL ON PURPOSE AND THE MONTHLY OFFER SAYS SO OUT LOUD.
+ *
+ * `month_349` has no guarantee and no refund. That is a fact the buyer is told at the card, not
+ * something discovered later, and the agreement states it in its own words. A null here is what
+ * stops a caller rendering the yearly guarantee against a monthly client by falling back.
+ */
+export const GUARANTEE_MONTH_LINE: string | null = null;
+
+export interface Offer {
+  key: OfferKey;
+  /** The plan name on the card. */
+  name: string;
+  /** One line under the name. What this offer is for. */
+  tagline: string;
+  /** What they pay, or null when nothing is charged. */
+  price: string | null;
+  /** The struck-through number above the price, or null. */
+  anchor: string | null;
+  /** Under the price. The per-month reading of an annual figure, or the term. */
+  priceNote: string | null;
+  /** Ticked lines on the card. */
+  includes: readonly string[];
+  /** The button. */
+  cta: string;
+  /** The approved guarantee sentence, or null when there is none. */
+  guarantee: string | null;
+  /** Whether signing a document is part of taking this offer. */
+  needsAgreement: boolean;
+}
+
+/**
+ * ‼️ THE SINGLE SOURCE FOR WHAT EACH OFFER IS. The cards, the agreement variants, the Slack card
+ * and the Loom all read this. A second list anywhere is the bug, the same way a second price is.
+ *
+ * ‼️ `review_free` IS A REAL DELIVERABLE AND NOT A TRIAL. They keep the review workflow whether or
+ * not anything paid follows, and nothing expires. Do not attach scarcity to it: the ban over
+ * FREE_FIRST_BUILD applies here for the same reason, and FOUNDING_SPOTS is not a counter-example
+ * because a founding cohort is a countable thing and this is not.
+ */
+export const OFFERS: readonly Offer[] = [
+  {
+    key: "review_free",
+    name: "Review Engine",
+    tagline: "The reviews AI actually quotes, set up for you.",
+    price: null,
+    anchor: null,
+    priceNote: "No card. Keep it either way.",
+    includes: [
+      "Automatic review requests after every visit",
+      "The words your front desk says at checkout",
+      "A one tap request link for the counter",
+      "We watch your review profiles weekly",
+    ],
+    cta: "Start free",
+    guarantee: null,
+    needsAgreement: false,
+  },
+  {
+    key: "year_3300",
+    name: "The Year",
+    tagline: "Everything we do, and we carry the risk.",
+    price: PRICE_YEAR,
+    anchor: PRICE_YEAR_ANCHOR,
+    priceNote: `Works out at ${PRICE_YEAR_EQUIV}.`,
+    includes: [
+      "Everything in the Review Engine",
+      "We rewrite your key pages so AI can quote them",
+      "We fix every NAP mismatch we can find you on",
+      "Your monthly AI Visibility Report",
+      `AI Skin Concierge included free, normally ${PRICE_CONCIERGE}`,
+      `${GUARANTEE_COUNT} qualified appointments in ${GUARANTEE_WINDOW}, or your first 3 months back`,
+    ],
+    cta: "Take the year",
+    guarantee: GUARANTEE_YEAR_LINE,
+    needsAgreement: true,
+  },
+  {
+    key: "month_349",
+    name: "Month to Month",
+    tagline: "The same work, no commitment, no guarantee.",
+    price: PRICE_MONTH,
+    anchor: null,
+    priceNote: "Cancel with 30 days notice.",
+    includes: [
+      "Everything in the Review Engine",
+      "We rewrite your key pages so AI can quote them",
+      "We fix every NAP mismatch we can find you on",
+      "Your monthly AI Visibility Report",
+      `AI Skin Concierge available at ${PRICE_CONCIERGE}`,
+      "No guarantee and no refunds",
+    ],
+    cta: "Go month to month",
+    guarantee: GUARANTEE_MONTH_LINE,
+    needsAgreement: true,
+  },
+] as const;
+
+/**
+ * The only way to turn a key into an offer.
+ *
+ * Throws rather than returning undefined, for the reason value() in onboarding2-agreement.ts
+ * throws: a missing offer must fail the build or the request, never render a card with blank
+ * prices on it.
+ */
+export function offerFor(key: OfferKey): Offer {
+  const found = OFFERS.find((o) => o.key === key);
+  if (!found) throw new Error(`[pitch] no offer for key "${key}"`);
+  return found;
+}
 
 // ── ChatGPT Ads, the accelerator ────────────────────────────────────────────
 /**

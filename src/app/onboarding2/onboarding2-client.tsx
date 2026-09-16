@@ -47,6 +47,8 @@ import { canonicalDocument, canonicalPage, sha256Hex } from "@/lib/onboarding2/c
 import { formatPhoneUS } from "@/lib/clients/normalize";
 import { readAttribution, track } from "@/lib/medspa/pixel";
 import { ChatPanel } from "./chat-bubble";
+import { OfferCards } from "./offer-cards";
+import type { OfferKey } from "@/config/pitch";
 
 const REEF = "#00C9A7";
 const CARD = "rounded-xl bg-white/5 p-6 sm:p-8";
@@ -96,7 +98,11 @@ interface Agreement {
 // The signing ROW, the snapshot, /api/onboarding2/initial, /api/onboarding2/sign and the
 // onboarding2_initials table all still exist. The SCREENS were removed from the funnel, not the
 // record from the database.
-type Stage = "loading" | "chat" | "limited";
+// !! A FOURTH STAGE ON 2026-09-16: the offer picker, and it runs BEFORE the session exists.
+// Every earlier version of this component opened a session on mount. It cannot any more, because
+// POST /start now needs to know which of the three agreements to freeze, and that is the question
+// this stage asks. A resume still opens on mount, because a resumed session already chose.
+type Stage = "loading" | "offer" | "chat" | "limited";
 
 interface Report {
   score: number | null;
@@ -144,9 +150,12 @@ function initialsFrom(fullName: string): string {
 export function Onboarding2Funnel({
   report,
   utm,
+  presetOffer,
 }: {
   report: Report;
   utm: { source: string; medium: string; campaign: string; content: string };
+  /** Chosen on the marketing page, so the picker is skipped. Null means ask. */
+  presetOffer: OfferKey | null;
 }) {
   const [stage, setStage] = useState<Stage>("loading");
   const [agreement, setAgreement] = useState<Agreement | null>(null);
@@ -163,6 +172,8 @@ export function Onboarding2Funnel({
   });
   const [idErrors, setIdErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  /** A pick is in flight. Separate from `saving`, which belongs to the deleted identity form. */
+  const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [trap, setTrap] = useState("");
   // Told to us by /start, decided there from the request host. The banner is the only reason the
@@ -237,63 +248,103 @@ export function Onboarding2Funnel({
     []
   );
 
-  // ── Open the session and freeze the agreement ──
+  /**
+   * Take a /start response that carried a session and put the funnel in the chat.
+   *
+   * Shared by the resume path and the pick path so the two cannot drift on what "a session is
+   * open" means. Returns false when the payload was not a usable session, and the caller decides
+   * what that means: on resume it means show the picker, on a pick it means show the error.
+   */
+  const adopt = useCallback((res: Record<string, unknown> | null): boolean => {
+    if (!res || res.ok !== true || !res.sessionToken) return false;
+    sessionStorage.setItem("srt:onb2:token", res.sessionToken as string);
+    setSessionToken(res.sessionToken as string);
+    setAgreement(res.agreement as Agreement);
+    setDemo(res.demo === true);
+    setInitialledSections((res.initialledSections as number[]) ?? []);
+    setInitialledPages((res.initialledPages as number[]) ?? []);
+    const resumed = res.identity as Identity | null;
+    if (resumed) setIdentity(resumed);
+    setStage("chat");
+    return true;
+  }, []);
+
+  /**
+   * Open the session, freezing the agreement for the offer they picked.
+   *
+   * ‼️ THIS IS THE ONLY PLACE A SESSION IS CREATED NOW, AND IT RUNS ON A TAP RATHER THAN ON
+   * MOUNT. The agreement frozen at /start depends on the offer, so there is nothing to freeze
+   * until somebody has chosen. A visitor who lands and leaves without picking now writes no row
+   * at all, which is a change worth knowing about: the signings table stops collecting one row
+   * per bounce, and per-IP start caps stop being burned by people who never engaged.
+   *
+   * The honeypot and the MIN_FILL_SECONDS time trap still ride along, and `renderedAt` is still
+   * page mount rather than the tap, so the trap measures what it always measured.
+   */
+  const start = useCallback(
+    async (offer: OfferKey, conciergeInterest: boolean) => {
+      setStarting(true);
+      setError(null);
+      const res = await post("start", {
+        renderedAt: renderedAt.current,
+        company_url_hp: trap,
+        attribution: attribution(),
+        offer,
+        conciergeInterest,
+      });
+      if (res?.limited) {
+        setStage("limited");
+        setStarting(false);
+        return;
+      }
+      if (!adopt(res)) {
+        setError("Could not start your session. Refresh and try again.");
+        setStarting(false);
+      }
+    },
+    [adopt, attribution, post, trap]
+  );
+
+  // ── Resume an open session, or ask which offer ──
   //
-  // sessionStorage, NOT localStorage. A half-signed contract persisted across a closed tab on a
-  // shared or front-desk machine is somebody else's document waiting to be finished by whoever
-  // sits down next. The cost is that closing the tab restarts the flow, which is correct.
+  // sessionStorage, NOT localStorage. A half-finished session persisted across a closed tab on a
+  // shared or front-desk machine is somebody else's in progress, waiting to be finished by
+  // whoever sits down next. The cost is that closing the tab restarts the flow, which is correct.
+  //
+  // ‼️ RESUME IS TRIED BEFORE THE PICKER AND IT CARRIES NO OFFER, WHICH IS WHY THE OFFER GATE IN
+  // POST /start SITS AFTER THE RESUME BRANCH. A resumed session already froze its agreement; asking
+  // again would either re-ask a question they answered or, worse, freeze a second document over a
+  // session that has initials against the first.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const existing = sessionStorage.getItem("srt:onb2:token");
-      const res = await post("start", {
-        renderedAt: renderedAt.current,
-        company_url_hp: "",
-        attribution: attribution(),
-        resume: existing,
-      });
+      if (existing) {
+        const res = await post("start", { resume: existing });
+        if (cancelled) return;
+        if (res?.limited) {
+          setStage("limited");
+          return;
+        }
+        if (adopt(res)) return;
+        // The token is stale, expired or already signed. Drop it rather than retrying with it
+        // forever, and fall through to the picker.
+        sessionStorage.removeItem("srt:onb2:token");
+      }
       if (cancelled) return;
-      if (!res || res.ok !== true) {
-        setError("Could not start your session. Refresh and try again.");
-        setStage("chat");
+
+      // Chosen on the marketing page. Open the session immediately rather than showing a picker
+      // with one answer already given.
+      if (presetOffer) {
+        void start(presetOffer, false);
         return;
       }
-      if (res.limited) {
-        setStage("limited");
-        return;
-      }
-      sessionStorage.setItem("srt:onb2:token", res.sessionToken as string);
-      setSessionToken(res.sessionToken as string);
-      setAgreement(res.agreement as Agreement);
-      setDemo(res.demo === true);
-
-      const doneSections = (res.initialledSections as number[]) ?? [];
-      const donePages = (res.initialledPages as number[]) ?? [];
-      setInitialledSections(doneSections);
-      setInitialledPages(donePages);
-
-      // ‼️ THE WHOLE IDENTITY COMES BACK ON A RESUME, NOT JUST THE EMAIL. A refresh mid-agreement
-      // must not put somebody back on screen one with five empty boxes, which would be the
-      // duplicate-question fault arriving by a different door.
-      // !! A RESUMED SESSION LANDS IN THE CHAT, NOT BACK ON THE FORM. The chat rebuilds its own
-      // history from stored turns and the lead row decides whether it is still booking or already
-      // asking questions, so returning here is genuinely resuming rather than starting again.
-      //
-      // The initials seed and the pages-done arithmetic went with the agreement screens. `res`
-      // still carries `agreement`, because POST /start still freezes a snapshot; nothing on the
-      // client reads it now.
-      // !! EVERY SESSION LANDS IN THE CHAT, RESUMED OR NOT. There is no form to go back to. A
-      // resumed session still gets its stored identity into state, because the chat's own
-      // progress is computed server-side from the same row and this keeps the two agreeing.
-      const resumed = res.identity as Identity | null;
-      if (resumed) setIdentity(resumed);
-      setStage("chat");
+      setStage("offer");
     })();
     return () => {
       cancelled = true;
     };
-    // Once, on mount. attribution and post are stable enough that re-running would only ever
-    // mean a second session row for one visitor.
+    // Once, on mount. Re-running would only ever mean a second session row for one visitor.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -384,6 +435,41 @@ export function Onboarding2Funnel({
     );
   }
 
+
+  // ── THE OFFER PICKER. Before the session, because the session needs its answer. ──
+  //
+  // `error` renders above the cards rather than replacing them: a failed /start must leave the
+  // three buttons on screen and tappable, because the only recovery available to the visitor is
+  // to tap one again.
+  if (stage === "offer") {
+    return (
+      <>
+        {error ? (
+          <div className="mx-auto mt-6 w-full max-w-6xl px-4">
+            <p className="rounded-lg bg-red-500/10 px-4 py-3 text-center text-sm text-red-300">
+              {error}
+            </p>
+          </div>
+        ) : null}
+        <OfferCards onPick={start} busy={starting} />
+        {/*
+          The honeypot rides on this screen now that the identity form is gone. POST /start still
+          reads company_url_hp and still answers a filled one with a cheerful 200, so keeping the
+          field somewhere on the page is what keeps that trap armed.
+        */}
+        <input
+          type="text"
+          name="company_url"
+          tabIndex={-1}
+          autoComplete="off"
+          aria-hidden="true"
+          value={trap}
+          onChange={(e) => setTrap(e.target.value)}
+          className="absolute left-[-9999px] h-0 w-0 opacity-0"
+        />
+      </>
+    );
+  }
 
   // !! FULL SCREEN FROM THE MOMENT IDENTITY IS IN. Not a corner bubble with a form behind it.
   // The conversation IS the page: it books the call first and asks the questions second, and it

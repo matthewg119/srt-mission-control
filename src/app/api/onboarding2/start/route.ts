@@ -14,6 +14,7 @@ import { supabaseAdmin } from "@/lib/db";
 import { hashIp, clientIpFrom } from "@/lib/scan/session";
 import { clean } from "@/lib/medspa/validate";
 import { buildSnapshot } from "@/lib/onboarding2/snapshot";
+import { isOfferKey, type OfferKey } from "@/config/pitch";
 import { loadByToken, mintSessionToken, overStartLimit } from "@/lib/onboarding2/session";
 import { coverageOf, loadInitials, pageCoverageOf } from "@/lib/onboarding2/initials";
 import { pagesOf } from "@/lib/onboarding2/snapshot";
@@ -71,7 +72,23 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, sessionToken: null, limited: true });
   }
 
-  const snapshot = await buildSnapshot();
+  // 4. THE OFFER. Required, validated against the closed list, and never defaulted.
+  //
+  // ‼️ A DEFAULT HERE WOULD BE A CLIENT SIGNED ONTO TERMS NOBODY QUOTED THEM. The three
+  // offers are three different arrangements, not three prices, so "whichever one the code picked
+  // when the field was missing" is not a recoverable mistake: it decides whether there is a
+  // guarantee, whether a refund exists, and what the fee is. A missing or unknown offer is a 400.
+  //
+  // ‼️ 400 IS SAFE TO RETURN HERE AND THE RATE LIMIT ABOVE IS NOT. The ledger answers 200 so a
+  // bot learns nothing from a refusal it could use. This is a malformed request from our own
+  // client, not a probe, and the picker cannot send one: it posts a key off OFFERS.
+  const offer = body.offer;
+  if (!isOfferKey(offer)) {
+    console.error("[onboarding2/start] bad offer:", JSON.stringify(offer));
+    return NextResponse.json({ ok: false, error: "bad_offer" }, { status: 400 });
+  }
+
+  const snapshot = await buildSnapshot(offer as OfferKey);
   const sessionToken = mintSessionToken();
   // Host decides, and only the host. See src/lib/onboarding2/demo.ts.
   const isDemo = isDemoRequest(req);
@@ -85,6 +102,7 @@ export async function POST(req: NextRequest) {
       agreement_snapshot: snapshot,
       template_version: snapshot.version,
       agreement_sha256: snapshot.documentSha256,
+      offer_key: offer,
       started_ip_hash: ipHash,
       is_demo: isDemo,
       ...attributionForSigning(attribution),

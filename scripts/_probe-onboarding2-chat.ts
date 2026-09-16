@@ -46,14 +46,27 @@ import {
 // pages" as literals, so the v5 cut broke six checks that were all describing the same two
 // facts the template already exports. A probe that hardcodes a count tests the count; a probe
 // that reads it tests the INVARIANT, which is what the page model actually needs proving.
-import {
-  AGREEMENT_PAGE_COUNT,
-  AGREEMENT_SECTION_COUNT,
-  TEMPLATE_VERSION,
-} from "../src/config/onboarding2-agreement";
+import { agreementFor } from "../src/config/onboarding2-agreement";
+import { isOfferKey, type OfferKey } from "../src/config/pitch";
 import { intakePatchFrom, answeredCount } from "../src/lib/onboarding2/delivery";
 import { modeFor } from "../src/lib/onboarding2/chat-store";
 import type { Onboarding2LeadRow, Onboarding2SigningRow } from "../src/lib/onboarding2/types";
+
+// ‼️ THE COUNTS COME FROM A RESOLVED VARIANT NOW, NOT FROM MODULE CONSTANTS. v6 split one
+// agreement into three, so "how many sections are there" is only answerable once you say which
+// document. The probe still READS the counts rather than hardcoding them, which is the property
+// the note above is about: a probe that hardcodes a count tests the count, a probe that reads it
+// tests the invariant.
+//
+// Defaults to the yearly plan because that is the document with the guarantee, the refund and the
+// most clauses, so it is the one where a page-model bug has the most room to hide. Pass an offer
+// key as the last argument to probe another.
+const OFFER: OfferKey = isOfferKey(process.argv[2]) ? (process.argv[2] as OfferKey) : "year_3300";
+const DOC = agreementFor(OFFER);
+const AGREEMENT_SECTION_COUNT = DOC.sectionCount;
+const AGREEMENT_PAGE_COUNT = DOC.pageCount;
+const TEMPLATE_VERSION = DOC.templateVersion;
+
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = ""): void {
@@ -91,7 +104,7 @@ function fakeInitial(pageNo: number, sections: number[], at: string): InitialRow
 }
 
 async function main(): Promise<void> {
-  const snapshot = await buildSnapshot();
+  const snapshot = await buildSnapshot(OFFER);
 
   // !! `unsigned` AND `signed` NOW MEAN "BEFORE AND AFTER SCREEN ONE", NOT BEFORE AND AFTER A
   // SIGNATURE. modeFor() keys on `email` since 2026-09-04, because nothing sets signed_at any
