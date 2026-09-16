@@ -18,6 +18,7 @@ import { waitUntil } from "@vercel/functions";
 import { runAuditPipeline } from "@/lib/audit-engine/run-audit-pipeline";
 import { normalizeTarget, normalizeErrorMessage } from "@/lib/scan/normalize";
 import { assertPublicHost } from "@/lib/scan/public-host";
+import { supabaseAdmin } from "@/lib/db";
 import {
   clientIpFrom,
   countRecentScansForIp,
@@ -36,7 +37,7 @@ export const fetchCache = "force-no-store";
 export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
-  let body: { url?: string };
+  let body: { url?: string } & Partial<Record<string, unknown>>;
   try {
     body = await req.json();
   } catch {
@@ -60,7 +61,21 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // ‼️ THE CAMPAIGN, IF THIS VISIT CARRIED ONE. Read off the body rather than the referer,
+  // because the referer is the page they were on and this is about the link they clicked.
+  const utm: Record<string, string> = {};
+  for (const k of ["utm_source", "utm_medium", "utm_campaign", "utm_content"] as const) {
+    const v = body?.[k];
+    if (typeof v === "string" && v.trim()) utm[k] = v.trim().slice(0, 120);
+  }
+
   // 3. Already scanned recently? Hand back that run rather than paying again.
+  //
+  // ‼️ A CACHED HIT KEEPS THE FIRST VISIT'S CAMPAIGN AND DOES NOT TAKE THIS ONE. The report
+  // already exists and already carries whoever brought it into being. Overwriting would mean the
+  // last person to scan a domain claims a report somebody else's campaign produced, which is a
+  // worse lie than an unattributed one. Two campaigns reaching one clinic is a real thing and
+  // the honest answer is that the first one found them.
   const cached = await findCachedSession(domain);
   if (cached) {
     return NextResponse.json({ ok: true, id: cached.id, domain, cached: true });
@@ -107,6 +122,17 @@ export async function POST(req: NextRequest) {
           // The whole stepped UI depends on this firing early. See its doc comment.
           onReportCreated: async (reportId) => {
             await updateSession(session.id, { status: "running", report_id: reportId });
+            // ‼️ STAMPED HERE BECAUSE THIS IS THE FIRST MOMENT THE ROW EXISTS. The pipeline
+            // owns the insert; this is the earliest hook after it. A failure is logged and
+            // swallowed: an unattributed report is a reporting gap, and killing a running audit
+            // over one would cost the prospect the thing they actually came for.
+            if (Object.keys(utm).length) {
+              const { error } = await supabaseAdmin
+                .from("audit_reports")
+                .update(utm)
+                .eq("id", reportId);
+              if (error) console.error("[scan/start] utm stamp failed:", error.message);
+            }
           },
           onError: async (message) => {
             console.error("[scan/start] pipeline error:", message);
