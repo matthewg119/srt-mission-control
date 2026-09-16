@@ -19,7 +19,7 @@ import { commandOwner } from "../src/lib/clients/step-commands";
 // resolve: importing it from a tsx script asks node to parse a WebP as JavaScript. Reading the source
 // checks the thing actually worth checking anyway, which is that every file it names exists on disk.
 const REGISTRY_DIR = "src/lib/concierge/mascot";
-const registry = readFileSync(`${REGISTRY_DIR}/index.ts`, "utf8");
+const registry = readFileSync(`${REGISTRY_DIR}/index.ts`, "utf8").replace(/\r\n/g, "\n");
 
 let failed = 0;
 function check(what: string, ok: boolean, detail = ""): void {
@@ -89,7 +89,11 @@ for (const c of ["middle", "bottom", "bottom-centre", "", null, 4]) check(`${JSO
 // ── 5. The loader ───────────────────────────────────────────────────────────
 console.log("\n5. the loader script parses, and still obeys its own rules");
 
-const route = readFileSync("src/app/embed.js/route.ts", "utf8");
+// ‼️ NEWLINES NORMALISED BEFORE ANYTHING IS SEARCHED FOR. git checks this file out with CRLF on
+// Windows depending on the worktree, so a probe that looks for a backtick followed by a newline finds
+// nothing and reports the script as missing rather than as broken. The file's line endings are not what
+// this is testing.
+const route = readFileSync("src/app/embed.js/route.ts", "utf8").replace(/\r\n/g, "\n");
 const open = route.indexOf("const SCRIPT = `");
 const close = route.indexOf("`;\n", open);
 const script = route.slice(open + "const SCRIPT = `".length, close);
