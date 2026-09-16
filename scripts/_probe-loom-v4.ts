@@ -25,7 +25,13 @@ import {
   FREE_UNTIL_LINE,
   GUARANTEE_LINE,
   GUARANTEE_RESTATE,
+  GUARANTEE_YEAR_LINE,
+  PRICE_CONCIERGE,
+  PRICE_MONTH,
   PRICE_RETAINER,
+  PRICE_YEAR_AMOUNT,
+  PRICE_YEAR_ANCHOR,
+  REFUND_LINE,
   VALUE_RECURRING,
 } from "../src/config/pitch";
 import type { BeatSheetFacts } from "../src/lib/audit-engine/loom-beatsheet";
@@ -36,9 +42,24 @@ import type { AuditReportRow } from "../src/lib/audit-engine/types";
 const FORT_PIERCE = "nurse practitioner in Fort Pierce";
 const BARBECUE = "I was at a barbecue with my wife";
 /** Figures from the offer that no longer exists. None may appear in any render. */
-const DEAD_PRICES = ["$349", "$999", "$4,999", "$399", "$299"];
+// ‼️ $349 CAME OFF THIS LIST ON 2026-09-16 BECAUSE IT IS A LIVE PRICE AGAIN.
+// It was the old Core tier, deleted on 2026-08-31, and this probe rightly guarded against it
+// resurfacing. It is now PRICE_MONTH, the month-to-month plan, and the script quotes it on
+// purpose. A dead-price list that outlives the death it recorded starts failing correct scripts,
+// which is the failure mode that gets a probe deleted rather than fixed.
+const DEAD_PRICES = ["$999", "$4,999", "$399", "$299"];
 /** Wording from the offer that no longer exists. */
-const DEAD_OFFER = ["double your investment", "Complete + ChatGPT Ads", "Core Visibility", "Enterprise"];
+const DEAD_OFFER = [
+  "double your investment",
+  "Complete + ChatGPT Ads",
+  "Core Visibility",
+  "Enterprise",
+  // ‼️ THE 2026-09-16 CASUALTIES. Both paid plans are paid up front now, so any sentence
+  // promising that nothing is owed until something happens is a false statement about money,
+  // not merely stale copy. Guarded here so it cannot creep back into a recording.
+  "you start free",
+  "qualified AI-sourced inquiries",
+];
 
 const avatars = {
   worst: [
@@ -191,12 +212,36 @@ async function main() {
   const genericFull = await render(report, view, facts);
   const generic = spokenPart(genericFull);
 
-  check("guarantee stated once, in full", count(generic, GUARANTEE_LINE) === 1, `found ${count(generic, GUARANTEE_LINE)}`);
-  // count() is case-insensitive on purpose: the script renders this through sentence(), so the
+  // count() is case-insensitive on purpose: the script renders these through sentence(), so the
   // spoken form starts with a capital. spokenForm() in delivery-guards.ts is case-insensitive for
   // the same reason, so an exact-case check here would be testing something no guard enforces.
-  check("the free period is stated", count(generic, FREE_UNTIL_LINE) === 1, `found ${count(generic, FREE_UNTIL_LINE)}`);
-  check("the one price is quoted", generic.includes(PRICE_RETAINER));
+  //
+  // ‼️ THESE TWO ASSERTED THE OFFER THAT DIED ON 2026-09-16 AND THAT IS WHY THEY CHANGED.
+  // The old script said GUARANTEE_LINE (a visibility commitment) and FREE_UNTIL_LINE ("you owe
+  // nothing until 5 qualified AI-sourced inquiries") on every render. Both are gone from the
+  // spoken script: there are three plans, the guarantee belongs to one of them, and nothing is
+  // free-until-anything any more. What is asserted instead is that the plan that HAS a guarantee
+  // states it exactly once, in the approved wording, alongside its refund.
+  check(
+    "the yearly guarantee is stated once, in full",
+    count(generic, GUARANTEE_YEAR_LINE) === 1,
+    `found ${count(generic, GUARANTEE_YEAR_LINE)}`
+  );
+  check(
+    "the refund is stated once, in full",
+    count(generic, REFUND_LINE) === 1,
+    `found ${count(generic, REFUND_LINE)}`
+  );
+  // ‼️ AND THE MONTHLY PLAN'S LACK OF ONE IS SAID OUT LOUD. A prospect who finds out on the
+  // invoice that the cheaper plan carried no guarantee has been handled badly, and it costs the
+  // guarantee its credibility on the plan that does carry one.
+  check(
+    "the monthly plan's absence of a guarantee is spoken",
+    /no guarantee on that one though, and no refunds/i.test(generic)
+  );
+  check("all three plans are quoted", [PRICE_YEAR_AMOUNT, PRICE_MONTH, PRICE_YEAR_ANCHOR].every((f) => generic.includes(f)));
+  check("the Concierge is priced", generic.includes(PRICE_CONCIERGE));
+  check("the free plan is offered", /the first one is free/i.test(generic));
   check("the recurring value is quoted", generic.includes(VALUE_RECURRING));
   check("all three pillars present", ["Number 1. Being findable", "Number 2. Being familiar", "Number 3. Staying fresh"].every((p) => generic.includes(p)));
   check("the pillars are named up front too", generic.includes("Being findable") && generic.includes("I will break those down"));
@@ -225,7 +270,12 @@ async function main() {
   check("a med spa does NOT read the generated labels", !clinic.includes("The Corporate Film Program Buyer"));
   check("a med spa names the customer to avoid", clinic.includes("Groupon deal hunters"));
   check("the header says which lane was taken", clinicFull.includes("AESTHETICS") && genericFull.includes("generated niche set"));
-  check("the med spa still gets the same offer", clinic.includes(PRICE_RETAINER) && count(clinic, FREE_UNTIL_LINE) === 1);
+  check(
+    "the med spa still gets the same three plans",
+    clinic.includes(PRICE_YEAR_AMOUNT) &&
+      clinic.includes(PRICE_MONTH) &&
+      count(clinic, GUARANTEE_YEAR_LINE) === 1
+  );
   check("the med spa still gets the same anecdote", clinic.includes(FORT_PIERCE));
 
   console.log(`\n=== The competitor, and its two fallbacks ===`);
