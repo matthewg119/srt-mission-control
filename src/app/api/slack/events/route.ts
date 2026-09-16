@@ -1169,6 +1169,16 @@ export async function POST(request: NextRequest) {
               text: userText,
               by,
             })) ??
+            // ‼️ ABOVE handlePreCallThreadReply, AND IT RETURNS null ONCE A PLAN EXISTS. `headlines` means
+            // "write the set I pick the seven pages from" before a plan and "write three options per page"
+            // after one, so the earlier meaning gets first refusal and hands the word back when it no
+            // longer applies. See the doctrine in precall-headlines.ts.
+            (await (await import("@/lib/clients/precall-headlines")).handlePreCallHeadlineReply({
+              clientId: client.id,
+              stepKey: client.stepKey,
+              text: userText,
+              by,
+            })) ??
             (await handlePreCallThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText, by })) ??
             (await handlePhotographThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText })) ??
             (await handleReviewLinkThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText, by })) ??

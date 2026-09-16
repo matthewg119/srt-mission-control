@@ -242,7 +242,7 @@ export async function clientVocQuotes(clientId: string): Promise<VocQuote[]> {
   return [...own, ...shared].slice(0, MAX_QUOTES);
 }
 
-interface HeadlineContext {
+export interface HeadlineContext {
   clientName: string;
   city: string | null;
   businessType: string | null;
@@ -291,7 +291,11 @@ async function loadClientRow(clientId: string): Promise<Record<string, unknown> 
   return (base.data as Record<string, unknown> | null) ?? null;
 }
 
-async function headlineContext(
+// ‼️ EXPORTED FOR THE PRE-CALL LANE (2026-09-16). precall-headlines.ts writes to one rung of the
+// awareness ladder and needs the same business, avatar, quotes and approved numbers this assembles. It
+// adds to the prompt this returns rather than gathering its own, so there is one answer to "what does the
+// model know about this client" and one place to change it.
+export async function headlineContext(
   clientId: string
 ): Promise<{ ok: true; ctx: HeadlineContext } | { ok: false; error: string }> {
   const { loadOffer } = await import("./offers");

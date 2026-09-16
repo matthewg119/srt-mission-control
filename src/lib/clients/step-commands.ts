@@ -33,12 +33,12 @@ const OWNERS: ReadonlyArray<{ test: RegExp; step: StepKey; what: string }> = [
     what: "Objections heard on a sales call",
   },
   {
-    test: /^\s*[`*_]*review\s+link\s*:/i,
+    test: /^\s*[`*_]*review\s+(link|platform)\s*:/i,
     step: "review_card_pdf",
     what: "Review links",
   },
   {
-    test: /^\s*[`*_]*(plan(\s+(new|approve|(drop|swap)\s+\d{1,2}|edit\s+\d{1,2}\s*:.+))?|anchor(\s*:\s*\S+)?|ladder(\s+pick\s+[1-5])?|pillar\s*:\s*(auto|#?\d{1,4})|supports\s*:\s*(auto|[#\d,\s]+)|guarantee\s*:.+)\s*[`*_]*\s*$/i,
+    test: /^\s*[`*_]*(plan(\s+(new|approve|(drop|swap)\s+\d{1,2}|edit\s+\d{1,2}\s*:.+))?|anchor(\s*:\s*\S+)?|ladder(\s+(pick\s+)?[1-5])?|(anchor\s+at|rung)\s+#?[1-5]|pillar\s*:\s*(auto|#?\d{1,4})|supports\s*:\s*(auto|[#\d,\s]+)|guarantee\s*:.+)\s*[`*_]*\s*$/i,
     step: "pre_call_pages",
     what: "Plan commands",
   },

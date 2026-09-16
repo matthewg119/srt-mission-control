@@ -29,8 +29,22 @@ import {
   type ReviewPlatform,
 } from "@/lib/hub/review-destinations";
 
-/** The steps whose threads and cards take a review link. */
-export const REVIEW_LINK_STEPS = new Set(["review_tool_preview", "review_card_pdf", "review_tool_handed"]);
+/**
+ * The steps whose threads and cards take a review link.
+ *
+ * ‼️ offer_locked IS THE PREP CALL AND IT IS FIRST ON PURPOSE (2026-09-16). Matthew: "I need to
+ * remember the review link that they want make sure We ask for that in the call where i confirm they're
+ * ideal offer ... so we can have all the work ready in the back end by asking the right questions."
+ * Until now the first time anybody was asked was step 20, by which point the review card PDF had already
+ * been generated with a QR pointing at a page whose Post button goes nowhere, and the step could not tick.
+ * The link never needed the card to exist; it needed somebody on a phone call to ask.
+ */
+export const REVIEW_LINK_STEPS = new Set([
+  "offer_locked",
+  "review_tool_preview",
+  "review_card_pdf",
+  "review_tool_handed",
+]);
 
 export type SetReviewLinkResult =
   | { ok: true; platform: ReviewPlatform; line: string; primarySet: boolean }
@@ -137,6 +151,35 @@ export async function hasReviewLink(clientId: string): Promise<boolean> {
 }
 
 const REVIEW_LINK_COMMAND = /^\s*[`*_]*review\s+link\s*:\s*(\S+)\s*[`*_]*\s*$/i;
+const REVIEW_PLATFORM_COMMAND = /^\s*[`*_]*review\s+platform\s*:\s*([a-z .]{2,30})\s*[`*_]*\s*$/i;
+
+/**
+ * `review platform: Trustpilot`, the answer to the first of the two prep call questions.
+ *
+ * ‼️ IT RECORDS THE CHOICE WITHOUT A URL, WHICH IS THE POINT. On the call the answer to "where do
+ * your reviews go" arrives a minute before anybody has found the page, and the two used to be one
+ * command, so the answer was lost and asked again at step 20. Recording it alone lets the card say which
+ * platform is still missing its link instead of asking the whole question twice.
+ */
+async function setReviewPlatform(args: {
+  clientId: string;
+  name: string;
+  actor: string;
+}): Promise<{ ok: true; platform: ReviewPlatform } | { ok: false; error: string }> {
+  const wanted = args.name.trim().toLowerCase().replace(/[.\s]+/g, "");
+  const platform = REVIEW_PLATFORMS.find(
+    (p) => p.key === wanted || p.name.toLowerCase().replace(/[.\s]+/g, "") === wanted
+  );
+  if (!platform) {
+    return { ok: false, error: `"${args.name.trim()}" is not one we can post to. ${REVIEW_PLATFORMS.map((p) => p.name).join(", ")}.` };
+  }
+  const { error } = await supabaseAdmin
+    .from("clients")
+    .update({ review_destination_primary: platform.key, updated_at: new Date().toISOString() })
+    .eq("id", args.clientId);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, platform };
+}
 
 /** `review link: <url>` in a review step's thread. Null when the text is not that command. */
 export async function handleReviewLinkThreadReply(args: {
@@ -145,9 +188,21 @@ export async function handleReviewLinkThreadReply(args: {
   text: string;
   by: string;
 }): Promise<{ message: string; after?: () => Promise<void> } | null> {
+  if (!args.stepKey || !REVIEW_LINK_STEPS.has(args.stepKey)) return null;
+
+  const chose = REVIEW_PLATFORM_COMMAND.exec(args.text);
+  if (chose) {
+    const res = await setReviewPlatform({ clientId: args.clientId, name: chose[1], actor: args.by });
+    if (!res.ok) return { message: `:warning: ${res.error}` };
+    return {
+      message:
+        `:white_check_mark: *${res.platform.name}* is where their reviews go, ${args.by}. ` +
+        `Now the page itself: \`review link: <url>\`, and the card's QR is right the first time it is printed.`,
+    };
+  }
+
   const m = REVIEW_LINK_COMMAND.exec(args.text);
   if (!m) return null;
-  if (!args.stepKey || !REVIEW_LINK_STEPS.has(args.stepKey)) return null;
 
   const res = await setReviewLink({ clientId: args.clientId, url: m[1], actor: args.by, source: "slack" });
   if (!res.ok) return { message: `:warning: ${res.error}` };

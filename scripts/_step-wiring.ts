@@ -37,7 +37,7 @@ function runnerFor(key: string): string | null {
 const COMMANDS: Record<string, string[]> = {
   avatar_confirmed: ["`avatar: <label>`", "[Avatar] buttons"],
   avatar_harvest: ["`research:` or a dropped file", "`prompt`, `prompt short`, `run`", "`avatar sheet:`, `short offer:`, `beliefs:`", "`share research`, `share sheet`"],
-  offer_locked: ["`offer:`", "`terms:`", "`outcome:`", "`price:`", "[Call now]"],
+  offer_locked: ["`offer:`", "`terms:`", "`outcome:`", "`price:`", "[Call now]", "`review platform: <name>`, `review link: <url>`"],
   keyword_set: ["`keywords approve`", "`keywords drop N`", "`keywords add:`", "`keywords more <category>`"],
   custom_question_set: ["`objection: <what they said>`", "`objection: ... | belief: <key>`"],
   hub_preview: ["`universe <name>`", "`template <name>`", "`skin reset`", "`pick 1|2|3`", "paste a screenshot"],
@@ -46,7 +46,9 @@ const COMMANDS: Record<string, string[]> = {
   concierge_preview: ["[Include concierge (add-on)] / [Not now, install later]", "[Patient lane] / [Owner lane]", "`concierge install`"],
   site_replica: ["`universe <name>`", "paste a screenshot"],
   pre_call_pages: [
-    "`ladder`, `ladder pick <1-5>`",
+    "`ladder`, `ladder pick <1-5>`, `anchor at <1-5>`, `ladder problem aware`",
+    "`headlines`, `headlines pick 4, 9, 12, ...` (seven)",
+    "`emotional:` then one question per line",
     "[Anchor at N], [Pillar N], [Supports: pick for me]",
     "`pillar: <rank>` / `pillar: auto`",
     "`supports: 3, 7, 12` / `supports auto`",

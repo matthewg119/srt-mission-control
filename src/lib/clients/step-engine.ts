@@ -1039,6 +1039,13 @@ async function instructionsFor(
           "Which ONE service do you want more of?",
           "What do your customers call it? The words they would say or type, not the menu name.",
           "How do you want to be known for it?",
+          // ‼️ THE REVIEW PAIR, ASKED HERE AND NOT AT STEP 20 (2026-09-16). Matthew: "I need to remember
+          // the review link that they want make sure We ask for that in the call where i confirm they're
+          // ideal offer ... so we can have all the work ready in the back end". Asked this late nobody was
+          // asked at all: the card PDF was already generated with a QR pointing at a page whose Post
+          // button went nowhere, and the step could not tick. Two questions on a call already happening.
+          "Where do you want new reviews to go? Google, Trustpilot, Yelp?",
+          "Can you send me the link to that page while we are on the phone?",
         ].join("\n")
       ).split("\n");
 
@@ -1067,6 +1074,8 @@ async function instructionsFor(
         `    keyword at step ${stepNumber("keyword_set")} is tested against.`,
         "  • `outcome: <what they get, e.g. more appointments>` is the promise headlines and CTAs make.",
         "  • `price: <as they state it, e.g. $399 per session>`.",
+        `  • \`review platform: <Google, Trustpilot, Yelp>\` and \`review link: <url>\` are the two answers ` +
+          `step ${stepNumber("review_card_pdf")} needs before a card can be printed with a working QR.`,
         "Each is its own message. A message with two of them is refused, never merged.",
         "",
         "*The sales letter* (step 11's framework script opens with it, so it is needed before step 11 hands over):",
