@@ -224,7 +224,7 @@ export async function generatePreCallHeadlines(args: {
   stage: AwarenessStage;
   rung: { readerState: string; angle: string; claim: string };
   count?: number;
-}): Promise<{ ok: true; candidates: Candidate[] } | { ok: false; error: string }> {
+}): Promise<{ ok: true; candidates: Candidate[]; dropped: number } | { ok: false; error: string }> {
   const count = args.count ?? PRE_CALL_HEADLINES;
   const pool = await headlineKeywordPool(args.clientId, args.stage);
   const keywords = pool.rows;
@@ -269,48 +269,86 @@ export async function generatePreCallHeadlines(args: {
     "is the door, not the wording of the query. Spread them: no search takes more than three of the set.",
   ].join("\n");
 
-  try {
+  // ‼️ THE BATCH IS FILTERED, NOT REFUSED, AND THAT IS THE WHOLE DIFFERENCE AT THIRTY THREE.
+  // The weekly lane validates all-or-nothing inside callClaudeJSON, which is right for twenty lines
+  // where one fault means the model misread the brief. At thirty three it means one invented figure
+  // throws away the other thirty two, twice, and a person waits two minutes for nothing: measured on
+  // SRT, where two runs in a row produced zero headlines over an invented score and four repeated
+  // openings. So the model call only has to return the right SHAPE, every line is judged on its own
+  // afterwards, and what passes is kept. A shortfall asks once more with the faults quoted.
+  const maxPerOpening = Math.max(2, Math.ceil(count / 11));
+  const kept: Candidate[] = [];
+  const seen = new Set<string>();
+  const dropped: string[] = [];
+
+  const harvest = (rows: Generated["headlines"]): void => {
+    for (const row of rows) {
+      const headline = stripEmDashes(String(row.headline ?? "")).trim();
+      const key = normalizeHeadline(headline);
+      if (!key || seen.has(key)) continue;
+      const keyword = numbered[Number(row.keyword) - 1];
+      if (!keyword) continue;
+      // count 0 skips the "expected N and got M" rule: this judges one line at a time. The opening
+      // rule is applied against what is already kept, so the third "how do I" is refused and the
+      // first two stand.
+      const faults = headlineFaults([...kept.map((k) => k.headline), headline], 0, numberHaystack, maxPerOpening);
+      const mine = faults.filter((f) => f.headline === headline || f.headline === "");
+      if (mine.length) {
+        dropped.push(`"${headline}" ${mine[0].why}`);
+        continue;
+      }
+      seen.add(key);
+      kept.push({ headline, keyword });
+      if (kept.length >= count) return;
+    }
+  };
+
+  const ask = async (want: number, correction: string): Promise<void> => {
     const { data } = await callClaudeJSON<Generated>({
       model: model(),
       system,
-      user: `Return JSON with exactly ${count} headlines, in English, each with the number of the search it carries.`,
+      user:
+        `Return JSON with exactly ${want} headlines, in English, each with the number of the search it carries.` +
+        correction,
       maxTokens: 6000,
       temperature: 0.9,
       schemaHint: '{ "headlines": [{ "headline": string, "keyword": number }] }',
+      // Shape only. The copy rules are applied per line by harvest(), so one bad line costs one line.
       validate: (v): v is Generated => {
         const p = v as Generated | null;
-        if (!p || !Array.isArray(p.headlines) || p.headlines.length < count) return false;
-        if (!p.headlines.every((h) => typeof h.headline === "string" && h.headline.trim())) return false;
-        if (!p.headlines.every((h) => typeof h.keyword === "number" && h.keyword >= 1 && h.keyword <= numbered.length)) return false;
-        return headlineFaults(p.headlines.map((h) => String(h.headline).trim()), count, numberHaystack).length === 0;
+        return Boolean(
+          p &&
+            Array.isArray(p.headlines) &&
+            p.headlines.length > 0 &&
+            p.headlines.every((h) => typeof h.headline === "string" && h.headline.trim())
+        );
       },
-      describeInvalid: (v) => {
-        const p = v as Generated | null;
-        if (!p || !Array.isArray(p.headlines)) return 'the "headlines" key was missing or was not an array';
-        if (p.headlines.length < count) return `there were ${p.headlines.length}, not ${count}`;
-        const out = p.headlines.findIndex((h) => typeof h.keyword !== "number" || h.keyword < 1 || h.keyword > numbered.length);
-        if (out >= 0) return `headlines[${out}] named search ${String(p.headlines[out].keyword)}, and the list runs 1 to ${numbered.length}`;
-        return headlineFaults(p.headlines.map((h) => String(h.headline).trim()), count, numberHaystack)
-          .slice(0, 6)
-          .map((f) => (f.headline ? `"${f.headline}" has ${f.why}` : f.why))
-          .join("; ");
-      },
+      describeInvalid: () => 'Return { "headlines": [{ "headline": "...", "keyword": 3 }] } and nothing else.',
+      timeoutMs: 180_000,
     });
+    harvest(data.headlines);
+  };
 
-    const seen = new Set<string>();
-    const candidates: Candidate[] = [];
-    for (const row of data.headlines) {
-      const headline = stripEmDashes(String(row.headline)).trim();
-      const key = normalizeHeadline(headline);
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      const keyword = numbered[Number(row.keyword) - 1];
-      if (keyword) candidates.push({ headline, keyword });
+  try {
+    await ask(count, "");
+    if (kept.length < count) {
+      const why = dropped.slice(0, 6).map((d) => `- ${d}`).join("\n");
+      await ask(
+        count - kept.length,
+        `\n\nThese were refused, so do not repeat the fault:\n${why}\n` +
+          `Do not repeat any of these lines:\n${kept.map((k) => `- ${k.headline}`).join("\n")}`
+      );
     }
-    return { ok: true, candidates };
   } catch (e) {
-    return { ok: false, error: (e as Error).message };
+    // A thrown call with lines already banked is a partial success, not a failure.
+    if (kept.length === 0) return { ok: false, error: (e as Error).message };
+    console.error(`[precall-headlines] second pass failed with ${kept.length} banked: ${(e as Error).message}`);
   }
+
+  if (kept.length === 0) {
+    return { ok: false, error: `every line was refused. ${dropped.slice(0, 3).join("; ")}` };
+  }
+  return { ok: true, candidates: kept, dropped: dropped.length };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -615,7 +653,11 @@ export async function handlePreCallHeadlineReply(input: {
         return;
       }
       const rows = await shortlist(input.clientId);
-      await say(shortlistLines(rows, stage).join("\n"));
+      const note =
+        got.dropped > 0
+          ? `\n_${got.dropped} more were written and refused by the rules, so they were dropped rather than shown._`
+          : "";
+      await say(shortlistLines(rows, stage).join("\n") + note);
       const { postStep } = await import("./step-engine");
       await postStep(input.clientId, STEP).catch(() => {});
     },
