@@ -27,6 +27,10 @@ export interface ParsedReachInboxEvent {
   campaignId: string | null;
   leadEmail: string | null;
   occurredAt: string;
+  /** Best effort. Null is the normal case and must read as "not sent", never as "empty reply". */
+  replyText: string | null;
+  /** The replier's name if the payload names them. Never guessed from the address. */
+  leadName: string | null;
 }
 
 /**
@@ -67,6 +71,31 @@ const CAMPAIGN_ID_KEYS = ["campaignid", "campaignuuid", "sequenceid", "cid"];
 const EMAIL_KEYS = ["leademail", "email", "to", "recipient", "recipientemail", "prospectemail", "contactemail", "toemail"];
 const TIME_KEYS = ["occurredat", "timestamp", "eventtime", "createdat", "date", "time", "sentat"];
 const ID_KEYS = ["eventid", "id", "messageid", "uuid", "eventuuid"];
+
+/**
+ * What a reply actually said.
+ *
+ * ‼️ `text` IS DELIBERATELY NOT IN THIS LIST. A Slack Block Kit body puts the notification's own
+ * prose there ("Reply received from jane@acme.com"), and quoting that back as though it were the
+ * lead's words would put a sentence we wrote in front of Matthew as a sentence they wrote. Null
+ * renders as "ReachInbox sent no reply text", which is true and is repairable from the stored
+ * payload; a plausible wrong quote is neither.
+ */
+const REPLY_TEXT_KEYS = [
+  "replytext", "replybody", "replymessage", "replycontent", "body", "bodytext", "textbody",
+  "plaintext", "plaintextbody", "message", "messagebody", "emailbody", "content", "snippet",
+  "preview", "bodypreview",
+];
+
+/**
+ * ‼️ BARE `name` IS DELIBERATELY ABSENT. findByKey searches the whole tree, so `name` would match
+ * the campaign object's own name on most shapes and address Matthew's Slack card to "7D 3E 6M".
+ * Every key here says whose name it is.
+ */
+const LEAD_NAME_KEYS = [
+  "leadname", "prospectname", "contactname", "recipientname", "toname", "fromname",
+  "firstname", "fullname", "sendername",
+];
 
 const canon = (k: string) => k.toLowerCase().replace(/[^a-z0-9]/g, "");
 
@@ -178,6 +207,31 @@ function parseTime(raw: string | null): string {
 }
 
 /**
+ * Make a webhook's idea of a reply body safe to put in a Slack block.
+ *
+ * Bodies arrive as HTML at least as often as text, and a raw `<div dir="ltr">` in the card reads
+ * as a bug. The quoted chain underneath a short answer is not stripped: finding the boundary needs
+ * rules per mail client, and truncating at 600 characters already keeps the answer — which is on
+ * top — while leaving the rest in the stored payload.
+ */
+export function cleanReplyText(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const text = raw
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<\/(p|div|tr|li)>/gi, " ")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text ? text.slice(0, 600) : null;
+}
+
+/**
  * @param body   the parsed JSON body, or null if it was not JSON at all
  * @param rawText the exact bytes received, used for the fallback dedupe id
  */
@@ -205,6 +259,11 @@ export function parseReachInboxEvent(body: unknown, rawText: string): ParsedReac
       // a genuinely new event differs by at least its timestamp.
       `sha:${createHash("sha256").update(rawText).digest("hex").slice(0, 32)}`;
 
+  const nameRaw = findByKey(body, LEAD_NAME_KEYS);
+  // An address is not a name. Outlook and most webhooks fall back to one, and "jane@acme.com
+  // replied" already appears on the line above it.
+  const leadName = nameRaw && !nameRaw.includes("@") ? nameRaw.slice(0, 120) : null;
+
   return {
     providerEventId,
     eventType,
@@ -212,5 +271,7 @@ export function parseReachInboxEvent(body: unknown, rawText: string): ParsedReac
     campaignId: campaignId?.slice(0, 200) ?? null,
     leadEmail: leadEmail ? leadEmail.toLowerCase() : null,
     occurredAt,
+    replyText: cleanReplyText(findByKey(body, REPLY_TEXT_KEYS)),
+    leadName,
   };
 }
