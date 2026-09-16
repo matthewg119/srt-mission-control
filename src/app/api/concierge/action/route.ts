@@ -97,6 +97,20 @@ export async function POST(req: NextRequest) {
       if (contactId) {
         await supabaseAdmin.from("concierge_sessions").update({ contact_id: contactId }).eq("id", session.id);
       }
+    } else if (!already) {
+      // ‼️ A PATIENT CAPTURE GOES TO THE CLIENT'S OWN CHANNEL AND NOWHERE ELSE (2026-09-16).
+      //
+      // The rule above stands: a visitor to a client's site is the CLIENT's customer, so nothing about
+      // them enters SRT's CRM, Zoho or #hot-leads. But "not ours" was being read as "nobody's": the row
+      // was written to concierge_sessions and no human was ever told, so a clinic's widget could capture
+      // somebody all afternoon and the clinic would find out never. Their private ops channel is the one
+      // place that is theirs and ours at once, which is where the board already talks to them.
+      //
+      // Failure is swallowed on purpose. A missing channel, a Slack outage or a client provisioned before
+      // ops channels existed must not turn into a 500 for the person typing their name into a widget.
+      await notifyClientLead({ clientId: session.clientId, name, email, body, picked }).catch((e) =>
+        console.error(`[concierge/action] client lead notice failed: ${(e as Error).message}`)
+      );
     }
     return reply({ ok: true, firstName: name.split(" ")[0] });
   }
@@ -165,4 +179,44 @@ export async function POST(req: NextRequest) {
   }
 
   return reply({ error: "Unknown action" }, 400);
+}
+
+/**
+ * Tell the client, in their own private channel, that somebody left their details on their site.
+ *
+ * ‼️ THEIR CHANNEL, NEVER #hot-leads, AND NEVER A contacts ROW. This is the client's customer. The file
+ * header states the rule; this function is the half of it that stops "not SRT's lead" meaning "nobody's
+ * lead". Nothing here writes to contacts, Zoho or the lead thread: it is a message, and the durable
+ * record stays on concierge_sessions where the 24 hour purge can reach it.
+ */
+async function notifyClientLead(args: {
+  clientId: string;
+  name: string;
+  email: string;
+  body: { host?: unknown; path?: unknown };
+  picked: string;
+}): Promise<void> {
+  const { data } = await supabaseAdmin
+    .from("clients")
+    .select("ops_channel_id, dba_name, legal_name")
+    .eq("id", args.clientId)
+    .maybeSingle();
+  const channel = typeof data?.ops_channel_id === "string" ? data.ops_channel_id.trim() : "";
+  if (!channel) return;
+
+  const where = [clean(args.body.host, 200), clean(args.body.path, 300)].join("");
+  const { slack } = await import("@/lib/slack-bot");
+  await slack.postMessage(
+    channel,
+    [
+      `:wave: *Somebody left their details with the assistant* on ${(data?.dba_name as string) || (data?.legal_name as string) || "the site"}.`,
+      `Name: ${args.name}`,
+      `Email: ${args.email}`,
+      args.picked ? `Asked for: ${args.picked}` : "",
+      where ? `Page: ${where}` : "",
+      "This is the clinic's own enquiry. It is not in our CRM and it has not been contacted.",
+    ]
+      .filter(Boolean)
+      .join("\n")
+  );
 }

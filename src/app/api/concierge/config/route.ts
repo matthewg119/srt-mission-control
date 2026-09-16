@@ -12,10 +12,11 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { unstable_cache } from "next/cache";
-import { loadConciergeConfig } from "@/lib/concierge/config";
+import { loadConciergeConfig, type LauncherCorner } from "@/lib/concierge/config";
 import { magnetByKey, pillLabel, resolveMagnet } from "@/lib/concierge/magnets";
 import { conciergeAllowed, PREVIEW_TOKEN_PARAM } from "@/lib/concierge/preview-grant";
-import { mascotAssets, type MascotAssets } from "@/lib/concierge/mascot";
+import { type MascotAssets } from "@/lib/concierge/mascot";
+import { mascotForClient } from "@/lib/concierge/mascot-for-client";
 import { hasBannedDash } from "@/lib/copy-guard";
 
 export const runtime = "nodejs";
@@ -30,6 +31,8 @@ interface PublicConfig {
   ctaLabel: string;
   /** The corner mascot's images, or null for the plain pill. */
   mascot: MascotAssets | null;
+  /** Which corner the launcher rests in, before anybody drags it. */
+  corner: LauncherCorner;
   /** What the mascot says in its bubble, one at a time, in a random order. */
   lines: string[];
 }
@@ -102,7 +105,8 @@ const publicConfig = unstable_cache(
 
     const body: PublicConfig = {
       enabled: true,
-      mascot: mascotAssets(config.mascot),
+      mascot: await mascotForClient(config.clientId, config.mascot),
+      corner: config.launcherCorner,
       lines: mascotLines({
         audience: config.audience,
         magnetTitle: magnet?.title ?? null,
@@ -174,7 +178,17 @@ export async function GET(req: NextRequest) {
   // to leave lying around.
   const shared = cached.tenantEnabled;
 
-  return NextResponse.json(cached.body, {
+  // ‼️ THE MASCOT OVERRIDE IS PREVIEW ONLY, AND IT IS RESOLVED AFTER THE CACHE ON PURPOSE. Step 18
+  // hands Matthew three links that differ only by ?mascot=, so the client can be shown three and
+  // pick one on the call. Folding the key into the cache key would give this route, the busiest in
+  // the lane, a fourth dimension chosen by the caller for the sake of three page views. It is a pure
+  // lookup in a closed registry, so it costs nothing to apply out here. Requiring `granted` is what
+  // stops a stranger repainting a client's live widget by adding a query param to our own script.
+  const wanted = (params.get("mascot") ?? "").trim().slice(0, 40).toLowerCase();
+  const override = token && wanted ? await mascotForClient(cached.clientId, wanted) : null;
+  const body = override ? { ...cached.body, mascot: override } : cached.body;
+
+  return NextResponse.json(body, {
     headers: {
       "cache-control": shared
         ? `public, max-age=60, s-maxage=${REVALIDATE_SECONDS}`

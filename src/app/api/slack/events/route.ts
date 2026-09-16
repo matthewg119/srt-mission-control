@@ -1194,6 +1194,13 @@ export async function POST(request: NextRequest) {
               stepKey: client.stepKey,
               text: userText,
               by,
+            })) ??
+            // `mascot ...` in step 18's thread: which character sits in the corner of their website.
+            (await (await import("@/lib/clients/mascot-studio")).handleMascotThreadReply({
+              clientId: client.id,
+              stepKey: client.stepKey,
+              text: userText,
+              by,
             }));
           if (said) {
             const { markEventKind, postClientReply } = await import("@/lib/clients/client-events");
@@ -1383,6 +1390,32 @@ export async function POST(request: NextRequest) {
                 console.error("[slack/events] skin screenshot threw:", (e as Error).message)
               )
             );
+            return NextResponse.json({ ok: true });
+          }
+        }
+
+        // 1b-bis. Mascot art dropped into step 18's thread, with the character named in the message.
+        //
+        // ‼️ ABOVE THE GENERAL CAPTURE AND BELOW THE SKIN BRANCH, and both halves of that matter. Above,
+        // because captureOnboardingUploads files anything into the private onboarding bucket and returns,
+        // so a mascot pasted after it would end up as a client document nothing reads. Below, because a
+        // design reference and a mascot are both images in a step thread and the skin steps are 16 and 19
+        // while this is 18, so the two can never both claim one upload.
+        //
+        // It returns null when the message names no character, and the fall-through is then exactly what
+        // it was: the file is still captured, just not wired to a mascot.
+        if (client && parentThreadTs && attachedFiles.length > 0) {
+          const { handleMascotArt } = await import("@/lib/clients/mascot-art");
+          const art = await handleMascotArt({
+            clientId: client.id,
+            stepKey: client.stepKey,
+            text: userText,
+            files: attachedFiles,
+            by: event.user ? `<@${event.user as string}>` : "someone in Slack",
+          });
+          if (art) {
+            const posted = await slack.postThreadReply(channel, parentThreadTs, art.message);
+            if (!slackOk(posted)) console.error("[slack/events] mascot art reply failed");
             return NextResponse.json({ ok: true });
           }
         }

@@ -73,6 +73,15 @@ export interface ConciergeEmbedProps {
    * every route refused one. See src/lib/concierge/preview-grant.ts.
    */
   preview?: string | null;
+  /**
+   * Show THIS mascot instead of the tenant's, for the three shortlist links step 18 posts.
+   *
+   * ‼️ IT DOES NOTHING WITHOUT `preview`. /api/concierge/config honours the override only alongside a
+   * valid token, so passing a key on a live page is inert rather than a way for a page to repaint a
+   * client's widget. It stores nothing either: these links exist to be compared on a call, and the
+   * mascot a client actually gets is written by `mascot <key>` in step 18's thread.
+   */
+  mascot?: string | null;
 }
 
 /**
@@ -89,6 +98,7 @@ export async function ConciergeEmbed({
   category,
   magnetKey,
   preview,
+  mascot,
 }: ConciergeEmbedProps) {
   const token = preview?.trim() || null;
   const client = await embeddableClient(clientId, token !== null);
@@ -113,6 +123,7 @@ export async function ConciergeEmbed({
       data-client={client.slug}
       {...(category ? { "data-category": category } : {})}
       {...(magnetKey ? { "data-magnet": magnetKey } : {})}
+      {...(token && mascot ? { "data-mascot": mascot } : {})}
     />
   );
 }
