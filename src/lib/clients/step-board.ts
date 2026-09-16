@@ -55,10 +55,75 @@ export interface BoardResult {
 // Loading
 // ─────────────────────────────────────────────────────────────────────────────
 
-function channelId(): string | null {
-  const channel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
+/**
+ * clientId to its own channel, or null when it has none.
+ *
+ * ‼️ THE FALLBACK IS NOT CACHED, ONLY THE COLUMN. Caching the resolved channel would freeze the
+ * env var into the process too, and _probe-cascade.ts sets SLACK_CLIENT_ONBOARDING_CHANNEL at
+ * runtime to redirect itself at a scratch channel. A cache that captured that would send probe
+ * output to whatever the first call happened to read.
+ */
+const CHANNEL_CACHE = new Map<string, string | null>();
+
+/**
+ * Forget a client's cached channel. For provisioning, which sets the column after the process
+ * may already have asked, and for tests.
+ */
+export function forgetChannel(clientId: string): void {
+  CHANNEL_CACHE.delete(clientId);
+}
+
+/**
+ * Which channel this client's board lives in.
+ *
+ * ‼️ THE SINGLE CHOKEPOINT, AND IT TAKES A CLIENT NOW. Every board write in this file went
+ * through channelId(), which took no arguments and read one env var, so the board was one
+ * shared channel by construction rather than by choice.
+ *
+ * ‼️ THE FALLBACK IS WHAT MAKES BOTH OF MATTHEW'S ANSWERS TRUE AT ONCE. He asked to "move the
+ * board but also let us run manual workflows using onboarding if we want to". A client with an
+ * ops channel gets their board there; every client provisioned before this has ops_channel_id
+ * null and keeps working in #onboarding-srt-aeo, untouched, with every stored ts still
+ * addressable. Nothing is backfilled and nothing moves.
+ *
+ * ‼️ ops_channel_id IS WRITE-ONCE AND MUST STAY THAT WAY. slack_anchor_ts and slack_message_ts
+ * are stored bare, with no channel beside them, and chat.update against a ts in the wrong
+ * channel fails with message_not_found, which slackFetch reports as {ok:false} rather than
+ * throwing. Moving a client's channel after their board exists orphans all 41 anchors at once,
+ * silently. See the migration header.
+ */
+export async function channelFor(clientId: string): Promise<string | null> {
+  const fallback = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL ?? null;
+
+  // ‼️ MEMOISED, AND ops_channel_id BEING WRITE-ONCE IS WHAT MAKES THAT SAFE.
+  //
+  // This is called by every board write: postStepAnchor, refreshStepAnchor, markAnchor,
+  // notifyStep, refreshHeader, pinHeader, postStep and humanReplies. Opening a board touches
+  // forty-one steps through several of those each, so an uncached lookup adds a few hundred
+  // queries to one provisioning run to answer a question whose answer cannot change.
+  //
+  // A stale entry is impossible by construction rather than by luck: the column is set once, at
+  // provisioning, before any anchor exists, and the migration header explains why moving it
+  // afterwards is not a thing anybody may do. If that ever changes, this cache has to go with it.
+  const cached = CHANNEL_CACHE.get(clientId);
+  if (cached !== undefined) return cached ?? fallback;
+
+  const { data } = await supabaseAdmin
+    .from("clients")
+    .select("ops_channel_id")
+    .eq("id", clientId)
+    .maybeSingle();
+
+  const own = (data?.ops_channel_id as string | null) ?? null;
+  CHANNEL_CACHE.set(clientId, own);
+
+  const channel = own ?? fallback;
+
   if (!channel) {
-    console.error("[step-board] SLACK_CLIENT_ONBOARDING_CHANNEL unset, nothing posted");
+    console.error(
+      `[step-board] no channel for ${clientId}: no ops_channel_id and ` +
+        "SLACK_CLIENT_ONBOARDING_CHANNEL is unset. Nothing posted."
+    );
     return null;
   }
   return channel;
@@ -191,7 +256,7 @@ function anchorText(client: BoardClient, step: DeliveryStep, row: BoardRow | nul
  * than two. A loser deletes nothing: it returns the ts that won.
  */
 export async function postStepAnchor(clientId: string, stepKey: string): Promise<BoardResult> {
-  const channel = channelId();
+  const channel = await channelFor(clientId);
   if (!channel) return { ok: false, error: "no_channel_env" };
 
   const step = stepFor(stepKey);
@@ -227,12 +292,27 @@ export async function postStepAnchor(clientId: string, stepKey: string): Promise
     return { ok: true, ts: again?.slack_anchor_ts ?? res.ts };
   }
 
+  // The step appearing on the board is itself something that happened to this client.
+  const { logClientEvent } = await import("./client-events");
+  await logClientEvent({
+    clientId,
+    stepKey,
+    source: "system",
+    kind: "bot_post",
+    author: "Mission Control",
+    text: anchorText(client, step, row),
+    slackChannel: channel,
+    slackTs: res.ts,
+    slackThreadTs: res.ts,
+    payload: { anchor: true },
+  });
+
   return { ok: true, ts: res.ts };
 }
 
 /** Re-render an existing anchor in place. Never posts, so channel position is preserved. */
 export async function refreshStepAnchor(clientId: string, stepKey: string): Promise<BoardResult> {
-  const channel = channelId();
+  const channel = await channelFor(clientId);
   if (!channel) return { ok: false, error: "no_channel_env" };
 
   const step = stepFor(stepKey);
@@ -270,7 +350,7 @@ export async function markAnchor(
   stepKey: string,
   mark: string | null
 ): Promise<BoardResult> {
-  const channel = channelId();
+  const channel = await channelFor(clientId);
   if (!channel) return { ok: false, error: "no_channel_env" };
 
   const row = await loadRow(clientId, stepKey);
@@ -318,9 +398,15 @@ export async function notifyStep(
   clientId: string,
   stepKey: string,
   text: string,
-  blocks?: SlackBlock[]
+  blocks?: SlackBlock[],
+  /**
+   * What this post IS, for the client log. Almost everything through here is the system narrating
+   * its own work; the assistant answering a question in a step thread is the exception, and the
+   * two read very differently when somebody is going back over what happened.
+   */
+  kind: "bot_post" | "assistant_reply" = "bot_post"
 ): Promise<BoardResult> {
-  const channel = channelId();
+  const channel = await channelFor(clientId);
   if (!channel) return { ok: false, error: "no_channel_env" };
 
   const ts = await anchorTsFor(clientId, stepKey);
@@ -338,6 +424,22 @@ export async function notifyStep(
     console.error(`[step-board] reply failed on ${stepKey}:`, res?.error ?? "unknown");
     return { ok: false, error: res?.error ?? "post_failed" };
   }
+
+  // Every runner note, refusal, artifact line and assistant answer about a step goes through here,
+  // which is what makes this the right place to record them rather than fourteen call sites.
+  const { logClientEvent } = await import("./client-events");
+  await logClientEvent({
+    clientId,
+    stepKey,
+    source: "slack",
+    kind,
+    author: "Mission Control",
+    text,
+    slackChannel: channel,
+    slackTs: res.ts ?? null,
+    slackThreadTs: ts,
+  });
+
   return { ok: true, ts: res.ts };
 }
 
@@ -397,7 +499,14 @@ function phaseCounts(rows: BoardRow[]): string {
     .join(" · ");
 }
 
-function headerText(client: BoardClient, rows: BoardRow[]): string {
+/**
+ * ‼️ IT TAKES THE CHANNEL RATHER THAN READING THE ENV, and that is the second half of
+ * channelFor(). This function builds the "open it" permalink to the next step's anchor, and a
+ * permalink is (channel, ts). Reading SLACK_CLIENT_ONBOARDING_CHANNEL here while the anchor was
+ * posted in the client's own channel produces a link that resolves to nothing, or worse to a
+ * message at that timestamp in the shared channel, which belongs to a different client.
+ */
+function headerText(client: BoardClient, rows: BoardRow[], channel: string): string {
   const status = new Map(rows.map((r) => [r.step_key, r.status]));
   const anchors = new Map(rows.map((r) => [r.step_key, r.slack_anchor_ts]));
 
@@ -438,10 +547,9 @@ function headerText(client: BoardClient, rows: BoardRow[]): string {
   } else {
     const n = positionOf(next.key);
     const ts = anchors.get(next.key);
-    const channel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
     // Only link to a message that exists. A blocked step has no anchor yet, and a link to
     // nothing reads as a broken channel rather than as work that has not started.
-    const link = ts && channel ? ` <${slackThreadLink(channel, ts)}|open it>` : "";
+    const link = ts ? ` <${slackThreadLink(channel, ts)}|open it>` : "";
     lines.push(`Next: *${n}. ${next.label}*${link}`);
   }
 
@@ -454,11 +562,15 @@ function headerText(client: BoardClient, rows: BoardRow[]): string {
   // The MEASURE gate. The call is where we tell them what the engines are saying and agree who
   // we are going after, and both come out of the baseline. Held first, it is opinions instead
   // of screenshots and the question set gets picked against a guess at their ideal customer.
-  const measureDone = ["baseline_scan", "findings_doc"].every(isDone);
+  // ‼️ IT NAMED findings_doc UNTIL THE CALL PACK MERGE (2026-09-12), and re-pointing it at
+  // `call_sheet` would have been wrong: that step also waits on the nine drafted pages, the hub
+  // and the question set, so it would warn about the baseline over work that has nothing to do
+  // with it. These three are what findings_doc itself was built from.
+  const measureDone = ["baseline_scan", "presence_sweep_manual", "review_audit"].every(isDone);
   if (!measureDone && (isDone("call_booked") || isDone("call_held"))) {
     lines.push(
-      ":warning: The call is on the board but the baseline is not finished. Run the audit and " +
-        "write the findings up first, or the call is opinions instead of screenshots."
+      ":warning: The call is on the board but the baseline is not finished. Run the audit, the " +
+        "presence sweep and the review audit first, or the call is opinions instead of screenshots."
     );
   }
 
@@ -511,7 +623,7 @@ function headerText(client: BoardClient, rows: BoardRow[]): string {
  * were posted under it.
  */
 export async function refreshHeader(clientId: string): Promise<BoardResult> {
-  const channel = channelId();
+  const channel = await channelFor(clientId);
   if (!channel) return { ok: false, error: "no_channel_env" };
 
   const client = await loadBoardClient(clientId);
@@ -521,7 +633,7 @@ export async function refreshHeader(clientId: string): Promise<BoardResult> {
   const res = (await slack.updateMessage(
     channel,
     client.opsThreadTs,
-    headerText(client, rows)
+    headerText(client, rows, channel)
   )) as { ok?: boolean; error?: string };
 
   if (!res?.ok) {
@@ -541,7 +653,7 @@ export async function refreshHeader(clientId: string): Promise<BoardResult> {
  * `already_pinned` is success.
  */
 export async function pinHeader(clientId: string): Promise<BoardResult> {
-  const channel = channelId();
+  const channel = await channelFor(clientId);
   if (!channel) return { ok: false, error: "no_channel_env" };
 
   const client = await loadBoardClient(clientId);

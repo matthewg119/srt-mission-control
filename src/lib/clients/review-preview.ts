@@ -30,6 +30,7 @@ import { readTheme, activeTheme } from "@/lib/hub/theme";
 import { hostsFor } from "@/lib/hub/vercel-domains";
 import { notifyStep } from "./step-board";
 import { signOnboardingToken } from "./token";
+import { probeUrl } from "@/lib/concierge/host-check";
 import type { AutoResult } from "./artifacts/registry";
 
 /**
@@ -115,7 +116,20 @@ export function previewLinkLine(
 }
 
 
-export async function verifyReviewToolPreview(clientId: string): Promise<AutoResult> {
+/** Whether the review tool can honestly be called themed, and what the card should say about it. */
+export type ReviewToolReadiness =
+  | { ok: true; name: string; themed: boolean; themeNote: string; hostWarning: string }
+  | { ok: false; error: string };
+
+/**
+ * The theme check and the QR host warning, with NO output_ref write and NO Slack post.
+ *
+ * ‼️ SPLIT OUT OF verifyReviewToolPreview BECAUSE THE VERIFIER CALLED THAT, AND THAT POSTS. Every
+ * Re-check on this step re-posted the whole preview card into the thread, one copy per press. The
+ * runner still posts, once, through verifyReviewToolPreview below; the verifier calls this and
+ * observeReviewTool, and both of those only read.
+ */
+export async function reviewToolPreviewReady(clientId: string): Promise<ReviewToolReadiness> {
   const { data: client } = await supabaseAdmin
     .from("clients")
     .select("id, legal_name, dba_name, theme, subdomain, domain")
@@ -178,31 +192,141 @@ export async function verifyReviewToolPreview(clientId: string): Promise<AutoRes
     }
   }
 
-  const url = reviewPreviewUrl(clientId);
-  const name = (client.dba_name || client.legal_name || "this client") as string;
+  return {
+    ok: true,
+    name: (client.dba_name || client.legal_name || "this client") as string,
+    themed: Boolean(theme),
+    themeNote,
+    hostWarning,
+  };
+}
 
-  // The durable pointer. output_ref is free text by design — the step-engine migration calls
-  // it "a PDF, a report id, a URL" — so a URL is a first-class value here, not a workaround.
+/** What a request for the review tool actually got back. */
+export type ReviewToolObservation =
+  | { ok: true; url: string; status: number; via: "live" | "preview" }
+  | { ok: false; url: string | null; detail: string; via: "live" | "preview" };
+
+/** A full page render, often on a cold start, so longer than host-check's six seconds. */
+const PAGE_PROBE_TIMEOUT_MS = 10_000;
+
+/**
+ * Request the review tool, now, and report what came back.
+ *
+ * ‼️ THIS EXISTS BECAUSE THE TICK SAID "`<host>` answered a live request" AND NO REQUEST WAS MADE.
+ * The verifier checked a theme and a client_hosts row and then printed a sentence about the
+ * network. A line may describe only what was actually checked, so this makes the request.
+ *
+ * WHICH URL: the client's own reviews host once its CNAME is `verified` (observed by the
+ * resolver, never asserted; see dns-records.ts) AND an enabled client_hosts row names it, because
+ * then the live host is what a printed QR will open. Otherwise the tokenised preview link on
+ * Mission Control, which needs no DNS and is what the call is walked on. `via` says which, so no
+ * caller can present a preview request as a live one.
+ *
+ * ‼️ A VERIFIED CNAME WITH NO ENABLED HOST ROW FALLS TO THE PREVIEW RATHER THAN GUESSING A
+ * HOSTNAME. Middleware serves a hub host only from client_hosts, so a host composed from the
+ * domain would 404 for a reason that is not the review tool's.
+ *
+ * Read only: no output_ref write, no Slack post, no row touched. Safe to call on every Re-check.
+ */
+export async function observeReviewTool(clientId: string): Promise<ReviewToolObservation> {
+  const [dns, hosts] = await Promise.all([
+    supabaseAdmin
+      .from("client_dns_records")
+      .select("status")
+      .eq("client_id", clientId)
+      .eq("record_key", "cname_reviews")
+      .maybeSingle(),
+    supabaseAdmin
+      .from("client_hosts")
+      .select("host")
+      .eq("client_id", clientId)
+      .eq("kind", "reviews")
+      .eq("enabled", true)
+      .limit(1),
+  ]);
+
+  const cnameVerified = !dns.error && dns.data?.status === "verified";
+  const rawHost = hosts.error ? null : (hosts.data?.[0] as { host?: unknown } | undefined)?.host;
+  const liveHost = typeof rawHost === "string" ? rawHost.trim().toLowerCase() : "";
+
+  if (cnameVerified && liveHost) {
+    const url = `https://${liveHost}/`;
+    const seen = await probeUrl(url, PAGE_PROBE_TIMEOUT_MS);
+    return seen.ok
+      ? { ok: true, url, status: seen.status, via: "live" }
+      : { ok: false, url, detail: `\`${liveHost}\` ${seen.detail}`, via: "live" };
+  }
+
+  const url = clientPreviewUrl(clientId, "reviews");
+  if (!url) {
+    return {
+      ok: false,
+      url: null,
+      detail:
+        "no request was made: no preview link could be minted because CLIENT_LINK_SECRET is not " +
+        "set on this environment",
+      via: "preview",
+    };
+  }
+
+  const seen = await probeUrl(url, PAGE_PROBE_TIMEOUT_MS);
+  return seen.ok
+    ? { ok: true, url, status: seen.status, via: "preview" }
+    : {
+        ok: false,
+        url,
+        detail: `the preview link on \`${new URL(url).host}\` ${seen.detail}`,
+        via: "preview",
+      };
+}
+
+/**
+ * The RUNNER: the readiness check, then the durable pointer and the one card this step posts.
+ *
+ * Verifiers must not call this, because it posts. They call reviewToolPreviewReady and
+ * observeReviewTool instead.
+ */
+export async function verifyReviewToolPreview(clientId: string): Promise<AutoResult> {
+  const ready = await reviewToolPreviewReady(clientId);
+  if (!ready.ok) return { ok: false, error: ready.error };
+
+  const url = reviewPreviewUrl(clientId);
+
+  // The durable pointer. output_ref is free text by design (the step-engine migration calls
+  // it "a PDF, a report id, a URL"), so a URL is a first-class value here, not a workaround.
   await supabaseAdmin
     .from("client_delivery_steps")
     .update({ output_ref: url, updated_at: new Date().toISOString() })
     .eq("client_id", clientId)
     .eq("step_key", "review_tool_preview");
 
+  // ‼️ THE CARD SAYS WHAT A REQUEST GOT, NOT THAT THE TOOL IS LIVE. It used to print "Themed and
+  // live" having requested nothing. The host is named without the token: the shareable link is
+  // printed once, on its own line below, with its expiry.
+  const seen = await observeReviewTool(clientId);
+  const seenHost = seen.url ? new URL(seen.url).host : null;
+  const seenLine = seen.ok
+    ? `:white_check_mark: Requested just now: \`${seenHost}\` answered ${seen.status}` +
+      (seen.via === "live"
+        ? " on their own reviews host."
+        : " for the preview link. Their reviews CNAME is not verified yet, so that is what was checked.")
+    : `:warning: Requested just now and it did not answer: ${seen.detail}.`;
+
   await notifyStep(
     clientId,
     "review_tool_preview",
     [
-      `*Review tool preview — ${name}*`,
-      theme ? `Themed and live: ${url}` : `Live: ${url}`,
+      `*Review tool preview, ${ready.name}*`,
+      ready.themed ? `Themed: ${url}` : `Internal preview: ${url}`,
       ":lock: That one is internal: it is a /dashboard/ path, so a logged-out visitor gets a 404.",
       "",
       previewLinkLine(clientPreviewUrl(clientId, "reviews"), "The review tool"),
+      seenLine,
       "",
       `• ${PREVIEW_DEMO_RULE}`,
       `• ${PREVIEW_DISCARD_RULE}`,
-      themeNote.trim(),
-      hostWarning,
+      ready.themeNote.trim(),
+      ready.hostWarning,
     ]
       .filter(Boolean)
       .join("\n")

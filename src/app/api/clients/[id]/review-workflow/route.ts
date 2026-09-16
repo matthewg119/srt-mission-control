@@ -34,6 +34,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/db";
+import { REVIEW_URL_KEYS, parseReviewUrl, platformFromUrl, platformByKey } from "@/lib/hub/review-destinations";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -42,8 +43,18 @@ export const fetchCache = "force-no-store";
 const MODES = ["booking_system", "card_only"] as const;
 type Mode = (typeof MODES)[number];
 
-/** The destination keys destinationsFor() reads. Adding one here means adding one there. */
-const URL_KEYS = ["google_url", "realself_url"] as const;
+/**
+ * The destination keys destinationsFor() reads.
+ *
+ * ‼️ IT WAS TWO OF SIX, AND THAT WAS THE BUG. This list held google_url and realself_url while
+ * the funnel offered six platforms to choose from, so a client who picked Trustpilot, Yelp, BBB
+ * or Facebook had their answer recorded on review_destination_primary with no box anywhere that
+ * could accept the matching link. SRT Agency is one of them. The review tool then rendered no
+ * destination at all, correctly and silently, because absent beats wrong.
+ *
+ * Imported now rather than restated, from the one table all three surfaces share.
+ */
+const URL_KEYS = REVIEW_URL_KEYS;
 
 function textOrNull(raw: unknown): string | null | undefined {
   if (raw === undefined) return undefined;
@@ -53,28 +64,28 @@ function textOrNull(raw: unknown): string | null | undefined {
 }
 
 /**
- * A review destination URL, or a reason it was refused.
+ * A review destination URL for one platform's box, or a reason it was refused. A blank clears.
  *
- * `https` only. A review link is opened by a customer on her own phone from a page on the
- * client's domain, and an `http://` one would be a mixed-content warning at the exact moment we
- * are asking her to trust the thing. `javascript:` and `data:` are the reason this parses rather
- * than pattern-matching.
+ * The https rule lives in parseReviewUrl, shared with the Slack thread and modal. The host check is
+ * new (2026-09-16): a Yelp link pasted into the Trustpilot box used to be stored under the wrong
+ * button, and a customer tapping "Post on Trustpilot" would land on Yelp.
  */
-function reviewUrl(raw: unknown): { ok: true; value: string | null } | { ok: false; error: string } {
+function reviewUrl(raw: unknown, field: string): { ok: true; value: string | null } | { ok: false; error: string } {
   const s = textOrNull(raw);
-  if (s === undefined) return { ok: true, value: null };
-  if (s === null) return { ok: true, value: null };
+  if (s === undefined || s === null) return { ok: true, value: null };
 
-  let parsed: URL;
-  try {
-    parsed = new URL(s);
-  } catch {
-    return { ok: false, error: `"${s}" is not a URL. Paste the whole link, including https://.` };
+  const parsed = parseReviewUrl(s);
+  if (!parsed.ok) return parsed;
+
+  const box = REVIEW_URL_KEYS.includes(field) ? platformByKey(field.replace(/_url$/, "")) : null;
+  const byHost = platformFromUrl(parsed.value);
+  if (box && byHost && byHost.key !== box.key) {
+    return { ok: false, error: `"${s}" is a ${byHost.name} page, not ${box.name}.` };
   }
-  if (parsed.protocol !== "https:") {
-    return { ok: false, error: `"${s}" is not https. A review link opens on a customer's phone from the client's own domain.` };
+  if (box && !byHost) {
+    return { ok: false, error: `"${s}" is not a ${box.name} page. Paste a link like ${box.placeholder}` };
   }
-  return { ok: true, value: parsed.toString() };
+  return { ok: true, value: parsed.value };
 }
 
 export async function POST(
@@ -94,6 +105,22 @@ export async function POST(
     body = (await req.json()) as Record<string, unknown>;
   } catch {
     return NextResponse.json({ ok: false, error: "Bad request body." }, { status: 400 });
+  }
+
+  // One link from the review preview's paste box. The same writer the Slack thread and modal use,
+  // so it also names a primary when the client never chose one and logs a client event.
+  if (body.reviewLink && typeof body.reviewLink === "object") {
+    const link = body.reviewLink as { url?: unknown; platform?: unknown };
+    const { setReviewLink } = await import("@/lib/clients/review-link");
+    const res = await setReviewLink({
+      clientId,
+      url: String(link.url ?? ""),
+      platformKey: typeof link.platform === "string" && link.platform ? link.platform : null,
+      actor,
+      source: "dashboard",
+    });
+    if (!res.ok) return NextResponse.json({ ok: false, error: res.error }, { status: 400 });
+    return NextResponse.json({ ok: true, platform: res.platform.key, line: res.line });
   }
 
   const { data: client, error: readError } = await supabaseAdmin
@@ -138,7 +165,7 @@ export async function POST(
 
   for (const key of URL_KEYS) {
     if (body[key] === undefined) continue;
-    const parsed = reviewUrl(body[key]);
+    const parsed = reviewUrl(body[key], key);
     if (!parsed.ok) {
       return NextResponse.json({ ok: false, error: parsed.error }, { status: 400 });
     }

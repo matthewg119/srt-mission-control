@@ -28,7 +28,10 @@
 // number that moves on its own makes the day-30 comparison meaningless.
 
 import { supabaseAdmin } from "@/lib/db";
+import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
+import { stepNumber } from "@/config/delivery-steps";
 import { commercialIntent, isObjection, verticalFor } from "../harvest";
+import { isAskable, kindOfRow } from "../phrase-kind";
 import { applySubstitutions, substitutionsFor } from "../question-sets";
 import { confirmedAvatarFor } from "../avatars";
 import {
@@ -52,6 +55,8 @@ import { deliverArtifact } from "./deliver";
 // itself reads, so a channel move cannot leave this pointing at the old one.
 import { pageStudioHint } from "../page-studio";
 import type { AutoResult } from "./registry";
+import { filterPhrases, droppedLine, normalizePhrase, namesOffer, offerVocabulary } from "../phrase-quality";
+import { loadOffer, effectiveTreatment } from "../offers";
 
 /** Runner v3 asks for 100 for the call. It is the ceiling on what gets printed, not a target. */
 export const CANDIDATE_CAP = 100;
@@ -184,6 +189,28 @@ export function scoreCandidate(args: {
   return Math.round(score * 100) / 100;
 }
 
+/**
+ * How much naming the offer is worth.
+ *
+ * Deliberately smaller than the visibility gap (15) and larger than an objection (12) is not:
+ * it sits between "their own reviews say it" (8) and "it is an objection" (12), so a phrase that
+ * names the offer sorts above an equivalent one that does not, and an objection about something
+ * else still beats a bland phrase that happens to contain the treatment name. A filter would
+ * have thrown the objections away entirely.
+ *
+ * ‼️ ONE DEFINITION, READ BY BOTH RANKINGS. keyword-set.ts had this as a private constant and
+ * this file ignored the offer entirely, so the keyword list and the page backlog ranked the same
+ * phrase differently. Both call offerBonus() now.
+ */
+export const OFFER_BONUS = 10;
+
+export function offerBonus(phrase: string, treatment: string | null): number {
+  if (!treatment) return 0;
+  // One definition of "names the offer" (namesOffer in phrase-quality.ts), on word boundaries, so
+  // this bonus and the keyword step's relevance test cannot disagree about the same phrase.
+  return namesOffer(phrase, offerVocabulary({ treatment })) ? OFFER_BONUS : 0;
+}
+
 /** Which of this client's audit questions did an engine actually name them for. */
 async function namedByQuestion(clientId: string): Promise<Map<string, boolean>> {
   const map = new Map<string, boolean>();
@@ -198,7 +225,14 @@ async function namedByQuestion(clientId: string): Promise<Map<string, boolean>> 
   // Same two-rung join the rest of the client code uses. audit_reports.client_id is the better
   // key and is deliberately not used: docs/2026-08-19-artifact-plumbing.sql adds it, and
   // PostgREST fails the WHOLE query on one unknown column rather than ignoring it.
-  let q = supabaseAdmin.from("audit_reports").select("id").order("created_at", { ascending: false }).limit(1);
+  // The `website ilike` rung below can match a supplied run, which carries no contact_id but does
+  // carry the client's domain, so the filter goes on before either rung. See run-labels.ts.
+  let q = supabaseAdmin
+    .from("audit_reports")
+    .select("id")
+    .or(BASELINE_ONLY)
+    .order("created_at", { ascending: false })
+    .limit(1);
   if (client.contact_id) q = q.eq("contact_id", client.contact_id as string);
   else if (client.domain) q = q.ilike("website", `%${client.domain as string}%`);
   else return map;
@@ -405,14 +439,31 @@ export async function generatePageCandidates(clientId: string): Promise<AutoResu
 
   const { data: bank } = await supabaseAdmin
     .from("question_bank")
-    .select("id, phrase, frequency_score, commercial_intent_score, objection_phrase")
+    .select("id, phrase, source, kind, frequency_score, commercial_intent_score, objection_phrase")
     .eq("vertical", vertical)
+    .is("excluded_at", null)
     .order("commercial_intent_score", { ascending: false })
     .order("frequency_score", { ascending: false })
-    .limit(400);
+    .limit(500);
+
+  // ‼️ SAME FILTER AS STEP 12, AND THE LIMIT MISMATCH IS FIXED WITH IT. This read was capped at
+  // 400 while custom-question-set.ts read the same table at 500, so on a 451-row vertical the
+  // tracked question set saw the whole corpus and the page candidates silently scored only the
+  // top 400, while both files told the reader in Slack that they work off the same corpus. They
+  // do now.
+  //
+  // The quality filter is the larger half: two thirds of these rows are extraction debris rather
+  // than anything anybody said. Filtered on read, nothing deleted. See phrase-quality.ts.
+  const bankFiltered = filterPhrases(bank ?? [], (r) => String(r.phrase ?? ""));
 
   const named = await namedByQuestion(clientId);
   const reviewText = await ownReviewText(clientId);
+
+  // ‼️ THE OFFER NOW REACHES THIS RANKING. It never did: the locked offer re-ranked the keyword
+  // list and left the page backlog aimed at the whole vertical, so the pages somebody picked
+  // from were ranked without the one decision the whole build is aimed at. Locked outranks
+  // proposed through effectiveTreatment, same as everywhere else.
+  const treatment = effectiveTreatment(await loadOffer(clientId)).value;
 
   const seen = new Set<string>();
   const scored: ScoredCandidate[] = [];
@@ -420,9 +471,11 @@ export async function generatePageCandidates(clientId: string): Promise<AutoResu
   // through, rather than inventing a second formula for the ideas the PDF prints beside them.
   const terms = new Map<string, ScoringInput>();
 
-  for (const row of bank ?? []) {
+  for (const row of bankFiltered.kept) {
     const phrase = ((row.phrase as string) ?? "").trim();
     if (!phrase) continue;
+    // A heading, a vendor's copy or a report's prose is not a page anybody is looking for.
+    if (!isAskable(kindOfRow(row))) continue;
 
     // Substituted per tenant, through the SAME chain the tracked twenty use, so a candidate
     // and a tracked question never disagree about what city this client is in.
@@ -450,7 +503,7 @@ export async function generatePageCandidates(clientId: string): Promise<AutoResu
       theme: themeOf(question),
       origin: "harvested",
       derivedFrom: null,
-      score: scoreCandidate({ ...input, currentlyNamed }),
+      score: Math.round((scoreCandidate({ ...input, currentlyNamed }) + offerBonus(question, treatment)) * 100) / 100,
     });
   }
 
@@ -467,7 +520,7 @@ export async function generatePageCandidates(clientId: string): Promise<AutoResu
       ok: false,
       error:
         `No harvested phrases for vertical "${vertical}", so there is nothing to score. ` +
-        `The avatar phrase harvest (step 10) fills question_bank, and it either has not run ` +
+        `The avatar phrase harvest (step ${stepNumber("avatar_harvest")}) fills question_bank, and it either has not run ` +
         `or came back empty. Nothing was written.`,
     };
   }
@@ -493,6 +546,40 @@ export async function generatePageCandidates(clientId: string): Promise<AutoResu
   );
 
   if (writeError) return { ok: false, error: `Writing page_candidates failed: ${writeError.message}` };
+
+  // ── Prune what this run did not produce ───────────────────────────────────
+  //
+  // ‼️ AN UPSERT NEVER DELETES, AND THAT IS HOW THE STUDIO MENU FILLED WITH DEBRIS. The quality
+  // filter arrived on 2026-09-08 and every run since has scored clean phrases, but the rows
+  // written before it kept their scores forever: "Why: Vendor lock-in fear", a lone quote mark,
+  // a citation marker, all still ranked at the top of SRT's menu on 2026-09-11. Re-running this
+  // step could never fix it. Now the table is exactly what the last run produced.
+  //
+  // Read then delete by id, rather than a NOT IN over question text: the questions carry quotes,
+  // commas and brackets, and PostgREST's `in` list has to quote every one of them correctly.
+  // A row somebody selected for a month is kept, since that is a decision rather than a reading.
+  // Nothing references page_candidates by id: client_pages and page_plan store the question
+  // verbatim for exactly this reason.
+  const produced = new Set([...top, ...derived].map((c) => c.question));
+  const { data: existingRows } = await supabaseAdmin
+    .from("page_candidates")
+    .select("id, question, selected_for_month")
+    .eq("client_id", clientId);
+
+  const stale = (existingRows ?? [])
+    .filter((r) => !produced.has(r.question as string) && r.selected_for_month == null)
+    .map((r) => r.id as string);
+
+  let pruned = 0;
+  for (let i = 0; i < stale.length; i += 100) {
+    const chunk = stale.slice(i, i + 100);
+    const { error: pruneError } = await supabaseAdmin.from("page_candidates").delete().in("id", chunk);
+    if (pruneError) {
+      console.error(`[page-candidates] prune failed: ${pruneError.message}`);
+      break;
+    }
+    pruned += chunk.length;
+  }
 
   // ── The document ──────────────────────────────────────────────────────────
   const name = (client.dba_name || client.legal_name || "Client") as string;
@@ -556,7 +643,7 @@ export async function generatePageCandidates(clientId: string): Promise<AutoResu
     (confirmedAvatar
       ? `This build is aimed at one confirmed customer, ${confirmedAvatar.label}, so an avatar ` +
         "tag on these rows would read the same on every one of them and separate nothing. "
-      : "No avatar has been confirmed yet, which is delivery step 8. ") +
+      : `No avatar has been confirmed yet, which is delivery step ${stepNumber("avatar_confirmed")}. `) +
       "Every phrase below was harvested against the vertical rather than tagged per avatar, so " +
       "theme is the axis that actually tells one row from another. It is derived from the shape " +
       "of the question itself.",
@@ -649,7 +736,8 @@ export async function generatePageCandidates(clientId: string): Promise<AutoResu
       // are mode:"auto", so postReadySteps skips them and instructionsFor is never reached —
       // this note is the whole surface either of them has. It is where the ranked list stops
       // being a PDF and starts being pages.
-      `*This is step 13, the PUBLISHING backlog: what is worth writing.* Step 12's question set ` +
+      `*This is step ${stepNumber("page_candidates")}, the PUBLISHING backlog: what is worth writing.* ` +
+      `Step ${stepNumber("custom_question_set")}'s question set ` +
       `is the MEASUREMENT set, frozen at Day 0, and nothing is ever published from it.\n` +
       `To turn any of these into a draft, post \`page ${name}\` in ${pageStudioHint()}. ` +
       `Pick a number, then type or send a voice note and your words go into the page verbatim.`,
@@ -660,6 +748,9 @@ export async function generatePageCandidates(clientId: string): Promise<AutoResu
   return {
     ok: true,
     docId: delivered.docId,
-    note: `Page candidates scored: ${top.length} ranked${unmeasured ? `, ${unmeasured} of them unmeasured` : ""}.`,
+    note:
+      `Page candidates scored: ${top.length} ranked${unmeasured ? `, ${unmeasured} of them unmeasured` : ""}` +
+      `${treatment ? `, aimed at ${treatment}` : ""}` +
+      `${pruned ? `. ${pruned} stale row${pruned === 1 ? "" : "s"} from earlier runs removed` : ""}.`,
   };
 }

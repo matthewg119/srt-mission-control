@@ -90,9 +90,9 @@
 //     decision someone makes on purpose rather than a sentence a model wrote.
 
 import { callClaudeJSON } from "@/lib/claude-calls";
+import { bookingUrlForReport } from "@/lib/onboarding2-link";
 import {
   ADS_ACCELERATOR,
-  BOOKING_LINK,
   DEFAULT_ANSWER_LINE,
   FAST_WINDOW,
   FOUNDING_BONUS,
@@ -731,11 +731,6 @@ export async function buildLoomScript(
   if (!name) {
     say(`NAME: not known. Say their name in the first line, or reply "loom <name>" and rebuild.`);
   }
-  if (!BOOKING_LINK) {
-    say(
-      `NO BOOKING LINK SET. The close below sends them to the onboarding call. Set SRT_ONBOARDING_CALL_URL and rebuild this script, or that sentence points at a page that does not exist.`
-    );
-  }
   if (!QUALIFIED_INQUIRY_DEF) {
     say(
       `NO DEFINITION OF "QUALIFIED AI-SOURCED INQUIRY" IS SET. That phrase is what starts the billing, so you and the client will read it differently on day 31. Set QUALIFIED_INQUIRY_DEF in config/pitch.ts, or be ready to define it on the onboarding call.`
@@ -1060,20 +1055,27 @@ export async function buildLoomScript(
   // 13. The CTA. The close is the onboarding call, not a payment page: nothing is charged up front
   // under this offer, so a checkout link here would contradict the free period two beats earlier.
   say(...rule("THE CLOSE"));
-  if (BOOKING_LINK) {
+  // ‼️ THE REPORT'S OWN GET STARTED BUTTON, NOT SRT_ONBOARDING_CALL_URL (2026-09-15). A booking made
+  // through it provisions the client and opens the board tied to this report; a bare Calendly page
+  // reached nothing. It always exists, so the "no link" branch below is unreachable and kept only so
+  // the shape of the close stays readable.
+  const bookingUrl = bookingUrlForReport(report);
+  if (bookingUrl) {
     say(
       `So here is what happens next.`,
       "",
-      // ‼️ IT NAMES THE BUTTON ON THEIR OWN REPORT, NOT A BARE BOOKING PAGE.
-      // The report's Get Started button opens /onboarding2, which asks which of the three plans
-      // they want BEFORE it books anything, so the call starts with the offer already known and
-      // the lead is labelled from the first row written. A booking made on a bare Calendly page
-      // reaches none of that: no offer, no client, no board.
-      `Scroll to the bottom of the report I sent you and press Get Started.`,
+      // ‼️ IT NAMES THE BUTTON ON THEIR OWN REPORT, NOT A BARE BOOKING PAGE. That is main's
+      // wording and it stays: the Get Started button opens /onboarding2, and a booking made on a
+      // bare Calendly page reaches none of this app, so there is no offer, no client and no board.
+      `The link to book the onboarding call is the Get Started button at the bottom of your report.`,
       "",
-      `It will ask which of those three you want, then find you a time.`,
+      // ‼️ "WHICH ONE", NOT "WHICH OF THE THREE". The picker shows TWO cards: the free Review
+      // Engine and the guaranteed plan. Month to month is still sold, on /pricing and on the call,
+      // but it is not a door on that screen, and a script that counted the options out loud would
+      // be wrong the moment one is added or removed.
+      `It will ask which one you want, then find you a time.`,
       "",
-      screen(`the Get Started button at the bottom of the report`),
+      screen(`the report's Get Started button, ${bookingUrl}`),
       "",
       `We write the first few pages after the onboarding call, but we will have a few examples ready for you before then.`,
       "",

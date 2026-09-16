@@ -25,6 +25,8 @@
 // `freezeUniversalV1()` below are untouched by it.
 
 import { supabaseAdmin } from "@/lib/db";
+import { ADOPTED_PROSPECT_AUDIT, BASELINE_ONLY, FIRED_FOR_CLIENT } from "@/lib/audit-engine/run-labels";
+import { loadOffer, usableTreatment } from "./offers";
 
 export const UNIVERSAL_V1_MED_SPA: readonly string[] = [
   "What's the best med spa near me for [Botox / filler / laser]?",
@@ -176,10 +178,23 @@ function keysUsedIn(text: string): Set<keyof Substitutions> {
  *   intake              the client said it: services.primary_service, ideal_patient.highest_margin,
  *                       clients.city / .state, the name on the row
  *   selected_competitor a competitor CONFIRMED on the board at step 7, which outranks intake
+ *   locked_offer        the one offer AGREED ON THE CALL at offer_locked, which outranks intake
  *   fallback            MATERIALIZATION_FALLBACKS. A fact about the med spa twenty, nothing else
  *   missing             nothing on the record fills it
+ *
+ * ‼️ `locked_offer` IS ITS OWN VALUE RATHER THAN BORROWING `intake`, AND THAT IS THE POINT OF
+ * HAVING THIS UNION AT ALL. The call sheet prints these words beside the value so a person can
+ * see where each one came from and correct the right ones. "From intake" means the client typed
+ * it into a form before anybody spoke to them; a locked offer is what they said out loud when
+ * asked directly. Collapsing the two would make the artifact whose whole job is provenance
+ * unable to tell a form answer from a decision.
  */
-export type SubSource = "intake" | "selected_competitor" | "fallback" | "missing";
+export type SubSource =
+  | "intake"
+  | "selected_competitor"
+  | "locked_offer"
+  | "fallback"
+  | "missing";
 
 export type SubProvenance = Record<keyof Substitutions, SubSource>;
 
@@ -224,16 +239,35 @@ function firstLine(raw: unknown): string {
 export async function substitutionsWithProvenance(
   clientId: string
 ): Promise<SubstitutionsResolved | null> {
-  const { data: client } = await supabaseAdmin
+  const { data: client, error } = await supabaseAdmin
     .from("clients")
+    // ‼️ `offer` LEFT THIS SELECT ON 2026-09-15. The offer lives in client_offers under the primary
+    // audience and is read through loadOffer below; clients.offer is a deprecated mirror nothing
+    // outside offers.ts may read.
     .select("city, state, services, ideal_patient, dba_name, legal_name")
     .eq("id", clientId)
     .maybeSingle();
+
+  // ‼️ A MISS AND A FAILURE ARE DIFFERENT ANSWERS AND COLLAPSING THEM IS THE EXPENSIVE MISTAKE.
+  // resolveHost() carries this warning already and it is the same shape here. Every caller of
+  // this function turns a null into "Client not found while reading substitutions", which is a
+  // LIE when the client exists and the query was refused: measured 2026-09-08, step 12 reported
+  // a missing client because the offer column had not been migrated yet, which sends somebody to
+  // look at the client record instead of at the migration. The error is named now.
+  if (error) {
+    console.error(
+      `[question-sets] substitutions query failed for ${clientId}: ${error.message}. ` +
+        `If it names a column, that migration has not been run: PostgREST fails the whole select ` +
+        `on one unknown name.`
+    );
+    return null;
+  }
 
   if (!client) return null;
 
   const services = (client.services ?? {}) as Record<string, unknown>;
   const ideal = (client.ideal_patient ?? {}) as Record<string, string>;
+  const offer = await loadOffer(clientId);
 
   const city = ((client.city as string | null) ?? "").trim();
   const state = ((client.state as string | null) ?? "").trim();
@@ -247,11 +281,38 @@ export async function substitutionsWithProvenance(
   //
   // `highest_margin` still wins, and it should: the intake question is "which service is your
   // highest margin", which is exactly what a tracked buying question should be about.
-  const treatmentPrimary = (
-    ideal.highest_margin ||
-    firstLine(services.services_list) ||
-    String(services.primary_service ?? "")
-  ).trim();
+  // ‼️ THE LOCKED OFFER FIRST, AND `primary_treatment` WAS MISSING FROM THIS CHAIN ENTIRELY.
+  //
+  // Two separate faults, and the second one is worse than the reader-with-no-writer above.
+  //
+  // `services.primary_treatment` is REQUIRED at intake and its config comment
+  // (src/config/client-intake.ts:124-131) says in capitals that it is "THE ONE FIELD THE WHOLE
+  // BUILD IS AIMED AT ... what we aim the pages, the posts and the free offer at". It appeared at
+  // NO position in this chain. Only deep-research-run.ts ever read it. So the field the whole
+  // build is aimed at reached the research prompt and reached nothing else: not the tracked
+  // question set, not the page candidates, not [treatment], not the magnet ladder. A writer with
+  // almost no reader, which is the same class as the bug the comment below records and harder to
+  // see, because nothing is null and nothing errors, it is just aimed at the wrong thing.
+  //
+  // And the LOCKED OFFER now outranks all of it. `highest_margin` is a good answer to a different
+  // question, and until somebody hears the answer out loud on the call, every one of these is a
+  // reading of a form. clients.offer.treatment is the only value a person put there deliberately.
+  // See src/lib/clients/offers.ts and delivery step offer_locked.
+  //
+  // `primary_service` HAS NEVER EXISTED and stays at the end of the chain: it costs nothing and
+  // removing a key is how a row nobody knew about goes blank.
+  //
+  // ‼️ EVERY LINK IS usableTreatment, AND THAT IS WHAT STOPS [treatment] BECOMING "any".
+  // SRT's highest_margin is the string "any". Without this the substitution resolves to it and
+  // every tracked question reads "the best any in Greensboro". Same guard usableCompetitorName
+  // applies one field over, and for the same reason: a required field does not make an answer.
+  const treatmentPrimary =
+    usableTreatment(offer.treatment) ??
+    usableTreatment(services.primary_treatment) ??
+    usableTreatment(ideal.highest_margin) ??
+    usableTreatment(firstLine(services.services_list)) ??
+    usableTreatment(services.primary_service) ??
+    "";
   const clientName = (((client.dba_name || client.legal_name) as string | null) ?? "").trim();
 
   // ‼️ THE CONFIRMED COMPETITOR OUTRANKS THE TYPED ONE. Step 7 is where somebody looked at who
@@ -276,7 +337,14 @@ export async function substitutionsWithProvenance(
     provenance: {
       city: city ? "intake" : "missing",
       state: state ? "intake" : "missing",
-      treatmentPrimary: treatmentPrimary ? "intake" : "missing",
+      // A locked offer is not "intake": somebody decided it out loud on the call, and the call
+      // sheet prints this word beside the value. Calling a decision an intake answer would make
+      // the two indistinguishable in the one artifact whose job is to say where things came from.
+      treatmentPrimary: offer.treatment
+        ? "locked_offer"
+        : treatmentPrimary
+          ? "intake"
+          : "missing",
       clientName: clientName ? "intake" : "missing",
       competitorIntake1: picked ? "selected_competitor" : typed ? "intake" : "missing",
       concern: "fallback",
@@ -347,13 +415,46 @@ const RESIDUAL_PLACEHOLDER = /\[[^\]]+\]/;
  * dropped question is honest and the fidelity note names it; a question materialized with the
  * wrong noun is read out loud to a client who then stops believing the rest of the document.
  */
+/**
+ * Does this client use the shipped med spa universal set?
+ *
+ * ‼️ THIS REPLACES THREE `vertical === "med_spa"` TESTS THAT COULD NEVER FIRE FOR A REAL CLIENT.
+ * classify.ts writes clients.vertical_slug as KEBAB-CASE free text and its own prompt instructs it
+ * never to emit snake_case, so `med_spa` is a spelling nothing in the pipeline produces. A genuine
+ * med spa classified `med-spa` missed all three branches and was handed a universal set derived
+ * from its own audit and then FROZEN forever under universal_v1@med-spa, which every later med spa
+ * in that spelling then inherited.
+ *
+ * ‼️ THE PRESET WINS WHEN THERE IS ONE, BECAUSE IT IS A VALUE A PERSON WROTE ON A ROW rather than
+ * a string a classifier had to happen to guess. The spelling list is the fallback for a client
+ * with no audience row yet, and it lists what classify.ts actually emits. Normalising at
+ * adoptAuditClassification, the single writer, is the real fix and is owed separately;
+ * PRESET_BY_VERTICAL carries the same note for the same reason.
+ */
+export const MED_SPA_QUESTION_SET = "universal_v1_med_spa";
+
+const MED_SPA_SPELLINGS: ReadonlySet<string> = new Set([
+  "med_spa",
+  "med-spa",
+  "medspa",
+  "medical-spa",
+  "aesthetics-clinic",
+]);
+
+export function usesMedSpaUniversalSet(opts: {
+  vertical: string;
+  questionSetPreset?: string | null;
+}): boolean {
+  if (opts.questionSetPreset) return opts.questionSetPreset === MED_SPA_QUESTION_SET;
+  return MED_SPA_SPELLINGS.has((opts.vertical ?? "").trim().toLowerCase());
+}
 export function materializeSet(
   questions: readonly string[],
   s: Substitutions,
   provenance: SubProvenance,
-  opts: { vertical: string }
+  opts: { vertical: string; questionSetPreset?: string | null }
 ): MaterializedSet {
-  const isMedSpa = opts.vertical === "med_spa";
+  const isMedSpa = usesMedSpaUniversalSet(opts);
   const out: MaterializedQuestion[] = [];
   const dropped: DroppedQuestion[] = [];
   const fallbacksUsed = new Set<string>();
@@ -408,9 +509,14 @@ export function materializeSet(
     // fallback or from nothing may never carry that label. Questions 1 and 2 of the universal
     // twenty are the primary service and the city, which is why they are normally the ones that
     // read `from intake` — printed so the client corrects the right ones on the call.
+    // A locked offer counts as the client supplying it, and more strongly than intake does: it
+    // is the answer they gave when asked directly rather than a box they filled in beforehand.
     const sources = [...used].map((k) => provenance[k]);
     const origin: QuestionOrigin =
-      sources.length > 0 && sources.every((x) => x === "intake" || x === "selected_competitor")
+      sources.length > 0 &&
+      sources.every(
+        (x) => x === "intake" || x === "selected_competitor" || x === "locked_offer"
+      )
         ? "intake"
         : "universal";
 
@@ -481,11 +587,11 @@ export function composeTrackedSet(
   universal: readonly string[],
   s: Substitutions,
   provenance: SubProvenance,
-  opts: { vertical: string; size?: number }
+  opts: { vertical: string; questionSetPreset?: string | null; size?: number }
 ): MaterializedSet {
   const size = opts.size ?? 20;
 
-  if (opts.vertical === "med_spa") {
+  if (usesMedSpaUniversalSet(opts)) {
     return materializeSet(universal, s, provenance, opts);
   }
 
@@ -561,7 +667,7 @@ export async function universalSetFor(clientId: string): Promise<UniversalSetRes
   const vertical = resolved.vertical;
   const version = `universal_v1@${vertical}`;
 
-  if (vertical === "med_spa") {
+  if (usesMedSpaUniversalSet({ vertical })) {
     // ‼️ THIS IS freezeUniversalV1's FIRST CALLER. It has existed since the measurement migration
     // and nothing has ever invoked it, so question_set_versions is empty and every fidelity
     // footer has printed "question set not frozen". A2 §6 is explicit that a code constant alone
@@ -607,13 +713,30 @@ export async function universalSetFor(clientId: string): Promise<UniversalSetRes
   }
 
   // Nothing frozen for this vertical yet. Derive it from THIS client's own audit.
-  const { data: report } = await supabaseAdmin
-    .from("audit_reports")
-    .select("id, prompts")
-    .eq("client_id", clientId)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const linkedReport = (source: string) =>
+    supabaseAdmin
+      .from("audit_reports")
+      .select("id, prompts")
+      .eq("client_id", clientId)
+      // ‼️ THE BASELINE, AND THIS FILTER IS THE MOST LOAD-BEARING ONE IN THE SET. The tracked
+      // universal set for a new vertical is DERIVED from this report and then FROZEN forever. A
+      // Photograph II asks universal_v1 plus custom_v1, so without this the first Day 0 run would
+      // become the source of the very set it was measuring, and every later client in the vertical
+      // would inherit it. See run-labels.ts.
+      .or(BASELINE_ONLY)
+      .eq("client_link_source", source)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+  // ‼️ A RUN FIRED FOR THE CLIENT FIRST, THEN THE AUDIT THEY BOOKED FROM (2026-09-15). This used to
+  // refuse adopted audits, when the 2026-09-14 host-match backfill was the only thing that adopted
+  // them and a match by host could be somebody else's business. Adoption now keys on the exact report
+  // the client clicked Get Started on, and onboarding fires no scan of its own, so for a new vertical
+  // that audit is the only one there is. It is the same pipeline and the same twenty prompts a
+  // Photograph I would have asked. Refusing it would stall every non-med-spa client at the question set.
+  const fired = await linkedReport(FIRED_FOR_CLIENT);
+  const { data: report } = fired.data ? fired : await linkedReport(ADOPTED_PROSPECT_AUDIT);
 
   if (!report) {
     return {
@@ -706,18 +829,47 @@ export async function universalSetFor(clientId: string): Promise<UniversalSetRes
  * edited in place" is the entire contract of a frozen set. A change is a new version.
  */
 export async function freezeUniversalV1(): Promise<void> {
+  const res = await freezeQuestionSet({
+    version: "universal_v1@med_spa",
+    vertical: "med_spa",
+    questions: UNIVERSAL_V1_MED_SPA,
+    note:
+      "The 20 Questions PDF verbatim (A2 D-P15). The fallback set in " +
+      "docs/specs/SRT-Question-Sets-v1.md is retired and must not seed this.",
+  });
+
+  if (!res.ok) throw new Error(`freezing universal_v1 failed: ${res.error}`);
+}
+
+/**
+ * THE one writer of question_set_versions.
+ *
+ * ‼️ docs/2026-08-19-harvest.sql CALLS A SECOND WRITER OF THIS TABLE A BUILD STOP, and the rule it
+ * is really protecting is that a frozen set is never EDITED: "harvest -> custom question set ->
+ * approved on the call -> Day 0 => question_set_versions". A row may be written when a set is
+ * frozen and never again, which is exactly what ignoreDuplicates enforces here. So the answer to
+ * two callers needing to freeze something is one function they both go through, not two upserts.
+ *
+ * The callers: freezeUniversalV1 (the med spa twenty), universalSetFor (a vertical's first client
+ * derives and freezes its own), and photograph.ts (custom_v1 at the moment it is measured). The
+ * harvest still writes nothing here, and must not.
+ */
+export async function freezeQuestionSet(args: {
+  version: string;
+  vertical: string;
+  questions: readonly string[];
+  note: string;
+}): Promise<{ ok: boolean; error?: string }> {
   const { error } = await supabaseAdmin.from("question_set_versions").upsert(
     {
-      version: "universal_v1@med_spa",
-      vertical: "med_spa",
-      questions: UNIVERSAL_V1_MED_SPA,
+      version: args.version,
+      vertical: args.vertical,
+      questions: args.questions,
       materialization: "materialization_v1",
-      note:
-        "The 20 Questions PDF verbatim (A2 D-P15). The fallback set in " +
-        "docs/specs/SRT-Question-Sets-v1.md is retired and must not seed this.",
+      note: args.note,
     },
     { onConflict: "version", ignoreDuplicates: true }
   );
 
-  if (error) throw new Error(`freezing universal_v1 failed: ${error.message}`);
+  return error ? { ok: false, error: error.message } : { ok: true };
 }

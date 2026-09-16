@@ -7,7 +7,8 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { resolveHost } from "@/lib/hub/resolve";
-import { listPublished } from "@/lib/hub/pages";
+import { listPublished, planLinkRows } from "@/lib/hub/pages";
+import { orderIndexPages } from "@/lib/hub/plan-links";
 import { HubIndexBody } from "@/components/hub/hub-bodies";
 import { ConciergeEmbed } from "@/lib/concierge/embed";
 import { ReviewTool } from "./reviews/review-tool";
@@ -59,7 +60,9 @@ export default async function HubIndex({ params }: Props) {
     return <ReviewTool client={client} />;
   }
 
-  const pages = await listPublished(client.id);
+  // Pillar first. planLinkRows returns [] until the plan has roles, which leaves the order alone.
+  const [published, planRows] = await Promise.all([listPublished(client.id), planLinkRows(client.id)]);
+  const pages = orderIndexPages(published, planRows);
 
   return (
     <>

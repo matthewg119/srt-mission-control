@@ -12,6 +12,7 @@
 // front of your customers instead of you".
 
 import { supabaseAdmin } from "@/lib/db";
+import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { isExcludedFromShortlist } from "@/config/presence-platforms";
 import { normalizeNameForCompare, stripEntitySuffix } from "./nap-compare";
 
@@ -113,6 +114,9 @@ export async function buildShortlist(
     .from("audit_reports")
     .select("id")
     .eq("client_id", clientId)
+    // The shortlist is built from who the engines named INSTEAD of this client at the baseline.
+    // A supplied run measures the approved keywords, which is a different question. See run-labels.ts.
+    .or(BASELINE_ONLY)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();

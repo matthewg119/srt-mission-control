@@ -27,6 +27,17 @@ import {
 } from "@/lib/clients/page-evidence";
 import { magnetByKey, type LeadMagnet } from "@/lib/concierge/magnets";
 import { audienceForClient } from "@/lib/concierge/for-client";
+import type { PageOutline, OutlineGap, OutlineSection } from "@/lib/hub/pages";
+import {
+  DRAFT_STORY_RULES,
+  OUTLINE_STORY_RULE,
+  draftStoryLines,
+  outlineStoryLines,
+  resolveStories,
+  storyFaults,
+  EMPTY_STORY_CONTEXT,
+  type StoryContext,
+} from "@/lib/hub/page-stories";
 
 /**
  * One assertion the page makes, and what it rests on.
@@ -77,7 +88,35 @@ interface Grounding {
    * which question to leave standing at the end.
    */
   magnet: LeadMagnet | null;
+  /**
+   * The approved skeleton, when the page was outlined first. Its headings become the page's
+   * subheadings and its gaps were answered as evidence, so `draft` fills a structure a person
+   * already agreed to instead of inventing one.
+   */
+  outline: PageOutline | null;
+  /**
+   * The buyer and the necessary beliefs the outline's stories install. Loaded only when the outline
+   * carries placed stories, so a page drafted without one costs no extra reads.
+   */
+  stories: StoryContext | null;
 }
+
+/**
+ * How long one section is, in CHARACTERS.
+ *
+ * ‼️ CHARACTERS AND NOT WORDS, AND THE UNIT IS THE POINT. Matthew, 2026-09-14. The old rule was
+ * "250 to 500 words" for a whole page, which at 6 to 14 sections is somewhere between 18 and 83
+ * words a section: a caption. Measuring per section instead makes the floor mean something no
+ * matter how many sections the subject wanted, and characters rather than words because a word
+ * count is the thing a model pads to hit.
+ *
+ * Declared HERE, above SYSTEM, because SYSTEM interpolates it and OUTLINE_LIMITS further down
+ * reads the same bounds. A const cannot be read before its own declaration is evaluated.
+ */
+export const SECTION_CHARS = { min: 250, max: 600 } as const;
+
+/** Sections per page. OUTLINE_LIMITS carries the same numbers and the reasoning behind them. */
+const SECTION_COUNT = { min: 6, max: 14 } as const;
 
 const SYSTEM = `You write one answer page for a local business's own website.
 
@@ -129,13 +168,29 @@ THE RULES, and every one of them exists because breaking it is worse than a thin
    a person asked it out loud. Everything after that is detail. Never open with a greeting,
    never open with "when it comes to", never open by restating the question.
 
-7. WHERE THE EVIDENCE IS THIN, SAY LESS. A short honest page beats a padded one. If you can
-   only write three paragraphs from what you were given, write three paragraphs. Never add a
-   section because a page of this kind usually has one.
+7. WHERE THE EVIDENCE IS THIN, DROP THE SECTION. DO NOT THIN IT. A short honest page beats a
+   padded one, and this is the one rule that decides what "short" means: if you cannot fill a
+   section to the length in SHAPE from what you were given, leave that section OUT entirely
+   rather than writing two lines under its heading. Fewer, complete sections is the correct
+   outcome and nothing here penalises it. A heading with a sentence under it is worse than no
+   heading: it promises an answer and delivers a caption, and both the reader and the engine
+   reading it can tell. Never add a section because a page of this kind usually has one.
 
-SHAPE. Markdown. 250 to 500 words. Short paragraphs, one idea each. At most two "##" subheadings
-and only if the answer genuinely has parts. No H1: the title is rendered separately. No links,
-no images, no tables, no bullet list longer than five items.
+8. WHAT, WHY AND HOW, ON EVERY PAGE. Say what the thing is, why it matters to the person who
+   asked, and how it actually works. A page that only defines something has answered a dictionary
+   question, not the one that was typed. This is checked in code against the subheadings.
+
+SHAPE. Markdown. Open with the direct answer, before any subheading, and that opening is held to
+the same length as a section. Then ${SECTION_COUNT.min} to ${SECTION_COUNT.max} "##" subheadings: the subject decides how many, and
+each one is a question phrased the way the reader would ask it out loud.
+
+${SECTION_CHARS.min} TO ${SECTION_CHARS.max} CHARACTERS UNDER EVERY HEADING, AND UNDER THE OPENING. Characters, not words, and it
+is checked in code on each one separately rather than across the page, so a full section cannot
+carry six thin ones. Under the floor the section is a caption; over the ceiling it is answering
+two questions and the second one needs its own heading.
+
+Short paragraphs, one idea each. No H1: the title is rendered separately. No links, no images, no
+tables, no bullet list longer than five items.
 
 TITLE. How a person would say the question, not the raw prompt string. Under 60 characters.
 
@@ -156,7 +211,128 @@ function refsAreReal(d: DraftedPage, valid: Set<string>): boolean {
   );
 }
 
-function isDrafted(v: unknown, valid: Set<string>): v is DraftedPage {
+/**
+ * A cited review must actually be QUOTED, not described.
+ *
+ * ‼️ THIS IS THE HALF OF THE FTC LINE THAT A TYPE CANNOT HOLD. Everywhere else in this file the
+ * schema is the enforcement: SkinRead has no field for markup, so a skin cannot carry a layout.
+ * Here the model is handed a real person's sentence and asked not to improve it, and there is no
+ * shape that prevents improving it. So it is verified: if the draft cites a CUSTOMER_REVIEW ref,
+ * a run of that review's own words has to appear in the body.
+ *
+ * The window is a whole sentence of the source, or the whole source when it is shorter than one.
+ * That is deliberately generous: quoting two sentences out of five is normal editing, and
+ * requiring the entire review would push somebody toward citing nothing. What it catches is the
+ * failure that matters, which is "our customers rave about the results [S3]" with none of S3 on
+ * the page.
+ *
+ * Whitespace is normalised on both sides because markdown rewraps lines. Nothing else is.
+ */
+const MIN_QUOTE_CHARS = 40;
+
+function quotesAreVerbatim(d: DraftedPage, reviews: Map<string, string>): boolean {
+  return missingQuoteRefs(d, reviews).length === 0;
+}
+
+function missingQuoteRefs(d: DraftedPage, reviews: Map<string, string>): string[] {
+  if (reviews.size === 0) return [];
+  const body = flat(d.answerMd);
+
+  const cited = new Set(
+    d.evidenceUsed
+      .map((c) => c.sourceRef)
+      .filter((r): r is string => typeof r === "string" && reviews.has(r))
+  );
+
+  const missing: string[] = [];
+  for (const ref of cited) {
+    const source = flat(reviews.get(ref) as string);
+    if (!source) continue;
+
+    // The whole thing, for a review shorter than one sentence.
+    if (source.length <= MIN_QUOTE_CHARS) {
+      if (!body.includes(source)) missing.push(ref);
+      continue;
+    }
+
+    const runs = source
+      .split(/(?<=[.!?])\s+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length >= MIN_QUOTE_CHARS);
+
+    const quoted =
+      body.includes(source) || runs.some((r) => body.includes(r));
+    if (!quoted) missing.push(ref);
+  }
+  return missing;
+}
+
+/** Collapse every run of whitespace, so a rewrapped line still matches its source. */
+function flat(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Split a body into its "## " sections, each with the prose under it.
+ *
+ * Anything before the first heading is the answer-first opening paragraph, which rule 6 asks for
+ * and which has no heading by design. It is returned as a section with an empty heading so the
+ * length rule applies to it too: an opening line that trails off is the same fault as a thin
+ * section, and it is the first thing a reader sees.
+ */
+export function bodySections(answerMd: string): Array<{ heading: string; body: string }> {
+  const out: Array<{ heading: string; body: string }> = [];
+  let heading = "";
+  let buffer: string[] = [];
+
+  const flush = () => {
+    const body = buffer.join("\n").trim();
+    if (heading || body) out.push({ heading, body });
+    buffer = [];
+  };
+
+  for (const line of answerMd.split(/\r?\n/)) {
+    const m = /^##\s+(.+?)\s*$/.exec(line);
+    if (m) {
+      flush();
+      heading = m[1];
+    } else {
+      buffer.push(line);
+    }
+  }
+  flush();
+  return out.filter((s) => s.heading !== "" || s.body !== "");
+}
+
+/**
+ * Every section that is outside SECTION_CHARS, in words, for the correction retry.
+ *
+ * ‼️ THIS REPLACED A FLAT `>= 120 words` ON THE WHOLE PAGE, and the old rule was passing exactly
+ * the page this one catches: four full sections and six one-line ones clears 120 words easily
+ * while being mostly captions. The floor only means something when it is per section.
+ *
+ * The MAXIMUM is a fault too, which the old rule had no equivalent of. A section that runs long
+ * is one that answered two questions, and the second one deserved its own heading and its own
+ * long tail.
+ */
+export function sectionLengthFaults(answerMd: string): string[] {
+  const out: string[] = [];
+  for (const [i, section] of bodySections(answerMd).entries()) {
+    const where = section.heading ? `"${section.heading}"` : `the opening paragraph`;
+    const n = section.body.length;
+    if (n < SECTION_CHARS.min) {
+      out.push(`Section ${i + 1}, ${where}, is ${n} characters. Every section needs at least ${SECTION_CHARS.min}.`);
+    } else if (n > SECTION_CHARS.max) {
+      out.push(
+        `Section ${i + 1}, ${where}, is ${n} characters and the limit is ${SECTION_CHARS.max}. ` +
+          `It is answering two questions. Keep the one the heading asks.`
+      );
+    }
+  }
+  return out;
+}
+
+function isDrafted(v: unknown, valid: Set<string>, reviews: Map<string, string>): v is DraftedPage {
   const d = v as DraftedPage;
   return (
     !!d &&
@@ -165,11 +341,13 @@ function isDrafted(v: unknown, valid: Set<string>): v is DraftedPage {
       (c) => !!c && typeof c.claim === "string" && c.claim.trim().length > 0 && "sourceRef" in c
     ) &&
     refsAreReal(d, valid) &&
+    quotesAreVerbatim(d, reviews) &&
     typeof d.title === "string" &&
     d.title.trim().length > 0 &&
     d.title.length <= 90 &&
     typeof d.answerMd === "string" &&
-    d.answerMd.trim().split(/\s+/).length >= 120 &&
+    // Per section, not per page. See sectionLengthFaults for why the flat word floor went.
+    sectionLengthFaults(d.answerMd).length === 0 &&
     typeof d.metaDescription === "string" &&
     d.metaDescription.trim().length > 0 &&
     d.metaDescription.length <= 200 &&
@@ -186,7 +364,7 @@ function isDrafted(v: unknown, valid: Set<string>): v is DraftedPage {
   );
 }
 
-function whyInvalid(v: unknown, valid: Set<string>): string {
+function whyInvalid(v: unknown, valid: Set<string>, reviews: Map<string, string>): string {
   const d = v as DraftedPage;
   if (!d || typeof d.answerMd !== "string") return "answerMd is missing.";
 
@@ -207,8 +385,26 @@ function whyInvalid(v: unknown, valid: Set<string>): string {
     );
   }
 
-  const words = d.answerMd.trim().split(/\s+/).length;
-  if (words < 120) return `answerMd is ${words} words. It needs at least 120.`;
+  const unquoted = Array.isArray(d.evidenceUsed) ? missingQuoteRefs(d, reviews) : [];
+  if (unquoted.length) {
+    return (
+      `${unquoted.join(", ")} ${unquoted.length === 1 ? "is a customer's own published review" : "are customers' own published reviews"} and you cited ` +
+      `${unquoted.length === 1 ? "it" : "them"} without quoting ${unquoted.length === 1 ? "it" : "them"}. ` +
+      `Put the review's own words on the page inside quotation marks, character for character, ` +
+      `typos included, or drop the citation. A sentence describing what customers say is not a ` +
+      `quote, and a tidied quote is a review the customer never wrote.`
+    );
+  }
+
+  // ‼️ EVERY BAD SECTION AT ONCE, NOT THE FIRST. Returned one at a time this costs one correction
+  // retry per thin section, and a 14-section page would exhaust the retries before it was right.
+  const lengths = sectionLengthFaults(d.answerMd);
+  if (lengths.length) {
+    return (
+      `Every "##" section has to be ${SECTION_CHARS.min} to ${SECTION_CHARS.max} characters of prose. Fix all of these ` +
+      `and return the whole page again:\n${lengths.map((f) => `  - ${f}`).join("\n")}`
+    );
+  }
   if (hasBannedDash(d.answerMd) || hasBannedDash(d.title) || hasBannedDash(d.metaDescription)) {
     return "An em dash is present. Rewrite those sentences with commas, periods or plain hyphens.";
   }
@@ -243,7 +439,8 @@ async function gather(
   question: string,
   existingBody: string | null,
   pageId: string | null,
-  magnetKey: string | null
+  magnetKey: string | null,
+  outline: PageOutline | null = null
 ): Promise<Grounding | { error: string }> {
   const { data: client } = await supabaseAdmin
     .from("clients")
@@ -305,12 +502,18 @@ async function gather(
   // stored ref point at a different source than the one it was written against.
   const evidence = await loadNumberedEvidence(clientId, pageId);
 
+  const stories = outline?.stories?.some((s) => s.heading)
+    ? await (await import("@/lib/clients/story-context")).storyContextFor(clientId)
+    : null;
+
   return {
     clientName: name,
     question,
     existingBody,
     evidence,
     magnet: await magnetFor(clientId, magnetKey),
+    outline,
+    stories,
     city: (client.city as string | null) ?? (report?.city as string | null) ?? null,
     state: (client.state as string | null) ?? null,
     phone: (client.phone as string | null) ?? null,
@@ -368,6 +571,23 @@ function userPrompt(g: Grounding): string {
     );
     lines.push("recent and they came from the person doing the work.");
     lines.push("");
+
+    // ‼️ THE ONE SOURCE TYPE THAT MAY NOT BE PARAPHRASED, AND THE RULE IS ALSO CHECKED BELOW.
+    // A model handed somebody else's sentence will smooth it, because that is what being
+    // helpful looks like everywhere else in this prompt. Here the smoothing is the failure:
+    // the page publishes the tidied version under a real customer's name, and that is a review
+    // WE wrote. quotesAreVerbatim() enforces it after the fact, because a prose ban is not a
+    // ban, the same reason the dash rule is checked rather than asked for.
+    if (g.evidence.some((e) => e.type === "CUSTOMER_REVIEW")) {
+      lines.push("ONE OF THOSE SOURCES IS A CUSTOMER'S OWN PUBLISHED REVIEW. If you use it:");
+      lines.push("- Reproduce it inside quotation marks, character for character, typos and all.");
+      lines.push("- Do not correct spelling, grammar, punctuation or capitalisation.");
+      lines.push("- Do not shorten it, do not summarise it, do not merge two reviews into one.");
+      lines.push("- Do not write a sentence that describes what customers say instead of quoting");
+      lines.push("  one. If you cite a review ref, the review's own words must appear on the page.");
+      lines.push("- If it does not fit what this page is about, do not cite it. That is allowed.");
+      lines.push("");
+    }
   } else {
     // Absent beats forbidden, said out loud, the same move the no-website branch makes below.
     lines.push("NO EVIDENCE HAS BEEN COLLECTED FOR THIS PAGE. Nobody has dictated an answer and");
@@ -431,6 +651,47 @@ function userPrompt(g: Grounding): string {
     lines.push(g.existingBody.slice(0, 12000));
   }
 
+  // ‼️ THE OUTLINE IS STRUCTURE, NOT EVIDENCE, AND THE PROMPT SAYS SO. It was written by a model,
+  // so nothing in it may be asserted as a fact about the business. What it contributes is the
+  // shape somebody approved and the gaps they answered, and those answers are already numbered in
+  // the EVIDENCE block above, where they can be cited.
+  if (g.outline && !g.existingBody) {
+    lines.push("");
+    lines.push("THE APPROVED OUTLINE. Follow it:");
+    lines.push("  - Use these headings as your ## subheadings, in this order, VERBATIM. A person");
+    lines.push("    approved these words and each one is the search that section has to win.");
+    lines.push(`  - ${SECTION_CHARS.min} to ${SECTION_CHARS.max} characters under each heading, as SHAPE says. That rule is per`);
+    lines.push("    section and this outline is what tells you how many sections there are.");
+    lines.push("  - Cover what each bullet says, in your own sentences.");
+    lines.push("  - A [Gn] mark is a gap the business was asked to fill. Its answer is in the EVIDENCE");
+    lines.push("    under a topic beginning \"Gap Gn\". Use it and cite it. Where a gap has no answer,");
+    lines.push("    leave that point out rather than filling it.");
+    lines.push("  - A SECTION YOU CANNOT FILL TO LENGTH IS DROPPED, HEADING AND ALL. Rule 7. The");
+    lines.push("    outline is what was planned; the evidence decides what survives. Returning six");
+    lines.push("    complete sections out of eleven planned is a correct answer.");
+    lines.push("  - The bullets are notes, not facts. Assert nothing from them that no source carries.");
+    // ‼️ STORIES ARE TOLD WHERE THE SKELETON PLACED THEM, and only there (F2). The unplaced ideas stay on
+    // the outline for posts and are not printed, so the drafter cannot pile a second story into a page.
+    const placed = (g.outline.stories ?? []).filter((s) => s.heading);
+    const sourceRefs = new Map(
+      g.evidence.filter((e) => e.sourceId).map((e) => [e.sourceId as string, e.ref] as const)
+    );
+    if (placed.length) for (const rule of DRAFT_STORY_RULES) lines.push(rule);
+    lines.push("");
+    for (const section of g.outline.sections) {
+      lines.push(`## ${section.heading}`);
+      // ‼️ PRINTED AS THE SEARCH, NOT AS A TARGET. A model told to "include this phrase" welds it
+      // in twice a paragraph, which is what keyword_shaped in page-gate.ts fails a page for. What
+      // it needs to know is what the reader typed, so the section answers THAT rather than the
+      // heading's nearest paraphrase.
+      if (section.keyword) lines.push(`     (what the reader typed to get here: ${section.keyword})`);
+      for (const bullet of section.bullets) lines.push(`  - ${bullet}`);
+      const story = placed.find((s) => s.heading === section.heading);
+      if (story) lines.push(...draftStoryLines(story, g.stories ?? EMPTY_STORY_CONTEXT, sourceRefs));
+    }
+    lines.push("");
+  }
+
   // ‼️ LAST, SO IT CANNOT BECOME THE BRIEF. Everything above decides what the page says; this
   // only decides what it deliberately leaves open. Placed before the evidence it would read as
   // the goal, and a model given a goal writes toward it.
@@ -473,7 +734,12 @@ function userPrompt(g: Grounding): string {
 export async function draftPage(
   clientId: string,
   question: string,
-  opts?: { existingBody?: string | null; pageId?: string | null; magnetKey?: string | null }
+  opts?: {
+    existingBody?: string | null;
+    pageId?: string | null;
+    magnetKey?: string | null;
+    outline?: PageOutline | null;
+  }
 ): Promise<{ ok: true; page: DraftedPage } | { ok: false; error: string }> {
   if (!question.trim()) return { ok: false, error: "No question was given." };
 
@@ -482,13 +748,21 @@ export async function draftPage(
     question.trim(),
     opts?.existingBody?.trim() || null,
     opts?.pageId ?? null,
-    opts?.magnetKey ?? null
+    opts?.magnetKey ?? null,
+    opts?.outline ?? null
   );
   if ("error" in g) return { ok: false, error: g.error };
 
   // The refs that actually exist. Built once and closed over by both validators, so "is this
   // ref real" is answered against what was sent rather than against a pattern.
   const validRefs = new Set(g.evidence.map((e) => e.ref));
+
+  // The review sources by ref, so the verbatim check has the words to compare against. Built
+  // here beside validRefs for the same reason: both validators answer against what was actually
+  // sent, never against a pattern or a re-read.
+  const reviewSources = new Map(
+    g.evidence.filter((e) => e.type === "CUSTOMER_REVIEW").map((e) => [e.ref, e.content] as const)
+  );
 
   try {
     const res = await callClaudeJSON<DraftedPage>({
@@ -498,11 +772,408 @@ export async function draftPage(
       maxTokens: 2600,
       temperature: 0.4,
       schemaHint: `{ "title": string, "answerMd": string, "metaDescription": string, "evidenceUsed": [{ "claim": string, "sourceRef": string | null }] }`,
-      validate: (v): v is DraftedPage => isDrafted(v, validRefs),
-      describeInvalid: (v) => whyInvalid(v, validRefs),
+      validate: (v): v is DraftedPage => isDrafted(v, validRefs, reviewSources),
+      describeInvalid: (v) => whyInvalid(v, validRefs, reviewSources),
     });
 
     return { ok: true, page: res.data };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The skeleton: headings, bullets and the gaps only the business can fill
+//
+// Matthew, 2026-09-11: "can't we simply have one version drafted, delete 80%, leave bullet
+// points and we can fill the gaps?" This is that, built the other way round: instead of a full
+// draft somebody cuts down, the model writes ONLY the skeleton and names the gaps, the gaps are
+// answered out loud as evidence, and `draft` then writes the body from those answers.
+//
+// ‼️ WHY NOT WRITE THE FULL PAGE AND LET HIM DELETE. A full draft is assembled from what anybody
+// could say about the topic, which is the one kind of page this product says is worth nothing to
+// an engine. Deleting 80% of it leaves 20% of generic text with his name on it. The skeleton puts
+// the model's work where it is good (structure, what to cover) and asks him for the only part an
+// engine cannot get anywhere else.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** What the plan decided about this page, when it came off one. All optional. */
+export interface OutlineContext {
+  workingTitle: string | null;
+  targetKeyword: string | null;
+  angle: string | null;
+  /**
+   * The page's picked direct-response headline, which every story starts from (F2). Optional: a page
+   * outlined before its headline was picked still gets stories, built from the question.
+   */
+  headline?: string | null;
+}
+
+/**
+ * ‼️ THE SUBJECT DECIDES, BETWEEN 6 AND 14. Matthew, 2026-09-14.
+ *
+ * It was 2 to 5, which is a page that answers one question and stops. What these pages are for is
+ * being the thing an engine cites on a long-tail query, and an engine picks the section that
+ * matches, not the page. Five sections is five chances; twelve is twelve. The floor is 6 because
+ * below it the page is an answer rather than a resource, and the ceiling is 14 because past that
+ * the model starts splitting one idea in two to reach a number.
+ *
+ * ‼️ THE GAP CAP STAYS AT 8, AND IT IS NOT AN OVERSIGHT. outlineFaults pins gap ids to G1..G9, and
+ * at 7 pages a batch this is already up to 56 questions in the ONE research prompt W1d sends. The
+ * [Pn] page tag is what separates them, not a wider gap numbering.
+ */
+export const OUTLINE_LIMITS = {
+  minSections: SECTION_COUNT.min,
+  maxSections: SECTION_COUNT.max,
+  minBullets: 2,
+  maxBullets: 4,
+  minGaps: 3,
+  maxGaps: 8,
+  maxBulletChars: 180,
+  maxHeadingChars: 80,
+  /** How many headings must be about something other than price, fear, comparison or process. */
+  minDivergent: 5,
+} as const;
+
+/**
+ * The four subjects a page drifts to when nobody stops it, and the words that give each away.
+ *
+ * ‼️ THIS IS A DIVERGENCE FLOOR, NOT A BAN. A page about a treatment SHOULD cover what it costs
+ * and what it is like. What it must not be is four sections of pricing, two of "X vs Y" and one
+ * about what to expect, which is the shape every competitor already published and the exact page
+ * an engine has no reason to prefer. Five headings have to be about something else.
+ *
+ * Matched on whole words against the lowercased heading, so "processing" does not count as
+ * "process" and "compared" does not count as "compare".
+ */
+const CONVERGENT_VOCABULARY: Readonly<Record<string, readonly string[]>> = {
+  price: ["price", "prices", "pricing", "cost", "costs", "afford", "affordable", "cheap", "expensive", "fee", "fees", "payment", "payments", "financing", "worth", "budget"],
+  fear: ["safe", "safety", "risk", "risks", "risky", "danger", "dangerous", "harm", "harmful", "pain", "painful", "hurt", "hurts", "side", "effects", "complication", "complications", "scared", "afraid", "worry", "worried"],
+  comparison: ["vs", "versus", "compare", "compares", "comparison", "better", "best", "worse", "difference", "differences", "alternative", "alternatives", "instead", "against", "rather"],
+  process: ["process", "step", "steps", "procedure", "expect", "during", "appointment", "session", "consultation", "book", "booking", "prepare", "preparation", "aftercare", "recovery", "downtime"],
+};
+
+const MANDATORY_SHAPES = ["what", "why", "how"] as const;
+
+/** Whole words of a heading, lowercased. Punctuation and markdown are not words. */
+function headingWords(heading: string): string[] {
+  return heading
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(" ")
+    .filter(Boolean);
+}
+
+/** Which of the four convergent subjects this heading is about, or null when it is about its own. */
+export function convergentSubject(heading: string): string | null {
+  const words = new Set(headingWords(heading));
+  for (const [subject, vocabulary] of Object.entries(CONVERGENT_VOCABULARY)) {
+    if (vocabulary.some((w) => words.has(w))) return subject;
+  }
+  return null;
+}
+
+/**
+ * Which of what / why / how the outline covers.
+ *
+ * ‼️ READ OFF THE FIRST WORD, NOT ANYWHERE IN THE HEADING. "What does it cost" is a what-section;
+ * "the cost of knowing what to expect" is not, and matching loosely would let a single heading
+ * satisfy all three and turn rule 8 into nothing. A long-tail question heading starts with its
+ * question word, so the first word is the honest place to read it.
+ */
+export function shapesCovered(headings: readonly string[]): Set<string> {
+  const found = new Set<string>();
+  for (const heading of headings) {
+    const first = headingWords(heading)[0];
+    if (first && (MANDATORY_SHAPES as readonly string[]).includes(first)) found.add(first);
+  }
+  return found;
+}
+
+const OUTLINE_SYSTEM = `You plan one answer page for a local business's own website. You do NOT write the page.
+
+You write its SKELETON: the headings it will have, a few short bullet points under each saying what
+that part covers, and the GAPS, which are the specific things only the business can supply. A person
+reads the skeleton, answers every gap out loud, and the page is then written from their answers.
+
+So every bullet is a note about what to cover, not finished copy. And every place the page would
+need a fact about this business that the evidence does not already carry is a gap.
+
+THE RULES:
+
+1. ANSWER FIRST. The first section answers the question directly. Its heading names the answer's
+   subject. Never "Introduction", never "Overview".
+2. ${OUTLINE_LIMITS.minSections} to ${OUTLINE_LIMITS.maxSections} sections, AND THE SUBJECT DECIDES HOW MANY. Do not pad to reach a number and
+   do not split one idea into two sections to get there. ${OUTLINE_LIMITS.minBullets} to ${OUTLINE_LIMITS.maxBullets} bullets each, each one short.
+2a. EVERY HEADING IS A LONG-TAIL QUESTION IN HER OWN WORDS. Write the heading the way the person
+   who typed the question would say it out loud, not the way a brochure would label a section.
+   "How long does it take before I see anything?" and not "Timeline". No heading is one noun.
+2b. EVERY SECTION CARRIES ITS OWN KEYWORD: the long-tail phrase that section is the answer to.
+   Return it as "keyword" on the section. It is the search this heading wins, so it is a phrase a
+   person would actually type, three words or more, and it is NOT the page's own phrase repeated.
+   Two sections may not carry the same keyword.
+2c. AT LEAST ${OUTLINE_LIMITS.minDivergent} HEADINGS ARE ABOUT SOMETHING OTHER than what it costs, whether it is safe or
+   painful, how it compares to something else, or what the appointment is like. Those four are
+   what every competing page already covers, so a page made only of them gives an engine no
+   reason to pick it. Cover them where they belong, then go past them.
+2d. WHAT, WHY AND HOW ARE ALL PRESENT. At least one heading begins with "What", at least one with
+   "Why", and at least one with "How". A page that only explains what a thing is has not told the
+   reader why it matters to them or how it actually works.
+3. ${OUTLINE_LIMITS.minGaps} to ${OUTLINE_LIMITS.maxGaps} GAPS. Each has an id (G1, G2, ...), a prompt asked in the second person
+   ("What do you charge for ...?"), and a scope: "client" when the answer is about the business as
+   a whole (pricing, where they serve, their credentials, their policies), "page" when it is about
+   this one question. Write [G1] inside the bullet that needs that answer. Every gap is referenced
+   by at least one bullet, and no bullet references a gap that does not exist.
+4. NOTHING INVENTED. No fact about this business that the evidence does not carry: where you would
+   need one, that is a gap. No numbers that are not in the evidence. No statistics.
+5. A GAP THE EVIDENCE ALREADY ANSWERS IS NOT A GAP. If a source already gives their price, pricing
+   is covered; write the bullet and cite nothing, do not ask again.
+6. No competitor named. No outcome promises. No links. No markdown inside headings or bullets.
+7. NO EM DASHES, EN DASHES OR DOUBLE HYPHENS, anywhere. This is checked in code.
+${OUTLINE_STORY_RULE}`;
+
+interface DraftedOutline {
+  sections: OutlineSection[];
+  gaps: OutlineGap[];
+  stories: unknown[];
+}
+
+/** Numbers of two or more digits that no source contains. Same rule as the magnet drafter. */
+function outlineOrphans(text: string, haystack: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(/\$?\d[\d,]*(?:\.\d+)?%?/g)) {
+    const bare = m[0].replace(/[,$%]/g, "");
+    if (bare.length < 2) continue;
+    if (!haystack.includes(bare)) out.push(m[0]);
+  }
+  return [...new Set(out)];
+}
+
+/**
+ * Everything wrong with a proposed skeleton, in words, for the correction retry.
+ *
+ * Exported for scripts/_probe-page-plan.ts, which proves the limits without a model call.
+ */
+export function outlineFaults(v: unknown, numberHaystack: string): string[] {
+  const out: string[] = [];
+  const d = v as Partial<DraftedOutline>;
+  const L = OUTLINE_LIMITS;
+
+  if (!Array.isArray(d?.sections)) return ['Return { "sections": [...], "gaps": [...] }.'];
+  if (!Array.isArray(d?.gaps)) return ['"gaps" is missing. Return it as an array, even though it has to have entries.'];
+
+  if (d.sections.length < L.minSections || d.sections.length > L.maxSections) {
+    out.push(`There are ${d.sections.length} sections. Write ${L.minSections} to ${L.maxSections}.`);
+  }
+  if (d.gaps.length < L.minGaps || d.gaps.length > L.maxGaps) {
+    out.push(`There are ${d.gaps.length} gaps. Name ${L.minGaps} to ${L.maxGaps}.`);
+  }
+
+  const gapIds = new Set<string>();
+  d.gaps.forEach((g, i) => {
+    const gap = g as Partial<OutlineGap>;
+    const id = typeof gap?.id === "string" ? gap.id.trim() : "";
+    const prompt = typeof gap?.prompt === "string" ? gap.prompt.trim() : "";
+    if (!/^G[1-9]$/.test(id)) out.push(`gap ${i + 1} has id "${id}". Use G1 to G9.`);
+    else if (gapIds.has(id)) out.push(`gap id ${id} is used twice.`);
+    else gapIds.add(id);
+    if (!prompt) out.push(`gap ${id || i + 1} has no prompt.`);
+    if (prompt && hasBannedDash(prompt)) out.push(`gap ${id}'s prompt contains a dash.`);
+    if (gap?.scope !== "page" && gap?.scope !== "client") {
+      out.push(`gap ${id || i + 1} needs scope "page" or "client".`);
+    }
+    for (const n of outlineOrphans(prompt, numberHaystack)) {
+      out.push(`gap ${id}'s prompt states ${n}, which no source contains.`);
+    }
+  });
+
+  const referenced = new Set<string>();
+  const headings: string[] = [];
+  const sectionKeywords = new Map<string, number>();
+
+  d.sections.forEach((s, i) => {
+    const section = s as Partial<OutlineSection>;
+    const heading = typeof section?.heading === "string" ? section.heading.trim() : "";
+    if (!heading) out.push(`section ${i + 1} has no heading.`);
+    else headings.push(heading);
+
+    // ‼️ THE PER-SECTION KEYWORD IS CHECKED, NOT ASKED FOR, same doctrine as the dash rule. It is
+    // written to client_pages.section_keywords and read back by keyword-placement.ts weeks later,
+    // so a missing one is not a cosmetic gap: it is a placement check that silently measures
+    // nothing.
+    const keyword = typeof section?.keyword === "string" ? section.keyword.trim() : "";
+    if (!keyword) {
+      out.push(`section ${i + 1} has no keyword. Give it the long-tail phrase that section answers.`);
+    } else {
+      if (keyword.split(/\s+/).filter(Boolean).length < 3) {
+        out.push(`section ${i + 1}'s keyword "${keyword}" is under three words. A long tail is a phrase somebody types.`);
+      }
+      if (hasBannedDash(keyword)) out.push(`section ${i + 1}'s keyword contains a dash.`);
+      const seen = sectionKeywords.get(keyword.toLowerCase());
+      if (seen) out.push(`sections ${seen} and ${i + 1} carry the same keyword "${keyword}". Each section wins its own search.`);
+      else sectionKeywords.set(keyword.toLowerCase(), i + 1);
+    }
+
+    if (heading.length > L.maxHeadingChars) out.push(`section ${i + 1}'s heading is over ${L.maxHeadingChars} characters.`);
+    if (/[#*_`]/.test(heading)) out.push(`section ${i + 1}'s heading contains markdown.`);
+    if (hasBannedDash(heading)) out.push(`section ${i + 1}'s heading contains a dash.`);
+    for (const n of outlineOrphans(heading, numberHaystack)) {
+      out.push(`section ${i + 1}'s heading states ${n}, which no source contains.`);
+    }
+
+    const bullets = Array.isArray(section?.bullets) ? section.bullets : [];
+    if (bullets.length < L.minBullets || bullets.length > L.maxBullets) {
+      out.push(`section ${i + 1} has ${bullets.length} bullets. Write ${L.minBullets} to ${L.maxBullets}.`);
+    }
+    bullets.forEach((b, j) => {
+      const text = typeof b === "string" ? b.trim() : "";
+      const where = `section ${i + 1} bullet ${j + 1}`;
+      if (!text) out.push(`${where} is empty.`);
+      if (text.length > L.maxBulletChars) out.push(`${where} is over ${L.maxBulletChars} characters. It is a note, not copy.`);
+      if (hasBannedDash(text)) out.push(`${where} contains a dash.`);
+      if (/\]\(|https?:\/\//i.test(text)) out.push(`${where} contains a link.`);
+      for (const m of text.matchAll(/\[(G\d+)\]/g)) {
+        referenced.add(m[1]);
+        if (!gapIds.has(m[1])) out.push(`${where} references ${m[1]}, which is not one of the gaps.`);
+      }
+      for (const n of outlineOrphans(text.replace(/\[G\d+\]/g, ""), numberHaystack)) {
+        out.push(`${where} states ${n}, which no source contains. Make it a gap instead.`);
+      }
+    });
+  });
+
+  for (const id of gapIds) {
+    if (!referenced.has(id)) out.push(`gap ${id} is never referenced. Put [${id}] in the bullet that needs it.`);
+  }
+
+  // ‼️ DIVERGENCE AND SHAPE ARE CHECKED ACROSS THE WHOLE OUTLINE, NOT PER SECTION, because both
+  // are properties of the set. No single heading can be "not convergent enough" and no single
+  // heading can supply what, why and how. Only counted when the section count is already legal,
+  // so a 3-section outline gets one clear fault about its size rather than three about its shape.
+  if (headings.length >= L.minSections) {
+    const divergent = headings.filter((h) => convergentSubject(h) === null);
+    if (divergent.length < L.minDivergent) {
+      const converged = headings
+        .map((h) => ({ h, subject: convergentSubject(h) }))
+        .filter((x): x is { h: string; subject: string } => x.subject !== null);
+      const tally = [...new Set(converged.map((c) => c.subject))]
+        .map((subject) => `${subject} (${converged.filter((c) => c.subject === subject).length})`)
+        .join(", ");
+      out.push(
+        `Only ${divergent.length} of ${headings.length} headings are about something other than price, ` +
+          `fear, comparison or process. At least ${L.minDivergent} must be. Covered now: ${tally}. ` +
+          `Keep those and replace the surplus with what this subject specifically involves.`
+      );
+    }
+
+    const covered = shapesCovered(headings);
+    const missing = MANDATORY_SHAPES.filter((shape) => !covered.has(shape));
+    if (missing.length) {
+      out.push(
+        `No heading begins with ${missing.map((m) => `"${m[0].toUpperCase()}${m.slice(1)}"`).join(" or ")}. ` +
+          `Every page needs a what, a why and a how.`
+      );
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Write the skeleton for one page. Returns it for the caller to store; never touches answer_md.
+ */
+export async function draftOutline(
+  clientId: string,
+  question: string,
+  opts: { pageId: string; context?: OutlineContext | null }
+): Promise<{ ok: true; outline: PageOutline } | { ok: false; error: string }> {
+  if (!question.trim()) return { ok: false, error: "No question was given." };
+
+  const g = await gather(clientId, question.trim(), null, opts.pageId, null);
+  if ("error" in g) return { ok: false, error: g.error };
+
+  const ctx = opts.context ?? null;
+  const { storyContextFor } = await import("@/lib/clients/story-context");
+  const story = await storyContextFor(clientId);
+
+  const numberHaystack = [
+    ...g.evidence.map((e) => e.content),
+    question,
+    ctx?.targetKeyword ?? "",
+    ctx?.angle ?? "",
+    ctx?.workingTitle ?? "",
+  ]
+    .join(" ")
+    .replace(/[,$]/g, "");
+
+  const lines: string[] = [
+    "THE QUESTION THIS PAGE ANSWERS:",
+    question.trim(),
+    "",
+    `THE BUSINESS: ${g.clientName}`,
+  ];
+  if (g.city) lines.push(`Location: ${[g.city, g.state].filter(Boolean).join(", ")}`);
+  if (g.businessType) lines.push(`What they are: ${g.businessType}`);
+  if (g.buyerPersona) lines.push(`Who buys and what hurts: ${g.buyerPersona}`);
+  if (ctx?.workingTitle) lines.push(`Working title: ${ctx.workingTitle}`);
+  if (ctx?.targetKeyword) lines.push(`The phrase this page is aimed at: ${ctx.targetKeyword}`);
+  if (ctx?.angle) lines.push(`What this page gives the reader: ${ctx.angle}`);
+  lines.push("");
+
+  if (g.evidence.length) {
+    lines.push("EVIDENCE ALREADY ON FILE. Anything answered here is not a gap:");
+    for (const e of g.evidence) {
+      lines.push(`[${e.ref}] ${e.label}${e.topic ? `, on ${e.topic}` : ""}`);
+      lines.push(e.content.slice(0, 1500));
+      lines.push("");
+    }
+  } else {
+    lines.push("NO EVIDENCE IS ON FILE FOR THIS BUSINESS YET. Every fact the page needs is a gap.");
+  }
+  lines.push(...outlineStoryLines(story, ctx?.headline ?? null));
+
+  const refs = new Map(g.evidence.map((e) => [e.ref, e.sourceId] as const));
+  const beliefIds = story.beliefs.map((b) => b.id);
+  const storyArgs = { refs, beliefIds, numberHaystack };
+  const faultsOf = (v: unknown) => [...outlineFaults(v, numberHaystack), ...storyFaults(v, storyArgs)];
+
+  try {
+    const res = await callClaudeJSON<DraftedOutline>({
+      model: "claude-sonnet-4-6",
+      system: OUTLINE_SYSTEM,
+      user: lines.join("\n"),
+      // 14 sections with a keyword each is roughly triple the old ceiling of 5, so the old 2000
+      // would truncate the JSON on a long outline and fail validation for a reason the correction
+      // retry cannot fix by rewriting. Three stories of four beats add roughly a thousand more.
+      maxTokens: 8000,
+      temperature: 0.3,
+      schemaHint:
+        '{ "sections": [{ "heading": string, "keyword": string, "bullets": string[] }], "gaps": [{ "id": "G1", "prompt": string, "scope": "page" | "client" }], ' +
+        '"stories": [{ "id": "T1", "title": string, "beats": [string, string, string, string], "installs": string[], "heading": string | null, "source": { "kind": "evidence", "ref": "S1" } | { "kind": "gap", "gapId": "G1" } | { "kind": "illustrative" } }] }',
+      validate: (v): v is DraftedOutline => faultsOf(v).length === 0,
+      describeInvalid: (v) =>
+        `Fix these and return the whole skeleton again:\n${faultsOf(v)
+          .map((f) => `  - ${f}`)
+          .join("\n")}`,
+    });
+
+    return {
+      ok: true,
+      outline: {
+        sections: res.data.sections.map((s) => ({
+          heading: s.heading.trim(),
+          keyword: (s.keyword ?? "").trim(),
+          bullets: s.bullets.map((b) => b.trim()),
+        })),
+        gaps: res.data.gaps.map((gap) => ({
+          id: gap.id.trim(),
+          prompt: gap.prompt.trim(),
+          scope: gap.scope === "client" ? "client" : "page",
+        })),
+        stories: resolveStories(res.data, refs, beliefIds),
+        writtenAt: new Date().toISOString(),
+      },
+    };
   } catch (e) {
     return { ok: false, error: (e as Error).message };
   }

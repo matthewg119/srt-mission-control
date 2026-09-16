@@ -31,8 +31,9 @@
 // absent answer is reported as absent and never guessed.
 
 import { supabaseAdmin } from "@/lib/db";
+import { ADOPTED_PROSPECT_AUDIT, BASELINE_ONLY, FIRED_FOR_CLIENT } from "@/lib/audit-engine/run-labels";
 import { slack } from "@/lib/slack-bot";
-import { DELIVERY_STEPS, type StepKey } from "@/config/delivery-steps";
+import { DELIVERY_STEPS, stepNumber, type StepKey } from "@/config/delivery-steps";
 import { PLATFORM_COUNT } from "@/config/presence-platforms";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -73,6 +74,13 @@ export interface VerifyCtx {
     output_ref: string | null;
     error_detail: string | null;
     slack_anchor_ts: string | null;
+    /**
+     * When the runner last CLAIMED this step, which is what makes "from this run" checkable.
+     * storeGeneratedDoc inserts a new row every time, so a document filed weeks ago still
+     * matches a filename. Null on rows that predate the column, and a null is treated as "no
+     * opinion" rather than as a refusal.
+     */
+    started_at: string | null;
   };
   client: Record<string, unknown>;
 }
@@ -145,7 +153,12 @@ async function docsInThread(ctx: VerifyCtx): Promise<number | null> {
  * complaint. Returns null when the thread could not be read, which is `broken`, not zero.
  */
 async function humanReplies(ctx: VerifyCtx): Promise<string[] | null> {
-  const channel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
+  // ‼️ THE CLIENT'S CHANNEL, NOT THE SHARED ONE. This reads the evidence a thread-tier verdict
+  // is earned against. Reading the wrong channel returns [], and conversationsReplies cannot
+  // tell "no replies" from "wrong channel", so the failure would be a step that refuses forever
+  // while the screenshots sit in its thread.
+  const { channelFor } = await import("./step-board");
+  const channel = await channelFor(ctx.clientId);
   if (!channel || !ctx.row.slack_anchor_ts) return null;
 
   const msgs = await slack.conversationsReplies(channel, ctx.row.slack_anchor_ts, 60);
@@ -231,7 +244,7 @@ async function artifactOnRecord(ctx: VerifyCtx, label: string): Promise<Verdict>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The map. Record<StepKey, Verifier> is the compile-time proof it covers all 39.
+// The map. Record<StepKey, Verifier> is the compile-time proof it covers all 43.
 //
 // (It said 33 for a long time while the array grew to 39. The NUMBER is prose and drifts; the
 // TYPE is the thing that actually holds, and adding site_replica to delivery-steps.ts broke this
@@ -246,7 +259,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
       return notYet(
         "clients.intake_completed_at",
         "empty, so the intake form was never finished",
-        "Send the client their /onboarding link again and wait for step 6 to save."
+        "Send the client their /onboarding link again and wait for the last step of the intake form to save."
       );
     }
     return verified(`intake completed at ${at}`);
@@ -272,20 +285,44 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
   //    is the baseline the day 30, 60 and 90 numbers are measured against, so "a run fired FOR
   //    this client" is the only acceptable link. presence-pdf.ts resolves it the same way.
   baseline_scan: async (ctx) => {
-    const { data: report, error } = await supabaseAdmin
-      .from("audit_reports")
-      .select("id, status, score")
-      .eq("client_id", ctx.clientId)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (error) return dbUnreachable("audit_reports");
+    const newestLinked = (source: string) =>
+      supabaseAdmin
+        .from("audit_reports")
+        .select("id, status, score, created_at")
+        .eq("client_id", ctx.clientId)
+        // ‼️ 4. AND THE SUPPLIED RUNS ARE EXCLUDED, WHICH IS THE FOURTH DELIBERATE THING HERE.
+        // Photograph II is fired FOR this client and carries its client_id, so without this filter
+        // the first Day 0 run would become "the newest report" and step 2 would start reporting the
+        // Day 0 score as the baseline it is supposed to be measured against. See run-labels.ts.
+        .or(BASELINE_ONLY)
+        .eq("client_link_source", source)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+    // ‼️ 5. A RUN FIRED FOR THE CLIENT FIRST, THEN THE PROSPECT AUDIT THEY BOOKED FROM (2026-09-15).
+    // This step used to refuse adopted audits outright, because client_id stopped meaning "fired for
+    // this client" after the 2026-09-14 backfill. The doctrine changed with the booking door: every
+    // client arrives through the audit Matthew ran before the Loom, onboarding no longer fires a scan
+    // of its own, and the measured baseline is the Day 0 run at day_zero_archive. So step 2 is now
+    // "the pre-call audit is attached". A run fired for the client still wins when one exists, and
+    // the evidence line says which kind was found so nobody reads an adopted audit as a photograph.
+    const fired = await newestLinked(FIRED_FOR_CLIENT);
+    if (fired.error) return dbUnreachable("audit_reports");
+    let report = fired.data;
+    let kind = "fired for this client";
+    if (!report) {
+      const adopted = await newestLinked(ADOPTED_PROSPECT_AUDIT);
+      if (adopted.error) return dbUnreachable("audit_reports");
+      report = adopted.data;
+      kind = `pre-call audit from ${String(report?.created_at ?? "").slice(0, 10)}, adopted when they booked`;
+    }
 
     if (!report) {
       return notYet(
         "audit_reports rows carrying this client's id",
-        "no baseline run has been recorded against this client",
-        "Photograph I has not started. Un-tick this step to re-run the baseline scan."
+        "no audit is attached to this client",
+        "Nothing was scanned at onboarding on purpose. Hit Re-run baseline scan on the client board to run one."
       );
     }
 
@@ -322,7 +359,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
 
     return verified(
       `${count} audit_runs rows, ${answered ?? 0} with a real answer`,
-      `report status done, score ${report.score ?? "unscored"}`
+      `report status done, score ${report.score ?? "unscored"}, ${kind}`
     );
   },
 
@@ -418,50 +455,6 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     return confirmed(
       `screenshots filed for ${cover.distinct} distinct platforms in this step's thread: ${describeCoverage(cover)}`,
       "That is evidence the searches were run and captured, not a reading of what they showed."
-    );
-  },
-
-  // ‼️ A FILE EXISTING IS NOT THE SAME AS THE FILE SAYING ANYTHING, AND THIS IS THE STEP
-  // WHERE THAT GAP SHOWS. This was artifactOnRecord(), which proves exactly one thing: a
-  // client_docs row carries this step key.
-  //
-  // Measured on SRT 2026-09-07 with presence_sweep_manual skipped: all 19 listings sat at
-  // confirmed_status null, the PDF said so on its own cover in amber ("a skipped step reads as
-  // not checked everywhere, and that is an absence of evidence, never evidence of
-  // correctness"), and the board line read "the presence and consistency PDF is filed against
-  // this client (1 file)". Every layer was honest except the one a human actually reads, and
-  // the card is what gets read.
-  //
-  // ‼️ IT STILL TICKS RATHER THAN REFUSING, AND THAT IS NOT A SOFTENING. `skipped` is a
-  // decision somebody is allowed to make, and findings_doc and citation_cleanup_list are both
-  // blockedBy this step, so refusing over a legitimate skip deadlocks the board with no way
-  // out. What changes is that the line can no longer imply content the document does not have.
-  // citation_cleanup, further down, is the step that DOES refuse on not_checked, because
-  // ticking "the cleanup was executed" over rows nobody opened is a different claim entirely.
-  presence_pdf: async (ctx) => {
-    const filed = await artifactOnRecord(ctx, "the presence and consistency PDF");
-    if (!filed.ok) return filed;
-
-    // Counted separately from loadSweep for the reason citation_cleanup already records:
-    // loadSweep swallows a query error into an empty array, and "the query failed" must never
-    // render as "no rows exist". If the two reads disagree, say nothing rather than a number.
-    const total = await countRows("nap_discrepancies", ctx.clientId);
-    if (total === null) return dbUnreachable("nap_discrepancies");
-
-    const { loadSweep, countByStatus } = await import("./presence-sweep");
-    const rows = await loadSweep(ctx.clientId);
-    if (rows.length !== total) return dbUnreachable("nap_discrepancies");
-
-    const counts = countByStatus(rows);
-    const checked = rows.length - counts.not_checked;
-
-    return verified(
-      `the presence and consistency PDF is filed against this client, reporting ${checked} of ` +
-        `${rows.length} platform${rows.length === 1 ? "" : "s"} checked` +
-        (counts.not_checked
-          ? `. The other ${counts.not_checked} print as "not checked", which is an absence of ` +
-            `evidence and not a finding of correctness`
-          : "")
     );
   },
 
@@ -640,7 +633,6 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     );
   },
 
-  findings_doc: async (ctx) => artifactOnRecord(ctx, "the findings document"),
 
   // ── PREPARE ────────────────────────────────────────────────────────────────
   // ‼️ THIS VERIFIER WAS CORRECT AND UNSATISFIABLE FOR THE WHOLE LIFE OF THE COLUMN.
@@ -655,18 +647,146 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
         "clients.primary_avatar",
         "no avatar has been confirmed",
         "Pick one of the three on this card, or reply `avatar: laser hair removal` with your " +
-          "own, or use the Avatar panel on the client board. Step 10 researches whoever is " +
+          `own, or use the Avatar panel on the client board. Step ${stepNumber("avatar_harvest")} researches whoever is ` +
           "picked, and the custom question set and the page candidates are both scored against " +
           "it, so none of the three means anything until this is answered."
       );
     }
     const label = (ctx.client.primary_avatar_label as string | null) ?? avatar;
     const by = (ctx.client.primary_avatar_confirmed_by as string | null) ?? null;
+
+    // ‼️ CONFIRMING THE AVATAR CAN SUCCEED WITH NO AUDIENCE, AND THE BLOCK BELONGS HERE, WHERE THE FIX
+    // IS. confirmAvatar returns ok even when its audience could not be created (no preset maps this
+    // client's vertical). The concierge needs an audience, and the offer lives under one, so without
+    // this the board would stall several steps later with nothing to point at. `audience: <preset>` is
+    // the repair, typed in this thread.
+    const { data: primary, error: audErr } = await supabaseAdmin
+      .from("client_audiences")
+      .select("id")
+      .eq("client_id", ctx.clientId)
+      .eq("is_primary", true)
+      .maybeSingle();
+    if (audErr) return dbUnreachable("client_audiences");
+    if (!primary) {
+      const { AUDIENCE_REPAIR } = await import("./audiences");
+      return notYet(
+        "a primary client_audiences row for this client",
+        `the avatar ${label} is confirmed, but no audience was created for it, so nothing knows what to call this client's buyers`,
+        `No preset matched this client's vertical. ${AUDIENCE_REPAIR}`
+      );
+    }
+
     return verified(
       `primary avatar ${avatar} (${label}) confirmed${by ? ` by ${by}` : ""}`,
       "Everything downstream is aimed at this customer: the phrase harvest, the tracked question " +
         "set and the page ranking."
     );
+  },
+
+  /**
+   * The proposal exists, and it says where it came from.
+   *
+   * ‼️ IT CONFIRMS A READING, NOT A DECISION, AND THE EVIDENCE LINE HAS TO SAY SO. Ticking this
+   * green means "the system read their intake form and put a name in the proposed slot". It does
+   * NOT mean anybody agreed. offer_locked is the step that means that, and conflating the two
+   * here would be a green tick over unchecked work in the most literal sense: the whole build
+   * pointed at a service nobody had confirmed the client wanted.
+   *
+   * NOTHING ON FILE IS A REFUSAL, NOT A PASS. `services.primary_treatment` is required at
+   * intake, so an empty proposal means the intake bag is empty or malformed, which is a real
+   * fault worth stopping on rather than a client who happens to sell nothing.
+   */
+  offer_proposed: async (ctx) => {
+    // ‼️ loadOfferStrict, NOT ctx.client.offer. The offer moved to client_offers (2026-09-15) and
+    // `offer` left CLIENT_COLUMNS in the same commit: reading the old field would see an empty offer
+    // for every client and refuse this step board-wide. A read failure is a fault, never "nothing
+    // was proposed", which would send somebody to check an intake form that is fine.
+    const { loadOfferStrict, offerLine } = await import("./offers");
+    const loaded = await loadOfferStrict(ctx.clientId);
+    if (!loaded.ok) return dbUnreachable("client_offers");
+    const offer = loaded.offer;
+
+    if (!offer.proposedTreatment) {
+      return notYet(
+        "client_offers.proposed_treatment for the primary audience",
+        "nothing was proposed, so no intake answer named a service",
+        "This reads services.primary_treatment, then ideal_patient.highest_margin, then the " +
+          "first line of services_list. All three are empty for this client, which usually " +
+          "means the intake bag never saved. Check the Intake panel on the board, then Re-check."
+      );
+    }
+
+    return verified(
+      `proposed "${offer.proposedTreatment}", from ${offer.proposedSource ?? "an unrecorded source"}`,
+      // ‼️ The second line is the honest limit of what was checked. Same discipline the
+      // thread tier follows: describe the artifact, never the fact it stands for.
+      `A proposal, not a decision. ${offerLine(offer)}`
+    );
+  },
+
+  /**
+   * A person named the offer.
+   *
+   * ‼️ THE LOCK IS THE ONLY THING DOWNSTREAM READS AS DECIDED, so this refuses on the proposal
+   * alone however good the proposal looks. `lockedAt` and `lockedBy` are what separate "the form
+   * said this" from "we agreed this on the call", and every page, magnet and keyword set built
+   * after it inherits whichever one it was.
+   */
+  offer_locked: async (ctx) => {
+    const { loadOfferStrict, isLocked } = await import("./offers");
+    const loaded = await loadOfferStrict(ctx.clientId);
+    if (!loaded.ok) return dbUnreachable("client_offers");
+    const offer = loaded.offer;
+
+    if (!isLocked(offer)) {
+      return notYet(
+        "client_offers.treatment for the primary audience",
+        offer.proposedTreatment
+          ? `only a proposal is on file ("${offer.proposedTreatment}"), and nobody has confirmed it`
+          : "nothing is proposed and nothing is locked",
+        "On the prep call, reply in this thread with `offer: <what they sell>`, or `offer: yes` " +
+          "to take the proposal as it stands, then `terms: <what their customers call it>`. " +
+          "Everything after this points at whatever is locked here: the keyword set, the tracked " +
+          "question set, the page candidates, the pages drafted before the call and the magnet on " +
+          "every one."
+      );
+    }
+
+    const parts = [`locked on "${offer.treatment}" by ${offer.lockedBy ?? "somebody"}`];
+    if (offer.magnetKey) parts.push(`anchored on ${offer.magnetKey}`);
+    if (offer.positioning) parts.push("positioning captured");
+    parts.push(
+      offer.terms.length
+        ? `${offer.terms.length} customer term${offer.terms.length === 1 ? "" : "s"} captured`
+        : "no customer terms"
+    );
+
+    // ‼️ A LOCK WITH NO TERMS IS STILL A LOCK, and the line says what it costs rather than
+    // refusing. The keyword step can still expand from the treatment and its own naming variants;
+    // it just has less of the customers' own vocabulary to test relevance against.
+    return verified(
+      parts.join(", "),
+      offer.terms.length
+        ? `Terms: ${offer.terms.join(", ")}.`
+        : "No customer terms, so the keyword match will be weaker. `terms: a, b, c` in this thread adds them.",
+      // True because setDeliveryStep re-runs a finished step whose blocker completes after it.
+      `Completing this re-runs step ${stepNumber("custom_question_set")}'s question set and step ` +
+        `${stepNumber("page_candidates")}'s page candidates wherever they already ran, and opens ` +
+        `step ${stepNumber("keyword_set")}.`
+    );
+  },
+
+  // ‼️ SYSTEM TIER, OFF client_keywords: the floor of query rows, a person's approval, and enough
+  // approved queries about the offer to fill a pillar and six supports. A set expanded for a
+  // different offer than the one locked now is refused, because an approval of that set is an
+  // approval of the wrong thing.
+  keyword_set: async (ctx) => {
+    const { verifyKeywordSet } = await import("./client-keywords");
+    const v = await verifyKeywordSet(ctx.clientId);
+    if (v.ok) return verified(...v.evidence);
+    return v.broken
+      ? broken("client_keywords for this client", v.found, v.todo)
+      : notYet("client_keywords for this client", v.found, v.todo);
   },
 
   custom_question_set: async (ctx) => {
@@ -710,7 +830,42 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     return verified(`${n} page candidates scored and ranked`);
   },
 
-  citation_cleanup_list: async (ctx) => artifactOnRecord(ctx, "the citation cleanup list"),
+  // ‼️ SAME GAP presence_pdf HAD, SAME FIX. artifactOnRecord proves one thing: a client_docs
+  // row carries this step key. It cannot tell an empty list built from a finished sweep from an
+  // empty list built from a sweep nobody started, and those are opposite claims about a
+  // business. Measured on SRT: all 19 rows at confirmed_status null and the board line read
+  // like the work was done.
+  //
+  // It still TICKS rather than refusing, for the reason presence_pdf's note gives: the list is
+  // generated, the step is auto, and refusing here would deadlock a board over a legitimately
+  // skipped sweep. citation_cleanup, further down, is the step that DOES refuse on not_checked,
+  // because "the cleanup was executed" is a different claim from "the list was built".
+  citation_cleanup_list: async (ctx) => {
+    const filed = await artifactOnRecord(ctx, "the citation cleanup list");
+    if (!filed.ok) return filed;
+
+    const total = await countRows("nap_discrepancies", ctx.clientId);
+    if (total === null) return dbUnreachable("nap_discrepancies");
+
+    const { loadSweepView, countByStatus } = await import("./presence-sweep");
+    const { rows, hidden } = await loadSweepView(ctx.clientId);
+    // loadSweep swallows a query error into an empty array, so a disagreement between the two
+    // reads means say nothing rather than a number. ‼️ PLUS `hidden`: rows the audience is not
+    // swept on are left out of the view on purpose, and that is not the query failing.
+    if (rows.length + hidden !== total) return dbUnreachable("nap_discrepancies");
+
+    const counts = countByStatus(rows);
+    const checked = rows.length - counts.not_checked;
+
+    return verified(
+      `the citation cleanup list is filed against this client, built from ${checked} of ` +
+        `${rows.length} platform${rows.length === 1 ? "" : "s"} that have been checked` +
+        (counts.not_checked
+          ? `. The other ${counts.not_checked} cannot appear on it: there is no confirmed ` +
+            `finding to put on the list, which is an unfinished sweep and not a clean record`
+          : "")
+    );
+  },
 
   // ‼️ IT VERIFIES THE PAGES AND THE EVIDENCE UNDER THEM, NOT THAT ANYBODY LIKED THE RESULT.
   // Rows exist and each was written from a snapshot of the page it shadows: both are real state
@@ -877,7 +1032,24 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
       );
     }
 
+    // ‼️ THE DEMO LINK IS FETCHED, NOT ASSUMED (2026-09-11). The row was always there while the link
+    // this step posted named concierge.srtagency.com, which does not resolve, with no token, which a
+    // switched-off widget refuses. A tick over a dead demo link is a tick over the one thing this
+    // step exists to hand over.
+    const { conciergePreviewUrlFor } = await import("./concierge-setup");
+    const { probeUrl } = await import("@/lib/concierge/host-check");
+    const demo = await conciergePreviewUrlFor(ctx.clientId);
+    const seen = demo ? await probeUrl(demo, 10_000) : null;
+    if (!seen?.ok) {
+      return notYet(
+        "a request for the demo link, made just now",
+        seen ? seen.detail : "no link could be minted (CLIENT_LINK_SECRET is unset or the client has no slug)",
+        "Re-run this step; its card names what failed."
+      );
+    }
+
     return verified(
+      `the demo link on ${new URL(demo as string).host} answered ${seen.status} to a request made just now`,
       `concierge_configs row present, ${origins.length} embed origin${origins.length === 1 ? "" : "s"} seeded (${origins.join(", ")})`,
       `analysis provider is \`${data.analysis_provider}\``,
       // ‼️ SAID, NOT REFUSED, AND THE LINE IS WHERE THE WIDGET IS. A preview answers on our own
@@ -900,7 +1072,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     const { data, error } = await supabaseAdmin
       .from("concierge_configs")
       .select(
-        "enabled, booking_mode, booking_url, booking_phone, allowed_origins, audience, audience_confirmed_at, audience_confirmed_by"
+        "enabled, booking_mode, booking_url, booking_phone, allowed_origins, audience, audience_confirmed_at, audience_confirmed_by, addon_status"
       )
       .eq("client_id", ctx.clientId)
       .maybeSingle();
@@ -932,6 +1104,18 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     //
     // Refusing FIRST means a person cannot satisfy this step by flipping `enabled` and having the
     // audience question never come up.
+    // ‼️ A WIDGET THEY DID NOT BUY DOES NOT GO LIVE (2026-09-16). The concierge is an add-on; this step is the
+    // one that puts it on their pages, so it refuses until somebody recorded that it was included.
+    if (data.addon_status !== "included") {
+      return notYet(
+        "concierge_configs.addon_status for this client",
+        data.addon_status === "declined" ? "the add-on was not included" : "nobody has recorded whether the add-on was bought",
+        data.addon_status === "declined"
+          ? "They did not take the concierge. Skip this step, or `concierge install` in any thread if they add it."
+          : "Press [Include concierge (add-on)] on step 18's card, or `concierge install` in any thread."
+      );
+    }
+
     if (!data.audience_confirmed_at) {
       return notYet(
         "concierge_configs.audience_confirmed_at for this client",
@@ -1135,38 +1319,163 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     );
   },
 
+  // ‼️ IT SAID "<host> answered a live request" HAVING MADE NO REQUEST (fixed 2026-09-11). The old
+  // check confirmed the theme and that a host row existed, then printed a sentence about a fetch
+  // that never happened, on a host that was NXDOMAIN. It now fetches: the client's own reviews host
+  // once its CNAME is verified, and before that the tokenised preview on our internal host, which
+  // needs no DNS at all. The evidence line names which one was asked and what it answered.
   review_tool_preview: async (ctx) => {
-    const { data, error } = await supabaseAdmin
-      .from("client_hosts")
-      .select("host, vercel_attached_at")
-      .eq("client_id", ctx.clientId)
-      .eq("kind", "reviews")
-      .maybeSingle();
-    if (error) return dbUnreachable("client_hosts");
-    if (!data?.vercel_attached_at) {
+    const { reviewToolPreviewReady, observeReviewTool } = await import("./review-preview");
+
+    const ready = await reviewToolPreviewReady(ctx.clientId);
+    if (!ready.ok) {
+      return notYet("a confirmed theme for the review tool", "the theme has not been confirmed", ready.error);
+    }
+
+    const seen = await observeReviewTool(ctx.clientId);
+    // Host only: the preview URL carries a 14-day token and evidence lines are kept.
+    const host = seen.url ? new URL(seen.url).host : null;
+
+    if (!seen.ok) {
       return notYet(
-        "the reviews host for this client",
-        data ? "a row exists but nothing was attached" : "no reviews host is registered",
-        "The reviews host is attached by the hub step. Confirm step 15 first."
+        seen.via === "live"
+          ? `a request to ${host}, made just now`
+          : `a request for the review tool preview${host ? ` on ${host}` : ""}, made just now`,
+        seen.detail,
+        seen.via === "live"
+          ? "The reviews CNAME is verified, so their own host is what gets checked. A 404 there usually means the host is not attached on Vercel or its client_hosts row is off."
+          : "The preview needs no DNS. A 404 means the token or the client did not resolve; a timeout is usually a cold start, so Re-check once."
       );
     }
 
-    const { verifyReviewToolPreview } = await import("./review-preview");
-    const res = await verifyReviewToolPreview(ctx.clientId);
-    if (!res.ok) {
-      return notYet(
-        `a live request to ${data.host}`,
-        res.error ?? "the preview did not answer",
-        "An attached domain with no DNS record behind it does not resolve yet, which is normal " +
-          "before the client adds the CNAME. Re-check after the DNS step."
-      );
-    }
-    return verified(`${data.host} answered a live request`);
+    return verified(
+      seen.via === "live"
+        ? `${host} answered ${seen.status} to a request made just now`
+        : `the review tool preview on ${host} answered ${seen.status} to a request made just now (their reviews CNAME is not verified yet, so the preview link was checked)`,
+      ready.themed
+        ? "theme confirmed with overrides"
+        : "theme confirmed with no overrides, so SRT's defaults render deliberately"
+    );
   },
 
-  review_card_pdf: async (ctx) => artifactOnRecord(ctx, "the review card PDF"),
+  // ‼️ SYSTEM TIER, AND IT IS OBSERVABLE STATE: the drafts exist as client_pages rows linked to the
+  // approved plan rows, each with a body. A thread-tier tick would be a person saying pages exist.
+  pre_call_pages: async (ctx) => {
+    const { verifyPreCallPages } = await import("./pre-call-pages");
+    const v = await verifyPreCallPages(ctx.clientId);
+    if (v.ok) return verified(...v.evidence);
+    return v.broken
+      ? broken("the pre-call plan and its drafts", v.found, v.todo)
+      : notYet("the pre-call plan and its drafts", v.found, v.todo);
+  },
 
-  call_sheet: async (ctx) => artifactOnRecord(ctx, "the call sheet PDF"),
+  // ‼️ A CARD WHOSE QR ENDS ON A PAGE WITH NO POST BUTTON IS NOT DONE (2026-09-16). SRT's card was
+  // generated and ticked while its chosen platform, Trustpilot, had no link, so every scan finished
+  // four questions and was told to go and find the review page herself. The PDF on record is still
+  // the first half; a pasted review link is the second.
+  review_card_pdf: async (ctx) => {
+    const onRecord = await artifactOnRecord(ctx, "the review card PDF");
+    if (!onRecord.ok) return onRecord;
+    const { hasReviewLink, reviewDestinationLine } = await import("./review-link");
+    if (!(await hasReviewLink(ctx.clientId))) {
+      return notYet(
+        "a review link the page's Post button can open",
+        await reviewDestinationLine(ctx.clientId),
+        "Paste their review page with `review link: <url>` in this thread or [Paste review link] on this card."
+      );
+    }
+    return onRecord;
+  },
+
+  // ‼️ FOUR DOCUMENTS, AND artifactOnRecord CANNOT TELL THEM APART. It proves exactly one thing:
+  // that some client_docs row carries this step key. That was true the moment the call sheet
+  // landed, even with the findings and the presence PDF both refused, so the merged step would
+  // have gone green over a pack that was missing half of itself.
+  //
+  // ‼️ FROM THIS RUN, NOT FROM ANY RUN. storeGeneratedDoc INSERTS on every pass, so a filename
+  // match alone passes on a document generated weeks ago against a sweep that has since changed.
+  // started_at is when the runner claimed the step. A row with no started_at (one that predates
+  // the column) is not refused over it: the check falls back to "is it filed at all", which is
+  // what this verifier used to do for all four.
+  //
+  // `source = generated` because a screenshot somebody drops in this thread is also a client_docs
+  // row against this step, and a screenshot is not the findings document.
+  call_sheet: async (ctx) => {
+    if (!ctx.row.output_ref) {
+      return notYet(
+        "the step's output_ref",
+        "empty, so the call pack has not been generated for this step",
+        "Un-tick and re-tick the step to run the pack. All four generators are idempotent, so " +
+          "re-running is safe."
+      );
+    }
+
+    const { CALL_PACK_DOCS, callPackDocOf } = await import("./artifacts/call-pack");
+
+    const { data, error } = await supabaseAdmin
+      .from("client_docs")
+      .select("filename, uploaded_at")
+      .eq("client_id", ctx.clientId)
+      .eq("delivery_step_key", ctx.stepKey)
+      .eq("source", "generated");
+
+    if (error) return dbUnreachable("client_docs");
+
+    // A minute of slack between the app clock that stamps started_at and the one that stamps
+    // uploaded_at. Without it a document filed in the same second reads as older than the run
+    // that produced it.
+    const since = ctx.row.started_at ? Date.parse(ctx.row.started_at) - 60_000 : null;
+    const fromThisRun = (data ?? []).filter((d) => {
+      if (since === null) return true;
+      const at = Date.parse((d.uploaded_at as string | null) ?? "");
+      return Number.isNaN(at) ? true : at >= since;
+    });
+
+    const present = new Set(
+      fromThisRun.map((d) => callPackDocOf((d.filename as string | null) ?? "")).filter(Boolean)
+    );
+    const missing = (Object.keys(CALL_PACK_DOCS) as Array<keyof typeof CALL_PACK_DOCS>).filter(
+      (k) => !present.has(k)
+    );
+
+    if (missing.length > 0) {
+      const names = missing.map((k) => CALL_PACK_DOCS[k].label);
+      return notYet(
+        "the four call pack documents filed against this step",
+        `${4 - missing.length} of 4 are on file. Missing: ${names.join(", ")}`,
+        "Un-tick and re-tick the step to re-run the pack. Anything that keeps refusing prints " +
+          "its own reason in this thread, and that reason is what to fix: the presence PDF needs " +
+          "the sweep, the findings need the review audit."
+      );
+    }
+
+    // The presence PDF's own line, kept through the merge. A skipped sweep reads as "not checked"
+    // everywhere, and that is an absence of evidence rather than a finding of correctness.
+    // Counted separately from loadSweep because loadSweep swallows a query error into an empty
+    // array, and "the query failed" must never render as "no rows exist".
+    const total = await countRows("nap_discrepancies", ctx.clientId);
+    if (total === null) return dbUnreachable("nap_discrepancies");
+
+    const { loadSweepView, countByStatus } = await import("./presence-sweep");
+    const { rows, hidden } = await loadSweepView(ctx.clientId);
+    // Hidden rows are the audience narrowing the sweep, not the query failing. See citation_cleanup_list.
+    if (rows.length + hidden !== total) return dbUnreachable("nap_discrepancies");
+
+    const counts = countByStatus(rows);
+    const checked = rows.length - counts.not_checked;
+
+    return verified(
+      "all four call pack documents are filed against this step: " +
+        Object.values(CALL_PACK_DOCS)
+          .map((d) => d.label.toLowerCase())
+          .join(", "),
+      `the presence PDF reports ${checked} of ${rows.length} platform${rows.length === 1 ? "" : "s"} checked` +
+        (counts.not_checked
+          ? `. The other ${counts.not_checked} print as "not checked", which is an absence of ` +
+            `evidence and not a finding of correctness`
+          : "")
+    );
+  },
 
   // ── THE CALL ───────────────────────────────────────────────────────────────
   call_booked: async (ctx) => {
@@ -1349,7 +1658,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
         "client_dns_records for this client",
         "no DNS rows have been seeded",
         "seedDnsRecords never ran, which happens when the hub step did not complete. Confirm " +
-          "step 15 first; it seeds all three records."
+          `step ${stepNumber("hub_preview")} first; it seeds all three records.`
       );
     }
     if (!allVerified(rows)) {
@@ -1370,15 +1679,37 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
   // setDeliveryStep calls stampDay0() after the row write, and this runs before it. So the
   // evidence has to be the archive itself, in the thread. That also makes this step stricter
   // than it was: it sits in front of the only hard rail in the repo and was a bare assertion.
-  day_zero_archive: async (ctx) =>
-    artifactInThread(
+  // ‼️ THERE ARE NOW TWO WAYS TO CONFIRM THIS, AND THEY ARE DIFFERENT KINDS OF FACT.
+  //
+  // A real `photograph_2` run is SYSTEM tier: the app fired the tracked set, stored every answer
+  // and can count them. That is the archive itself, not a picture of one, which is what this step
+  // has always been asking for and what nothing could produce until 2026-09-12.
+  //
+  // The thread tier stays underneath it, unchanged, because one engine is keyed and A2 D-P16 says a
+  // one-engine run is never a photograph. Until a second engine is keyed, `photograph` files a
+  // `measurement` and this step is still confirmed the old way, by a person posting the archive.
+  day_zero_archive: async (ctx) => {
+    const { day0PhotographFor } = await import("./photograph");
+    const taken = await day0PhotographFor(ctx.clientId);
+
+    if (taken && taken.answered > 0) {
+      return verified(
+        `Photograph II is archived: ${taken.questions} tracked questions, ${taken.answered} answered, ` +
+          `taken ${taken.takenAt.slice(0, 10)}`,
+        "The day 30, 60 and 90 re-tests re-ask exactly those questions, off the archived run"
+      );
+    }
+
+    return artifactInThread(
       ctx,
       "a Day-0 archive having been taken",
-      "Post the archived Day-0 scan into this thread before ticking. This is the baseline the " +
-        "day 30/60/90 numbers are measured against, and once a page is live it cannot be " +
-        "recovered by being careful afterwards. Ticking here stamps day_0_source as " +
-        "manual_step, which is an assertion the archive happened and is never a photograph."
-    ),
+      "Post the archived Day-0 scan into this thread before ticking, or reply `photograph` to run " +
+        "the tracked set from here. This is the baseline the day 30/60/90 numbers are measured " +
+        "against, and once a page is live it cannot be recovered by being careful afterwards. " +
+        "Ticking here stamps day_0_source as manual_step, which is an assertion the archive " +
+        "happened and is never a photograph."
+    );
+  },
 
   // ── BUILD ──────────────────────────────────────────────────────────────────
   gbp_buildout: async (ctx) =>
@@ -1414,7 +1745,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
       return broken(
         "nap_discrepancies for this client",
         "no presence rows exist, so there is no cleanup list to have executed",
-        "The sweep never seeded. Confirm step 4 first."
+        `The sweep never seeded. Confirm step ${stepNumber("nap_sweep")} first.`
       );
     }
 
@@ -1482,7 +1813,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
       return broken(
         "the cname_hub row for this client",
         "no hub CNAME record has been seeded",
-        "seedDnsRecords never ran for this client. Confirm step 15 first: registerHubAndSeedDns " +
+        `seedDnsRecords never ran for this client. Confirm step ${stepNumber("hub_preview")} first: registerHubAndSeedDns ` +
           "is what writes the three rows."
       );
     }
@@ -1503,9 +1834,32 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     }
 
     const verifiedCount = rows.filter((r) => r.status === "verified").length;
+
+    // ‼️ THE MAIN SITE TO PILLAR LINK IS OBSERVED, AND IT IS A LINE, NOT A GATE (2026-09-11).
+    // The SOP: "the interlink is what passes authority in both directions". Hub to main already
+    // exists through the NAP and sameAs. This fetches their homepage and looks for a link to the
+    // published pillar, and says exactly what it saw. It cannot gate this step: first_page is
+    // blocked by subdomain_live, so the pillar cannot be live yet on the first pass, and gating
+    // would demand a link to a page that 404s. Every Re-check after publishing re-fetches, and the
+    // line never claims a link it did not fetch.
+    const { mainSiteLinksPillar } = await import("./main-site-link");
+    const link = await mainSiteLinksPillar(ctx.clientId).catch((e) => ({
+      checked: false,
+      found: false,
+      homepage: null,
+      pillarUrl: null,
+      detail: (e as Error).message,
+    }));
+    const linkLine = !link.checked
+      ? `main site to pillar link not checked: ${link.detail}`
+      : link.found
+        ? `${link.homepage} links to the pillar ${link.pillarUrl} (fetched just now)`
+        : `${link.homepage} was fetched just now and does NOT link to the pillar ${link.pillarUrl} yet. Ask whoever edits their site to add it`;
+
     return verified(
       `\`${hub.host}\` resolves to the hub target (record status verified)`,
-      `${verifiedCount} of ${rows.length} DNS records verified`
+      `${verifiedCount} of ${rows.length} DNS records verified`,
+      linkLine
     );
   },
 
@@ -1710,6 +2064,9 @@ const CLIENT_COLUMNS =
   // took steps 7 and 9 down with it by asking for `visibility_score`. pixel_key is created by
   // docs/2026-09-03-attribution.sql; that migration is a prerequisite for the board, not just
   // for the pixel.
+  //
+  // ‼️ `offer` LEFT THIS LIST ON 2026-09-15. The offer lives in client_offers now and both offer
+  // verifiers read it through loadOfferStrict. Putting it back would re-read the deprecated mirror.
   "pixel_key";
 
 /**
@@ -1745,7 +2102,7 @@ export async function verifyStep(clientId: string, stepKey: string): Promise<Ver
     supabaseAdmin.from("clients").select(CLIENT_COLUMNS).eq("id", clientId).maybeSingle(),
     supabaseAdmin
       .from("client_delivery_steps")
-      .select("status, output_ref, error_detail, slack_anchor_ts")
+      .select("status, output_ref, error_detail, slack_anchor_ts, started_at")
       .eq("client_id", clientId)
       .eq("step_key", stepKey)
       .maybeSingle(),
@@ -1834,6 +2191,20 @@ export function refusalText(stepLabel: string, verdict: Verdict): string {
 
   lines.push("");
   lines.push("The step is still open and has no checkmark.");
+
+  // ‼️ A REFUSAL THAT ENDS ON "STILL OPEN" TELLS SOMEBODY THEY ARE STUCK AND NOT HOW TO GET OUT.
+  // The verdict above already carries the specific todo or fix. This is the generic half: what
+  // the buttons do and where the rest of it lives.
+  //
+  // ‼️ AND IT IS SYNCHRONOUS, WHICH IS WHY IT DOES NOT NAME THE NEXT STEP. This function runs
+  // inside the button path, between a tap and the reply Slack is waiting three seconds for, and
+  // making it async to look up the board would put a query in that gap. next-steps.ts records
+  // the same reason on nextStepLinesSync.
+  lines.push("");
+  lines.push("*Next:*");
+  lines.push("  • Do the thing above, then press *Re-check* on the card.");
+  lines.push("  • Or say what happened in this thread, which is where the evidence is read from.");
+
   return lines.join("\n");
 }
 

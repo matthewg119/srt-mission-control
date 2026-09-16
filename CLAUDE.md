@@ -2835,10 +2835,17 @@ worse than a record idle for a fortnight.
   newer projects, so correct it per record from the Vercel dashboard.
 
 ### The audit gates the call
-`headerText` (step-board.ts) warns when `call_booked`/`call_held` is ticked while `baseline_scan`
-or `findings_doc` is not. The call is where the screenshots and the avatar decision come from,
-so holding it first means opinions instead of evidence. **Flags, never blocks** — same
-doctrine as the market-overlap check and the Day-0 gate.
+`headerText` (step-board.ts) warns when `call_booked`/`call_held` is ticked while `baseline_scan`,
+`presence_sweep_manual` or `review_audit` is not. The call is where the screenshots and the avatar
+decision come from, so holding it first means opinions instead of evidence. **Flags, never
+blocks** — same doctrine as the market-overlap check and the Day-0 gate.
+
+> It named `findings_doc` until the call pack merged that step away (2026-09-12). Re-pointing it at
+> `call_sheet` would have been the obvious move and it is wrong: that step now also waits on the
+> nine drafted pages, the hub and the question set, so the gate would warn about the baseline over
+> work that has nothing to do with it. These three are what `findings_doc` was built from, which is
+> what the gate was always really asking about. The same three keys are repeated on the
+> `call_booked` card in `step-engine.ts`.
 
 Day 30/60/90 reminders ride on `/api/cron/followup-digest` (`report-reminders.ts`) rather
 than a new cron: `vercel.json` already carries 14 entries against a Hobby plan that
@@ -4131,6 +4138,71 @@ at one single-purpose mailbox that is deliberately identical for every campaign.
 `contacts.utm_campaign` was null on every ReachInbox lead before this: `ingestLead` was passed
 `utmSource` and `utmMedium` as constants and no campaign at all, so every campaign ever run produced
 byte-identical attribution.
+
+## A campaign reply reaches Slack (2026-09-16) -- the webhook stopped being silent
+
+The first campaign (`7D 3E 6M`, a `verified-ok.csv` send list of 136) went out on 2026-09-16 and the
+webhook was registered against `/api/webhooks/reachinbox` with **Reply Received**. At that point the
+receiver stored the event and posted nothing, because the 2026-09-07 rule was "nothing is posted to
+Slack" -- so a live campaign could take a reply and nobody would be told.
+
+**‼️ THAT RULE WAS ABOUT VOLUME, NOT ABOUT REPLIES, AND IT HAD BEEN OVER-READ.** `All Events`
+carries Email Sent and Email Opened in the thousands, and those would bury a channel whose invariant
+is that nothing appears unless a real prospect did something. A `replied` event **is** that
+invariant. So exactly one event type is announced and the other five still land in the table in
+silence. `All Events` remains the correct registration -- the volume never reaches Slack.
+
+**The gate is `shouldAnnounceReply` in `src/lib/reachinbox/announce.ts`, not in the route**, so a
+future caller cannot widen it by passing a different event type. It also requires `lead_email`: a
+reply with no address still counts in the funnel but has no person to open a thread for.
+
+### The two lanes compose; neither one posts a second card
+
+    webhook  -> mints the prospect, opens ITS thread, posts "reply received" in seconds
+    mailbox  -> finds that same prospect and that same thread, posts the body into it
+
+`ensureProspectThread` returns early when `slack_thread_ts` is already set, which is the whole
+mechanism. **Do not change either side to post a fresh top-level message**, or one reply becomes two
+cards the moment `REACHINBOX_REPLY_MAILBOX` is finally set. The webhook calls the same
+`createCampaignProspect` the mailbox lane calls, so there is one set of minting rules, not two.
+
+**‼️ THE WEBHOOK DELIBERATELY DOES NOT INGEST A CRM LEAD.** `announceCampaignReply` does that, and
+it can because it has the body: `speedToLead` is gated on `isHot(classification)` and a RingOut
+fired at "take me off your list" is worse than no RingOut. The webhook has no body to classify, so
+the card says `Not in the CRM yet` rather than creating a thin lead and guessing. The CRM half of
+this lane genuinely still waits on the forwarding mailbox.
+
+### What the card may and may not claim
+
+`replyText` is best effort and **null is the normal case**. It renders as "ReachInbox sent no reply
+text with this event", never as an empty quote -- a silent blank reads as "they sent an empty email",
+which is a different and much worse fact. `REPLY_TEXT_KEYS` deliberately **excludes bare `text`**:
+a Slack Block Kit body puts the notification's own prose there, and quoting that back would show
+Matthew a sentence we wrote as though the lead wrote it. `LEAD_NAME_KEYS` excludes bare `name` for
+the same class of reason -- `findByKey` searches the whole tree, so `name` matches the campaign
+object and would address the card to "7D 3E 6M".
+
+The route logs the top-level payload KEYS (never the values -- a reply body is the lead's own words)
+on the first reply, so whichever key the body really arrives under is one log line away.
+
+### `announced_at`, and why a retry re-announces
+
+`docs/2026-09-16-reachinbox-reply-announce.sql` (run in prod 2026-09-16). ReachInbox retries any
+webhook it did not get a 200 from, which cuts both ways: a retry landing mid-post would double the
+thread note, and a first attempt that inserted the row and then died before Slack would lose the
+notification for good. So **the 23505 duplicate path still calls announce**, and the claim is a
+conditional `update ... where announced_at is null` that lets the database pick a winner. A failure
+after the claim releases it, so the next retry can try again.
+
+**‼️ A MISSING COLUMN ANNOUNCES ANYWAY** (42703 is caught and treated as "go"). This file has to
+work on the deploy that lands before the SQL is run, and a duplicate note is legible where a missing
+one is not. The announcement is `await`ed, never backgrounded: a serverless function can be frozen
+the moment it responds.
+
+Probe: `bunx tsx scripts/_probe-reachinbox-webhook.ts` -- 94 checks, offline, no key, no DB. It
+proves the gate for all six event types, that a bodiless card quotes nothing at all, and that Slack
+prose is never mistaken for the lead's words.
+
 
 ## The drop dedupes before it asks which workflow (2026-09-03)
 

@@ -122,6 +122,30 @@ export function buildOnboarding2Url(
 }
 
 /**
+ * THE booking link for a report's prospect: the same /onboarding2 URL the report's Get Started
+ * button opens, carrying r=<slug> (2026-09-15).
+ *
+ * ‼️ NOT SRT_ONBOARDING_CALL_URL. That was a bare Calendly page, and a booking made there never
+ * reaches the app: no client, no channel, no board. Booking through /onboarding2 is what starts
+ * onboarding, and the slug is what attaches THIS report to the client as its pre-call audit. The Loom
+ * script, the beat sheet and the delivery email all send people here.
+ */
+export function bookingUrlForReport(
+  report: { slug?: string | null; score?: number | null; city?: string | null; client_name?: string | null },
+  origin = FUNNEL_ORIGIN
+): string {
+  return buildOnboarding2Url(
+    {
+      score: report.score ?? null,
+      city: report.city ?? null,
+      business: report.client_name ?? null,
+      reportSlug: report.slug ?? null,
+    },
+    origin
+  );
+}
+
+/**
  * The explainer funnel.
  *
  * ‼️ NO CALLER AS OF 2026-09-03. The audit report dropped its second button that day and this is

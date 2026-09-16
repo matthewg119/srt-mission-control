@@ -10,7 +10,7 @@
 // not a script that fetches and then removes itself.
 
 import { supabaseAdmin } from "@/lib/db";
-import { conciergeOrigin } from "./origin";
+import { conciergeOrigin, previewOrigin } from "./origin";
 
 export { conciergeOrigin };
 
@@ -97,8 +97,13 @@ export async function ConciergeEmbed({
   // ‼️ ON THE src, NOT IN A data- ATTRIBUTE. embed.js copies query params off its own script URL
   // into the frame URL and into its config fetch, which are the two places that have to carry it.
   // A data- attribute would need threading through both by hand.
+  //
+  // ‼️ A PREVIEW LOADS FROM OUR OWN HOST, A LIVE PAGE FROM THE CONCIERGE HOST. The token only
+  // ever arrives from /preview/[token], which is itself on the internal host, so the loader, the
+  // frame it derives and the API calls it makes are all same-origin with the page and need no
+  // DNS record anywhere. See previewOrigin() in ./origin.ts.
   const src = token
-    ? `${conciergeOrigin()}/embed.js?pt=${encodeURIComponent(token)}`
+    ? `${previewOrigin()}/embed.js?pt=${encodeURIComponent(token)}`
     : `${conciergeOrigin()}/embed.js`;
 
   return (

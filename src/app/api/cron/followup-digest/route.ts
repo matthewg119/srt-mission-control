@@ -16,6 +16,7 @@ import { runFollowupDigest } from "@/lib/followup-operator/digest";
 import { runClientReportReminders } from "@/lib/clients/report-reminders";
 import { runContentDigest } from "@/lib/clients/content-digest";
 import { runWeeklyReports } from "@/lib/clients/weekly-report";
+import { runWeeklyHeadlines } from "@/lib/clients/weekly-headlines";
 import { runTimeLogNudges } from "@/lib/clients/time-log-nudge";
 import { runFunnelReport } from "@/lib/experiments/funnel-report";
 import { stepDigest } from "@/lib/clients/step-engine";
@@ -41,9 +42,12 @@ async function handle(req: NextRequest) {
     const result = await runFollowupDigest({ dry });
 
     // A PASSENGER on this job, deliberately. Client day 30 / 60 / 90 reminders need a
-    // daily tick and nothing else; vercel.json already carries 14 cron entries against a
-    // Hobby plan that documents 2, so adding a 15th to run one query is the wrong move.
+    // daily tick and nothing else; vercel.json already carries 17 cron entries against a
+    // Hobby plan that documents 2, so adding an 18th to run one query is the wrong move.
     // This is already the "what is due today" run.
+    //
+    // (That count said 14 until 2026-09-14. It is 17 now, which makes the point harder
+    // rather than softer, and a stale number in a warning is how a warning stops working.)
     //
     // Caught separately: a reminder failing must never turn the follow-up digest, which
     // is the job this route exists for, into a 500.
@@ -106,6 +110,17 @@ ${text}`);
       return { posted: 0, reason: "threw" };
     });
 
+    // Seventh passenger, same reasoning and the same isolation. Twenty AEO headlines per client
+    // per week. Thursday only, and it returns immediately on the other six days without touching
+    // the database. Idempotent on the ISO week against client_headlines itself, so a second run
+    // on the same Thursday writes nothing.
+    const headlines = dry
+      ? { posted: 0, skipped: 0 }
+      : await runWeeklyHeadlines().catch((e) => {
+          console.error("[followup-digest] weekly headlines failed:", (e as Error).message);
+          return { posted: 0, skipped: 0 };
+        });
+
     return NextResponse.json({
       ok: true,
       dry,
@@ -113,6 +128,7 @@ ${text}`);
       clientReports: { checked: reports.checked, reminded: reports.reminded.length },
       contentDigest: { posted: content.posted.length, skipped: content.skipped },
       weeklyReports: weekly,
+      weeklyHeadlines: headlines,
       timeLogNudges: timeLog,
       funnelReport,
     });

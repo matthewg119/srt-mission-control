@@ -162,7 +162,7 @@ export function formatDnsRecords(
     const value = preview
       ? def?.valueIsExternal
         ? "generated in Search Console on the call"
-        : "issued by Vercel at step 15"
+        : `issued by Vercel at step ${stepNumber("hub_preview")}`
       : row.value ??
         (def?.valueIsExternal
           ? "generated in Search Console on the call"
@@ -176,7 +176,7 @@ export function formatDnsRecords(
   for (const row of rows) {
     out.push(
       preview
-        ? `  • ${row.host} becomes ${fqdn(row.host, domain)} once step 15 attaches it`
+        ? `  • ${row.host} becomes ${fqdn(row.host, domain)} once step ${stepNumber("hub_preview")} attaches it`
         : `  • ${row.host} becomes ${fqdn(row.host, domain)} — currently *${row.status}*`
     );
   }

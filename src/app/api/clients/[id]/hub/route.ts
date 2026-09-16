@@ -14,6 +14,7 @@ import { autoCompleteStep, stepByKey } from "@/lib/clients/delivery-checklist";
 import { subdomainLabel } from "@/lib/clients/normalize";
 import { assertDay0Archived, isDay0Error, DAY_ZERO_STEP_KEY } from "@/lib/clients/day-zero";
 import { assertGatePassed, isGateError, runGate, waiveGate, latestGateRun } from "@/lib/hub/page-gate";
+import { capturePage } from "@/lib/clients/page-dataset";
 import {
   loadEvidenceFor,
   verifySource,
@@ -334,6 +335,15 @@ export async function POST(
       const result = await setPublished(clientId, pageId, publish);
       if (!result.ok) return NextResponse.json({ ok: false, error: result.error });
 
+      // ‼️ THE SNAPSHOT OF WHAT SHIPPED, AND IT IS THE MOST VALUABLE ROW IN THE DATASET. Every
+      // other capture is a draft; this one is the version that went on somebody's domain, after
+      // whatever editing happened in between. Fire and forget, and deliberately unawaited-in-
+      // effect: capturePage swallows its own failures, because losing a research row must never
+      // fail a publish that has already passed the Day 0 wall and the gate.
+      if (publish) {
+        void capturePage({ clientId, pageId, reason: "published" });
+      }
+
       let pageUrl: string | null = null;
 
       if (publish && client.domain) {
@@ -401,6 +411,13 @@ export async function POST(
       // The type is whitelisted rather than trusted. It is what isFirstParty() reads, and a
       // request that could set its own type could label outside research as the client's own
       // words and satisfy the first-party floor with somebody else's page.
+      //
+      // ‼️ CUSTOMER_REVIEW IS DELIBERATELY NOT ON THIS LIST, and it is the one omission likely
+      // to look like an oversight. A review quote is only worth anything if it is what the
+      // customer actually published, and the guarantee that it is comes from being TRANSCRIBED
+      // off the screenshot it was read from, then confirmed against that picture. A free text
+      // box types an approximation and calls it a quote, with nothing to check it against. The
+      // page studio's `review` command is the one door, on purpose.
       const ALLOWED: SourceType[] = [
         "CLIENT_VOICE",
         "CLIENT_DOCUMENT",

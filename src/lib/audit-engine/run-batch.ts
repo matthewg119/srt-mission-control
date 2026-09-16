@@ -11,6 +11,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { runOpenAI, withMention } from "./run-prompts";
 import { extractRecommendedBatch } from "./extract-recommended";
+import { recordFanout } from "./fanout-store";
 import type { AuditReportRow } from "./types";
 import type { AuditPrompt } from "./classify";
 
@@ -49,6 +50,20 @@ export async function runBatch(row: AuditReportRow, aliases: string[], promptsIn
         error: result.status === "no_data" ? result.error : null,
       })
     )
+  );
+
+  // The fanout: what the engine actually searched, and what it cited. Written to its
+  // own tables rather than onto audit_runs, because the delete-then-insert above would
+  // wipe it on every re-run. Best-effort by construction — see fanout-store.ts for why
+  // this must never throw into a live audit.
+  await recordFanout(
+    row.id,
+    perPrompt.map(({ prompt: p, result }) => ({
+      prompt: p.prompt,
+      block: p.block,
+      fanoutQueries: result.status === "ok" ? result.fanoutQueries : [],
+      citations: result.status === "ok" ? result.citations : [],
+    }))
   );
 
   // Heartbeat: mark progress so the daily watchdog can tell a live run from a

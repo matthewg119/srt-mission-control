@@ -42,3 +42,33 @@ export function conciergeHostname(): string {
 export function conciergeOrigin(): string {
   return `https://${conciergeHostname()}`;
 }
+
+/**
+ * Where a PREVIEW of the widget answers from: Mission Control's own origin.
+ *
+ * ‼️ A PREVIEW NEEDS NO DNS, AND NAMING THE CONCIERGE HOST MADE IT NEED SOME. On 2026-09-11
+ * `concierge.srtagency.com` was still NXDOMAIN, so every preview loader tag, and the demo link
+ * step 20 posts, pointed at nothing. The internal host already serves /embed.js, /w/{slug} and
+ * /api/concierge/*, and a signed preview token opens a switched-off widget there, so a preview
+ * that loads from here works before anybody has touched a registrar. Live client pages still use
+ * conciergeOrigin() above and nothing about them changes.
+ *
+ * ‼️ THE HEADER'S "ALL THREE MUST AGREE" STILL HOLDS, AND IT HOLDS BY DERIVATION, NOT BY A SECOND
+ * CONSTANT. embed.js builds the frame URL and the config fetch from its own script src, the frame's
+ * /start and /turn are relative, and engine.ts builds the booking hop from the frame origin /start
+ * recorded. Only the loader tag names this function; everything after it follows.
+ *
+ * ‼️ THE ENV READ IS INLINED RATHER THAN BORROWED FROM config.ts OR review-preview.ts, for the
+ * reason at the top of this file: both of those pull the database client in behind them.
+ */
+export function previewOrigin(): string {
+  const raw = (process.env.NEXT_PUBLIC_APP_URL || "").trim();
+  if (raw) {
+    try {
+      return new URL(raw).origin;
+    } catch {
+      // A malformed value falls through to the production default, same as host-classify.ts.
+    }
+  }
+  return "https://mission.srtagency.com";
+}

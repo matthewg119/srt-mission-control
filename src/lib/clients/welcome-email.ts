@@ -33,7 +33,7 @@ import { guard } from "@/lib/copy-guard";
 // Spelled "Search Retrieval Tactics", matching srtagency.com. Kept local to this file so
 // changing it cannot disturb the audit-pitch signature, which is a different voice for a
 // different moment.
-const WELCOME_SIGNATURE_HTML = `
+export const WELCOME_SIGNATURE_HTML = `
 <div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#333333;line-height:1.5">
   <p style="margin:0 0 4px">Thanks,</p>
   <p style="margin:0"><strong>Matthew Garcia</strong></p>
@@ -63,7 +63,7 @@ const INTAKE_LINE = guard(
     "When you're done we'll send you times for our call."
 );
 
-const CALL_LINE = guard(
+export const CALL_LINE = guard(
   "welcome call line",
   "On the call I'll show you exactly where the AI is naming other businesses in your city " +
     "instead of you, then we get set up. About an hour, you drive your own accounts, " +

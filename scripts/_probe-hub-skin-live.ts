@@ -100,7 +100,20 @@ async function main(): Promise<void> {
 
   const before = await loadSkin(clientId);
   const beforeTheme = await themeOf(clientId);
-  console.log(`  will restore: template=${before.template} source=${before.source}`);
+  // ‼️ AND THE CANDIDATES, RAW. writeSkin() clears hub_skin_candidates on every write, and this
+  // probe calls it four times, so restoring only the skin and the theme silently deleted whatever
+  // three designs somebody was halfway through comparing. Found 2026-09-11 before it ran on SRT.
+  const { data: candRow } = await supabaseAdmin
+    .from("clients")
+    .select("hub_skin_candidates")
+    .eq("id", clientId)
+    .maybeSingle();
+  const beforeCandidates =
+    (candRow as { hub_skin_candidates?: unknown } | null)?.hub_skin_candidates ?? null;
+  console.log(
+    `  will restore: template=${before.template} source=${before.source} ` +
+      `candidates=${beforeCandidates ? "a set" : "none"}`
+  );
 
   try {
     const res = await writeSkin(
@@ -232,7 +245,11 @@ async function main(): Promise<void> {
     // skin back would leave a real client's hub rendering SRT's defaults on their own domain.
     await supabaseAdmin
       .from("clients")
-      .update({ hub_skin: before.source === "default" ? null : before, theme: beforeTheme })
+      .update({
+        hub_skin: before.source === "default" ? null : before,
+        theme: beforeTheme,
+        hub_skin_candidates: beforeCandidates,
+      })
       .eq("id", clientId);
 
     const restoredSkin = await loadSkin(clientId);

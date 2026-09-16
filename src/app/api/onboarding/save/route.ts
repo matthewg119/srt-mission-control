@@ -11,10 +11,10 @@
 //
 // NOTHING PRICED. This route reads and writes intake answers and consent. It touches no
 // billing column and imports no price constant.
-
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { verifyOnboardingToken } from "@/lib/clients/token";
+import { adoptPriorAudit } from "@/lib/clients/adopt-audit";
 import { slack } from "@/lib/slack-bot";
 import { revalidateClientHub } from "@/lib/hub/resolve";
 import {
@@ -23,8 +23,8 @@ import {
   autoCompleteStep,
 } from "@/lib/clients/delivery-checklist";
 import { postDraft } from "@/lib/clients/client-drafts";
-import { startBaselineScan } from "@/lib/clients/baseline-scan";
-import { waitUntil } from "@vercel/functions";
+import { channelFor, notifyStep } from "@/lib/clients/step-board";
+import { channelLine } from "@/lib/clients/provision";
 import {
   INTAKE_STEPS,
   TOTAL_STEPS,
@@ -299,9 +299,15 @@ async function onIntakeComplete(args: {
   // ── The anchor message ──
   // Its ts is claimed with a conditional UPDATE guarded on `is null`, so two concurrent
   // completions cannot produce two threads. Same pattern as lead-thread.ts.
-  const onboardingChannel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
-  if (onboardingChannel) {
-    const res = (await slack.postMessage(onboardingChannel, lines.join("\n"))) as {
+  //
+  // ‼️ IN channelFor, NOT THE SHARED CHANNEL (2026-09-15). This message becomes the board header,
+  // and refreshHeader/pinHeader edit it in channelFor(clientId). Posted in #onboarding-srt-aeo while
+  // the board lived in the client's private channel, every edit failed with message_not_found.
+  // The shared channel gets its own one-line notice with the channel link instead.
+  const boardChannel = await channelFor(args.clientId);
+  const sharedChannel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
+  if (boardChannel) {
+    const res = (await slack.postMessage(boardChannel, lines.join("\n"))) as {
       ok?: boolean;
       ts?: string;
     };
@@ -313,31 +319,44 @@ async function onIntakeComplete(args: {
         .is("ops_thread_ts", null);
     }
   }
+  if (sharedChannel && boardChannel && boardChannel !== sharedChannel) {
+    await slack
+      .postMessage(sharedChannel, [lines[0], channelLine(boardChannel, args.name), lines[1]].join("\n"))
+      .catch(() => null);
+  }
 
   // ── The internal delivery checklist ──
   await seedDeliverySteps(args.clientId);
+  // ‼️ BEFORE THE TICKS. Step 1's own label promises "audit attached if one exists". Here the
+  // website, the domain and the contact are all on the client row. Never throws: a client with no
+  // prior audit is the ordinary case and must not be stopped from onboarding.
+  const adopted = await adoptPriorAudit(args.clientId).catch((e) => ({
+    reportId: null,
+    detail: `adopt failed: ${(e as Error).message}`,
+  }));
+  console.log(`[onboarding/save] prior audit: ${adopted.detail}`);
   await autoCompleteStep(args.clientId, "intake_received").catch(() => {});
+  if (adopted.reportId) await autoCompleteStep(args.clientId, "baseline_scan").catch(() => {});
   await postDeliveryChecklist(args.clientId).catch((e) =>
     console.error("[onboarding/save] checklist post failed:", (e as Error).message)
   );
 
   // ── The intro draft ──
   // Posted for a human to send, never sent. It goes AFTER the checklist so the thread
-  // reads in the order the work happens, and it is caught separately so a copy problem
-  // cannot stop the baseline scan below.
+  // reads in the order the work happens.
   await postDraft(args.clientId, "intro").catch((e) =>
     console.error("[onboarding/save] intro draft failed:", (e as Error).message)
   );
 
-  // ── The baseline scan ──
-  // NOT awaited. runAuditPipeline does not return until the ENTIRE audit is finished,
-  // which is minutes: awaiting it here would hang the client on the Finish button and
-  // then blow the function's time limit. waitUntil lets the response go back immediately
-  // while the scan keeps running.
-  waitUntil(
-    startBaselineScan(args.clientId).catch((e) =>
-      console.error("[onboarding/save] baseline scan failed:", (e as Error).message)
-    )
-  );
+  // ‼️ NO BASELINE SCAN HERE ANY MORE (2026-09-15). Finishing this form fired Photograph I, and that
+  // run pitched SRT Agency LLC its own score in #hot-leads. Onboarding scans nothing now: the audit on
+  // file is attached above, and the measured run is Day 0. See src/lib/clients/open-board.ts.
+  await notifyStep(
+    args.clientId,
+    "baseline_scan",
+    adopted.reportId
+      ? `:link: Pre-call audit attached: ${adopted.detail}. No new scan was run.`
+      : `:grey_question: No finished audit on file for this business, so step 2 is open and nothing was scanned. Hit *Re-run baseline scan* on the client board when you want one.`
+  ).catch(() => {});
 }
 

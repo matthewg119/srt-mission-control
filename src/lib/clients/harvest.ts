@@ -29,6 +29,8 @@
 // would make the day-30 comparison meaningless.
 
 import { supabaseAdmin } from "@/lib/db";
+import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
+import { classifyPhrase, type PhraseKind, type PhraseSpeaker } from "./phrase-kind";
 
 const FETCH_TIMEOUT_MS = 8000;
 const MAX_PAGES = 40;
@@ -49,32 +51,8 @@ const MAX_PHRASE_WORDS = 22;
 const QUESTION_STARTERS =
   /^(how|what|why|when|where|which|who|is|are|does|do|did|can|could|should|would|will|has|have|am|was|were|any(one|body)|has anyone)\b/i;
 
-const OBJECTION_MARKERS = [
-  /\bafraid\b/i,
-  /\bscared\b/i,
-  /\bnervous\b/i,
-  /\bworried\b/i,
-  /\bworry\b/i,
-  /\brisk(y|s)?\b/i,
-  /\bdanger(ous)?\b/i,
-  /\bside effects?\b/i,
-  /\bwent wrong\b/i,
-  /\bbad experience\b/i,
-  /\bruined\b/i,
-  /\bregret\b/i,
-  /\bwaste of money\b/i,
-  /\brip(-|\s)?off\b/i,
-  /\bscam\b/i,
-  /\bdoes ?n'?t work\b/i,
-  /\bpainful\b/i,
-  /\bhurts?\b/i,
-  /\bbruis(e|ing)\b/i,
-  /\bfrozen\b/i,
-  /\bfake\b/i,
-  /\bover ?done\b/i,
-  /\bunnatural\b/i,
-  /\btoo expensive\b/i,
-];
+// OBJECTION_MARKERS lived here until 2026-09-16. Their words are part of HESITATION in phrase-kind.ts,
+// where they only count inside a buyer's own question or sentence.
 
 /** 0 to 3. Higher means closer to actually booking. */
 const INTENT_LADDER: Array<[RegExp, number]> = [
@@ -92,6 +70,9 @@ export interface HarvestedPhrase {
   commercialIntentScore: number;
   objectionPhrase: boolean;
   sourceUrl: string;
+  /** What the phrase is and who said it (phrase-kind.ts), stored on question_bank.kind / speaker. */
+  kind: PhraseKind;
+  speaker: PhraseSpeaker;
 }
 
 export function normalizePhrase(input: string): string {
@@ -185,8 +166,17 @@ export function commercialIntent(phrase: string): number {
   return score;
 }
 
-export function isObjection(phrase: string): boolean {
-  return OBJECTION_MARKERS.some((p) => p.test(phrase));
+/**
+ * Is this a buyer's objection?
+ *
+ * ‼️ NOT A WORD MATCH ANY MORE (2026-09-16). OBJECTION_MARKERS matched "risk" or "scam" anywhere, so a
+ * competitor's button ("Request the Governance Risk Audit"), a research heading ("### Compliance and
+ * Regulatory Risks") and an article about talent-agency scams all filled SRT's Objection bucket. The
+ * shape and the speaker decide now, in phrase-kind.ts. The markers stay as the patient lane's
+ * vocabulary and are one input to that rule, never the whole of it.
+ */
+export function isObjection(phrase: string, source?: string | null): boolean {
+  return classifyPhrase(phrase, source).kind === "objection";
 }
 
 /** Strip tags, scripts and styles. No parser dependency; this is a coarse text extraction. */
@@ -220,8 +210,12 @@ export function extractPhrases(text: string, sourceUrl: string): HarvestedPhrase
     if (words < MIN_PHRASE_WORDS || words > MAX_PHRASE_WORDS) continue;
 
     const questionShaped = phrase.includes("?") || QUESTION_STARTERS.test(phrase);
-    const objection = isObjection(phrase);
+    const reading = classifyPhrase(phrase, sourceUrl === "deep_research" ? "deep_research" : "harvest");
+    const objection = reading.kind === "objection";
     if (!questionShaped && !objection) continue;
+    // A vendor's question to the reader ("Ready to grow your practice?") and a heading are question-shaped
+    // and are nothing a buyer asked.
+    if (reading.kind === "vendor_copy" || reading.kind === "heading") continue;
 
     // Boilerplate filter. Cookie banners and nav text are question-shaped often enough to
     // pollute a bank that a human then has to read.
@@ -240,6 +234,8 @@ export function extractPhrases(text: string, sourceUrl: string): HarvestedPhrase
       commercialIntentScore: commercialIntent(phrase),
       objectionPhrase: objection,
       sourceUrl,
+      kind: reading.kind,
+      speaker: reading.speaker,
     });
   }
 
@@ -440,6 +436,9 @@ export async function runHarvest(
     .from("audit_reports")
     .select("id")
     .eq("client_id", clientId)
+    // The citation harvest reads the pages the engines cited at the BASELINE. A supplied run's
+    // citations describe what they cite now, which is not what this corpus is for. See run-labels.ts.
+    .or(BASELINE_ONLY)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -516,6 +515,8 @@ export async function runHarvest(
       // brief that offered it.
       avatar: avatar.slug,
       objection_phrase: p.objectionPhrase,
+      kind: p.kind,
+      speaker: p.speaker,
     }));
 
     // ‼️ THE TARGET HAS TO MATCH THE INDEX EXACTLY OR IT IS 42P10 AT PLAN TIME, ON EVERY RUN.
@@ -609,11 +610,16 @@ export const KEYWORD_SOURCE = "keywords" as const;
  * how much), `comparing` is its 2 (vs, compare, best, which clinic), and `researching` is its 1
  * (safe, licensed, reviews).
  */
+// ‼️ STEMS, AND THE WORDS A TOOL ACTUALLY WRITES. The prompt asks for ready | price | comparing | researching,
+// and ChatGPT deep research answered SRT's with "purchase" and "research" (2026-09-15): every row read as
+// the lowest intent. Matched with includes(), so a stem covers "compare", "comparing" and "comparison".
 const KEYWORD_INTENT_SCORE: Record<string, number> = {
   ready: 3,
   price: 3,
-  comparing: 2,
-  researching: 1,
+  purchas: 3,
+  buy: 3,
+  compar: 2,
+  research: 1,
 };
 
 /** The ceiling `question_bank_intent_check` enforces. Nothing here may emit above it. */
@@ -674,15 +680,34 @@ export function extractKeywords(text: string): HarvestedPhrase[] {
     const intentScore = Math.max(0, Math.min(MAX_INTENT_SCORE, mapped));
     const sourceUrl = cells.slice(3).join(" ").trim();
 
+    const cited = /^https?:\/\//i.test(cells.slice(3).join(" ").trim());
+
     out.push({
       phrase,
       normalized,
-      // The volume when one was sourced, 1 when it says "unknown". Never 0: the column is what
-      // ranks a keyword, and a 0 would sort a real phrase below one nobody has measured either.
-      frequencyScore: Number.isFinite(volume) && volume > 0 ? volume : 1,
+      // ‼️ THE NUMBER IS ONLY TRUSTED WHEN THE ROW CITES WHERE IT CAME FROM, and that rule is
+      // the whole reason this line is not just `volume || 1`.
+      //
+      // frequency_score is what RANKS a keyword, and keyword-set.ts reads it. This column is
+      // filled by a research model that was asked for a monthly search volume. No volume API
+      // touches the client lane, deliberately (see the header of keyword-set.ts: Google Ads
+      // volume is the wrong denominator for this product and Matthew's call on 2026-09-08 was
+      // not to buy it). So a number here is a model's estimate unless something says otherwise,
+      // and an estimate that lands in a ranking column is indistinguishable from a measurement
+      // the moment it is stored.
+      //
+      // A source URL beside it is the "otherwise". It is not proof, but it is the difference
+      // between a number somebody can go and check and a number nobody can. Everything else
+      // reads as unknown and ranks on commercial intent, which is a categorical judgement this
+      // corpus already relies on rather than a quantity wearing a measurement's clothes.
+      //
+      // Never 0: the column ranks, and a 0 would sort a real phrase below one nobody measured.
+      frequencyScore: cited && Number.isFinite(volume) && volume > 0 ? volume : 1,
       commercialIntentScore: intentScore,
       objectionPhrase: false,
       sourceUrl: /^https?:\/\//i.test(sourceUrl) ? sourceUrl : "",
+      kind: "question",
+      speaker: "buyer",
     });
   }
 

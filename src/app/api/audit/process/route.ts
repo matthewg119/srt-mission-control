@@ -1,18 +1,19 @@
-// Internal batch worker for the Audit Engine. Processes ALL remaining batches
-// (4 prompts, one OpenAI call each) within a SINGLE invocation — no cross-invocation
-// self-chaining. The old waitUntil(fetch(next batch)) hop was silently dropped
-// by Vercel after the response returned, stalling runs at status:"running"
-// forever. ~5 batches fit comfortably under maxDuration=300. Writes are
-// idempotent (each batch clears its prior rows first) so a re-kick from the
-// daily watchdog never double-counts. Gated by AUDIT_INTERNAL_SECRET.
+// Internal batch worker for the Audit Engine.
+//
+// The batch loop itself lives in lib/audit-engine/process-run.ts, because two routes now enter it:
+// this one (the kick-off from run-audit-pipeline, and the watchdog's re-kick) and
+// api/internal/audit-continue (the hand-off between hops). Read that file's header before changing
+// anything about the chaining: this route's OWN history is a self-chain that Vercel silently
+// dropped, and the fix that replaced it assumed twenty questions, which supplied runs broke.
+//
+// A prospect audit is twenty questions and still finishes in a single invocation. A forty or
+// eighty question supplied run hands the rest to a fresh request when the budget runs out.
+//
+// Writes are idempotent (each batch clears its prior rows first), so a re-kick from the daily
+// watchdog never double-counts. Gated by AUDIT_INTERNAL_SECRET.
 
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/db";
-import { buildAliases } from "@/lib/audit-engine/mention-match";
-import { runBatch } from "@/lib/audit-engine/run-batch";
-import { BATCH_SIZE, TOTAL_PROMPTS } from "@/lib/audit-engine/types";
-import type { AuditReportRow } from "@/lib/audit-engine/types";
-import { finishReport, failReport } from "@/lib/audit-engine/finish-report";
+import { processRun } from "@/lib/audit-engine/process-run";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,39 +34,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "missing id/batch" }, { status: 400 });
   }
 
-  const { data: reportData, error: fetchError } = await supabaseAdmin
-    .from("audit_reports")
-    .select("*")
-    .eq("id", id)
-    .single();
-  if (fetchError || !reportData) {
-    return NextResponse.json({ error: "report not found" }, { status: 404 });
-  }
+  const result = await processRun({ reportId: id, fromBatch: batch, hop: 0 });
 
-  const row = reportData as AuditReportRow;
-  if (row.status === "done" || row.status === "failed") {
-    return NextResponse.json({ ok: true, skipped: row.status });
-  }
-
-  const aliases = buildAliases(row.client_name ?? row.business_type ?? row.website, row.website);
-  const totalPrompts = row.prompts.length || TOTAL_PROMPTS;
-  const totalBatches = Math.ceil(totalPrompts / BATCH_SIZE);
-
-  try {
-    // Process every remaining batch in THIS invocation — no fragile
-    // cross-invocation self-chain. Fresh runs start at batch 0; a watchdog
-    // re-kick starts at the first incomplete batch.
-    for (let b = Math.max(0, batch); b < totalBatches; b++) {
-      const startIdx = b * BATCH_SIZE;
-      const promptsInBatch = row.prompts.slice(startIdx, startIdx + BATCH_SIZE);
-      if (promptsInBatch.length === 0) break;
-      await runBatch(row, aliases, promptsInBatch);
-    }
-  } catch (e) {
-    await failReport(row, (e as Error).message);
-    return NextResponse.json({ ok: false, error: (e as Error).message });
-  }
-
-  await finishReport(row);
-  return NextResponse.json({ ok: true, done: true, fromBatch: batch });
+  if (result.skipped) return NextResponse.json({ ok: true, skipped: result.skipped });
+  if (!result.ok) return NextResponse.json({ ok: false, error: result.error });
+  return NextResponse.json({
+    ok: true,
+    done: result.finished === true,
+    ...(result.handedOffAt === undefined ? {} : { handedOffAt: result.handedOffAt }),
+    fromBatch: batch,
+  });
 }

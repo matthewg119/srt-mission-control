@@ -211,9 +211,10 @@ function displayName(client: Record<string, unknown>): string {
  * column would orphan it.
  */
 export async function postDeliveryChecklist(clientId: string): Promise<void> {
-  const channel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
+  const { channelFor } = await import("./step-board");
+  const channel = await channelFor(clientId);
   if (!channel) {
-    console.error("[delivery-checklist] SLACK_CLIENT_ONBOARDING_CHANNEL unset, board not opened");
+    console.error("[delivery-checklist] no channel for this client, board not opened");
     return;
   }
 
@@ -228,6 +229,15 @@ export async function postDeliveryChecklist(clientId: string): Promise<void> {
   // its position at the top of the run and whatever client-level drafts hang under it.
   await refreshHeader(clientId);
   await pinHeader(clientId);
+
+  // ‼️ THE INDEX GOES UP BEFORE THE ANCHORS, and the order is the same one the header relies
+  // on: Slack sorts by post time, so anything posted after forty-one step anchors sits under
+  // all of them. It is a no-op for a client on the shared fallback channel, where a second
+  // pinned message per client would make "the pinned message" mean nothing.
+  const { refreshOpsIndex } = await import("./ops-index");
+  await refreshOpsIndex(clientId).catch((e) =>
+    console.error("[delivery-checklist] ops index failed:", (e as Error).message)
+  );
 
   // ‼️ AUTO STEPS RUN BEFORE MANUAL CARDS ARE POSTED, AND THE ORDER IS LOAD-BEARING.
   // postStep parks a row in awaiting_me and runReadyAutoSteps will not claim a row in that
@@ -259,6 +269,18 @@ export async function postDeliveryChecklist(clientId: string): Promise<void> {
  */
 export async function refreshDeliveryChecklist(clientId: string): Promise<void> {
   await refreshHeader(clientId);
+
+  // ‼️ THE INDEX RIDES ALONG HERE RATHER THAN GETTING ITS OWN SCHEDULE. A dozen call sites
+  // already say "bring the summary back in line with the rows", and the index is the other
+  // half of that summary: it states the offer, the avatar and the page counts, all of which
+  // move when a step completes. A separate trigger would be a second list of places to
+  // remember, and the failure mode of forgetting one is an index quietly describing last week.
+  //
+  // It never throws into the caller, same contract as the header above it.
+  const { refreshOpsIndex } = await import("./ops-index");
+  await refreshOpsIndex(clientId).catch((e) =>
+    console.error("[delivery-checklist] ops index refresh failed:", (e as Error).message)
+  );
 }
 
 /**
@@ -285,6 +307,97 @@ export async function refreshDeliveryChecklist(clientId: string): Promise<void> 
  * A skip is a real transition and it goes through the same door as a tick.
  */
 export type StepTransition = "complete" | "skipped" | "reopened";
+
+/**
+ * Generators re-run when a step they are blocked by completes AFTER they did, and when.
+ *
+ * ‼️ GENERATORS ONLY. Each of these overwrites its own artifact from the current record, so a
+ * re-run is the plainest way to aim it at a decision made since. A step a person approved
+ * (the keyword set, the page plan) is never here: re-running it would un-approve somebody's work.
+ *
+ *   custom_question_set  only before Day 0. After it the set is frozen as custom_v1 (A1 D-P12)
+ *                        and a re-run would rewrite the measurement it is the baseline of.
+ *   page_candidates      always. It is the publishing backlog and is regenerated freely.
+ *   call_sheet           only while call_held is outstanding. After the call it is a record.
+ */
+const RE_AIM: Record<string, (state: { day0: boolean; callHeld: boolean }) => boolean> = {
+  custom_question_set: (s) => !s.day0,
+  page_candidates: () => true,
+  call_sheet: (s) => !s.callHeld,
+};
+
+/** Reopen every RE_AIM step that names `completedKey` as a blocker and finished before it. */
+export async function reaimStaleDependents(
+  clientId: string,
+  completedKey: string,
+  completedAt: string
+): Promise<string[]> {
+  const dependents = DELIVERY_STEPS.filter(
+    (s) => RE_AIM[s.key] && (s.blockedBy ?? []).includes(completedKey)
+  );
+  if (dependents.length === 0) return [];
+
+  const [{ data: rows }, { data: client }] = await Promise.all([
+    supabaseAdmin
+      .from("client_delivery_steps")
+      .select("step_key, status, completed_at, slack_anchor_ts")
+      .eq("client_id", clientId)
+      .in("step_key", [...dependents.map((d) => d.key), "call_held"]),
+    supabaseAdmin.from("clients").select("day_0_archived_at").eq("id", clientId).maybeSingle(),
+  ]);
+
+  const byKey = new Map(((rows ?? []) as Array<Record<string, unknown>>).map((r) => [String(r.step_key), r]));
+  const state = {
+    day0: Boolean((client as { day_0_archived_at?: string | null } | null)?.day_0_archived_at),
+    callHeld: byKey.get("call_held")?.status === "complete",
+  };
+  const blocker = stepByKey(completedKey);
+
+  const reopened: string[] = [];
+  for (const dep of dependents) {
+    const row = byKey.get(dep.key);
+    if (!row || row.status !== "complete") continue;
+    const at = (row.completed_at as string | null) ?? null;
+    if (at && at >= completedAt) continue;
+    if (!RE_AIM[dep.key](state)) continue;
+
+    // Conditional on still being complete, so two transitions landing together reopen it once.
+    const { data: written } = await supabaseAdmin
+      .from("client_delivery_steps")
+      .update({
+        status: "pending",
+        completed_at: null,
+        completed_by: null,
+        skipped_reason: null,
+        verified_source: null,
+        verified_detail: null,
+        verified_at: null,
+        error_detail: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("client_id", clientId)
+      .eq("step_key", dep.key)
+      .eq("status", "complete")
+      .select("id");
+    if (!written?.length) continue;
+
+    reopened.push(dep.key);
+    await refreshStepAnchor(clientId, dep.key).catch(() => {});
+    await markAnchor(clientId, dep.key, null).catch(() => {});
+    // Only into a thread that already exists: notifyStep creates a missing anchor, and a step
+    // appearing out of order is the one-at-a-time rule coming apart.
+    if (row.slack_anchor_ts) {
+      await notifyStep(
+        clientId,
+        dep.key,
+        `:repeat: Re-running: *${blocker?.label ?? completedKey}* was completed after this ran, ` +
+          "so what it produced was aimed at an earlier answer. The cascade picks it up as soon as " +
+          "everything it waits on is done."
+      ).catch(() => {});
+    }
+  }
+  return reopened;
+}
 
 export async function setDeliveryStep(args: {
   clientId: string;
@@ -388,9 +501,17 @@ export async function setDeliveryStep(args: {
   if (args.stepKey === DAY_ZERO_STEP_KEY) {
     try {
       if (complete) {
+        // ‼️ THE SOURCE IS OBSERVED, NEVER PASSED IN. A real `photograph_2` run for this client is
+        // the difference between "a run wrote this" and "somebody ticked a box", and the honest way
+        // to tell them apart is to look. A caller-supplied source would let a button assert a
+        // fidelity nothing measured, which is the exact thing day_0_source exists to prevent.
+        // With one engine keyed this always finds nothing and stamps manual_step, as before.
+        const { day0PhotographFor } = await import("@/lib/clients/photograph");
+        const photograph = await day0PhotographFor(args.clientId).catch(() => null);
+
         await stampDay0({
           clientId: args.clientId,
-          source: "manual_step",
+          source: photograph && photograph.answered > 0 ? "photograph_2" : "manual_step",
           by: args.actor ?? null,
         });
       } else {
@@ -431,6 +552,19 @@ export async function setDeliveryStep(args: {
     if (!adopted.ok) {
       console.error("[delivery-checklist] adopting the audit classification failed:", adopted.error);
     }
+  }
+
+  // ‼️ A FINISHED STEP WHOSE BLOCKER FINISHES AFTER IT IS RE-RUN (2026-09-11).
+  //
+  // offer_locked moved in front of the question set, the page candidates and the call sheet, but
+  // on a client already past it (SRT is the live case) those ran against a PROPOSED offer weeks
+  // ago and a lock arriving now changed nothing about them, while three places said "rebuilt
+  // against this". Only the steps in RE_AIM are eligible: re-running a generator is safe because
+  // every runner is idempotent, and re-running anything a person approved is not.
+  if (complete) {
+    await reaimStaleDependents(args.clientId, args.stepKey, now).catch((e) =>
+      console.error("[delivery-checklist] re-aiming dependents failed:", (e as Error).message)
+    );
   }
 
   // The eight pilot stages on the board are DERIVED from these rows, so they are
@@ -477,18 +611,39 @@ export async function setDeliveryStep(args: {
   // The evidence goes in the step's own thread, as a record of WHAT was checked rather than
   // a bare tick. A line saying "verified: 20 audit_runs rows, 14 answered" is auditable three
   // weeks later; ":white_check_mark: Photograph I" is not.
+  // ‼️ THE SAME FOOTER THE BUTTON PATH ADDS, BECAUSE THIS IS THE OTHER DOOR TO THE SAME
+  // MOMENT. A step completed by a runner or by an API call lands here instead of in
+  // actions/route.ts, and a card that offers a next step only when a human pressed the button
+  // is a card that offers one about half the time.
+  //
+  // It never blocks the notify: the row is already written, and losing the confirmation over a
+  // footer would be strictly worse than losing the footer.
+  const footer = async (asDone: boolean): Promise<string> => {
+    try {
+      const { nextStepLines } = await import("./next-steps");
+      const { isStepKey } = await import("@/config/delivery-steps");
+      if (!isStepKey(args.stepKey)) return "";
+      const lines = await nextStepLines(args.clientId, args.stepKey, { asDone });
+      return lines.length ? `\n\n${lines.join("\n")}` : "";
+    } catch (e) {
+      console.error("[delivery-checklist] next-step footer failed:", (e as Error).message);
+      return "";
+    }
+  };
+
   if (complete && verdict?.ok) {
     await notifyStep(
       args.clientId,
       args.stepKey,
-      confirmationText(step.label, verdict, args.actor ?? null)
+      confirmationText(step.label, verdict, args.actor ?? null) + (await footer(true))
     );
   } else if (skipped) {
     await notifyStep(
       args.clientId,
       args.stepKey,
       `:${MARK_SKIPPED}: *${step.label}* — skipped${args.actor ? ` by ${args.actor}` : ""}. ` +
-        `It reads as not checked everywhere, never as no issues found.`
+        `It reads as not checked everywhere, never as no issues found.` +
+        (await footer(true))
     );
   }
 
@@ -614,13 +769,31 @@ async function offerDraftsFor(
  * intro draft and the day 30/60/90 reports.
  */
 export async function notifyThread(clientId: string, text: string): Promise<void> {
-  const channel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
+  const { channelFor } = await import("./step-board");
+  const channel = await channelFor(clientId);
   if (!channel) return;
 
   const client = await loadClient(clientId);
   if (!client?.ops_thread_ts) return;
 
-  await slack.postThreadReply(channel, client.ops_thread_ts as string, text);
+  const res = (await slack.postThreadReply(channel, client.ops_thread_ts as string, text)) as {
+    ok?: boolean;
+    ts?: string;
+  };
+
+  // Client-level, so no step key: the intro draft, the day 30/60/90 reports and the workflow
+  // outputs all land here, and each one is something this client was told.
+  const { logClientEvent } = await import("./client-events");
+  await logClientEvent({
+    clientId,
+    source: "slack",
+    kind: "bot_post",
+    author: "Mission Control",
+    text,
+    slackChannel: channel,
+    slackTs: res?.ts ?? null,
+    slackThreadTs: client.ops_thread_ts as string,
+  });
 }
 
 /**

@@ -19,7 +19,8 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { HubClient } from "@/lib/hub/resolve";
-import { localBusinessJsonLd, questionAnswerJsonLd, jsonLdScript } from "@/lib/hub/jsonld";
+import { localBusinessJsonLd, questionAnswerJsonLd, breadcrumbJsonLd, jsonLdScript } from "@/lib/hub/jsonld";
+import { NO_PLAN_LINKS, type PlanLinks } from "@/lib/hub/plan-links";
 
 export interface HubBodyPage {
   id: string;
@@ -71,22 +72,37 @@ export function truncate(text: string, max: number): string {
  * routing it through the optimizer would put every hub page's header behind our image
  * pipeline for no benefit. Height is capped in CSS so a 2000px logo cannot own the page.
  * alt is the business name because that is what the mark says.
+ *
+ * ‼️ EXPORTED SINCE 2026-09-08 FOR THE REVIEW TOOL, WHICH HAD NO LOGO AT ALL. reviews.{domain}
+ * and learn.{domain} come off the same client record and share a layout, but the mark was drawn
+ * only by the bodies in this file, so a client with a confirmed logo had it on one host and not
+ * the other. Two hosts for one business that do not look like each other is the exact thing
+ * sharing a theme object exists to prevent.
  */
-function HubLogo({ client }: { client: HubClient }) {
+export function HubLogo({ client }: { client: HubClient }) {
   if (!client.theme?.logoUrl) return null;
   // eslint-disable-next-line @next/next/no-img-element
   return <img className="hub-logo" src={client.theme.logoUrl} alt={client.displayName} />;
 }
+
+/**
+ * Where a page link points. `/` on a live hub, where the host is in the URL. The dashboard
+ * preview passes its own base, because there `/slug` would land on Mission Control's root and 404.
+ * A string rather than a function so it crosses any server/client boundary unchanged.
+ */
+const LIVE_LINK_BASE = "/";
 
 /** The index: who they are, what has been answered, and the canonical NAP. */
 export function HubIndexBody({
   client,
   host,
   pages,
+  linkBase = LIVE_LINK_BASE,
 }: {
   client: HubClient;
   host: string;
   pages: HubBodyPage[];
+  linkBase?: string;
 }) {
   const where = [client.city, client.state].filter(Boolean).join(", ");
 
@@ -120,7 +136,7 @@ export function HubIndexBody({
           <ul className="hub-list">
             {pages.map((page) => (
               <li key={page.id}>
-                <a href={`/${page.slug}`}>
+                <a href={`${linkBase}${page.slug}`}>
                   {page.title}
                   <span className="hub-q">{page.question}</span>
                 </a>
@@ -167,16 +183,31 @@ export function HubIndexBody({
   );
 }
 
-/** One answer page. The unit the whole hub exists to publish. */
+/**
+ * One answer page. The unit the whole hub exists to publish.
+ *
+ * `links` comes from the page plan through lib/hub/plan-links.ts and holds PUBLISHED pages only.
+ * Optional, and absent means the page as it was before the plan existed: the previews render this
+ * same component without it, and a page off the plan gets NO_PLAN_LINKS.
+ */
 export function HubAnswerBody({
   client,
   host,
   page,
+  links = NO_PLAN_LINKS,
+  linkBase = LIVE_LINK_BASE,
+  homeHref = LIVE_LINK_BASE,
 }: {
   client: HubClient;
   host: string;
   page: HubAnswerPage;
+  links?: PlanLinks;
+  linkBase?: string;
+  homeHref?: string;
 }) {
+  const pillar = links.isPillar ? null : links.pillar;
+  const onward = links.isPillar ? links.supports : links.related;
+
   return (
     <>
       <script
@@ -194,15 +225,43 @@ export function HubAnswerBody({
         }}
       />
 
+      {/* ‼️ Hub, pillar, page. Only when the pillar is published, or the trail names a 404. */}
+      {pillar && (
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: jsonLdScript(
+              breadcrumbJsonLd([
+                { name: client.displayName, url: `https://${host}/` },
+                { name: pillar.title, url: `https://${host}/${pillar.slug}` },
+                { name: page.title, url: `https://${host}/${page.slug}` },
+              ])
+            ),
+          }}
+        />
+      )}
+
+      {/* ‼️ No Person/Physician node: nothing structured is on file, and a name pulled from intake's free-text credentials would be invented. */}
+
       {/* Same wrapper as the index, for the same reason. See HubIndexBody. */}
       <header className="hub-head">
         <HubLogo client={client} />
         <p className="hub-eyebrow">
-          <a href="/">{client.displayName}</a>
+          <a href={homeHref}>{client.displayName}</a>
         </p>
         <h1>{page.title}</h1>
         {page.question !== page.title && <p className="hub-lede">{page.question}</p>}
       </header>
+
+      {/*
+        ‼️ BELOW THE MASTHEAD, NOT INSIDE IT. The split hero lays .hub-head's children into a grid
+        in DOM order, so one more child there would push the h1 into the wrong column.
+      */}
+      {pillar && (
+        <p className="hub-part">
+          Part of <a href={`${linkBase}${pillar.slug}`}>{pillar.title}</a>
+        </p>
+      )}
 
       <div className="hub-answer">
         {/*
@@ -213,6 +272,23 @@ export function HubAnswerBody({
         */}
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{page.answerMd}</ReactMarkdown>
       </div>
+
+      {/*
+        ‼️ THE TEMPLATE DRAWS THESE, NEVER THE BODY. draft-page.ts bans links in answer_md so a
+        model cannot invent a citation as a link, and this is how the pages still link each other.
+      */}
+      {onward.length > 0 && (
+        <nav className="hub-links" aria-label={links.isPillar ? "Questions in this guide" : "Related answers"}>
+          <h2>{links.isPillar ? "The questions people ask about this" : "Related"}</h2>
+          <ul className="hub-list">
+            {onward.map((link) => (
+              <li key={link.slug}>
+                <a href={`${linkBase}${link.slug}`}>{link.title}</a>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      )}
 
       <p className="hub-foot">
         {page.publishedAt

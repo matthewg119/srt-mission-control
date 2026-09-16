@@ -34,6 +34,33 @@ export interface CapturedDoc {
 }
 
 /**
+ * Is this a channel the client board lives in: the shared onboarding channel, or one client's
+ * own ops channel?
+ *
+ * ‼️ THE SHARED CHANNEL IS CHECKED FIRST AND WITHOUT A QUERY, because it is still where most
+ * traffic is and where every client provisioned before 2026-09-08 lives. The database lookup
+ * only runs for a channel that is not it, which in practice means a message that has already
+ * failed every other channel gate in the events route.
+ *
+ * Exported because the events route needs the same answer before it decides that a channel
+ * belongs to the client lane at all, and two copies of this test would drift.
+ */
+export async function isClientChannel(channelId: string): Promise<boolean> {
+  if (!channelId) return false;
+
+  const onboardingChannel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
+  if (onboardingChannel && channelId === onboardingChannel) return true;
+
+  const { data } = await supabaseAdmin
+    .from("clients")
+    .select("id")
+    .eq("ops_channel_id", channelId)
+    .maybeSingle();
+
+  return Boolean(data);
+}
+
+/**
  * Which client owns this Slack thread, if any.
  *
  * The onboarding channel is ONE channel with a thread per client (clients.ops_thread_ts),
@@ -48,8 +75,14 @@ export async function clientForThread(
   channelId: string,
   threadTs: string | null | undefined
 ): Promise<{ id: string; legalName: string; stepKey: string | null } | null> {
-  const onboardingChannel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
-  if (!onboardingChannel || channelId !== onboardingChannel) return null;
+  // ‼️ TWO KINDS OF CHANNEL NOW, AND MISSING THE SECOND SILENCES EVERY NEW CLIENT'S BOARD.
+  //
+  // This gate used to be byte-equality against SLACK_CLIENT_ONBOARDING_CHANNEL, which was
+  // correct while there was exactly one channel. A client with their own ops channel has all
+  // 41 step threads in it, and a gate that returns null before it looks at the database means
+  // every screenshot, every research paste and every thread reply in that channel falls through
+  // to the generic assistant tail. Nothing errors; the board just stops answering.
+  if (!(await isClientChannel(channelId))) return null;
   if (!threadTs) return null;
 
   // ‼️ TWO KINDS OF THREAD NOW, AND MISSING THE SECOND WOULD HAVE BROKEN EVERY UPLOAD.
@@ -204,6 +237,27 @@ export async function captureOnboardingFile(args: {
   }
   if (error) return { ok: false, error: error.message };
 
+  // A file arriving is one of the things that happens to a client, and it is the one kind of event
+  // that already had a home (client_docs) without being in the ORDER everything else happened in.
+  const { logClientEvent } = await import("./client-events");
+  await logClientEvent({
+    clientId,
+    stepKey: args.stepKey ?? null,
+    source: "slack",
+    kind: "file",
+    author: file.user ?? null,
+    text: filename,
+    slackChannel: null,
+    slackTs: null,
+    slackThreadTs: threadTs,
+    payload: {
+      slackFileId: file.id,
+      contentType: file.mimetype ?? null,
+      bytes: buf.byteLength,
+      ...(presencePlatform ? { presencePlatform } : {}),
+    },
+  });
+
   return { ok: true, presencePlatform };
 }
 
@@ -293,6 +347,36 @@ export async function storeGeneratedDoc(args: {
 
   if (error) return { ok: false, error: error.message };
   return { ok: true, docId: data.id as string };
+}
+
+/**
+ * Record which Slack file a generated document became, once it has been uploaded.
+ *
+ * ‼️ IT IS WHAT STOPS THE SAME PDF BEING FILED TWICE. A generated row is written with
+ * slack_file_id null (it has no Slack file yet), the bytes are then uploaded into the step thread,
+ * and Slack fires `file_shared` for the bot's own upload. The events route skips bot uploads, but
+ * the two events race, so this closes the window from the other side: with the id stamped on, the
+ * unique partial index on slack_file_id refuses a second row for the same file.
+ *
+ * Conditional on the column still being null, the same claim shape postStepAnchor uses, so a
+ * re-run can never relabel a document as a different Slack file.
+ */
+export async function attachSlackFileId(
+  docId: string,
+  slackFileId: string,
+  threadTs: string | null
+): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from("client_docs")
+    .update({ slack_file_id: slackFileId, slack_thread_ts: threadTs })
+    .eq("id", docId)
+    .is("slack_file_id", null);
+
+  // 23505 means the racing file_shared won and filed its own row first. The document exists either
+  // way, which is what matters; the duplicate is the thing being prevented, not this write.
+  if (error && (error as { code?: string }).code !== "23505") {
+    console.error("[clients/onboarding-docs] could not stamp the Slack file id:", error.message);
+  }
 }
 
 export interface OnboardingDocView {

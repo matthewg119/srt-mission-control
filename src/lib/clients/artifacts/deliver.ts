@@ -71,8 +71,8 @@ export async function deliverArtifact(args: {
   // to land in the same thread as everything else, so a PDF was findable only by scrolling
   // past whatever had been posted since. The anchor is created if it does not exist yet
   // rather than falling back to the header.
-  const { anchorTsFor } = await import("@/lib/clients/step-board");
-  const channel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
+  const { anchorTsFor, channelFor } = await import("@/lib/clients/step-board");
+  const channel = await channelFor(args.clientId);
   const threadTs = channel ? await anchorTsFor(args.clientId, args.stepKey) : null;
 
   if (!channel || !threadTs) {
@@ -97,15 +97,41 @@ export async function deliverArtifact(args: {
   const reallyShared = upload?.ok === true && Array.isArray(sharedFiles) && sharedFiles.length > 0;
 
   if (reallyShared) {
+    // ‼️ THE SLACK FILE ID IS STAMPED ONTO THE ROW WE ALREADY WROTE, and it is the second half of
+    // the double-filing fix. `file_shared` for the bot's own upload is skipped in the events route,
+    // but the two events race, so this closes the window: once the generated row carries the id,
+    // the unique partial index on slack_file_id refuses any second row for the same file.
+    const sharedId = (sharedFiles as Array<{ id?: string }>)[0]?.id;
+    if (sharedId) {
+      const { attachSlackFileId } = await import("../onboarding-docs");
+      await attachSlackFileId(stored.docId, sharedId, threadTs);
+    }
+
     // The `.catch(() => {})` that used to be here caught nothing: slackFetch resolves with
     // { ok: false } instead of throwing, so a refused post was completely silent.
     const res = (await slack.postThreadReply(channel, threadTs, args.message)) as {
       ok?: boolean;
+      ts?: string;
       error?: string;
     };
     if (!res?.ok) {
       console.error(`[artifacts/deliver] ${args.stepKey} note did not post:`, res?.error ?? "unknown");
     }
+
+    const { logClientEvent } = await import("../client-events");
+    await logClientEvent({
+      clientId: args.clientId,
+      stepKey: args.stepKey,
+      source: "system",
+      kind: "bot_post",
+      author: "Mission Control",
+      text: args.message,
+      slackChannel: channel,
+      slackTs: res?.ts ?? null,
+      slackThreadTs: threadTs,
+      payload: { artifact: args.filename, docId: stored.docId },
+    });
+
     return { ok: true, docId: stored.docId, uploaded: true };
   }
 

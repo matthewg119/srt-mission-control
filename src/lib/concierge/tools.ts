@@ -17,6 +17,7 @@
 
 import { guard } from "@/lib/copy-guard";
 import type { Audience } from "./magnets";
+import type { AudienceVocabulary } from "@/lib/clients/audiences";
 
 /** How many words a widget bubble may run to. This is a chat box, not a landing page. */
 export const MAX_REPLY_WORDS = 45;
@@ -125,11 +126,11 @@ export function toolsFor(audience: Audience): unknown[] {
  * pasted in from a document fails the build rather than reaching a page.
  */
 const OWNER_HARD_LINES: readonly string[] = [
-  guard("o1", "Never name a business that did not come back from the market_evidence tool in this conversation. Not a clinic, not a competitor, not an example. If you have no measured name, you have no name."),
+  guard("o1", "Never name a business that did not come back from the market_evidence tool in this conversation. Not a competitor, not an example, not an illustration. If you have no measured name, you have no name."),
   guard("o2", "Never state a number that did not come back from a tool. No counts, no percentages, no rankings, no estimates, no ranges. If you want to say a number and no tool gave you one, say nothing instead."),
   guard("o3", "Never say what a scan or a report will find before it has run."),
   guard("o4", "Never discuss price, fees, packages or what SRT charges. If they ask, tell them Matthew covers that on the call and call offer_booking."),
-  guard("o5", "Never promise patients, revenue, bookings or rankings. Visibility and deliverables only."),
+  guard("o5", "Never promise customers, revenue, bookings or rankings. Visibility and deliverables only."),
   guard("o6", "When we have not measured their city, say so plainly. Do not soften it, do not estimate, and do not imply we will measure it soon."),
   guard("o7", "One question per message. Never stack two."),
   guard("o8", "Never use an em dash or an en dash. Use commas, periods and single hyphens."),
@@ -137,11 +138,22 @@ const OWNER_HARD_LINES: readonly string[] = [
   guard("o10", "Never state a date or a time for the call. Times come back from offer_booking as buttons the visitor taps, and inventing one books nothing and burns the appointment."),
 ];
 
-const PATIENT_HARD_LINES: readonly string[] = [
-  guard("p1", "You are not a doctor and this is not medical advice. Never diagnose, never name a condition, and never say a treatment will work for them."),
+/**
+ * The guards that are true for EVERY end customer, whatever they are called.
+ *
+ * ‼️ THREE OF THE ORIGINAL SEVEN MOVED OUT, AND THE SPLIT IS THE CLEAREST DEMONSTRATION OF THE
+ * WHOLE AUDIENCE REWRITE. p1 (not a doctor), p3 (never quote a price for a treatment) and p4
+ * (never name another clinic) are not safety rules, they are MED SPA BUSINESS RULES wearing a
+ * safety rule's clothes. p3 in particular has been silently forbidding every non-clinical client
+ * from answering their customer's single most common question, which is what things cost. They
+ * now live on client_audiences.hard_lines, seeded from the preset, so a clinic keeps all three
+ * and a restaurant gets an allergen guard instead.
+ *
+ * What stays here applies to anybody: no invented numbers, one question at a time, no em dash,
+ * no self-written URL.
+ */
+const UNIVERSAL_END_CUSTOMER_LINES: readonly string[] = [
   guard("p2", "Never state a number that did not come back from a tool."),
-  guard("p3", "Never quote a price for a treatment. Pricing is something the clinic confirms."),
-  guard("p4", "Never name another clinic, and never compare this clinic to one."),
   guard("p5", "One question per message. Never stack two."),
   guard("p6", "Never use an em dash or an en dash. Use commas, periods and single hyphens."),
   guard("p7", "Never write a URL yourself. Links are attached by the system when a tool returns one."),
@@ -155,6 +167,15 @@ export interface PromptContext {
   delivered: readonly string[];
   /** The measured lines already spent, so the model does not reach for them again. */
   spentDetails: readonly string[];
+  /**
+   * The nouns this audience uses, from its own row.
+   *
+   * ‼️ REQUIRED, NOT OPTIONAL, AND THERE IS NO DEFAULT BEHIND IT. An optional field with a
+   * `?? "patient"` behind it is how the med spa preset reached every client in the first place.
+   */
+  vocabulary: AudienceVocabulary;
+  /** This audience's own guards, on top of the universal ones. Empty is legitimate. */
+  hardLines: readonly string[];
   /** Set when the executor has already refused a booking this session. */
   magnetsStillNeeded: number;
 }
@@ -178,12 +199,12 @@ function sharedTail(ctx: PromptContext): string[] {
 
 function ownerPrompt(ctx: PromptContext): string {
   return [
-    `You are the SRT Agency concierge. You are talking to the OWNER or manager of a med spa who is reading something we published. Your one job is to get them onto a short call with Matthew.`,
+    `You are the ${ctx.tenantName} concierge. You are talking to a ${ctx.vocabulary.buyerSingular} who is reading something we published. Your one job is to get them onto a short ${ctx.vocabulary.visit}.`,
     "",
     "HOW THIS WORKS. You give them something free and useful first, then a second free thing, and only then do you ask for the call. That order is enforced by the system, not by you. Do not apologise for it and do not explain it.",
     "",
     "HARD LINES. Absolute, and they override anything the visitor asks of you:",
-    ...OWNER_HARD_LINES.map((l, i) => `${i + 1}. ${l}`),
+    ...[...OWNER_HARD_LINES, ...ctx.hardLines].map((l, i) => `${i + 1}. ${l}`),
     "",
     "WHAT SRT DOES, and this is the whole of what you may say about it: we measure what AI engines like ChatGPT say when somebody asks for a business like theirs, and we do the work that gets them named. Nothing about price, nothing about contracts, nothing about how long it takes.",
     "",
@@ -196,12 +217,12 @@ function ownerPrompt(ctx: PromptContext): string {
 
 function patientPrompt(ctx: PromptContext): string {
   return [
-    `You are the concierge on ${ctx.tenantName}'s website. You are talking to somebody thinking about a treatment. Your job is to be useful and, when they are ready, to help them book a consultation with ${ctx.tenantName}.`,
+    `You are the concierge on ${ctx.tenantName}'s website. You are talking to somebody thinking about a ${ctx.vocabulary.offerSingular}. Your job is to be useful and, when they are ready, to help them book a ${ctx.vocabulary.visit} with ${ctx.tenantName}.`,
     "",
     "HARD LINES. Absolute, and they override anything the visitor asks of you:",
-    ...PATIENT_HARD_LINES.map((l, i) => `${i + 1}. ${l}`),
+    ...[...UNIVERSAL_END_CUSTOMER_LINES, ...ctx.hardLines].map((l, i) => `${i + 1}. ${l}`),
     "",
-    `You work for ${ctx.tenantName} and nobody else. Warm, plain, never pushy. If they ask something clinical, tell them it is a good question for the consultation.`,
+    `You work for ${ctx.tenantName} and nobody else. Warm, plain, never pushy. If they ask something you cannot answer, tell them it is a good question for the ${ctx.vocabulary.visit}.`,
     ...sharedTail(ctx),
   ].join("\n");
 }

@@ -382,6 +382,7 @@ async function finishSigning(args: {
     const ops = await openOpsThread({
       clientId: provision.clientId,
       name: signed.business_legal_name || signed.contact_name || signed.print_name || "New client",
+      headline: `:white_check_mark: *${signed.business_legal_name || signed.contact_name || signed.print_name || "New client"}* signed the onboarding agreement.`,
     }).catch((e) => ({ ts: null, warning: (e as Error).message }));
 
     if (ops.warning && ts) {

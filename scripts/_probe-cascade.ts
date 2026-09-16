@@ -190,6 +190,15 @@ async function main() {
   try {
     await seedDeliverySteps(clientId);
 
+    // ‼️ AN INTAKE SERVICE IS PART OF THE FIXTURE TOO (2026-09-11). offer_proposed reads it, and
+    // with none it parks in `error` ("no intake answer names a service"), which the error check at
+    // the end rightly reports. It also means the prep call card is walked with a proposal on it,
+    // which is how a real client arrives.
+    await supabaseAdmin
+      .from("clients")
+      .update({ services: { primary_treatment: "cascade probe treatment" } })
+      .eq("id", clientId);
+
     // ── Get to the starting line: confirm step 1 ────────────────────────────
     //
     // ‼️ A CANONICAL NAP IS PART OF THE FIXTURE, and without it this probe measures the wrong
@@ -398,6 +407,24 @@ async function main() {
     });
     ok("the avatar is writable at all", picked.ok, picked.error);
 
+    // ‼️ 2026-09-15: THIS PROBE'S VERTICAL MAPS TO NO PRESET, SO NO AUDIENCE WAS CREATED, AND THE STEP
+    // NOW SAYS SO INSTEAD OF PASSING. That is the case the hand repair exists for, and the probe
+    // exercises it rather than working around it: refused with the repair named, then `audience:` by
+    // hand, then confirmed. The offer lives under the audience, so the lock below needs it too.
+    const refused = await setDeliveryStep({
+      clientId,
+      stepKey: "avatar_confirmed",
+      transition: "complete",
+      actor: "cascade probe",
+    });
+    ok("avatar_confirmed refuses while there is no audience", !refused.ok);
+    ok("and the refusal names the hand repair", /audience:/.test(refused.error ?? ""), refused.error ?? "");
+    {
+      const { seedAudienceByHand } = await import("@/lib/clients/audiences");
+      const seeded = await seedAudienceByHand({ clientId, presetKey: "med_spa_patient", by: "cascade probe" });
+      ok("`audience:` creates the primary audience by hand", seeded.ok, seeded.message);
+    }
+
     const eightDone = await setDeliveryStep({
       clientId,
       stepKey: "avatar_confirmed",
@@ -423,6 +450,32 @@ async function main() {
       ok("review_audit skips", res.ok, res.error);
     }
 
+    // ── The prep call: the offer is locked BEFORE the harvest (2026-09-11) ──
+    //
+    // ‼️ offer_locked MOVED from the middle of the call to right after offer_proposed, and the
+    // harvest now waits on it, because the deep research is written about the LOCKED offer. It is
+    // manual, so the walk stops on it exactly as it stops on the avatar, and the harvest is not
+    // anchored until it resolves.
+    rows = await stepRows(clientId);
+    console.log("\nAt the prep call");
+    ok("exactly one step is waiting", waiting(rows).length === 1, waiting(rows).join(", "));
+    eq("and it is the prep call", waiting(rows)[0] ?? "none", "offer_locked");
+    ok("offer_locked got its card", Boolean(rows.get("offer_locked")?.slack_message_ts));
+    ok("avatar_harvest is STILL not anchored", !rows.get("avatar_harvest")?.slack_anchor_ts);
+    {
+      const { lockOffer } = await import("@/lib/clients/offers");
+      const locked = await lockOffer({ clientId, treatment: "cascade probe treatment", by: "cascade probe" });
+      ok("the offer locks", locked.ok, locked.ok ? "" : locked.error);
+      const done = await setDeliveryStep({
+        clientId,
+        stepKey: "offer_locked",
+        transition: "complete",
+        actor: "cascade probe",
+      });
+      ok("offer_locked confirms off the column", done.ok, done.error);
+      eq("and its evidence is system tier", done.verdict?.ok ? done.verdict.kind : "refused", "system");
+    }
+
     rows = await stepRows(clientId);
     console.log("\nAt the harvest");
 
@@ -441,7 +494,12 @@ async function main() {
     // card, and it then WAITED for a person instead of ticking itself. That is the invariant
     // that broke when postReadySteps ran before runReadyAutoSteps and parked the row where no
     // runner could ever claim it.
-    ok("avatar_harvest filed an output_ref, so its generator ran", Boolean(nine?.output_ref));
+    // ‼️ NOT output_ref ANY MORE (since 8e928be, 2026-08-28). Step 10 stopped running the research
+    // itself and now POSTS a prompt, which files no artifact, so output_ref stays empty until the
+    // answer comes back and this assertion had been failing on a correct board. What proves the
+    // runner ran is what follows: a card exists only once runReadyAutoSteps has left the row at
+    // `ready`, which it writes after the runner returns ok.
+    ok("avatar_harvest's runner ran and left it waiting, not errored", nine?.status !== "error", String(nine?.status));
     ok("avatar_harvest got its card", Boolean(nine?.slack_message_ts));
     ok(
       "and then waited for a person rather than ticking itself",

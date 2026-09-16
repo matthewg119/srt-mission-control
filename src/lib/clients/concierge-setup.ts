@@ -33,15 +33,67 @@ import { notifyStep } from "./step-board";
 import type { AutoResult } from "./artifacts/registry";
 import { proposeAudience } from "@/lib/concierge/audience-proposal";
 import { conciergeLaneName } from "@/lib/concierge/lane-name";
+import { audienceFor } from "./audiences";
 import { verticalFor } from "./harvest";
+import { signOnboardingToken } from "./token";
+import { PREVIEW_TOKEN_TTL_DAYS, previewLinkLine } from "./review-preview";
+import { previewOrigin } from "@/lib/concierge/origin";
+import { probeUrl } from "@/lib/concierge/host-check";
+import { PREVIEW_TOKEN_PARAM } from "@/lib/concierge/preview-grant";
 
 /** Where the widget answers. Matches CONCIERGE_HOST in src/lib/hub/host-classify.ts. */
 export function conciergeHost(): string {
   return (process.env.CONCIERGE_HOST || "concierge.srtagency.com").trim().toLowerCase();
 }
 
+/** The LIVE frame address, on the concierge host. It 404s while `enabled` is false. */
 export function conciergeFrameUrl(slug: string): string {
   return `https://${conciergeHost()}/w/${slug}`;
+}
+
+/**
+ * Generous next to host-check's six seconds: this is a full route render, often on a cold start,
+ * and a timeout here means a card that withholds a link which would have worked.
+ */
+const DEMO_PROBE_TIMEOUT_MS = 10_000;
+
+/**
+ * The demo link for this client's widget, switched off or not, or null when nothing can sign one.
+ *
+ * ‼️ ON MISSION CONTROL'S OWN HOST WITH A PREVIEW TOKEN, NOT conciergeFrameUrl(). That one names
+ * the concierge host, which was NXDOMAIN on 2026-09-11, and carries no token, so /w/{slug} 404s
+ * for every client whose widget is still off, which before concierge_live is all of them. The
+ * internal host serves the same route and the token is what opens a switched-off tenant there.
+ * See src/lib/concierge/preview-grant.ts.
+ *
+ * ‼️ NULL RATHER THAN A LINK THAT WILL NOT OPEN. Signing throws when CLIENT_LINK_SECRET is unset,
+ * the same tri-state clientPreviewUrl() in review-preview.ts keeps.
+ *
+ * The token lives fourteen days, so a card should call this (or conciergePreviewUrlFor) when it
+ * is drawn rather than reprint a stored copy.
+ */
+export function conciergePreviewUrl(clientId: string, slug: string): string | null {
+  try {
+    const { token } = signOnboardingToken(clientId, PREVIEW_TOKEN_TTL_DAYS, "preview");
+    return (
+      `${previewOrigin()}/w/${encodeURIComponent(slug)}` +
+      `?${PREVIEW_TOKEN_PARAM}=${encodeURIComponent(token)}`
+    );
+  } catch (e) {
+    console.error("[clients/concierge-setup] demo link not minted:", (e as Error).message);
+    return null;
+  }
+}
+
+/** conciergePreviewUrl for a caller holding only the client id, such as a step card. */
+export async function conciergePreviewUrlFor(clientId: string): Promise<string | null> {
+  const { data } = await supabaseAdmin
+    .from("clients")
+    .select("slug")
+    .eq("id", clientId)
+    .maybeSingle();
+  const slug = typeof data?.slug === "string" ? data.slug.trim() : "";
+  return slug ? conciergePreviewUrl(clientId, slug) : null;
 }
 
 /**
@@ -114,7 +166,6 @@ export async function provisionConcierge(clientId: string): Promise<AutoResult> 
     : "";
 
   const origins = seedOrigins(client.domain as string | null, hosts);
-  const url = conciergeFrameUrl(slug);
   const name = (client.dba_name || client.legal_name || "this client") as string;
 
   // ── The audience, read before it is written. See the header's third list. ──
@@ -133,13 +184,39 @@ export async function provisionConcierge(clientId: string): Promise<AutoResult> 
   const resolved = await verticalFor(clientId);
   const proposal = proposeAudience(resolved.ok ? resolved.vertical : null);
 
+  // ‼️ THE THIRD INDEPENDENT ROUTE TO "THIS CLIENT IS A MED SPA", AND IT WAS THE LIVE ONE.
+  // This file's own header records that a `?? "med_spa"` literal was removed from here once
+  // already. It came back one line down as `|| "medspa"`, writing a med-spa vertical onto every
+  // widget whose client had no vertical_slug. The other two routes were closed on 2026-09-14:
+  // concierge_configs.vertical lost its `default 'medspa'` in the migration, and config.ts lost
+  // its `?? "medspa"` coalesce. This is the last of the three.
+  //
+  // ‼️ IT REFUSES INSTEAD. A widget cannot be provisioned before somebody has said who the client
+  // sells to, because everything it says is written in that buyer's words. The refusal names the
+  // repair and the step card shows it, which is the whole reason audienceFor returns a sentence.
+  const aud = await audienceFor(clientId);
+  if (!aud.ok) {
+    return {
+      ok: false,
+      error:
+        `The concierge cannot be set up yet. ${aud.error} ` +
+        `Seed the audience first, then run this step again.`,
+    };
+  }
+
   const seeded: Record<string, unknown> = {
     client_id: clientId,
-    vertical: (client.vertical_slug as string | null) || "medspa",
+    // From the audience row, which is the only thing that knows. No literal, no coalesce.
+    vertical: aud.audience.researchVertical,
+    audience_id: aud.audience.id,
     allowed_origins: origins,
     updated_at: new Date().toISOString(),
   };
-  if (!existing) seeded.audience = proposal.audience;
+  // ‼️ THE STANCE MIRROR STAYS, AND IT IS WRITTEN FROM THE ROW RATHER THAN FROM THE PROPOSAL.
+  // concierge_configs.audience keeps its CHECK and is still what rungOf()'s magnet firewall and
+  // for-client.ts read, so the two must not drift. Writing both in one statement is what keeps
+  // them one fact. An existing row is left alone: a person may have confirmed it.
+  if (!existing) seeded.audience = aud.audience.stance;
 
   const { error: upsertError } = await supabaseAdmin
     .from("concierge_configs")
@@ -165,20 +242,60 @@ export async function provisionConcierge(clientId: string): Promise<AutoResult> 
   const ratified = Boolean(existing?.audience_confirmed_at);
   const lane = conciergeLaneName(audience);
 
-  // output_ref is free text by design — the step-engine migration calls it "a PDF, a report id,
-  // a URL" — so the frame URL is a first-class value here, the same as review_tool_preview.
+  // ── The demo link, minted and then REQUESTED before anybody is handed it ──
+  //
+  // ‼️ AFTER THE UPSERT, BECAUSE /w/{slug} READS THE ROW THAT WAS JUST WRITTEN. Asking before it
+  // exists would 404 on a first run and report a failure this same function was about to fix.
+  //
+  // ‼️ A LINK THAT DID NOT ANSWER IS NOT POSTED. This card printed a dead /w/{slug} for as long
+  // as the step existed, so the check is the whole point: a 200 or the reason it was not one.
+  const demoUrl = conciergePreviewUrl(clientId, slug);
+  const demo = demoUrl ? await probeUrl(demoUrl, DEMO_PROBE_TIMEOUT_MS) : null;
+  const demoAnswered = demo?.ok === true;
+  // Named without the token, for the lines that describe a failure or go into a note.
+  const demoWhere = `${new URL(previewOrigin()).host}/w/${slug}`;
+
+  // output_ref is free text by design (the step-engine migration calls it "a PDF, a report id,
+  // a URL"), so the demo URL is a first-class value here, the same as review_tool_preview.
+  //
+  // ‼️ NULL WHEN IT DID NOT ANSWER, WHICH ALSO CLEARS THE OLD DEAD LINK. Rows written before
+  // 2026-09-11 hold the tokenless concierge-host URL, and leaving it there would keep a card
+  // printing it as the demo link.
   await supabaseAdmin
     .from("client_delivery_steps")
-    .update({ output_ref: url, updated_at: new Date().toISOString() })
+    .update({ output_ref: demoAnswered ? demoUrl : null, updated_at: new Date().toISOString() })
     .eq("client_id", clientId)
     .eq("step_key", "concierge_preview");
+
+  const demoLine = !demoUrl
+    ? previewLinkLine(null, "Assistant demo")
+    : demoAnswered
+      ? previewLinkLine(
+          demoUrl,
+          "Assistant demo",
+          "opens this client's assistant even while it is switched off"
+        )
+      : `:rotating_light: *The demo link did not answer, so it is not posted here.* ` +
+        `\`${demoWhere}\` ${demo && !demo.ok ? demo.detail : "was not requested"}. The config ` +
+        `row above is saved either way; fix that and re-run this step for a working link.`;
+
+  // ‼️ THE LINK HANDED OVER IS THE WIDGET ON A PAGE (2026-09-16). demoUrl above is the bare frame and it stays the
+  // thing that is probed; what a person opens on the call is their hub with sample text and the assistant in
+  // the corner, which is what the product actually is. Matthew: "it's supposed to be an extension for the
+  // website not a whole chatbot itself."
+  const { conciergeDemoUrlFor } = await import("./concierge-addon");
+  const pageDemo = demoAnswered ? await conciergeDemoUrlFor(clientId) : null;
 
   await notifyStep(
     clientId,
     "concierge_preview",
     [
       `*${lane}, ${name}*`,
-      `Preview: ${url}`,
+      pageDemo ? `*Demo on a page:* ${pageDemo}
+The assistant sits in the corner, as a visitor meets it.` : demoLine,
+      "",
+      ":moneybag: *It is an add-on.* Demo it, then press [Include concierge (add-on)] or [Not now, install later]. " +
+        "Both tick this step; neither touches their pages, magnets or plan. `concierge install` in any thread adds it later.",
       "",
       ":lock: Not live on their site. `enabled` is false until the `concierge_live` step, so " +
         "this link is for the call and nothing is running on their domain yet.",
@@ -215,10 +332,20 @@ export async function provisionConcierge(clientId: string): Promise<AutoResult> 
       .join("\n")
   );
 
+  // ‼️ ok STAYS TRUE WHEN THE LINK FAILED, AND THE NOTE SAYS SO INSTEAD. The runner's job is the
+  // config row, which was written, and the step's verifier checks that row. Failing the runner
+  // here would withhold the step card and its two audience buttons over a problem the card above
+  // already names. What the note must not do is call a link ready that nobody could open.
+  const demoNote = demoAnswered
+    ? `demo link answered ${demo?.status} on ${demoWhere}`
+    : demoUrl
+      ? `demo link on ${demoWhere} did not answer (${demo && !demo.ok ? demo.detail : "not requested"}), so none was posted`
+      : "no demo link could be minted (CLIENT_LINK_SECRET is not set)";
+
   return {
     ok: true,
     note:
-      `${lane} preview ready at ${url}, ${origins.length} embed origin(s) seeded, ` +
+      `${lane} provisioned, ${demoNote}, ${origins.length} embed origin(s) seeded, ` +
       `audience ${audience}${ratified ? " (confirmed)" : " (awaiting confirmation)"}`,
   };
 }

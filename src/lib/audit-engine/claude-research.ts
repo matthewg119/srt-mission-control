@@ -25,6 +25,8 @@ import { callClaudeJSON } from "@/lib/claude-calls";
 import type { SiteResearch } from "./site-research";
 import type { CrawlBlock } from "./types";
 import type { ResearchTarget } from "./search-research";
+import { getOrFetch, cacheKeyOf } from "@/lib/data/dataset-cache";
+import { tokensOnly } from "@/lib/data/model-costs";
 
 /** Under this, the profile is a shrug dressed as prose rather than an identification.
  *  Same floor as search-research.ts, and deliberately the same number. */
@@ -470,6 +472,83 @@ export function describeResearchTarget(target: ResearchTarget): string {
   return target.city ? `${target.name} (${target.city})` : target.name;
 }
 
+// --- the identity, bought once -----------------------------------------------------------
+//
+// This call is Sonnet plus up to MAX_SEARCHES server-side web searches, and until 2026-09-14 it
+// was re-bought in full every time the same business was audited. It is now fronted by
+// getOrFetch, so the second audit of a business reads the first one.
+//
+// ‼️ THE TTL IS THE REBRAND WINDOW, NOT A GUESS AT FRESHNESS. Who a business is and what it
+// sells changes slowly, so a month-old answer is still the right answer; 30 days matches
+// NICHE_BRIEF_TTL_DAYS for the same reason. The failure case is a business that rebrands, and it
+// costs one stale month rather than a re-bought call on every audit of every prospect.
+
+const IDENTITY_KIND = "anthropic.business_identity";
+const IDENTITY_MODEL = "claude-sonnet-4-6";
+const IDENTITY_TTL_DAYS = 30;
+
+/**
+ * Thrown to buy an answer and then decline to keep it.
+ *
+ * getOrFetch writes whatever fetch() returns and does not catch what fetch throws, so throwing is
+ * the only way to spend the money, use the answer for this run, and leave the cache empty.
+ */
+class UnusableIdentity extends Error {
+  constructor(readonly raw: RawIdentity) {
+    super("identity not worth caching");
+    this.name = "UnusableIdentity";
+  }
+}
+
+function toIdentity(raw: RawIdentity): BusinessIdentity {
+  return {
+    found: raw.found,
+    tradingName: raw.trading_name,
+    whatTheyDo: raw.what_they_do,
+    services: raw.services,
+    city: raw.city,
+    state: raw.state,
+    cityConfidence: raw.city_confidence,
+    alternates: raw.alternates,
+    websites: raw.websites,
+    reviewsSummary: raw.reviews_summary,
+    competitors: raw.competitors,
+    sources: raw.sources,
+  };
+}
+
+/**
+ * Why this answer must never be served again, or null when it is good.
+ *
+ * ‼️ ONE DEFINITION, READ BY BOTH THE CACHE AND THE CALLER. These were three inline checks that
+ * each returned their own ResearchMiss. They are one function now because the cache has to agree
+ * with the caller about what a usable answer is: an answer the cache keeps and the caller then
+ * rejects would be served back, for free, on every audit of that business until the TTL expires.
+ *
+ * ‼️ A PROFILE WITH NO SOURCE IS THE MODEL ANSWERING FROM MEMORY, which is precisely the failure
+ * this file exists to prevent. found=true with an empty sources array is a confident
+ * hallucination, and it is indistinguishable from a real answer once it reaches classify.ts.
+ * That is the one it would be worst to cache.
+ */
+export function unusableReason(id: BusinessIdentity): Exclude<ResearchMiss, "call_failed"> | null {
+  if (!id.found) return "unidentified";
+  if (renderProfile(id).length < MIN_PROFILE_CHARS) return "thin_profile";
+  if (id.sources.length === 0) return "no_sources";
+  return null;
+}
+
+/** The line each rejection has always logged, kept word for word. */
+function describeUnusable(
+  reason: Exclude<ResearchMiss, "call_failed">,
+  id: BusinessIdentity
+): string {
+  if (reason === "unidentified") return "no identifiable business (found=false)";
+  if (reason === "thin_profile") {
+    return `profile too thin (${renderProfile(id).length} chars) to classify from`;
+  }
+  return "answer cited no sources";
+}
+
 /**
  * Identify a business with Claude's server-side web search.
  *
@@ -490,76 +569,89 @@ export async function researchViaClaudeDetailed(
 
   let raw: RawIdentity;
   try {
-    const { data } = await callClaudeJSON<RawIdentity>({
-      model: "claude-sonnet-4-6",
-      system: SYSTEM,
-      user: buildUserPrompt(target),
-      maxTokens: 3000,
-      // ‼️ Bounded on purpose. This runs inside waitUntil against a 300s maxDuration, in front
-      // of 20 engine calls that have not started yet, and web_search can run for minutes. A
-      // request that never returns would eat the whole audit and post nothing — a timeout drops
-      // us to the OpenAI backup in researchProfile(), which is the entire reason it was kept.
-      timeoutMs: RESEARCH_TIMEOUT_MS,
-      // Identification is a recall task, not a creative one. classify.ts runs at 0.4 because it
-      // is writing questions; this is reporting what sources say.
-      temperature: 0.1,
-      schemaHint: SCHEMA_HINT,
-      tools: [
-        {
-          type: "web_search_20260209",
-          name: "web_search",
-          max_uses: MAX_SEARCHES,
-          // Not allowed_domains: an allowlist containing a host Anthropic's crawler cannot reach
-          // is rejected at request validation and takes the whole call with it. See the
-          // BRIEF_BLOCKED_DOMAINS header in config/pitch.ts for the incident.
-          blocked_domains: IDENTIFY_BLOCKED_DOMAINS,
-        },
-      ],
-      validate: isRawIdentity,
-      coerce: coerceIdentity,
-      describeInvalid: describeInvalidIdentity,
+    // ‼️ THE MOST EXPENSIVE GENERATION IN THE PIPELINE, AND IT WAS BOUGHT EVERY TIME.
+    // Sonnet plus up to MAX_SEARCHES server-side web searches, re-run in full whenever the same
+    // business is audited again. The answer is a fact about a BUSINESS and not about a client,
+    // so clientId is null and two clients asking about the same business ask one paid question.
+    const { payload, cached } = await getOrFetch<RawIdentity>({
+      clientId: null,
+      kind: IDENTITY_KIND,
+      // Only the target reaches the model: buildUserPrompt(target) is the whole user turn, and
+      // `block` and `existing` are read after the call, never inside it. The model id is part of
+      // the key because a different model is a different answer to the same question.
+      cacheKey: cacheKeyOf({ target, model: IDENTITY_MODEL }),
+      ttlDays: IDENTITY_TTL_DAYS,
+      provider: "anthropic",
+      params: { kind: target.kind, target: label },
+      fetch: async () => {
+        const { data, usage, model } = await callClaudeJSON<RawIdentity>({
+          model: IDENTITY_MODEL,
+          system: SYSTEM,
+          user: buildUserPrompt(target),
+          maxTokens: 3000,
+          // ‼️ Bounded on purpose. This runs inside waitUntil against a 300s maxDuration, in front
+          // of 20 engine calls that have not started yet, and web_search can run for minutes. A
+          // request that never returns would eat the whole audit and post nothing — a timeout drops
+          // us to the OpenAI backup in researchProfile(), which is the entire reason it was kept.
+          timeoutMs: RESEARCH_TIMEOUT_MS,
+          // Identification is a recall task, not a creative one. classify.ts runs at 0.4 because it
+          // is writing questions; this is reporting what sources say.
+          temperature: 0.1,
+          schemaHint: SCHEMA_HINT,
+          tools: [
+            {
+              type: "web_search_20260209",
+              name: "web_search",
+              max_uses: MAX_SEARCHES,
+              // Not allowed_domains: an allowlist containing a host Anthropic's crawler cannot reach
+              // is rejected at request validation and takes the whole call with it. See the
+              // BRIEF_BLOCKED_DOMAINS header in config/pitch.ts for the incident.
+              blocked_domains: IDENTIFY_BLOCKED_DOMAINS,
+            },
+          ],
+          validate: isRawIdentity,
+          coerce: coerceIdentity,
+          describeInvalid: describeInvalidIdentity,
+        });
+
+        // ‼️ A BAD ANSWER IS NEVER CACHED, AND THAT IS WHY THIS THROWS.
+        // getOrFetch stores whatever fetch() returns and does not catch what it throws, so a
+        // throw is the only way to buy an answer and decline to keep it. Caching found=false, a
+        // thin profile or a sourceless reply would make one bad minute permanent for the whole
+        // TTL: every later audit of that business would be served the failure for free, and a
+        // no_sources reply is a confident hallucination rather than a fact that ages well.
+        // findCachedSession excludes its `failed` rows for exactly this reason.
+        if (unusableReason(toIdentity(data))) throw new UnusableIdentity(data);
+        // ‼️ A FLOOR, NOT THE TOTAL. tokensOnly cannot see the per-search charge for the up to
+        // MAX_SEARCHES server-side web searches this call makes, and no per-search rate is on
+        // file here. Recording the token cost understates by a known amount; recording nothing
+        // recorded a zero, and a zero in a spend ledger reads as a measurement.
+        return { payload: data, costUsd: tokensOnly(model, usage) };
+      },
     });
-    raw = data;
+    if (cached) {
+      console.log(`[claude-research] ${label}: identity read from client_datasets, nothing bought`);
+    }
+    raw = payload;
   } catch (e) {
-    console.error(`[claude-research] ${label}: call failed — ${(e as Error).message}`);
-    return { result: null, miss: "call_failed" };
+    // The answer arrived and was deliberately not kept. It is still the answer for THIS run, and
+    // the checks below turn it into the same miss, with the same log line, that it always was.
+    if (e instanceof UnusableIdentity) {
+      raw = e.raw;
+    } else {
+      console.error(`[claude-research] ${label}: call failed - ${(e as Error).message}`);
+      return { result: null, miss: "call_failed" };
+    }
   }
 
-  if (!raw.found) {
-    console.error(`[claude-research] ${label}: no identifiable business (found=false)`);
-    return { result: null, miss: "unidentified" };
+  const identity = toIdentity(raw);
+  const reason = unusableReason(identity);
+  if (reason) {
+    console.error(`[claude-research] ${label}: ${describeUnusable(reason, identity)}`);
+    return { result: null, miss: reason };
   }
-
-  const identity: BusinessIdentity = {
-    found: true,
-    tradingName: raw.trading_name,
-    whatTheyDo: raw.what_they_do,
-    services: raw.services,
-    city: raw.city,
-    state: raw.state,
-    cityConfidence: raw.city_confidence,
-    alternates: raw.alternates,
-    websites: raw.websites,
-    reviewsSummary: raw.reviews_summary,
-    competitors: raw.competitors,
-    sources: raw.sources,
-  };
 
   const profile = renderProfile(identity);
-  if (profile.length < MIN_PROFILE_CHARS) {
-    console.error(
-      `[claude-research] ${label}: profile too thin (${profile.length} chars) to classify from`
-    );
-    return { result: null, miss: "thin_profile" };
-  }
-
-  // ‼️ A profile with no source is the model answering from memory, which is precisely the
-  // failure this file exists to prevent. found=true with an empty sources array is a confident
-  // hallucination, and it is indistinguishable from a real answer once it reaches classify.ts.
-  if (identity.sources.length === 0) {
-    console.error(`[claude-research] ${label}: answer cited no sources`);
-    return { result: null, miss: "no_sources" };
-  }
 
   const sources = identity.sources.join(", ");
   const header =

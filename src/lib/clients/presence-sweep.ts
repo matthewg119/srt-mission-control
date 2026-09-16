@@ -24,6 +24,8 @@ import {
   RECOMMENDED,
   RECOMMENDED_KEYS,
   SWEEP_GATE_COUNT,
+  platformsFor,
+  sweepGateFor,
 } from "@/config/presence-platforms";
 import { canonicalLine, type Canonical } from "./nap-compare";
 import { normalizeState } from "./normalize";
@@ -144,7 +146,110 @@ export async function seedPresenceSweep(
   return { ok: true, seeded: inserted?.length ?? 0, onFile: count ?? 0 };
 }
 
+/**
+ * Which platforms this client is swept on, from its primary audience.
+ *
+ * `keys: null` means every platform, and it is the honest answer in two cases that both say so on
+ * the card: nobody has confirmed an audience yet, or the audience lists no platforms.
+ *
+ * ‼️ THE BOARD ORDER MAKES THE FIRST CASE THE NORMAL ONE. nap_sweep (step 4) and the manual sweep
+ * (step 5) both run BEFORE avatar_confirmed (step 7), which is what creates the audience. So a new
+ * client is always seeded and first carded against all nineteen, and narrows the moment its avatar
+ * is confirmed. Reading a preset here to narrow sooner is not an option: seedClientAudience is the
+ * only reader of a preset, and a request-time fallback to one is the design this replaced.
+ *
+ * ‼️ NOTHING IS DELETED WHEN IT NARROWS. The seed still writes every platform, and the audience is a
+ * VIEW over those rows (see loadSweepView). An audience changes (a client can have several, and the
+ * primary moves), and a view follows it where a prune would have thrown evidence away.
+ */
+export interface SweepScope {
+  keys: string[] | null;
+  /** Why the scope is what it is, for the card. Null when an audience decided it cleanly. */
+  note: string | null;
+}
+
+export async function sweepScopeFor(clientId: string): Promise<SweepScope> {
+  const { audienceFor } = await import("./audiences");
+  const aud = await audienceFor(clientId);
+
+  if (!aud.ok) {
+    return {
+      keys: null,
+      note: "No audience is confirmed for this client yet, so every platform is listed. Confirming the avatar narrows this to the platforms that audience is found on.",
+    };
+  }
+
+  const { platforms, unknown } = platformsFor(aud.audience.presencePlatformKeys);
+  const typo = unknown.length
+    ? ` Not recognised on the audience row, so not listed: ${unknown.join(", ")}.`
+    : "";
+
+  if (!platforms.length) {
+    return {
+      keys: null,
+      note: `The audience "${aud.audience.label}" lists no platforms, so every platform is listed.${typo}`,
+    };
+  }
+
+  return { keys: platforms.map((p) => p.key), note: typo ? typo.trim() : null };
+}
+
+/**
+ * Has anybody done anything to this row since it was seeded?
+ *
+ * ‼️ A TOUCHED ROW IS NEVER HIDDEN, WHATEVER THE AUDIENCE SAYS. If somebody screenshotted RealSelf
+ * for a restaurant, that is a platform this client was swept on, and a finding about it belongs on
+ * the cleanup list and the PDF. The audience decides what is ASKED for, not what is KEPT.
+ */
+function touched(r: SweepRow): boolean {
+  return (
+    r.status !== "not_checked" ||
+    r.proposedStatus !== null ||
+    r.confirmedStatus !== null ||
+    r.screenshotRef !== null ||
+    r.listingUrl !== null ||
+    r.skipReason !== null ||
+    r.checkedAt !== null ||
+    r.rawName !== null ||
+    r.rawAddress !== null ||
+    r.rawPhone !== null ||
+    r.claimed !== null
+  );
+}
+
+export interface SweepView {
+  /** The rows this client's audience is swept on, plus any other row somebody has touched. */
+  rows: SweepRow[];
+  /**
+   * Untouched rows for platforms outside the audience. Counted, so a verifier comparing a row count
+   * against loadSweep can tell "hidden by the audience" from "the query failed".
+   */
+  hidden: number;
+  scope: SweepScope;
+}
+
+/** The sweep as this client's audience sees it. Every reader that renders or verifies uses this. */
+export async function loadSweepView(clientId: string): Promise<SweepView> {
+  const [all, scope] = await Promise.all([loadAllSweepRows(clientId), sweepScopeFor(clientId)]);
+  if (!scope.keys) return { rows: all, hidden: 0, scope };
+
+  const wanted = new Set(scope.keys);
+  const rows = all.filter((r) => wanted.has(r.platform) || touched(r));
+  return { rows, hidden: all.length - rows.length, scope };
+}
+
+/** The audience's view of the sweep. See loadSweepView. */
 export async function loadSweep(clientId: string): Promise<SweepRow[]> {
+  return (await loadSweepView(clientId)).rows;
+}
+
+/**
+ * Every row, whatever the audience says. For WRITERS only.
+ *
+ * ‼️ listing-read.ts reads screenshots into rows by platform, and a screenshot of a platform outside
+ * the audience must still find its row. Through the view it would find nothing and be skipped.
+ */
+export async function loadAllSweepRows(clientId: string): Promise<SweepRow[]> {
   const { data, error } = await supabaseAdmin
     .from("nap_discrepancies")
     .select("*")
@@ -238,57 +343,80 @@ export function worstFirst(rows: SweepRow[]): SweepRow[] {
  * Slack sections as it needs, never mid-line, because these lines are search strings and URLs
  * somebody pastes.
  */
-export function formatSweepCard(client: { name: string; city: string; state: string }, canonical: Canonical): string {
+export function formatSweepCard(
+  client: { name: string; city: string; state: string },
+  canonical: Canonical,
+  /**
+   * The audience's platforms. Omitted or null lists all nineteen, which is the card a client with
+   * no confirmed audience gets, and `scopeNote` then says why.
+   */
+  scope?: SweepScope | null
+): string {
   const state = normalizeState(client.state || "");
   const args = { name: client.name, city: client.city, state };
   const line = (n: number, p: (typeof ALL_PLATFORMS)[number]) =>
-    ` ${n}. ${p.label} — search: \`${p.search(args)}\`  <${p.url}|open>`;
+    ` ${n}. ${p.label}: search \`${p.search(args)}\`  <${p.url}|open>`;
 
-  const restOfCore = CORE_SIX.filter((p) => !RECOMMENDED_KEYS.includes(p.key));
-  const restOfExtended = EXTENDED.filter((p) => !RECOMMENDED_KEYS.includes(p.key));
+  const wanted = scope?.keys ? new Set(scope.keys) : null;
+  const inScope = (p: (typeof ALL_PLATFORMS)[number]) => !wanted || wanted.has(p.key);
+
+  const listed = ALL_PLATFORMS.filter(inScope);
+  const gate = wanted ? sweepGateFor(listed.length) : SWEEP_GATE_COUNT;
+  const start = RECOMMENDED.filter(inScope);
+  const restOfCore = CORE_SIX.filter((p) => inScope(p) && !RECOMMENDED_KEYS.includes(p.key));
+  const restOfExtended = EXTENDED.filter((p) => inScope(p) && !RECOMMENDED_KEYS.includes(p.key));
 
   const lines: string[] = [
-    `*Presence sweep — 0 of ${PLATFORM_COUNT} done automatically*`,
+    `*Presence sweep: 0 of ${listed.length} done automatically*`,
     "No presence provider is keyed (Google Places, Bing, Foursquare, Yelp all unkeyed), so every one is manual.",
+    ...(scope?.note ? [scope.note] : []),
     "",
     `*Canonical:* ${canonicalLine(canonical)}`,
     "",
     "Search the string, screenshot what you see, reply in this thread.",
     "",
-    `*[Done] closes on any ${SWEEP_GATE_COUNT} DISTINCT platforms, and which ${SWEEP_GATE_COUNT} is your choice.*`,
-    `Not four named ones: any ${SWEEP_GATE_COUNT} of the ${PLATFORM_COUNT} below. The first four are where I would start.`,
+    `*[Done] closes on any ${gate} DISTINCT platforms, and which ${gate} is your choice.*`,
+    wanted
+      ? `Any ${gate} of the ${listed.length} below, which are the platforms this client's audience is found on. A platform not listed still counts if you screenshot it.`
+      : `Not four named ones: any ${gate} of the ${listed.length} below. The first four are where I would start.`,
     "",
     "*Two ways a screenshot gets attributed, and one of them needs nothing typed:*",
     "  • name the platform in the message: type `Yelp` and attach the image, or",
     "  • leave the Chrome address bar in the shot and the URL in the picture is read for you.",
     "One platform per message either way. A screenshot nothing can attribute is still filed and",
-    "still kept, it just does not count toward the four, and the thread says which one it was.",
-    "",
-    "*START WITH THESE FOUR*",
+    `still kept, it just does not count toward the ${gate}, and the thread says which one it was.`,
   ];
 
-  RECOMMENDED.forEach((p, i) => {
-    lines.push(line(i + 1, p));
-    if (p.note) lines.push(`     ${p.note}`);
-  });
+  let n = 0;
+  if (start.length) {
+    lines.push("", start.length === 4 ? "*START WITH THESE FOUR*" : "*START WITH THESE*");
+    for (const p of start) {
+      lines.push(line(++n, p));
+      if (p.note) lines.push(`     ${p.note}`);
+    }
+  }
 
-  lines.push(
-    "",
-    "*THE REST OF THE CORE SIX* — the remediation tier. A mismatch here is week-one cleanup work."
-  );
-  restOfCore.forEach((p, i) => {
-    lines.push(line(RECOMMENDED.length + i + 1, p));
-    if (p.note) lines.push(`     ${p.note}`);
-  });
+  if (restOfCore.length) {
+    lines.push(
+      "",
+      `*${start.length ? "THE REST OF THE CORE SIX" : "THE CORE SIX"}*: the remediation tier. A mismatch here is week-one cleanup work.`
+    );
+    for (const p of restOfCore) {
+      lines.push(line(++n, p));
+      if (p.note) lines.push(`     ${p.note}`);
+    }
+  }
 
-  lines.push(
-    "",
-    "*EXTENDED* — context. Findings, not week-one cleanup. Any of these still counts toward the four."
-  );
-  restOfExtended.forEach((p, i) => {
-    lines.push(line(RECOMMENDED.length + restOfCore.length + i + 1, p));
-    if (p.note) lines.push(`     ${p.note}`);
-  });
+  if (restOfExtended.length) {
+    lines.push(
+      "",
+      `*EXTENDED*: context. Findings, not week-one cleanup. Any of these still counts toward the ${gate}.`
+    );
+    for (const p of restOfExtended) {
+      lines.push(line(++n, p));
+      if (p.note) lines.push(`     ${p.note}`);
+    }
+  }
 
   lines.push(
     "",
@@ -324,11 +452,18 @@ export async function runAutomatedSweep(
   const seeded = await seedPresenceSweep(clientId);
   if (!seeded.ok) return { ok: false, error: seeded.error, note: "" };
 
+  // The seed writes every platform whatever the audience says; the audience narrows what is ASKED
+  // for, through loadSweepView. So this reports both numbers rather than letting 19 imply 19 asks.
+  const scope = await sweepScopeFor(clientId);
+  const asked = scope.keys
+    ? `This client's audience is swept on ${scope.keys.length} of them: ${scope.keys.join(", ")}. `
+    : "";
+
   return {
     ok: true,
     note:
       `${seeded.onFile} of ${PLATFORM_COUNT} platforms are on file at "not checked" ` +
-      `(${seeded.seeded} written on this run). ` +
+      `(${seeded.seeded} written on this run). ${asked}` +
       `Nothing was checked automatically: no presence provider is keyed. The manual sweep is the sweep.`,
   };
 }

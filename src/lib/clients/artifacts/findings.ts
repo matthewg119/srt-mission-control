@@ -1,4 +1,5 @@
-// The findings report — delivery step 10, Runner v3 section 10, Artifact Templates section 2.
+// The findings report — one of the four call pack documents (it was a delivery step of its own
+// until the 2026-09-12 merge), Runner v3 section 10, Artifact Templates section 2.
 //
 // This is the document the whole onboarding exists to produce. Six sections, in that order, no
 // deviation. It is assembled from what steps 2 to 4c already wrote; it computes nothing new and
@@ -25,6 +26,8 @@
 // silently rewrite the questions in a report already sent to a client.
 
 import { supabaseAdmin } from "@/lib/db";
+import { verticalFor } from "@/lib/clients/harvest";
+import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { canonicalFor, loadSweep, effectiveStatus, countByStatus } from "../presence-sweep";
 import { platformByKey } from "@/config/presence-platforms";
 import type { Canonical } from "../nap-compare";
@@ -32,6 +35,7 @@ import { selectedCompetitors, tallyRecommended, type CandidateRow } from "../com
 import { loadReviewAudit, isRecorded, reviewPlatformLabel, type ReviewAuditRow } from "../review-audit";
 import type { SiteIntel } from "../site-intel";
 import { signedDocUrl } from "../onboarding-docs";
+import { CALL_PACK_DOCS, CALL_PACK_STEP_KEY, callPackFilename } from "./call-pack";
 import {
   startDoc,
   finishDoc,
@@ -532,8 +536,15 @@ function sectionSix(state: PageState, args: { intel: SiteIntel | null; domain: s
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * One of the four call pack documents.
+ *
+ * `presenceDocId` comes from the runner, which generated the presence PDF moments earlier.
+ * `stepKey` is which step this is filed against and defaults to the pack.
+ */
 export async function generateFindings(
-  clientId: string
+  clientId: string,
+  opts: { stepKey?: string; presenceDocId?: string | null } = {}
 ): Promise<{ ok: boolean; error?: string; docId?: string }> {
   const { data: client } = await supabaseAdmin
     .from("clients")
@@ -550,6 +561,10 @@ export async function generateFindings(
     .from("audit_reports")
     .select("id, engines, robots_check, site_signals")
     .eq("client_id", clientId)
+    // The BASELINE, never a measurement we fired ourselves. Section 1 quotes this run's questions
+    // back to the client, and a Photograph II or a re-test would put the tracked set in a document
+    // describing what the engines said before any of the work started. See run-labels.ts.
+    .or(BASELINE_ONLY)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -583,20 +598,38 @@ export async function generateFindings(
     .eq("source", "slack")
     .limit(5);
 
-  const { data: presenceDoc } = await supabaseAdmin
-    .from("client_docs")
-    .select("id")
-    .eq("client_id", clientId)
-    .eq("delivery_step_key", "presence_pdf")
-    .eq("source", "generated")
-    .order("uploaded_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  // ‼️ THE RUNNER HANDS THIS OVER. Both documents come out of the same pass now, so looking the
+  // presence PDF up would mean querying for a row the caller wrote seconds ago. The query below
+  // is the fallback for a call that passed nothing: it matches the pack's filename prefix under
+  // this step, and under the legacy `presence_pdf` key for clients whose documents were filed
+  // before the merge.
+  let presenceDocId = opts.presenceDocId ?? null;
+  if (!presenceDocId) {
+    const { data: presenceDoc } = await supabaseAdmin
+      .from("client_docs")
+      .select("id")
+      .eq("client_id", clientId)
+      .in("delivery_step_key", [opts.stepKey ?? CALL_PACK_STEP_KEY, "presence_pdf"])
+      .eq("source", "generated")
+      .like("filename", `${CALL_PACK_DOCS.presence.prefix}%`)
+      .order("uploaded_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    presenceDocId = (presenceDoc?.id as string | null) ?? null;
+  }
 
-  const { data: versions } = await supabaseAdmin
-    .from("question_set_versions")
-    .select("version")
-    .eq("vertical", "med_spa");
+  // ‼️ THE CLIENT'S OWN VERTICAL, NOT THE LITERAL "med_spa". freezeUniversalV1 stores the version
+  // as `universal_v1@${vertical}` where vertical is clients.vertical_slug, which classify.ts writes
+  // as kebab-case free text and is instructed never to emit as snake_case. So this filter matched
+  // only a client whose slug was literally `med_spa`, a spelling nothing produces, and the footer
+  // has printed "question set not frozen" for every real client since it was written.
+  const ownVertical = await verticalFor(clientId);
+  const { data: versions } = ownVertical.ok
+    ? await supabaseAdmin
+        .from("question_set_versions")
+        .select("version")
+        .eq("vertical", ownVertical.vertical)
+    : { data: null };
 
   const clientName = ((client.dba_name || client.legal_name) as string) ?? "";
   const city = [client.city, client.state].filter(Boolean).join(", ") || "your area";
@@ -629,7 +662,7 @@ export async function generateFindings(
   sectionTwo(state, {
     canonical,
     rows,
-    presenceDocUrl: presenceDoc ? `${appBase}/api/clients/${clientId}/docs/${presenceDoc.id}` : null,
+    presenceDocUrl: presenceDocId ? `${appBase}/api/clients/${clientId}/docs/${presenceDocId}` : null,
   });
 
   sectionThree(state, { clientName, competitors, reviewRows });
@@ -668,8 +701,8 @@ export async function generateFindings(
 
   const result = await deliverArtifact({
     clientId,
-    stepKey: "findings_doc",
-    filename: `Findings - ${clientName}.pdf`,
+    stepKey: opts.stepKey ?? CALL_PACK_STEP_KEY,
+    filename: callPackFilename("findings", clientName),
     buffer,
     message,
   });

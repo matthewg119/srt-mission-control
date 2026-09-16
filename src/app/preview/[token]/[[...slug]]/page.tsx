@@ -47,9 +47,13 @@ import {
 import { listReplica } from "@/lib/hub/replica-pages";
 import { ConciergeEmbed } from "@/lib/concierge/embed";
 import { themeStyle } from "@/lib/hub/theme";
-import { skinStyle, skinClass } from "@/lib/hub/skin";
+import { skinStyle, hubRootClass } from "@/lib/hub/skin";
 import { ReviewTool } from "@/app/hub/[host]/reviews/review-tool";
+import { GHOST_BELOW, GHOST_NOTICE, GHOST_PAGES, ghostAnswerPage } from "@/lib/hub/ghost-content";
+import { universeFontClass } from "@/components/hub/universe-fonts";
+import { UniverseBand, UniverseTop } from "@/components/hub/universe-chrome";
 import "@/app/hub/[host]/hub.css";
+import "@/app/hub/[host]/universes.css";
 
 // A preview must never be a cached render: you preview to see what you just saved.
 export const dynamic = "force-dynamic";
@@ -89,7 +93,13 @@ export default async function TokenPreview({ params, searchParams }: Props) {
   });
 
   const kind =
-    searchParams.kind === "reviews" ? "reviews" : searchParams.kind === "site" ? "site" : "hub";
+    searchParams.kind === "reviews"
+      ? "reviews"
+      : searchParams.kind === "site"
+        ? "site"
+        : searchParams.kind === "concierge" || (params.slug?.[0] ?? "").startsWith("lorem-ipsum-")
+          ? "concierge"
+          : "hub";
   const host =
     wanted.find((w) => w.kind === kind)?.host ??
     `${kind === "reviews" ? "reviews" : "learn"}.{no domain set}`;
@@ -100,6 +110,37 @@ export default async function TokenPreview({ params, searchParams }: Props) {
   // host, so a nested path costs nothing, while middleware's HUB_SLUG forbids one on a hostname
   // a client's registrar controls. That rule is untouched and must stay that way.
   const replicaPath = (params.slug ?? []).join("/");
+
+  // ── The assistant, in the corner of a sample page ────────────────────────
+  //
+  // ‼️ THE DEMO IS THE WIDGET ON A PAGE, NOT THE CHAT ON ITS OWN (2026-09-16). Step 18 used to hand over the
+  // bare /w/<slug> frame, so the "extension for their website" was shown as a full-screen chatbot. This is
+  // their themed hub with sample text and the corner assistant exactly as a visitor meets it.
+  if (kind === "concierge") {
+    const real = (await listAllForBoard(verified.clientId)).filter((p) => p.status === "published");
+    const useGhost = real.length < GHOST_BELOW;
+    const base = `/preview/${params.token}/`;
+    const ghost = slug ? ghostAnswerPage(slug) : null;
+    return (
+      <div
+        className={`${hubRootClass(client.skin)} ${universeFontClass(client.skin?.universe)}`.trim()}
+        lang={client.language}
+        style={{ ...skinStyle(client.skin), ...themeStyle(client.theme) }}
+      >
+        <DemoRibbon ghost={useGhost} />
+        <UniverseTop universe={client.skin?.universe} name={client.displayName} where={[client.city, client.state].filter(Boolean).join(", ") || null} pages={-1} />
+        <div className="hub-wrap">
+          {ghost ? (
+            <HubAnswerBody client={client} host={host} page={ghost} linkBase={base} homeHref={`/preview/${params.token}?kind=concierge`} />
+          ) : (
+            <HubIndexBody client={client} host={host} pages={useGhost ? GHOST_PAGES : real} linkBase={base} />
+          )}
+        </div>
+        <UniverseBand universe={client.skin?.universe} name={client.displayName} where={null} pages={-1} />
+        <ConciergeEmbed clientId={verified.clientId} magnetKey={null} preview={params.token} />
+      </div>
+    );
+  }
 
   // ── The replica of their own site ────────────────────────────────────────
   //
@@ -130,7 +171,7 @@ export default async function TokenPreview({ params, searchParams }: Props) {
 
     return (
       <div
-        className={`hub-root ${skinClass(client.skin)}`}
+        className={`${hubRootClass(client.skin)} ${universeFontClass(client.skin?.universe)}`.trim()}
         lang={client.language}
         style={{ ...skinStyle(client.skin), ...themeStyle(client.theme) }}
       >
@@ -160,12 +201,13 @@ export default async function TokenPreview({ params, searchParams }: Props) {
 
   return (
     <div
-      className={`hub-root ${skinClass(client.skin)}`}
+      className={`${hubRootClass(client.skin)} ${universeFontClass(client.skin?.universe)}`.trim()}
       lang={client.language}
       // Skin first, theme second. Same order as the live layout; see src/lib/hub/skin.ts.
       style={{ ...skinStyle(client.skin), ...themeStyle(client.theme) }}
     >
       <PreviewRibbon host={host} slug={slug} />
+      <UniverseTop universe={kind === "reviews" ? null : client.skin?.universe} name={client.displayName} where={[client.city, client.state].filter(Boolean).join(", ") || null} pages={-1} />
       <div className="hub-wrap">
         {kind === "reviews" ? (
           <ReviewTool client={client} />
@@ -248,6 +290,29 @@ function PreviewRibbon({ host, slug }: { host: string; slug?: string }) {
         This is what <code style={{ color: "#fff" }}>{host}</code>
         {slug ? `/${slug}` : ""} will serve. Nothing here is live yet and nothing is indexed.
       </span>
+    </div>
+  );
+}
+
+/** The concierge demo's ribbon: what the corner is, and that the words on the page are a sample. */
+function DemoRibbon({ ghost }: { ghost: boolean }) {
+  return (
+    <div
+      style={{
+        background: "#1d1d1f",
+        color: "rgba(255,255,255,0.75)",
+        borderBottom: "1px solid rgba(255,255,255,0.12)",
+        padding: "10px 16px",
+        font: "13px/1.5 ui-sans-serif, system-ui, sans-serif",
+        display: "flex",
+        flexWrap: "wrap",
+        gap: "12px",
+        alignItems: "baseline",
+      }}
+    >
+      <strong style={{ color: "#F5A623" }}>DEMO</strong>
+      <span>The assistant sits in the bottom right corner of your website. Click it.</span>
+      {ghost && <span style={{ color: "rgba(255,255,255,0.5)" }}>{GHOST_NOTICE}</span>}
     </div>
   );
 }

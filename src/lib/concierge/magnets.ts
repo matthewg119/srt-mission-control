@@ -224,9 +224,88 @@ export async function resolveMagnet(
 ): Promise<LeadMagnet | null> {
   const exclude = new Set(opts.exclude ?? []);
   const ranked = rankMagnets(await candidatesFor(q), q);
+
+  // ‼️ A FRAMING OF SOMETHING ALREADY HANDED OVER IS THE SAME THING HANDED OVER AGAIN. Every page
+  // of an anchored client mints its own framing of one offer, all at the client rung, so once the
+  // audit has been given the ladder would otherwise offer "the audit, framed for another page" as
+  // the second magnet. Only read when there is something to exclude, and only for client rows,
+  // because library rows never frame anything.
+  const frames = exclude.size
+    ? await framesKeyById(ranked.filter((m) => m.clientId !== null).map((m) => m.id))
+    : new Map<string, string>();
+
   return (
-    ranked.find((m) => isDeliverable(m) && !(m.magnetKey && exclude.has(m.magnetKey))) ?? null
+    ranked.find((m) => {
+      if (!isDeliverable(m)) return false;
+      if (m.magnetKey && exclude.has(m.magnetKey)) return false;
+      const framed = frames.get(m.id);
+      return !(framed && exclude.has(framed));
+    }) ?? null
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Anchors: a magnet that frames the client's one core offer
+//
+// Matthew, 2026-09-11: every page's lead magnet should lead back to ONE offer (for SRT, the AI
+// visibility audit). A page's magnet is therefore a topic-shaped DOOR into that offer: its own
+// title, pill and opening line, and the anchor's deliverable. lead_magnets.frames_key names it.
+//
+// ‼️ frames_key IS READ SEPARATELY AND NOT ADDED TO COLUMNS, AND THAT IS BLAST RADIUS, NOT STYLE.
+// COLUMNS feeds every magnet read the widget makes for every client. PostgREST fails a whole
+// select on one unknown column, so adding frames_key there would take every client's pill down
+// in the window between a deploy and docs/2026-09-11-page-plan.sql being run. Read here, a
+// missing column degrades to "frames nothing", which is exactly how every row behaved before.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** frames_key per magnet id, for the rows that have one. Empty on any read failure. */
+async function framesKeyById(ids: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (ids.length === 0) return out;
+  const { data, error } = await supabaseAdmin.from("lead_magnets").select("id, frames_key").in("id", ids);
+  if (error) return out;
+  for (const r of (data ?? []) as Array<Record<string, unknown>>) {
+    const key = typeof r.frames_key === "string" && r.frames_key.trim() ? r.frames_key.trim() : null;
+    if (key) out.set(String(r.id), key);
+  }
+  return out;
+}
+
+/** The anchors framed by these delivered keys, so a session can exclude them too. */
+export async function framesKeysOf(keys: readonly string[], audience: Audience): Promise<string[]> {
+  if (keys.length === 0) return [];
+  const { data, error } = await supabaseAdmin
+    .from("lead_magnets")
+    .select("frames_key")
+    .in("magnet_key", [...keys])
+    .eq("audience", audience);
+  if (error) return [];
+  const out = new Set<string>();
+  for (const r of (data ?? []) as Array<Record<string, unknown>>) {
+    if (typeof r.frames_key === "string" && r.frames_key.trim()) out.add(r.frames_key.trim());
+  }
+  return [...out];
+}
+
+/** The anchor this magnet frames, or null when it frames nothing. */
+export async function anchorOf(magnet: LeadMagnet): Promise<LeadMagnet | null> {
+  const frames = await framesKeyById([magnet.id]);
+  const key = frames.get(magnet.id);
+  // A row naming itself is not an anchor relationship, it is a loop.
+  if (!key || key === magnet.magnetKey) return null;
+  return magnetByKey(key, magnet.audience);
+}
+
+/**
+ * The link this magnet actually hands over.
+ *
+ * A framing hands over its anchor's asset: that is the whole meaning of "the audit in disguise".
+ * Falls back to the magnet's own asset when the anchor has none or cannot be read, which is how
+ * every magnet behaved before anchors existed.
+ */
+export async function deliveryUrlFor(magnet: LeadMagnet): Promise<string | null> {
+  const anchor = await anchorOf(magnet);
+  return (anchor ? assetUrlFor(anchor) : null) ?? assetUrlFor(magnet);
 }
 
 /**
@@ -260,9 +339,12 @@ export async function nextInChain(
   magnet: LeadMagnet,
   opts: ResolveOptions = {}
 ): Promise<LeadMagnet | null> {
-  if (!magnet.chainsToKey) return null;
-  if (opts.exclude?.includes(magnet.chainsToKey)) return null;
-  return magnetByKey(magnet.chainsToKey, magnet.audience);
+  // A framing is minted with no chain of its own, and continues exactly where its anchor would:
+  // the visitor was handed the anchor's deliverable, so the anchor's next step is the right one.
+  const chainKey = magnet.chainsToKey ?? (await anchorOf(magnet))?.chainsToKey ?? null;
+  if (!chainKey) return null;
+  if (opts.exclude?.includes(chainKey)) return null;
+  return magnetByKey(chainKey, magnet.audience);
 }
 
 /**

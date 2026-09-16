@@ -7,6 +7,7 @@
 // short of re-running the whole onboarding funnel.
 
 import { supabaseAdmin } from "@/lib/db";
+import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { runAuditPipeline } from "@/lib/audit-engine/run-audit-pipeline";
 import { autoCompleteStep, setDeliveryStep } from "@/lib/clients/delivery-checklist";
 import { anchorTsFor, notifyStep } from "@/lib/clients/step-board";
@@ -80,6 +81,10 @@ export async function adoptAuditClassification(
     .from("audit_reports")
     .select("vertical_slug, business_type")
     .eq("client_id", clientId)
+    // The classifier's answer comes off the BASELINE. A supplied run copies its vertical from the
+    // client row, so adopting from one would be the client's own value making a round trip and
+    // arriving as though something had classified it. See run-labels.ts.
+    .or(BASELINE_ONLY)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -153,7 +158,8 @@ export async function startBaselineScan(clientId: string): Promise<void> {
   // third of the wall on its own. They belong under step 2, which is the step that produced
   // them, and audit_reports.slack_thread_ts then points there so every thread command on the
   // report keeps working in the place the report actually is.
-  const onboardingChannel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
+  const { channelFor } = await import("./step-board");
+  const onboardingChannel = await channelFor(clientId);
   const stepThreadTs = onboardingChannel ? await anchorTsFor(clientId, BASELINE_STEP_KEY) : null;
   const deliveryThread =
     onboardingChannel && stepThreadTs
@@ -171,7 +177,9 @@ export async function startBaselineScan(clientId: string): Promise<void> {
   const result = await runAuditPipeline({
     website: client.website as string,
     city,
-    requesterEmail: (client.email as string) ?? undefined,
+    // ‼️ NO requesterEmail. finishReport drafts a pitch and pings #hot-leads for any report carrying
+    // one, and on 2026-09-15 that pitched SRT Agency LLC its own baseline. isClientRun in
+    // finish-report.ts is the real guard; leaving the email off is the second one.
     requesterName: ((client.dba_name || client.legal_name) as string) ?? undefined,
     contactId: (client.contact_id as string) ?? undefined,
     clientId,

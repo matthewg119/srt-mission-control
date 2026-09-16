@@ -11,15 +11,49 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { isAudience, type Audience } from "./magnets";
+import { audienceById, type AudienceVocabulary } from "@/lib/clients/audiences";
 
 export type BookingMode = "link" | "calendly" | "none";
+
+/**
+ * Whether the client bought the widget (Matthew, 2026-09-15: "we will charge for this additionally so it can
+ * be optional in the onboarding but if I skip it I still may be able to come back and install it").
+ *
+ * ‼️ THE CONFIG ROW EXISTS EITHER WAY. Page drafting, magnets, publishing and the site replica all read the
+ * catalogue through it, so declining the widget must not delete it. `declined` only keeps the widget off
+ * every live page; `concierge install` flips it to `included` later.
+ */
+export type AddonStatus = "undecided" | "included" | "declined";
+
+/** A button under "How can we help you today?". */
+export interface QuickAction {
+  kind: "audit" | "magnet" | "type" | "booking";
+  label: string;
+}
 
 export interface ConciergeConfig {
   clientId: string;
   slug: string;
   enabled: boolean;
   audience: Audience;
+  /**
+   * The SHARED research namespace, from the audience row.
+   *
+   * ‼️ NO LONGER `?? "medspa"`. That fallback sat on a column whose own database default was
+   * also 'medspa', so a client that never chose anything read as a med spa twice over. Both are
+   * gone: the default was dropped in docs/2026-09-14-client-audiences.sql and the coalesce here
+   * was the other half of the same silent answer.
+   */
   vertical: string;
+  /** The nouns every prompt interpolates. Loaded once, here, from client_audiences. */
+  vocabulary: AudienceVocabulary;
+  /** The guards that are this audience's and not universal. Empty is legitimate. */
+  hardLines: string[];
+  /** What this lane is called in front of a person, from the row rather than from a ternary. */
+  laneName: string | null;
+  launcherLabel: string | null;
+  /** The market the ammo lookup is about. Null is honest and competitorAmmo says so. */
+  buyerMarket: string | null;
   greeting: string | null;
   allowedOrigins: string[];
   bookingMode: BookingMode;
@@ -33,11 +67,16 @@ export interface ConciergeConfig {
   clientCity: string | null;
   clientState: string | null;
   clientWebsite: string | null;
+  addonStatus: AddonStatus;
+  /** Null means the audience's default buttons (quickActionsFor). */
+  quickActions: QuickAction[] | null;
+  /** Which mascot sits in the corner, or null for the plain pill. */
+  mascot: string | null;
 }
 
 const CONFIG_COLUMNS =
-  "client_id, enabled, audience, vertical, greeting, allowed_origins, booking_mode, booking_url, " +
-  "booking_phone, analysis_provider, daily_scan_cap, consent_version, " +
+  "client_id, enabled, audience, audience_id, vertical, greeting, allowed_origins, booking_mode, booking_url, " +
+  "booking_phone, analysis_provider, daily_scan_cap, consent_version, addon_status, quick_actions, mascot, " +
   "clients!inner(slug, legal_name, dba_name, domain, website, city, state)";
 
 function bookingMode(v: unknown): BookingMode {
@@ -76,12 +115,46 @@ export async function loadConciergeConfig(slug: string): Promise<ConciergeConfig
 
   const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
 
+  // ‼️ THE WORDS COME FROM A ROW, AND A WIDGET WITH NO ROW DOES NOT SERVE.
+  // This file already refuses on an unreadable audience and says why in the log, for the same
+  // reason: the widget speaks in a client's own voice on a client's own domain, and the failure
+  // it is guarding against is confidently saying the wrong word to a stranger. A missing
+  // audience is the same class of fault as an unreadable stance, so it gets the same answer.
+  const audienceId = str(row.audience_id);
+  if (!audienceId) {
+    console.error(
+      `[concierge] ${clean} has no audience_id, refusing to serve. ` +
+        `Seed one with seedClientAudience() so the widget knows what to call the buyer.`
+    );
+    return null;
+  }
+
+  const resolved = await audienceById(audienceId);
+  if (!resolved.ok) {
+    console.error(`[concierge] ${clean} refusing to serve: ${resolved.error}`);
+    return null;
+  }
+  const aud = resolved.audience;
+
+  const addonStatus: AddonStatus =
+    row.addon_status === "included" || row.addon_status === "declined" ? row.addon_status : "undecided";
+
   return {
     clientId: String(row.client_id),
     slug: clean,
-    enabled: row.enabled === true,
+    // A declined add-on is off on every live page whatever `enabled` says. A preview token still opens it,
+    // so the widget can be shown on a call to a client who has not bought it yet.
+    enabled: row.enabled === true && addonStatus !== "declined",
+    addonStatus,
+    quickActions: readQuickActions(row.quick_actions),
+    mascot: row.mascot === null ? null : str(row.mascot) ?? "wizard-cat",
     audience: row.audience,
-    vertical: str(row.vertical) ?? "medspa",
+    vertical: aud.researchVertical,
+    vocabulary: aud.vocabulary,
+    hardLines: aud.hardLines,
+    laneName: aud.laneName,
+    launcherLabel: aud.launcherLabel,
+    buyerMarket: aud.buyerMarket,
     greeting: str(row.greeting),
     allowedOrigins: Array.isArray(row.allowed_origins)
       ? (row.allowed_origins as unknown[]).filter((o): o is string => typeof o === "string" && !!o.trim())
@@ -97,6 +170,37 @@ export async function loadConciergeConfig(slug: string): Promise<ConciergeConfig
     clientState: str(client.state),
     clientWebsite: str(client.website) ?? str(client.domain),
   };
+}
+
+function readQuickActions(raw: unknown): QuickAction[] | null {
+  if (!Array.isArray(raw)) return null;
+  const kinds = new Set(["audit", "magnet", "type", "booking"]);
+  const out = raw
+    .map((a) => a as { kind?: unknown; label?: unknown })
+    .filter((a) => typeof a.kind === "string" && kinds.has(a.kind) && typeof a.label === "string" && a.label.trim())
+    .map((a) => ({ kind: a.kind as QuickAction["kind"], label: String(a.label).trim().slice(0, 48) }));
+  return out.length ? out.slice(0, 4) : null;
+}
+
+/**
+ * The buttons under the greeting, by audience, when the row names none.
+ *
+ * ‼️ AN OWNER IS OFFERED THE AUDIT AND A PATIENT IS NOT. The free AI visibility audit is something SRT sells
+ * to a business; on a med spa's own site the reader is a patient, and an audit button there would pitch our
+ * product to our client's customers. The magnet button carries the page's own offer either way.
+ */
+export function quickActionsFor(config: Pick<ConciergeConfig, "audience" | "quickActions">): QuickAction[] {
+  if (config.quickActions) return config.quickActions;
+  return config.audience === "owner"
+    ? [
+        { kind: "audit", label: "Get Free AI Visibility audit (3 min)" },
+        { kind: "magnet", label: "" },
+        { kind: "type", label: "Type for help" },
+      ]
+    : [
+        { kind: "magnet", label: "" },
+        { kind: "type", label: "Type for help" },
+      ];
 }
 
 /**

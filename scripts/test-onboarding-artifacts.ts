@@ -57,8 +57,40 @@ import {
   tieAtCutoff,
   REQUIRED_SELECTIONS,
 } from "../src/lib/clients/competitors";
-import { analyse, gradeLevel, sentences as splitSentences } from "../src/lib/hub/readability";
+import {
+  analyse,
+  gradeLevel,
+  mergeMarks,
+  sentences as splitSentences,
+} from "../src/lib/hub/readability";
 import { PHASE_BEFORE, PHASE_DURING, PHASE_AFTER } from "../src/config/delivery-steps";
+import {
+  REVIEW_PLATFORMS,
+  destinationLine,
+  destinationState,
+} from "../src/lib/hub/review-destinations";
+import { hasBannedDash } from "../src/lib/copy-guard";
+import {
+  droppedLine,
+  filterPhrases,
+  isUsablePhrase,
+  phraseFaults,
+  tidyPhrase,
+} from "../src/lib/clients/phrase-quality";
+import {
+  effectiveTreatment,
+  isLocked,
+  isOfferReply,
+  offerLine,
+  readOffer,
+  usableTreatment,
+} from "../src/lib/clients/offers";
+import {
+  candidateAt,
+  readCandidateSet,
+  skinVariants,
+  tokenVariants,
+} from "../src/lib/hub/skin-variants";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -541,10 +573,32 @@ ok("the sections are numbered in order",
   brief.indexOf("1. Who BUYS") < brief.indexOf("7. Their EXACT words"));
 
 // Section 9 has to ask for a SHAPE, not just for keywords, because extractKeywords parses it.
+//
+// ‼️ THE SHAPE MOVED OUT OF SECTION 9 ON 2026-09-13, AND SO DID THIS TEST'S TEETH. It used to
+// match the prose ("block titled KEYWORDS", "phrase | monthly volume") inside the section brief.
+// Measured that day: `question_bank` held 306 deep_research rows for SRT's vertical and ZERO with
+// source='keywords', so the block described in prose had NEVER ONCE come back in a shape the
+// parser could read, and every one of those string assertions passed the whole time. A test that
+// matches the ask cannot catch an ask that does not work.
+//
+// So the prompt now ends with a worked KEYWORDS row, and this runs the REAL parser over the real
+// prompt. If the example we hand people stops parsing, or somebody reformats it, this fails.
 ok("section 9 asks for 100 search phrases", /100 search phrases/.test(brief));
-ok("section 9 names the KEYWORDS block", /block titled KEYWORDS/.test(brief));
-ok("section 9 asks for the pipe shape", /phrase \| monthly volume/.test(brief));
-ok("section 9 asks for an intent word", /ready\|comparing\|researching\|price/.test(brief));
+ok("the prompt names the KEYWORDS block", /KEYWORDS/.test(brief));
+
+const workedRows = extractKeywords(brief);
+ok(`the prompt's own worked example parses (${workedRows.length} rows)`, workedRows.length === 2);
+// Both worked rows use a top-intent word ("ready" and "price" both map to MAX_INTENT_SCORE), so
+// an example whose intent column stopped being recognised would land them at the default 1.
+ok(
+  "the worked rows' intent words are recognised, not defaulted",
+  workedRows.every((r) => r.commercialIntentScore === MAX_INTENT_SCORE)
+);
+ok(
+  "the sourced row keeps its volume and the unknown one does not invent a number",
+  workedRows.some((r) => r.frequencyScore === 1900) && workedRows.some((r) => r.frequencyScore === 1)
+);
+ok("both worked rows cite a source URL", workedRows.every((r) => Boolean(r.sourceUrl)));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The funnel lead's first email
@@ -672,6 +726,31 @@ ok("comparing outranks researching",
 // one nobody has measured either.
 ok("an unsourced volume still scores",
   (kws.find((k) => k.phrase === "juvederm vs restylane")?.frequencyScore ?? 0) > 0);
+
+// ‼️ A NUMBER WITH NO SOURCE BESIDE IT IS NOT A MEASUREMENT, AND frequency_score IS A RANKING
+// COLUMN. No volume API touches the client lane (keyword-set.ts's header says why, and Matthew
+// declined to buy one on 2026-09-08), so this column is filled by a research model that was
+// asked for a monthly volume. A model asked for a number produces one. Stored unqualified, an
+// estimate ranks exactly like a measurement and nothing downstream can tell them apart.
+//
+// The rule: trust the number only when the row cites where it came from. Everything else reads
+// as unknown and ranks on commercial intent, which is a categorical judgement this corpus
+// already relies on rather than a quantity wearing a measurement's clothes.
+const kwUncited = extractKeywords(
+  [
+    "## KEYWORDS",
+    "cheek filler cost | 4400 | price | seen on a keyword tool",
+    "chin filler cost | 4400 | price | https://example.com/cited",
+  ].join(String.fromCharCode(10))
+);
+ok(
+  "an uncited volume does not become a ranking score",
+  kwUncited.find((k) => k.phrase === "cheek filler cost")?.frequencyScore === 1
+);
+ok(
+  "a volume with a real source URL is kept",
+  kwUncited.find((k) => k.phrase === "chin filler cost")?.frequencyScore === 4400
+);
 // The close is prose, not a row. Eating it would file a sentence as a keyword.
 ok("the closing line is not eaten as a keyword",
   !kws.some((k) => /25 phrases/.test(k.phrase)));
@@ -714,6 +793,7 @@ ok("extractPhrases ignores the keyword rows",
 const oneSection = buildSectionPrompt(briefInput, {
   key: "t",
   title: "T",
+  heading: "T",
   instruction: () => "the long version",
   brief: () => "the short version",
 });
@@ -905,8 +985,10 @@ for (const key of stillUnimplemented) {
   ok(`${key} is completed by a route rather than merely missing`, ROUTE_COMPLETED.has(key));
 }
 
-// The four artifacts this session was commissioned to build, by checklist row number.
-for (const key of ["presence_pdf", "findings_doc", "review_card_pdf", "call_sheet"]) {
+// The artifacts this session was commissioned to build. `presence_pdf` and `findings_doc` were
+// two of them and are no longer steps: both documents are generated by the `call_sheet` runner
+// since the call pack merged them on 2026-09-12.
+for (const key of ["review_card_pdf", "call_sheet"]) {
   ok(`${key} no longer renders _auto_ falsely`, !stillUnimplemented.includes(key));
 }
 
@@ -995,13 +1077,17 @@ eq("entities are decoded", unwrapSlackMarkup("cost &gt; value &amp; time"), "cos
 //
 // ‼️ THE REGRESSION THIS PINS ACTUALLY HAPPENED, AND IT WAS SILENT.
 //
-// findings_doc is blockedBy [presence_pdf, review_audit] and call_sheet by
+// findings_doc WAS blockedBy [presence_pdf, review_audit] and call_sheet by
 // [findings_doc, custom_question_set, page_candidates, hub_preview]. review_audit,
-// custom_question_set and page_candidates are all declared `auto` with no implementation, so
-// they never tick — and runReadyAutoSteps would not start a step with an incomplete blocker.
+// custom_question_set and page_candidates were all declared `auto` with no implementation, so
+// they never ticked — and runReadyAutoSteps would not start a step with an incomplete blocker.
 // The findings report and the call sheet could not have generated for any client, ever, and
 // nothing would have errored: the rows would just have sat at `pending` under a checklist
 // showing them as work the system was going to do.
+//
+// The two merged-away steps are gone (the call pack, 2026-09-12) and the shape of the hazard is
+// not: call_sheet still names five blockers, and a new one pointing at an unbuilt auto step would
+// deadlock the whole pack exactly the same way.
 //
 // This asserts every implemented artifact is reachable through blockers that CAN complete —
 // a runner, a route, or a human. Adding a blockedBy entry pointing at an unbuilt auto step
@@ -1040,8 +1126,14 @@ for (const key of IMPLEMENTED_THIS_SESSION) {
 // review_audit is `auto_then_manual`: no review provider is keyed, so its runner seeds the grid
 // and a person reads the listings. That IS satisfiable; it just is not automatic.
 for (const [step, blockers] of [
-  ["findings_doc", ["presence_pdf", "review_audit"]],
-  ["call_sheet", ["findings_doc", "custom_question_set", "page_candidates", "hub_preview"]],
+  // 2026-09-12: the call pack. call_sheet inherited presence_sweep_manual and review_audit from
+  // the two steps merged into it, because its RUNNER needs both: the presence PDF reports the
+  // sweep and findings section 3 is built from the review audit.
+  ["call_sheet", ["presence_sweep_manual", "review_audit", "custom_question_set", "page_candidates", "hub_preview", "pre_call_pages"]],
+  // 2026-09-11: the keyword step and the pre-call pages. Every blocker is a step a person or a
+  // runner can finish, so neither can deadlock the call sheet behind it.
+  ["keyword_set", ["offer_locked", "avatar_harvest"]],
+  ["pre_call_pages", ["offer_locked", "keyword_set", "page_candidates", "concierge_preview"]],
 ] as const) {
   for (const b of blockers) {
     ok(`${step}: blocker ${b} can actually complete`, !unreachable.has(b));
@@ -1225,6 +1317,113 @@ eq(
   );
 }
 
+// -- The Hemingway pass: it points at words too, and still never rewrites -----
+// The word-level half, added 2026-09-08. Same rule as the sentence half: a mark is an
+// observation about what she wrote. Nothing here proposes different words and nothing may.
+{
+  const src = fs.readFileSync(
+    path.join(__dirname, "..", "src", "lib", "hub", "readability.ts"),
+    "utf8"
+  );
+  // Restated for the new code rather than assumed to still hold: the whole vocabulary is
+  // single-column lists of things to POINT AT, so there is nowhere a replacement could live.
+  ok("still imports nothing after the Hemingway pass", !/^\s*import\s/m.test(src));
+  // Comments stripped FIRST, and that is not a detail. The header of readability.ts explains at
+  // length that Matthew "chose this instead", and an earlier version of this check failed on
+  // that sentence, which would have pushed somebody to delete the paragraph documenting the
+  // rule in order to make the test pass. _probe-review-gating.ts learned the same lesson on the
+  // printed card. Comments say what we intend; only code is evidence.
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  ok(
+    "no vocabulary maps a word to a replacement",
+    !/(SIMPLER|REPLACEMENT|ALTERNATIVE|SUBSTITUT)\w*\s*[:=]/i.test(code)
+  );
+  // The lists are Sets and arrays of strings. A Record or a Map from one word to another is the
+  // shape a replacement table would have to take, so its absence is the structural half.
+  ok(
+    "and no lookup table from a word to another word",
+    !/(?:Record<string,\s*string>|new Map<string,\s*string>)/.test(code)
+  );
+
+  // The carve-out that keeps the hint readable. hemingway.app calls "I was worried" passive; it
+  // is a predicate adjective and it is also the literal shape of the answer to question one, so
+  // a generic detector would mark nearly every review this tool has ever collected.
+  const feelings = analyse("I was worried about the pain. I am pleased with the result.");
+  eq("a feeling is not read as the passive voice", feelings.flags.length, 0);
+
+  const passive = analyse("The room was cleaned before I arrived.");
+  eq("a real passive is caught", passive.flags.filter((f) => f.kind === "passive").length, 1);
+  eq(
+    "and it spans the auxiliary and the participle together",
+    "was cleaned",
+    "The room was cleaned before I arrived.".slice(
+      passive.flags[0]?.start ?? 0,
+      passive.flags[0]?.end ?? 0
+    )
+  );
+
+  const hedged = analyse("It was kind of good and I really liked the staff.");
+  ok(
+    "a hedge is caught",
+    hedged.flags.some((f) => f.kind === "qualifier")
+  );
+
+  const adverbs = analyse("She explained it beautifully.");
+  eq("an adverb is caught", adverbs.flags.filter((f) => f.kind === "adverb").length, 1);
+  eq("a friendly nurse is not an adverb", analyse("The friendly nurse helped.").flags.length, 0);
+  eq("and neither is a family member", analyse("My family came along.").flags.length, 0);
+
+  // A word is marked once. "really" is both an -ly adverb and a hedge, and two marks on one
+  // word would put a mark inside a mark.
+  const overlap = analyse("I was really worried.");
+  eq("one word carries one mark", overlap.flags.length, 1);
+
+  // Flags never overlap each other, which is what lets mergeMarks stay a cover test.
+  const busy = analyse(
+    "The room was cleaned really beautifully and I was kind of nervous, but it was fine."
+  );
+  ok(
+    "word flags never overlap each other",
+    busy.flags.every((f, i) => i === 0 || f.start >= (busy.flags[i - 1]?.end ?? 0))
+  );
+
+  // -- mergeMarks: the pieces must join back to the original, exactly ---------
+  // The review tool paints these into a div underneath a transparent textarea. One dropped or
+  // duplicated character does not look broken, it looks like the hint is pointing at the wrong
+  // sentence. Every case below deliberately has a word flag nested inside a hard sentence,
+  // which is the arrangement the old single-cursor walk could not survive.
+  const samples = [
+    "",
+    "Short.",
+    "The room was cleaned really beautifully.",
+    "I was genuinely unsure about whether the treatment would hurt at all because I have had a " +
+      "bad experience somewhere else before and I did not want that again.",
+    "Kind of nervous. Really pleased. The staff were lovely.",
+    "utilize approximately numerous methods",
+  ];
+  for (const sample of samples) {
+    const merged = mergeMarks(sample, analyse(sample));
+    eq(
+      `mergeMarks rebuilds ${JSON.stringify(sample.slice(0, 24))} exactly`,
+      merged.map((m) => m.text).join(""),
+      sample
+    );
+    ok(
+      `and emits no empty piece for ${JSON.stringify(sample.slice(0, 24))}`,
+      merged.every((m) => m.text.length > 0)
+    );
+  }
+
+  // The nesting case, stated as its own proposition rather than left implied by the rebuild.
+  const nested = "The whole room was cleaned really beautifully before I ever walked in there.";
+  const marks = mergeMarks(nested, analyse(nested));
+  ok(
+    "a flagged word inside a flagged sentence carries both",
+    marks.some((m) => m.hard !== null && m.flag !== null) ||
+      analyse(nested).hard.length === 0
+  );
+}
+
 // ── The review path still has no model in it ─────────────────────────────────
 // review-assemble.ts importing nothing is the enforcement, not the comment above it.
 {
@@ -1256,6 +1455,397 @@ eq(
   );
 }
 
+
+// -- The six review destinations, written down once ---------------------------
+// ‼️ THE SAME SIX PLATFORMS USED TO BE SPELLED OUT IN THREE FILES WITH A COMMENT ASKING PEOPLE TO
+// KEEP THEM IN STEP, AND THEY WERE NOT. The onboarding2 funnel offered six names, the Review
+// handover panel had two boxes, and SRT Agency's own record names Trustpilot. So the platform
+// the client picked was the one with nowhere to put its link, the review tool rendered no
+// button, and nothing anywhere said so. Measured in production 2026-09-08.
+{
+  const platformSrc = fs.readFileSync(
+    path.join(__dirname, "..", "src", "lib", "hub", "review-destinations.ts"),
+    "utf8"
+  );
+
+  eq("six platforms", REVIEW_PLATFORMS.length, 6);
+  ok(
+    "every platform has a distinct key and a distinct URL field",
+    new Set(REVIEW_PLATFORMS.map((p) => p.key)).size === 6 &&
+      new Set(REVIEW_PLATFORMS.map((p) => p.field)).size === 6
+  );
+  ok(
+    "every key is lowercase, so it matches review_destination_primary",
+    REVIEW_PLATFORMS.every((p) => p.key === p.key.toLowerCase())
+  );
+  ok(
+    "no banned dash in a platform name or label",
+    !REVIEW_PLATFORMS.some((p) => hasBannedDash(`${p.name} ${p.label}`))
+  );
+
+  // ‼️ ABSENT BEATS WRONG, MADE STRUCTURAL. The table carries no template a URL could be built
+  // from, because a link constructed out of a business name sends a real customer to somebody
+  // else's profile to leave a review about this one. delivery.ts:116 is the note.
+  // ‼️ COMMENTS STRIPPED, AND PER LINE, AND BOTH HALVES WERE LEARNED THE HARD WAY.
+  //
+  // The header of review-destinations.ts says in prose "there is no `searchUrl`, no template, no
+  // fallback", which is the rule this check enforces, and a check that fails on the sentence
+  // documenting its own rule teaches somebody to delete the documentation. _probe-review-gating
+  // .ts carries the same note about the printed card. Comments say what we intend; only code is
+  // evidence.
+  //
+  // And per line, because a character class excluding only quotes runs happily across half a
+  // file and finds an interpolation in an unrelated function.
+  const platformCode = platformSrc
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+  ok(
+    "the table holds no URL template to synthesise a link from",
+    !platformCode
+      .split("\n")
+      .some((line) => /searchUrl|urlTemplate|buildUrl|https?:\/\/[^"']*\$\{/.test(line))
+  );
+
+  // The state helper, which is what the panel, the tool and any card describe themselves with.
+  const nothing = destinationState({}, "trustpilot");
+  eq("nothing configured is nothing configured", nothing.configured.length, 0);
+  eq("and the client's own choice is still known", nothing.primary?.key, "trustpilot");
+  ok("and it says the chosen one is the one missing", nothing.primaryMissingUrl);
+  ok(
+    "the line names the platform they picked rather than saying nothing is set",
+    /Trustpilot/.test(destinationLine(nothing))
+  );
+
+  const partial = destinationState({ google_url: "https://g.page/r/x" }, "trustpilot");
+  eq("a link that IS set shows up", partial.configured.length, 1);
+  ok("and the mismatch is still called out", partial.primaryMissingUrl);
+  ok(
+    "the line says the button they asked for is the one that will not appear",
+    /will not appear/.test(destinationLine(partial))
+  );
+
+  const ordered = destinationState(
+    { google_url: "https://g.page/r/x", trustpilot_url: "https://www.trustpilot.com/evaluate/x" },
+    "trustpilot"
+  );
+  eq("the client's own choice sorts first", ordered.configured[0]?.key, "trustpilot");
+  ok("and nothing is flagged missing", !ordered.primaryMissingUrl);
+
+  // Whitespace is not a link. A box someone tabbed through is empty.
+  eq("blank is not configured", destinationState({ google_url: "   " }, "google").configured.length, 0);
+  // An unknown platform name is nobody, not a guess.
+  eq("an unknown primary resolves to null", destinationState({}, "angies-list").primary, null);
+  eq("and so does a missing one", destinationState({}, null).primary, null);
+}
+
+// -- Three designs from one screenshot, and none of them is a layout ----------
+// ‼️ skin-vision.ts's HEADER IS THE CONSTRAINT: "IT RETURNS TOKENS. IT CANNOT RETURN MARKUP, COPY
+// OR A LAYOUT, AND THE SCHEMA IS WHY." A variation can move a template, a ground colour, a
+// radius, a measure and a type scale, and nothing else. hub-bodies.tsx, the heading order, the
+// JSON-LD and the NAP block are identical in all three by construction, because a skin is CSS
+// custom properties. These checks are the structural half of that sentence.
+{
+  const variantSrc = fs.readFileSync(
+    path.join(__dirname, "..", "src", "lib", "hub", "skin-variants.ts"),
+    "utf8"
+  );
+  const variantCode = variantSrc
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+
+  // The type is the enforcement, so the module may not grow a field that carries markup.
+  ok(
+    "a candidate cannot carry markup, copy or a section order",
+    !/\b(html|markup|body|headline|sections?|order|css)\s*[?]?\s*:/i.test(
+      variantCode.slice(variantCode.indexOf("interface SkinCandidate"), variantCode.indexOf("interface SkinCandidateSet"))
+    )
+  );
+
+  const read = {
+    template: "document" as const,
+    reading: "a quiet document with a warm ground",
+    bg: "#fbfaf8",
+    fg: "#1d1d1f",
+    muted: "#6b6b70",
+    faint: "#a0a0a5",
+    rule: "#e5e3df",
+    card: "#ffffff",
+    band: null,
+    bandFg: null,
+    headingFamily: "Georgia, serif",
+    radius: 10,
+    measure: 44,
+    baseSize: 17,
+    accentSuggestion: "#0a7c6a",
+  };
+
+  // ‼️ THE TOKEN-SET VARIANTS ARE tokenVariants SINCE 2026-09-16. skinVariants offers three UNIVERSES now (checked
+  // right after this block); the contract below about reading a reference literally still holds for these.
+  const variants = tokenVariants(read, "test");
+  eq("three candidates", variants.length, 3);
+  eq("numbered from one", variants.map((v) => v.slot), [1, 2, 3]);
+  ok("each one says what it is", variants.every((v) => v.blurb.length > 8));
+  ok("no banned dash in a blurb", !variants.some((v) => hasBannedDash(v.blurb)));
+
+  // ‼️ THE FIRST ONE IS THE READ, UNTOUCHED. It is the only candidate with evidence behind it,
+  // so it must be exactly what the reference said and must be offered first.
+  eq("the first is the template that was read", variants[0]?.template, read.template);
+  eq("with the radius that was read", variants[0]?.radius, read.radius);
+  eq("and the measure that was read", variants[0]?.measure, read.measure);
+
+  // ‼️ NO CANDIDATE INVENTS A COLOUR. Making up a palette for a variation is the one thing
+  // skin-vision.ts refuses, arriving by the back door: a colour with no provenance, on a
+  // client's own domain, that somebody would then have to defend.
+  for (const v of variants) {
+    eq(`candidate ${v.slot} keeps the ground that was read`, v.bg, read.bg);
+    eq(`candidate ${v.slot} keeps the text colour that was read`, v.fg, read.fg);
+    eq(`candidate ${v.slot} keeps the rule colour that was read`, v.rule, read.rule);
+  }
+
+  // Three that look the same are one design offered three times.
+  ok(
+    "the three are actually distinguishable",
+    new Set(variants.map((v) => `${v.template}|${v.radius}|${v.measure}|${v.baseSize}`)).size === 3
+  );
+
+  // Every derived number survived readSkin(), which REFUSES out of range rather than clamping.
+  // A dropped field would come back null, so a null here means the arithmetic left the range.
+  for (const v of variants) {
+    ok(`candidate ${v.slot} has a radius readSkin accepted`, v.radius !== null);
+    ok(`candidate ${v.slot} has a measure readSkin accepted`, v.measure !== null);
+    ok(`candidate ${v.slot} has a base size readSkin accepted`, v.baseSize !== null);
+  }
+
+  // A read with nothing but a template still produces three usable designs rather than three
+  // copies of the default: the variation is the template plus the shape, not just the colours.
+  const bare = tokenVariants(
+    { ...read, bg: null, fg: null, muted: null, faint: null, rule: null, card: null, headingFamily: null, radius: null, measure: null, baseSize: null },
+    "test"
+  );
+  eq("a colourless read still gives three", bare.length, 3);
+  ok(
+    "and they are still different from each other",
+    new Set(bare.map((v) => `${v.template}|${v.radius}|${v.measure}`)).size === 3
+  );
+  // ‼️ ROUNDER MEANS ROUNDER. A null radius is "nobody set one, so the stylesheet's 8px stands",
+  // not "no corners". Deriving from 0 would make the SOFTER variant squarer than the one it
+  // varies, which looks like a design opinion and is a bug.
+  ok("softer is rounder than the rendered default", (bare[1]?.radius ?? 0) > 8);
+
+  // ── Three universes, not three tints (Matthew, 2026-09-15) ─────────────────
+  const worlds = skinVariants(read, "test");
+  eq("three universes are offered", worlds.length, 3);
+  ok("each candidate is a universe", worlds.every((w) => typeof w.universe === "string"));
+  eq("and no two are the same universe", new Set(worlds.map((w) => w.universe)).size, 3);
+  ok("a universe candidate carries no read ground, which would flatten it back into the reference", worlds.every((w) => w.bg === null && w.fg === null));
+  ok("each blurb names its universe", worlds.every((w) => /Blueprint|Atelier|Magazine|Brutalist|Noir|Botanica/.test(w.blurb)));
+  ok("no banned dash in a universe blurb", !worlds.some((w) => hasBannedDash(w.blurb)));
+  eq("the same reference always offers the same three", skinVariants(read, "again").map((w) => w.universe), worlds.map((w) => w.universe));
+  const dark = skinVariants({ ...read, bg: "#07090c", fg: "#e8e8e8" }, "test");
+  eq("a dark reference is closest to Noir", dark[0]?.universe, "noir");
+
+  // The round trip through storage. Anything malformed is nothing, because a half-read set sends
+  // you back to the screenshot, which is where you would have to go anyway.
+  const set = {
+    generatedAt: "2026-09-08T00:00:00.000Z",
+    generatedBy: "test",
+    reading: read.reading,
+    accentSuggestion: read.accentSuggestion,
+    candidates: variants,
+  };
+  const round = readCandidateSet(JSON.parse(JSON.stringify(set)));
+  eq("a stored set reads back", round?.candidates.length, 3);
+  eq("and slot 2 is still slot 2", candidateAt(round, 2)?.slot, 2);
+  eq("a slot nobody offered is null", candidateAt(round, 9), null);
+  eq("an empty set is null", readCandidateSet({ candidates: [] }), null);
+  eq("rubbish is null", readCandidateSet("nope"), null);
+  eq("nothing is null", readCandidateSet(null), null);
+}
+
+// -- The offer: a reading is not a decision ----------------------------------
+// ‼️ THE TWO HALVES OF clients.offer MEAN DIFFERENT THINGS AND THE WHOLE FEATURE RESTS ON THE
+// DIFFERENCE. A proposal is what the intake form said; a lock is what a person heard on the call.
+// Everything downstream reads the lock, so anything that let a proposal pass as one would aim a
+// client's entire build at a box they ticked before anybody spoke to them.
+{
+  const proposalOnly = readOffer({
+    proposedTreatment: "lip filler",
+    proposedSource: "primary_treatment",
+    proposedAt: "2026-09-08T00:00:00.000Z",
+  });
+  ok("a proposal alone is not locked", !isLocked(proposalOnly));
+  eq("and effective says so", effectiveTreatment(proposalOnly).certain, false);
+  eq("but it still has a value to open the call with", effectiveTreatment(proposalOnly).value, "lip filler");
+  ok(
+    "the line refuses to call it decided",
+    /Nobody has confirmed it/.test(offerLine(proposalOnly))
+  );
+
+  // ‼️ A TREATMENT WITH NO lockedAt IS NOT A LOCK. That pair is what a person leaves behind, and
+  // a value that appeared without one came from somewhere that is not a decision.
+  const halfWritten = readOffer({ treatment: "lip filler" });
+  ok("a treatment with no timestamp is not locked", !isLocked(halfWritten));
+
+  const locked = readOffer({
+    proposedTreatment: "lip filler",
+    proposedSource: "primary_treatment",
+    treatment: "laser hair removal",
+    lockedAt: "2026-09-08T00:00:00.000Z",
+    lockedBy: "@matthew",
+  });
+  ok("a lock is a lock", isLocked(locked));
+  eq("and it outranks the proposal", effectiveTreatment(locked).value, "laser hair removal");
+  eq("with certainty", effectiveTreatment(locked).certain, true);
+  ok("the line names who locked it", /@matthew/.test(offerLine(locked)));
+  ok("no banned dash in any offer line", !hasBannedDash(offerLine(locked) + offerLine(proposalOnly)));
+
+  // Drop-never-repair, the discipline readTheme and readSkin already follow.
+  eq("rubbish is an empty offer", readOffer("nope").treatment, null);
+  eq("nothing is an empty offer", readOffer(null).proposedTreatment, null);
+  eq("an unknown source is dropped, not kept", readOffer({ proposedSource: "vibes" }).proposedSource, null);
+  eq("whitespace is not a treatment", readOffer({ treatment: "   " }).treatment, null);
+
+  // ‼️ A REQUIRED FIELD DOES NOT MAKE AN ANSWER, AND SRT'S OWN ROW IS THE CASE.
+  // ideal_patient.highest_margin on SRT Agency is literally the string "any". Proposing that
+  // would put "any" into [treatment], so every tracked question would read "the best any in
+  // Greensboro". Same shape as the competitor box containing "a", which usableCompetitorName
+  // was written to catch.
+  eq("a placeholder is not a treatment", usableTreatment("any"), null);
+  eq("nor is everything", usableTreatment("Everything"), null);
+  eq("nor is n/a", usableTreatment("N/A"), null);
+  eq("nor is a shrug", usableTreatment("not sure"), null);
+  eq("nor is one letter", usableTreatment("a"), null);
+  eq("nor is punctuation", usableTreatment("--"), null);
+  eq("a real service survives", usableTreatment("lip filler"), "lip filler");
+  eq("and so does a long one", usableTreatment("AEO Services for med spas"), "AEO Services for med spas");
+  // ‼️ NO VOCABULARY. It checks the SHAPE, never the words, because a list of allowed treatments
+  // would refuse a real business's real service for not being on it.
+  eq("an unusual service is still a service", usableTreatment("cryoskin toning"), "cryoskin toning");
+
+  // The prefix is exact. Free text in a step thread is answered by a model otherwise, and a
+  // sentence that merely mentions an offer must fall through untouched.
+  ok("an offer reply is recognised", isOfferReply("offer: lip filler"));
+  ok("with whatever spacing", isOfferReply("  Offer :  lip filler"));
+  ok("a sentence about the offer is not one", !isOfferReply("the offer they liked was the filler"));
+  ok("and neither is a bare word", !isOfferReply("offer"));
+
+  // ‼️ THE MESSAGE THAT CORRUPTED SRT'S LOCK, 2026-09-14. Sent as one message it locked
+  // "yes\nterms: ai visibility, ..." as the treatment with terms: []. It is now REFUSED whole:
+  // one command per message, decided 2026-09-15, never merged.
+  const { readOfferCommand } =
+    require("../src/lib/clients/offers") as typeof import("../src/lib/clients/offers");
+  eq("the corrupting message is refused, not merged",
+    readOfferCommand("offer: yes\nterms: ai visibility, chatgpt answers, answer engine optimization"),
+    { kind: "combined", commands: ["offer", "terms"] });
+  eq("in either order", readOfferCommand("terms: a, b\r\noffer: lip filler").kind, "combined");
+  eq("and so is a command given twice", readOfferCommand("offer: a\noffer: b").kind, "combined");
+  eq("one command alone is read as before", readOfferCommand("  Offer :  lip filler"), { kind: "offer", value: "lip filler", extra: [] });
+  eq("terms alone", readOfferCommand("terms: lip flip, lip filler"), { kind: "terms", value: "lip flip, lip filler", extra: [] });
+  // A continuation line is reported, never folded into the value: folding it would lock a sentence.
+  eq("a continuation line is not part of the treatment",
+    readOfferCommand("offer: lip filler\nthey want it natural"), { kind: "offer", value: "lip filler", extra: ["they want it natural"] });
+  // ‼️ THE REASON FOR FIRST-LINE-ONLY. This thread is about to take pasted sales letters, and a letter
+  // can carry a line that starts "Offer:". Only a message that BEGINS with a command is one.
+  eq("a pasted document with an Offer: line inside is not a command",
+    readOfferCommand("letter replace:\nHeadline here\nOffer: 3 free sessions this month").kind, "none");
+  eq("a sentence that mentions an offer is still conversation", readOfferCommand("the offer: it was fine").kind, "none");
+
+  // ‼️ THE CHAIN. primary_treatment was absent from treatmentPrimary entirely, which is the whole
+  // bug this pair of steps exists to close, and the locked offer has to sit in front of it.
+  const chainSrc = fs.readFileSync(
+    path.join(__dirname, "..", "src", "lib", "clients", "question-sets.ts"),
+    "utf8"
+  );
+  const chain = chainSrc.slice(
+    chainSrc.indexOf("const treatmentPrimary"),
+    chainSrc.indexOf("const clientName")
+  );
+  ok("the locked offer comes first in the treatment chain", chain.indexOf("offer.treatment") === chain.search(/offer\.treatment|primary_treatment|highest_margin/));
+  ok("primary_treatment is in the chain at all", chain.includes("primary_treatment"));
+  ok(
+    "and it outranks highest_margin, which answers a different question",
+    chain.indexOf("primary_treatment") < chain.indexOf("highest_margin")
+  );
+  // ‼️ INVERTED 2026-09-15. The offer moved to client_offers under the primary audience; this file
+  // reads it through loadOffer, and selecting the deprecated clients.offer mirror would read a copy.
+  ok("the treatment chain reads the offer through loadOffer", /await loadOffer\(clientId\)/.test(chainSrc));
+  ok("and never selects the deprecated clients.offer column", !/\.select\("[^"]*\boffer\b/.test(chainSrc));
+}
+
+// -- Phrase quality: two thirds of the corpus is not a phrase ----------------
+// ‼️ MEASURED ON PRODUCTION, 2026-09-08. SRT Agency's vertical `aeo-agency-med-spa` holds 451
+// question_bank rows and 169 of them are usable. Matthew, about the step 12 PDF: "the pdf shows
+// a lot of BS, tbh most of it is not even usable". He was right, and this is the number.
+//
+// The rules are mechanical so a dropped row can be shown the reason it was dropped. Everything
+// here is a property of the string; nothing asks a model whether a phrase is any good, because
+// that answer would move on every run and the tracked question set is frozen at Day 0.
+{
+  const qualitySrc = fs.readFileSync(
+    path.join(__dirname, "..", "src", "lib", "clients", "phrase-quality.ts"),
+    "utf8"
+  );
+  ok("phrase-quality imports nothing", !/^\s*import\s/m.test(qualitySrc));
+
+  // Real rows from the live corpus, each one the shape of a whole class of debris.
+  const debris: Array<[string, string]> = [
+    ["url", "Inconsistent citations hurt rankings -> https://example.com/blog/x?utmsource=openai"],
+    ["citation_marker", "best marketing for med spa high ROI【41†L65-L69】 owners worry"],
+    ["label", "Why: Regulatory risk; owner liable for patient data security"],
+    ["too_long", "When a client cannot see meaningful differences between one clinic and the next one down the road then the decision shifts almost entirely toward price and nothing else matters"],
+    ["too_short", "book now"],
+    ["nav_chrome", "Continue Back Best number to reach you?"],
+    ["fragment", "that agencies are either snake oil or too expensive."],
+    ["dangling", "Out of scope of the retainer:"],
+  ];
+  for (const [expected, phrase] of debris) {
+    ok(`${expected} is caught`, phraseFaults(phrase).includes(expected as never));
+    ok(`and ${expected} is not usable`, !isUsablePhrase(phrase));
+  }
+
+  // ‼️ THE REAL QUESTIONS SURVIVE, AND THIS HALF MATTERS MORE THAN THE HALF ABOVE. A filter that
+  // is too eager throws away the market's own wording, which is the entire value of the corpus.
+  const keepers = [
+    "How much does this cost?",
+    "Is a consultation required?",
+    "What deposit, cancellation, or rescheduling rules apply?",
+    "Does ChatGPT recommend med spas?",
+    "Can I do citation building myself or should I hire an agency?",
+    "How do AI assistants decide which local businesses to recommend?",
+    "Are AEO agencies legit or is this snake oil?",
+    // ‼️ CAUGHT BY AN EARLIER VERSION OF THE FRAGMENT RULE AND IT SHOULD NOT BE. Opening on a
+    // discourse marker is how people actually speak, and a question mark means somebody asked.
+    "So how much does it cost?",
+    "But does it hurt?",
+  ];
+  for (const phrase of keepers) {
+    ok(`kept: ${phrase.slice(0, 40)}`, isUsablePhrase(phrase));
+  }
+
+  // Entities are OUR damage, not the market's wording. Decoding them restores what was said;
+  // nothing else about the string changes, and no typo is corrected.
+  eq(
+    "our own HTML entities are decoded",
+    tidyPhrase("Is my data and my patients&#x27; data safe?"),
+    "Is my data and my patients' data safe?"
+  );
+  eq("and whitespace is collapsed", tidyPhrase("  a   b  "), "a b");
+  eq(
+    "but the market's own typos are kept",
+    tidyPhrase("does lazer hair removal hurt"),
+    "does lazer hair removal hurt"
+  );
+
+  // The count is part of the answer: a corpus that silently loses two thirds of itself looks
+  // like a small corpus, and that sends somebody to run another harvest.
+  const mixed = [{ p: "How much does this cost?" }, { p: "Why: a label" }, { p: "x" }];
+  const filtered = filterPhrases(mixed, (r) => r.p);
+  eq("one of three survives", filtered.kept.length, 1);
+  eq("and two were dropped", filtered.dropped, 2);
+  ok("with a reason each", Object.keys(filtered.faults).length >= 2);
+  ok("and a line that names them", (droppedLine(filtered, 3) ?? "").includes("1 of 3"));
+  eq("nothing dropped means nothing said", droppedLine(filterPhrases([{ p: "How much is it?" }], (r) => r.p), 1), null);
+}
 
 // ---- LANE 3 ----------------------------------------------------------------
 // The call, and the close. Pure functions only: no network, no database, no model.
@@ -2097,6 +2687,57 @@ import { pageSlug } from "../src/lib/hub/pages";
       !isFirstPartyBody.includes("EXTERNAL_RESEARCH")
   );
 
+  // ‼️ AND THE ONE ADDED 2026-09-08 IS IN IT. A customer's published review, transcribed
+  // verbatim and confirmed against the screenshot it came off, is the business's own knowledge
+  // in the sense the gate cares about. Asserted rather than assumed because the check above
+  // only says what must be ABSENT, and a type silently dropped from this set would quietly
+  // stop counting toward the first-party floor on every page that quotes a customer.
+  ok("isFirstParty includes CUSTOMER_REVIEW", isFirstPartyBody.includes("CUSTOMER_REVIEW"));
+
+  // ‼️ A CITED REVIEW MUST BE QUOTED, NOT DESCRIBED, AND IT IS CHECKED RATHER THAN ASKED FOR.
+  // The prompt tells the model to reproduce a review character for character. A prose ban is
+  // not a ban, the same reason the dash rule is verified: a model handed somebody else's
+  // sentence smooths it, and the smoothed version publishes under a real customer's name.
+  const draftPage = read("src/lib/hub/draft-page.ts");
+  ok(
+    "draft-page verifies a cited review is quoted verbatim",
+    draftPage.includes("function quotesAreVerbatim") &&
+      draftPage.includes("quotesAreVerbatim(d, reviews)")
+  );
+  ok(
+    "the verbatim check is wired into both validators",
+    draftPage.includes("isDrafted(v, validRefs, reviewSources)") &&
+      draftPage.includes("whyInvalid(v, validRefs, reviewSources)")
+  );
+
+  // ‼️ NOTHING IN THE REVIEW-QUOTE PATH MAY REACH review-assemble.ts. FTC 16 CFR Part 465: that
+  // file is the customer-facing review tool and imports nothing. Quoting a published review in
+  // the CLIENT's own marketing is a different artifact under a different rule, and the two must
+  // not be folded together by an import that looks convenient.
+  const pageReview = read("src/lib/clients/page-review.ts");
+  const quoteRead = read("src/lib/clients/review-quote-read.ts");
+  ok(
+    "the review-quote path never imports the review tool",
+    [pageReview, quoteRead].every((src) => {
+      // ‼️ THE IMPORT LINES THEMSELVES, NOT A SCAN OF THE FILE. Both of these files ARGUE about
+      // review-assemble.ts in their headers, at length, because the argument is the reason they
+      // are allowed to exist. A check that searched the whole source would fail on the sentence
+      // explaining why it passes, which teaches the next person to delete the explanation.
+      const imports = src
+        .split("\n")
+        .filter((l) => /^\s*import\b/.test(l))
+        .join("\n");
+      return !imports.includes("review-assemble") && !imports.includes("@/app/hub");
+    })
+  );
+
+  // A truncated quote is not a quote: half a review reads as a whole one on a page, and the
+  // missing half is the part that said "but".
+  ok(
+    "a truncated read is refused rather than published",
+    /!read\.truncated/.test(quoteRead)
+  );
+
   // ‼️ ONE NUMBERING FUNCTION. The drafter stores "S3" and the gate reads it back weeks later.
   ok(
     "numberEvidence is defined exactly once and both sides use it",
@@ -2217,6 +2858,57 @@ import { pageSlug } from "../src/lib/hub/pages";
   ok("the sweep card still says an empty search result is the evidence", /empty search result/i.test(card));
   ok("the sweep card leads with the recommended four", card.indexOf("START WITH THESE FOUR") < card.indexOf("THE REST OF THE CORE SIX"));
   ok("every platform is still on the card", ALL.every((p) => card.includes(p.label)));
+  ok("the sweep card carries no em dash", !card.includes("—"));
+
+  // ── Step 8 (2026-09-15): the audience decides which platforms are ASKED for ─
+  //
+  // ‼️ A RESTAURANT WAS BEING ASKED FOR A REALSELF PROFILE. Every client got all nineteen. The
+  // audience row now names the subset and the card lists only that, while the gate still counts a
+  // screenshot of any platform, because "which four is your choice" was a promise.
+  const acme = {
+    name: "La Casita Tacos",
+    addressLine1: "1 Elm St",
+    addressLine2: null,
+    city: "Greensboro",
+    state: "NC",
+    postalCode: "27401",
+    phone: "+13365550100",
+  };
+  const diner = formatSweepCard(
+    { name: "La Casita Tacos", city: "Greensboro", state: "NC" },
+    acme,
+    { keys: ["google", "apple", "bing", "yelp", "facebook", "foursquare"], note: null }
+  );
+  ok("a restaurant's card asks for no clinical platform",
+    !/RealSelf|Healthgrades|NPI Registry/.test(diner));
+  // Matched as a numbered card line: the provider sentence at the top names Foursquare and Yelp for
+  // every client, so a bare includes() would pass on a card that lists neither.
+  ok("but does ask for what a diner uses", /\d+\. Foursquare:/.test(diner) && /\d+\. Yelp:/.test(diner));
+  ok("and counts the audience's platforms, not nineteen", /0 of 6 done automatically/.test(diner));
+  ok("and still says a platform off the list counts", /not listed still counts/i.test(diner));
+  ok("the restaurant gate is still four", /any 4 DISTINCT platforms/.test(diner));
+
+  const agency = formatSweepCard(
+    { name: "SRT Agency", city: "Greensboro", state: "NC" },
+    acme,
+    { keys: ["google", "facebook", "bbb", "trustpilot"], note: null }
+  );
+  ok("the agency card lists exactly its four", ["Google Business Profile", "Facebook Page", "BBB", "Trustpilot"].every((l) => agency.includes(l)) && !agency.includes("Apple Maps"));
+  ok("the start group only names recommended platforms the audience is on", agency.includes("*START WITH THESE*") && !/\d+\. Yelp:/.test(agency));
+
+  const three = formatSweepCard(
+    { name: "X", city: "Greensboro", state: "NC" },
+    acme,
+    { keys: ["google", "yelp", "bbb"], note: null }
+  );
+  ok("a gate never asks for more platforms than are listed", /any 3 DISTINCT platforms/.test(three));
+
+  const unscoped = formatSweepCard(
+    { name: "X", city: "Greensboro", state: "NC" },
+    acme,
+    { keys: null, note: "No audience is confirmed for this client yet, so every platform is listed." }
+  );
+  ok("no audience lists all nineteen and says why", ALL.every((p) => unscoped.includes(p.label)) && /No audience is confirmed/.test(unscoped));
 }
 
 
@@ -2258,8 +2950,24 @@ import { pageSlug } from "../src/lib/hub/pages";
   // _probe-step-verify.ts DID. Both sat at 33 through the concierge lane's two additions, so
   // both suites were red and each one read as somebody else's problem. Keeping the literal is
   // deliberate: the check exists to make a person ACKNOWLEDGE a change to the step list, and
-  // deriving it from STEPS.length would assert nothing. 33 -> 35 (concierge_preview, concierge_live) -> 37 (tracking_installed, self_report_field) -> 39 (agreement_signed, site_replica).
-  eq("the step count is what the last person to change it said", STEPS.length, 39);
+  // deriving it from STEPS.length would assert nothing. 33 -> 35 (concierge_preview, concierge_live) -> 37 (tracking_installed, self_report_field) -> 39 (agreement_signed, site_replica) -> 41 (offer_proposed, offer_locked) -> 43 (keyword_set, pre_call_pages, 2026-09-11) -> 41 (the call pack, 2026-09-12).
+  //
+  // ‼️ THE FIRST TIME THIS NUMBER HAS GONE DOWN. What is being acknowledged: presence_pdf and
+  // findings_doc were merged into call_sheet. Both produced a document nobody reads on its own,
+  // each had its own anchor and its own tick, and all four documents are picked up together when
+  // the call is prepared. The KEYS are gone from the array and their rows are deleted by
+  // docs/2026-09-12-call-pack-orphans.sql, which runs AFTER the deploy: while the old code is
+  // live, a client with fewer rows than steps gets both re-seeded by loadRows and reachableCursor.
+  eq("the step count is what the last person to change it said", STEPS.length, 41);
+  // The prep call sits before the harvest and the keyword step, and blocks both. Moving it back
+  // behind call_booked would put every keyword and every pre-call page on a PROPOSED offer again.
+  ok("the offer is locked before the harvest",
+    keys.indexOf("offer_locked") < keys.indexOf("avatar_harvest") &&
+      (STEPS.find((s) => s.key === "avatar_harvest")?.blockedBy ?? []).includes("offer_locked"));
+  ok("and it no longer waits for the call to be booked",
+    !(STEPS.find((s) => s.key === "offer_locked")?.blockedBy ?? []).includes("call_booked"));
+  ok("the pre-call pages come after the concierge, whose row their magnets need",
+    keys.indexOf("pre_call_pages") > keys.indexOf("concierge_preview"));
 
   {
     const seenPhases = new Set<string>();
@@ -2352,6 +3060,908 @@ import { pageSlug } from "../src/lib/hub/pages";
   ok("the method is no longer pasted into the prompt", !framework.includes(RESEARCH_METHOD_PART_2));
 }
 
+
+// ---- STEP 16 UNBLOCK (2026-09-09) -------------------------------------------
+//
+// Three structural facts that were each found by reading rather than by failing, which is why
+// they are asserted here: none of the three has a pure function to call, and all three are the
+// kind of thing that reads as fine until a live run costs a card or a vision call.
+{
+  const hubSkinSrc = fs.readFileSync(
+    path.join(__dirname, "..", "src", "lib", "clients", "hub-skin.ts"),
+    "utf8"
+  );
+
+  /** One exported function's source, comments and all, so an assertion cannot drift onto its neighbour. */
+  const fnBody = (src: string, name: string): string => {
+    const start = src.indexOf(`export async function ${name}`);
+    if (start === -1) return "";
+    const next = src.indexOf("\nexport ", start + 1);
+    return src.slice(start, next === -1 ? src.length : next);
+  };
+
+  // ── writeSkin clears BOTH, and the two are one decision ────────────────────
+  //
+  // The confirmation half has always been there. The candidate half was not, and its absence
+  // made the step card contradict the row: designSection() reads hub_skin_candidates FIRST, so
+  // `template bold` after a screenshot re-rendered step 16 as "Three designs off that reference.
+  // Nothing has changed yet." over a design that had just changed.
+  const writeSkinSrc = fnBody(hubSkinSrc, "writeSkin");
+  ok("writeSkin exists to be checked", writeSkinSrc.length > 0);
+  ok("writeSkin un-confirms the theme", /confirmedAt:\s*null/.test(writeSkinSrc));
+  ok("writeSkin clears the candidates too", /hub_skin_candidates:\s*null/.test(writeSkinSrc));
+  ok(
+    "and it does both in the one update, so the row can never half-change",
+    /\.update\(\{[\s\S]*?hub_skin_candidates:\s*null[\s\S]*?confirmedAt:\s*null[\s\S]*?\}\)/.test(
+      writeSkinSrc
+    )
+  );
+
+  // ── confirmSkinPick is still the one exception, and still sets the timestamp ──
+  //
+  // ‼️ A REGRESSION GUARD, NOT A FEATURE TEST. The rule every other skin write follows is
+  // "clear confirmedAt", and somebody tidying this file toward consistency would break the only
+  // reason the pick lane exists: choosing one of three rendered previews IS a person looking at
+  // it, so it must not then ask for a second signature on the same decision.
+  const pickSrc = fnBody(hubSkinSrc, "confirmSkinPick");
+  ok("confirmSkinPick exists to be checked", pickSrc.length > 0);
+  ok("the pick SETS confirmedAt rather than clearing it", /confirmedAt:\s*now/.test(pickSrc));
+  ok("the pick never clears it", !/confirmedAt:\s*null/.test(pickSrc));
+  ok("the pick takes the candidates off the row", /hub_skin_candidates:\s*null/.test(pickSrc));
+  ok(
+    "skin and confirmation land in one update, so the gate and the design cannot disagree",
+    /\.update\(\{[\s\S]*?hub_skin:\s*skin[\s\S]*?confirmedAt:\s*now[\s\S]*?\}\)/.test(pickSrc)
+  );
+
+  // ── The reference read has a size cap, like every other vision reader ──────
+  //
+  // Anthropic answers an oversized request with a 413, isTransientStatus declines to retry it,
+  // and the read dies on the first attempt. Before this the lane had no cap at all while
+  // onboarding-docs, page-review, page-studio, listing-read and review-audit all stopped at 6 MB.
+  const screenshotSrc = fnBody(hubSkinSrc, "handleSkinScreenshot");
+  ok("handleSkinScreenshot exists to be checked", screenshotSrc.length > 0);
+  ok(
+    "an oversized reference is skipped rather than sent",
+    /buf\.byteLength\s*>\s*MAX_VISION_BYTES/.test(screenshotSrc)
+  );
+  // Compared against a sibling's source rather than against a literal, so the day somebody
+  // raises the headroom the two cannot drift apart silently.
+  const capOf = (src: string): string | null =>
+    src.match(/MAX_VISION_BYTES\s*=\s*([^;]+);/)?.[1]?.trim() ?? null;
+  const siblingCap = capOf(
+    fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "page-review.ts"), "utf8")
+  );
+  ok("the sibling reader still declares a cap", siblingCap !== null);
+  ok("the cap is the same headroom the other readers use", capOf(hubSkinSrc) === siblingCap);
+  ok(
+    "too large and could not be fetched are different answers",
+    /too large to read/.test(screenshotSrc) && /could not download/.test(screenshotSrc)
+  );
+  // The three-image cap and a size skip are two different reasons a picture was ignored, and
+  // this note explains only the first. Measured against `picked`, never against `payload`.
+  ok(
+    "the muddy-skin note counts what the cap dropped, not what the size check did",
+    /picked\.length < images\.length/.test(screenshotSrc) &&
+      !/payload\.length < images\.length/.test(screenshotSrc)
+  );
+
+  // ── A refused [Done] re-renders its own card ───────────────────────────────
+  //
+  // ‼️ NOTHING IN PRODUCTION RE-RAN A CARD BODY BEFORE THIS. postStep was called only by
+  // scripts, postReadySteps skips any step that already has a slack_message_ts, and the three
+  // buttons either answer ephemerally or REPLACE the card with a one-line outcome. So a card
+  // rendered from the wrong environment stayed wrong, which is what put "CLIENT_LINK_SECRET is
+  // not set on this environment" into a live hub_preview card for a day.
+  const actionsSrc = fs.readFileSync(
+    path.join(__dirname, "..", "src", "app", "api", "slack", "actions", "route.ts"),
+    "utf8"
+  );
+  const gateIdx = actionsSrc.indexOf("const gate = await stepPrecondition(clientId, stepKey);");
+  ok("the precondition gate is where it was", gateIdx > -1);
+  const gateBlock = actionsSrc.slice(gateIdx, gateIdx + 2600);
+  ok(
+    "a refused precondition re-renders the card",
+    /postStep\(clientId, stepKey\)/.test(gateBlock)
+  );
+  ok(
+    "the refusal is delivered first, so a render fault cannot swallow it",
+    gateBlock.indexOf("tellActor(args, clientId") < gateBlock.indexOf("postStep(clientId, stepKey)")
+  );
+  ok(
+    "the re-render cannot throw the handler",
+    /postStep\(clientId, stepKey\)\.catch\(/.test(gateBlock)
+  );
+}
+
+
+// ---- SKIN DESIGN TOKENS (2026-09-11) ----------------------------------------
+//
+// The screenshot lane was widened: a pick now writes the reference's accent and body face into
+// the THEME, and the skin grew face keys. The SkinCandidate check above greps only the text
+// between `interface SkinCandidate` and `interface SkinCandidateSet`, and SkinCandidate EXTENDS
+// StoredSkin, so every field this change added to HubSkin sits outside it. It is not edited and
+// still passes. It is RESTATED here, deliberately, over every type the widening touched.
+import * as skinT from "../src/lib/hub/skin";
+import * as facesT from "../src/lib/hub/faces";
+import * as themeT from "../src/lib/hub/theme";
+import * as variantsT from "../src/lib/hub/skin-variants";
+import * as visionT from "../src/lib/hub/skin-vision";
+{
+  const srcOf = (...p: string[]): string =>
+    fs.readFileSync(path.join(__dirname, "..", "src", ...p), "utf8");
+
+  /** One interface's body, comments stripped, braces matched so a nested object cannot end it. */
+  const interfaceBody = (src: string, name: string): string => {
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    const start = code.search(new RegExp(`interface ${name}\\b`));
+    if (start === -1) return "";
+    const open = code.indexOf("{", start);
+    let depth = 0;
+    for (let i = open; i < code.length; i += 1) {
+      if (code[i] === "{") depth += 1;
+      if (code[i] === "}" && --depth === 0) return code.slice(open, i + 1);
+    }
+    return "";
+  };
+
+  // Same pattern as the check above, word for word, so the two cannot mean different things.
+  const MARKUP = /\b(html|markup|body|headline|sections?|order|css)\s*[?]?\s*:/i;
+  // ‼️ AND THE WHOSE-PAGE LINE, AS A TYPE. skin-vision.ts's header says a reference may give us
+  // tokens and never an asset, a logo or a link. A field whose name carries one of those words is
+  // how that would start, so the skin side of the schema may not have one.
+  const ASSET = /\b\w*(url|src|href|image|asset|logo)\w*\s*[?]?\s*:/i;
+
+  const types: Array<[string[], string, boolean]> = [
+    [["lib", "hub", "skin.ts"], "HubSkin", true],
+    [["lib", "hub", "skin.ts"], "StoredSkin", true],
+    [["lib", "hub", "skin-vision.ts"], "SkinRead", true],
+    [["lib", "hub", "skin-variants.ts"], "SkinCandidateSet", true],
+    // The theme legitimately has logoUrl, so only the markup half applies to it.
+    [["lib", "hub", "theme.ts"], "StoredTheme", false],
+    [["lib", "hub", "theme.ts"], "ReferenceProvenance", false],
+  ];
+  for (const [file, name, assetsBanned] of types) {
+    const body = interfaceBody(srcOf(...file), name);
+    ok(`${name} exists to be checked`, body.length > 2);
+    ok(`${name} cannot carry markup, copy or a section order`, !MARKUP.test(body));
+    if (assetsBanned) ok(`${name} cannot carry a URL, an image or a logo`, !ASSET.test(body));
+  }
+
+  // ── Faces: a key from our list, never a name from a model ─────────────────
+  for (const face of facesT.HUB_FACES) {
+    const stack = facesT.FACE_STACKS[face];
+    // ‼️ THE PICK WRITES THE BODY STACK INTO theme.fontFamily, WHICH IS GATED BY safeFontFamily().
+    // A stack that fails it is dropped on the way in and the pick silently applies no font.
+    eq(`the ${face} stack survives safeFontFamily unchanged`, themeT.safeFontFamily(stack), stack);
+    ok(`the ${face} face is in the catalogue the prompt is built from`,
+      facesT.FACE_CATALOGUE.some((f) => f.key === face));
+  }
+  eq("an unlisted face is refused, not matched to a nearby one", skinT.readSkin({ headingFace: "comic-sans" }).headingFace, null);
+  eq("a listed face is kept", skinT.readSkin({ labelFace: "mono" }).labelFace, "mono");
+  eq("a face carrying a CSS breakout is refused", skinT.readSkin({ headingFace: "mono; } body {" }).headingFace, null);
+
+  const faced = skinT.skinStyle(
+    skinT.readSkin({ headingFace: "system", subheadingFace: "serif", labelFace: "mono", headingFamily: "Georgia, serif" })
+  ) as Record<string, string>;
+  eq("a heading face wins over the legacy free-text stack", faced["--hub-heading-family"], facesT.FACE_STACKS.system);
+  eq("the subheading face has its own variable", faced["--hub-subheading-family"], facesT.FACE_STACKS.serif);
+  eq("the label face has its own variable", faced["--hub-label-family"], facesT.FACE_STACKS.mono);
+  ok("every key is still a --hub-* custom property", Object.keys(faced).every((k) => k.startsWith("--hub-")));
+  ok("the skin still never writes a body font", !("fontFamily" in faced));
+
+  const hubCssT = srcOf("app", "hub", "[host]", "hub.css");
+  for (const v of ["--hub-subheading-family", "--hub-label-family", "--hub-on-accent"]) {
+    ok(`hub.css declares ${v} on .hub-root`, hubCssT.includes(`${v}:`));
+  }
+
+  // ── The vision lane cannot hand CSS a font name ────────────────────────────
+  const coerced = visionT._coerceForTest({
+    headingFamily: 'Poppins; } .hub-root { display: none } .x {',
+    headingFace: " System ",
+  }) as Record<string, unknown>;
+  eq("coerce drops any free-text font stack the model sends", coerced.headingFamily, null);
+  eq("and normalises the case of a face key", coerced.headingFace, "system");
+  eq("an absent face reads as null, not undefined", coerced.bodyFace, null);
+
+  // ── The pick's brand write: only what was read, never the logo, and on the record ──
+  const brand = variantsT.brandFromReference({ accentSuggestion: "#2dd4bf", bodyFace: "system" }, { bg: "#0a0a0a" });
+  eq("the reference's accent is what gets written", brand.accent, "#2dd4bf");
+  eq("the body face becomes its code-owned stack", brand.fontFamily, facesT.FACE_STACKS.system);
+  ok(
+    "the soft tint is mixed onto THIS page's dark ground, so it is darker than the accent",
+    typeof brand.accentSoft === "string" && brand.accentSoft < "#2dd4bf" && brand.accentSoft !== "#2dd4bf"
+  );
+  eq(
+    "a stored accent that is not a hex is not written",
+    variantsT.brandFromReference({ accentSuggestion: "red; }", bodyFace: null }, { bg: null }).accent,
+    null
+  );
+
+  const before: themeT.StoredTheme = {
+    ...themeT.EMPTY_THEME,
+    logoUrl: "https://example.com/logo.png",
+    accent: "#00705f",
+    accentSoft: "#e6f3f0",
+  };
+  const after = variantsT.themeFromPick(before, brand, 2, "test", "2026-09-11T00:00:00.000Z");
+  eq("the pick never touches the logo", after.logoUrl, before.logoUrl);
+  eq("the accent is the reference's", after.accent, "#2dd4bf");
+  eq("the soft tint came with it rather than staying paired with the old accent", after.accentSoft, brand.accentSoft);
+  eq("it records what it wrote", after.fromReference?.accent, "#2dd4bf");
+  eq("and what it replaced, so it can be typed back", after.fromReference?.replacedAccent, "#00705f");
+  ok("and that it came from a pick", /design 2/.test(after.fromReference?.from ?? ""));
+  ok(
+    "a reference that read nothing writes nothing and claims nothing",
+    variantsT.themeFromPick(before, { accent: null, accentSoft: null, fontFamily: null }, 1, "test", "x") === before
+  );
+
+  const round = themeT.readTheme(JSON.parse(JSON.stringify({ ...after, fromReference: { ...after.fromReference, replacedAccent: "red; }" } })));
+  eq("the provenance survives the jsonb round trip", round.fromReference?.accent, "#2dd4bf");
+  eq("and every colour in it is re-gated on the way back", round.fromReference?.replacedAccent, null);
+
+  // ── Text on an accent is computed, and readable ────────────────────────────
+  eq("dark text on a bright teal", themeT.onAccent("#2dd4bf"), "#0a0a0a");
+  eq("white text on the default green", themeT.onAccent("#00705f"), "#ffffff");
+  eq(
+    "themeStyle writes it beside the accent",
+    (themeT.themeStyle({ logoUrl: null, accent: "#2dd4bf", accentSoft: null, fontFamily: null }) as Record<string, string>)["--hub-on-accent"],
+    "#0a0a0a"
+  );
+
+  // ── All three candidates carry the faces that were read ────────────────────
+  const facedRead = {
+    template: "bold" as const,
+    reading: "dark, teal accent, system sans headings, mono labels",
+    bg: "#0a0a0a", fg: "#e8e8e8", muted: "#999999", faint: "#666666", rule: "#333333",
+    card: "#1a1a1a", band: "#0a0a0a", bandFg: "#e8e8e8", headingFamily: null,
+    radius: 10, measure: 48, baseSize: 16, accentSuggestion: "#2dd4bf",
+    headingFace: "system" as const, subheadingFace: "system" as const, labelFace: "mono" as const, bodyFace: "system" as const,
+  };
+  for (const v of variantsT.tokenVariants(facedRead, "test")) {
+    eq(`candidate ${v.slot} keeps the heading face that was read`, v.headingFace, "system");
+    eq(`candidate ${v.slot} keeps the label face that was read`, v.labelFace, "mono");
+  }
+
+  // ── The stale set is still pickable: confirmed, not assumed ────────────────
+  // SRT's hub_skin_candidates on 2026-09-11 predates faces. readCandidateSet() is permissive about
+  // missing fields (readSkin fills them with null), so the set does NOT disappear on this change:
+  // it stays pickable, renders as it did, and its set-level accent is applied on a pick.
+  const stale = variantsT.readCandidateSet({
+    reading: "Dark website for a medical marketing agency with a bright teal accent.",
+    accentSuggestion: "#2dd4bf",
+    candidates: [
+      { slot: 1, template: "bold", bg: "#0a0a0a", fg: "#e8e8e8", radius: 4, measure: 48, baseSize: 16, source: "screenshot", headingFamily: null },
+    ],
+  });
+  eq("a set stored before faces existed still reads", stale?.candidates.length, 1);
+  eq("with no body face, which is what it has", stale?.bodyFace, null);
+  eq("and its accent is still there for the pick", stale?.accentSuggestion, "#2dd4bf");
+
+  // ── The pick still writes skin, theme and confirmation in ONE update ───────
+  const hubSkinSrcT = srcOf("lib", "clients", "hub-skin.ts");
+  const pickStart = hubSkinSrcT.indexOf("export async function confirmSkinPick");
+  const pickSrcT = hubSkinSrcT.slice(pickStart, hubSkinSrcT.indexOf("\nexport ", pickStart + 1));
+  ok(
+    "the reference's brand lands in the same update as the skin and the confirmation",
+    /\.update\(\{[\s\S]*?hub_skin:\s*skin[\s\S]*?theme:\s*\{\s*\.\.\.nextTheme,\s*confirmedAt:\s*now/.test(pickSrcT)
+  );
+  ok("through the one function the preview renders with", /brandFromReference\(/.test(pickSrcT));
+  ok(
+    "the screenshot reply no longer says the accent was not applied",
+    !/was NOT applied/.test(hubSkinSrcT)
+  );
+
+  // ── Shape traits: words from a list, each a class hub.css has a rule for ──
+  for (const t of skinT.SKIN_TRAITS) {
+    for (const v of t.values) {
+      eq(`readSkin keeps ${t.field} "${v}"`, (skinT.readSkin({ [t.field]: v }) as unknown as Record<string, unknown>)[t.field], v);
+    }
+    eq(
+      `readSkin refuses an unknown ${t.field} rather than matching it`,
+      (skinT.readSkin({ [t.field]: "brutalist" }) as unknown as Record<string, unknown>)[t.field],
+      null
+    );
+  }
+  const shaped = skinT.readSkin({
+    template: "bold", nav: "pill", hero: "split", surface: "dots",
+    headingScale: "display", headingWeight: "medium", headingTracking: "tight",
+  });
+  eq("skinClass is untouched by traits", skinT.skinClass(shaped), "hub-tpl-bold");
+  eq(
+    "hubRootClass carries the template and every trait",
+    skinT.hubRootClass(shaped),
+    "hub-root hub-tpl-bold hub-nav-pill hub-hero-split hub-surface-dots hub-hs-display hub-hw-medium hub-ht-tight"
+  );
+  eq("no skin is the root and the default template", skinT.hubRootClass(null), "hub-root hub-tpl-document");
+  eq(
+    "traits add nothing to the inline style: they are classes, never CSS a value wrote",
+    JSON.stringify(skinT.skinStyle(shaped)),
+    JSON.stringify(skinT.skinStyle(skinT.readSkin({ template: "bold" })))
+  );
+
+  const shapedCoerce = visionT._coerceForTest({ hero: " Centre ", nav: "PILL", surface: "none" }) as Record<string, unknown>;
+  eq("coerce maps the spellings of centred onto the one value", shapedCoerce.hero, "centered");
+  eq("and lowercases a trait", shapedCoerce.nav, "pill");
+  eq("and 'none' is null", shapedCoerce.surface, null);
+  eq("an absent trait is null, not undefined", shapedCoerce.headingScale, null);
+
+  for (const v of variantsT.tokenVariants({ ...facedRead, hero: "centered", nav: "pill", surface: "glow" }, "test")) {
+    eq(`candidate ${v.slot} keeps the masthead that was read`, v.hero, "centered");
+    eq(`candidate ${v.slot} keeps the navigation that was read`, v.nav, "pill");
+    eq(`candidate ${v.slot} keeps the surface that was read`, v.surface, "glow");
+  }
+
+  // ‼️ ALL FIVE RENDERERS WRITE THE ROOT THROUGH ONE FUNCTION. A trait on four of them renders on a
+  // call and not on the client's own domain, which is the preview lying.
+  for (const file of [
+    ["app", "hub", "[host]", "layout.tsx"],
+    ["app", "dashboard", "clients", "[id]", "preview", "[[...slug]]", "page.tsx"],
+    ["app", "preview", "[token]", "[[...slug]]", "page.tsx"],
+    ["lib", "hub", "page-preview.ts"],
+  ]) {
+    const src = srcOf(...file);
+    ok(`${file.join("/")} renders .hub-root through hubRootClass`, /hubRootClass\(/.test(src));
+    ok(`${file.join("/")} spells no root class by hand`, !/hub-root \$\{skinClass\(/.test(src));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ---- W4 ---- the five stages of awareness (2026-09-15)
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const { AWARENESS_STAGES, awarenessOf, awarenessTarget, isAwarenessStage } =
+    require("../src/lib/audit-engine/awareness") as typeof import("../src/lib/audit-engine/awareness");
+
+  // ‼️ MATTHEW'S NUMBERING RUNS BACKWARDS FROM THE USUAL FUNNEL: 5 is unaware, 1 is most aware.
+  // A stage list that got "tidied" into 1..5 ascending would invert every label silently.
+  eq("the stages run 5 down to 1", AWARENESS_STAGES.map((s) => s.stage), [5, 4, 3, 2, 1]);
+  eq("5 is unaware", AWARENESS_STAGES[0].name, "unaware");
+  eq("1 is most aware", AWARENESS_STAGES[4].name, "most aware");
+  ok("no em dash in the definitions the classifier is shown",
+    AWARENESS_STAGES.every((s) => !s.means.includes("—") && !s.name.includes("—")));
+
+  ok("a stage is a whole number from 1 to 5", [1, 2, 3, 4, 5].every(isAwarenessStage));
+  ok("and nothing else is", ![0, 6, 2.5, "3", null, undefined].some(isAwarenessStage));
+
+  // The rule, for questions the classifier never saw.
+  eq("a brand query is most aware", awarenessOf("acme med spa reviews", "MARCA"), 1);
+  eq("a comparison is product aware", awarenessOf("botox vs dysport", "COMPARATIVO"), 2);
+  eq("a category search is solution aware", awarenessOf("best med spa in greensboro", "SERVICIO"), 3);
+  eq("how it works is solution aware", awarenessOf("how does morpheus8 work", "INFO"), 3);
+  eq("their own situation is problem aware", awarenessOf("why do i have dark spots on my face", "INFO"), 4);
+  // ‼️ A rule cannot tell "noticed a symptom" from "does not know it is a problem". Only the
+  // classifier, reading the whole business, may say 5.
+  ok("the rule never claims stage 5", (["MARCA", "COMPARATIVO", "INFO", "SERVICIO"] as const).every(
+    (b) => ["is it normal to feel tired", "what causes this", "x", "why am i like this"].every((q) => awarenessOf(q, b) !== 5)
+  ));
+  ok("the rule is deterministic", awarenessOf("what causes acne scars", "INFO") === awarenessOf("what causes acne scars", "INFO"));
+
+  // Lower is closer to buying, so moving a reader forward is the number going DOWN.
+  eq("a page for the unaware leaves them problem aware", awarenessTarget(5), 4);
+  eq("a page moves a reader one stage", awarenessTarget(3), 2);
+  eq("a reader who knows the business has nowhere closer to go", awarenessTarget(1), 1);
+
+  // ‼️ ONE GATE, AND IT SHIPPED WITH THE PROMPT THAT ASKS. A validator demanding a field the prompt
+  // never requested rejects the classification after the crawl and the research are paid for.
+  const classifySrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "audit-engine", "classify.ts"), "utf8");
+  ok("the classifier's schema hint asks for awareness", /"awareness": 1 \| 2 \| 3 \| 4 \| 5/.test(classifySrc));
+  ok("the classifier's system prompt shows the stages", /AWARENESS_STAGES\.map/.test(classifySrc));
+  ok("the awareness check is inside isAuditClassification", /isAwarenessStage\(\(p as AuditPrompt\)\.awareness\)/.test(classifySrc));
+  ok("a rejection tells the retry what was wrong", /describeInvalid: whyNotClassification/.test(classifySrc));
+  const suppliedSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "audit-engine", "supplied-run.ts"), "utf8");
+  ok("the supplied path labels by rule and says so", /awarenessOf\(p\.prompt, block\)/.test(suppliedSrc) && /"rule"/.test(suppliedSrc));
+  const photoSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "photograph.ts"), "utf8");
+  ok("a retest carries the archived label", /awareness: p\.awareness/.test(photoSrc));
+
+  // ── The three artifacts: every column has a writer ─────────────────────────
+  const { awarenessForPage } =
+    require("../src/lib/clients/page-plan") as typeof import("../src/lib/clients/page-plan");
+  eq("a how-it-works page starts solution aware and leaves product aware",
+    awarenessForPage("How much does lip filler cost?", "lip filler cost"), { awareness_entry: 3, awareness_target: 2 });
+  eq("a page for somebody describing their own situation starts problem aware",
+    awarenessForPage("why do i have dark spots on my face", "dark spots"), { awareness_entry: 4, awareness_target: 3 });
+  // ‼️ The QUESTION decides, not the keyword: a pillar's keyword is the offer plus the city, which
+  // reads as a category search whatever the page is for.
+  eq("the question outranks the keyword",
+    awarenessForPage("botox vs dysport which lasts longer", "botox greensboro nc").awareness_entry, 2);
+  eq("a row with no question falls back to its keyword",
+    awarenessForPage("", "botox vs dysport").awareness_entry, 2);
+
+  const kwSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "client-keywords.ts"), "utf8");
+  eq("both keyword inserts write a stage", (kwSrc.match(/awareness_stage: stageOf\(/g) ?? []).length, 2);
+  ok("the keyword read carries it", /KW_COLUMNS =[\s\S]{0,200}awareness_stage/.test(kwSrc));
+  const planSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "page-plan.ts"), "utf8");
+  ok("the plan insert writes both numbers", /\.\.\.awarenessForPage\(c\.question/.test(planSrc));
+  // ‼️ NOT in PLAN_COLUMNS: one unknown column blanks the whole plan before the migration runs.
+  ok("the plan reads them in their own tolerant select", /select\("id, awareness_entry, awareness_target"\)/.test(planSrc) &&
+    !/const PLAN_COLUMNS =[^;]*awareness/.test(planSrc));
+  const preCallSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "pre-call-pages.ts"), "utf8");
+  ok("the pre-call plan insert writes both numbers", /\.\.\.awarenessForPage\(item\.question/.test(preCallSrc));
+  const headSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "client-headlines.ts"), "utf8");
+  ok("an approved headline copies its page's numbers", /awareness_entry: stages\.awareness_entry/.test(headSrc));
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ---- C0 ---- a client with no preset can still get an audience (2026-09-15)
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const { AUDIENCE_PREFIX, AUDIENCE_REPAIR, handleAudienceThreadReply, seedAudienceByHand } =
+    require("../src/lib/clients/audiences") as typeof import("../src/lib/clients/audiences");
+
+  ok("`audience:` is its own prefix", AUDIENCE_PREFIX.test("audience: restaurant_diner"));
+  ok("and `avatar:` is not it", !AUDIENCE_PREFIX.test("avatar: taco lovers"));
+  ok("the repair names every preset", ["aeo_agency_owner", "med_spa_patient", "restaurant_diner"].every((k) => AUDIENCE_REPAIR.includes(k)));
+  ok("the repair has no em dash", !AUDIENCE_REPAIR.includes("—"));
+
+  // Every path below returns before touching the database.
+  const wrongStep = await handleAudienceThreadReply({ clientId: "x", stepKey: "offer_locked", text: "audience: restaurant_diner", by: "t" });
+  ok("only the avatar step's thread takes it", wrongStep === null);
+  const chat = await handleAudienceThreadReply({ clientId: "x", stepKey: "avatar_confirmed", text: "the audience: is diners", by: "t" });
+  ok("a sentence is conversation", chat === null);
+  const two = await handleAudienceThreadReply({ clientId: "x", stepKey: "avatar_confirmed", text: "audience: restaurant_diner\navatar: diners", by: "t" });
+  ok("one command per message", two !== null && !two.ok && /on its own/.test(two.message));
+  const bogus = await seedAudienceByHand({ clientId: "x", presetKey: "taco_people", by: "t" });
+  ok("an unknown preset is refused and the repair named", !bogus.ok && bogus.message.includes("restaurant_diner"));
+  const generic = await seedAudienceByHand({ clientId: "x", presetKey: "GENERIC", by: "t" });
+  ok("GENERIC decides nothing, so nothing seeds from it", !generic.ok);
+
+  const verifySrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "step-verify.ts"), "utf8");
+  const avatarVerifier = verifySrc.slice(verifySrc.indexOf("avatar_confirmed: async"), verifySrc.indexOf("offer_proposed: async"));
+  ok("the avatar step refuses [Done] without a primary audience", /is_primary", true/.test(avatarVerifier) && /AUDIENCE_REPAIR/.test(avatarVerifier));
+  ok("and a failed read is a fault, not missing work", /dbUnreachable\("client_audiences"\)/.test(avatarVerifier));
+
+  const headlineSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "client-headlines.ts"), "utf8");
+  const vocFn = headlineSrc.slice(headlineSrc.indexOf("export async function clientVocQuotes"), headlineSrc.indexOf("interface HeadlineContext"));
+  // ‼️ page_sources has source_content and topic. `content, label` failed silently for weeks.
+  ok("a client's own reviews are read from the columns that exist", /select\("source_content, topic"\)/.test(vocFn) && !/select\("content/.test(vocFn));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ---- C2 ---- offers live under audiences (2026-09-15)
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const { readOfferCommand: cmd, EMPTY_OFFER: empty } =
+    require("../src/lib/clients/offers") as typeof import("../src/lib/clients/offers");
+
+  eq("`outcome:` is a command", cmd("outcome: more appointments"), { kind: "outcome", value: "more appointments", extra: [] });
+  eq("`price:` is a command", cmd("  Price :  $399 per session"), { kind: "price", value: "$399 per session", extra: [] });
+  eq("an offer and a price in one message are refused", cmd("offer: yes\nprice: $399").kind, "combined");
+  eq("an outcome and terms in one message are refused", cmd("outcome: more jobs\nterms: a, b").kind, "combined");
+  // ‼️ B1 of the design review. A pasted letter is not a command, so its "Price:" and "Terms:" lines
+  // can never make it "combined": only the FIRST line decides what a message is.
+  eq("a pasted letter with Price: and Terms: lines is still not a command",
+    cmd("letter replace:\nThe headline\nPrice: $399\nTerms: financing available").kind, "none");
+  ok("an empty offer carries the new fields as null", empty.outcomePromise === null && empty.price === null && empty.id === null && empty.audienceId === null);
+
+  // ‼️ clients.offer IS A DEPRECATED MIRROR. Anything that selects it reads a copy of the offer, and a
+  // copy is how two answers to "what does this client sell" appear. Only offers.ts may touch it.
+  const srcRoot = path.join(__dirname, "..", "src");
+  const walk = (dir: string): string[] =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = path.join(dir, e.name);
+      return e.isDirectory() ? walk(p) : /\.(ts|tsx)$/.test(e.name) ? [p] : [];
+    });
+  const offenders = walk(srcRoot).filter((file) => {
+    if (file.endsWith(path.join("clients", "offers.ts"))) return false;
+    const src = fs.readFileSync(file, "utf8");
+    return /\.from\("clients"\)[\s\S]{0,400}?\.select\(\s*["'`][^"'`]*\boffer\b(?!_)/.test(src);
+  });
+  ok(`nothing outside offers.ts selects clients.offer${offenders.length ? ` (${offenders.map((f) => path.relative(srcRoot, f)).join(", ")})` : ""}`, offenders.length === 0);
+
+  const verifySrc2 = fs.readFileSync(path.join(srcRoot, "lib", "clients", "step-verify.ts"), "utf8");
+  const columns = verifySrc2.slice(verifySrc2.indexOf("const CLIENT_COLUMNS"), verifySrc2.indexOf(";", verifySrc2.indexOf("const CLIENT_COLUMNS")));
+  ok("CLIENT_COLUMNS no longer names the offer column", !/\boffer\b/.test(columns.replace(/\/\/.*$/gm, "")));
+  const offerVerifiers = verifySrc2.slice(verifySrc2.indexOf("offer_proposed: async"), verifySrc2.indexOf("keyword_set: async"));
+  eq("both offer verifiers read through loadOfferStrict", (offerVerifiers.match(/loadOfferStrict\(ctx\.clientId\)/g) ?? []).length, 2);
+  ok("and a failed read is a fault, not an empty offer", /dbUnreachable\("client_offers"\)/.test(offerVerifiers));
+
+  const offersSrc2 = fs.readFileSync(path.join(srcRoot, "lib", "clients", "offers.ts"), "utf8");
+  // Every writer goes through writeOffer, which refuses a client with no audience and mirrors the rest.
+  ok("no writer updates clients.offer except the mirror", (offersSrc2.match(/\.update\(\{ offer:/g) ?? []).length === 1);
+  ok("a client with no audience is refused with the hand repair", /AUDIENCE_REPAIR/.test(offersSrc2));
+  ok("the old column is read only when client_offers is missing", /case "table_missing":\s*return legacyOffer/.test(offersSrc2));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ---- C3 ---- the sales letter at step 10 (2026-09-15)
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const { readLetterCommand: letter, pageToLetterText, slackUrl, letterFaults } =
+    require("../src/lib/clients/sales-letter") as typeof import("../src/lib/clients/sales-letter");
+  const { offerFingerprint, kindBelongsToOffer } =
+    require("../src/lib/clients/audience-documents") as typeof import("../src/lib/clients/audience-documents");
+
+  eq("letter use", letter("letter use"), { kind: "use", url: null });
+  eq("letter use <url> takes the URL, never Slack's label",
+    letter("letter use <https://acme.com/lip-filler|acme.com/lip-filler>"), { kind: "use", url: "https://acme.com/lip-filler" });
+  eq("letter draft", letter("letter draft"), { kind: "draft" });
+  eq("letter text", letter("  Letter text"), { kind: "text" });
+  eq("letter approve with a short id", letter("letter approve 1a2b3c4d"), { kind: "approve", id: "1a2b3c4d" });
+  eq("a sentence starting with the word is conversation, not a malformed command", letter("letter looks good to me").kind, "none");
+  eq("`letter replace` without its colon is refused, so the letter is not silently lost", letter("letter replace\n" + "x".repeat(300)).kind, "refused");
+  eq("and a message not starting with letter is not a command", letter("we should draft a letter").kind, "none");
+  ok("a one-line command with more under it is refused", letter("letter draft\noffer: yes").kind === "refused");
+
+  // ‼️ `letter replace:` CARRIES A DOCUMENT, and a letter is full of lines a command parser would grab.
+  const pasted = "letter replace:\n## Stop Losing Patients To Guesswork\n" + "Real body text for the letter. ".repeat(10) + "\nPrice: $399\nTerms: financing\nOffer: 3 sessions";
+  const read = letter(pasted);
+  ok("a pasted letter with Price:, Terms: and Offer: lines is stored whole", read.kind === "replace" && read.body.includes("Offer: 3 sessions") && read.body.startsWith("## Stop"));
+  ok("a fence around the whole letter is Slack formatting, not the letter",
+    (() => { const r = letter("letter replace:\n```\n" + "x".repeat(250) + "\n```"); return r.kind === "replace" && !r.body.includes("```"); })());
+  ok("a replace with no letter is refused", letter("letter replace: fix").kind === "refused");
+
+  eq("Slack's <url|label> resolves to the URL", slackUrl("<https://x.com/a?b=1&amp;c=2|x.com>"), "https://x.com/a?b=1&c=2");
+
+  const page = pageToLetterText(
+    "<html><nav>Home About</nav><h1>Lip Filler &amp; You</h1><p>First paragraph — here.</p><ul><li>One</li><li>Two</li></ul><script>x()</script><footer>(c) 2026</footer></html>"
+  );
+  ok("headings survive as ##", page.includes("## Lip Filler & You"));
+  ok("list items stay on their own lines", /\n- One\n- Two/.test(page));
+  ok("navigation, scripts and footers are removed", !/Home About|x\(\)|\(c\) 2026/.test(page));
+  ok("and a stored page carries no em dash", !page.includes("—"));
+
+  const evidence = { numberHaystack: "we have 12 years and 4.9 stars", quotes: ["Best filler I have ever had, so natural looking"] };
+  const clean = await letterFaults('## Headline\nOver 12 years. "Best filler I have ever had, so natural looking" [PROOF] costs $1,999.', { ...evidence, numberHaystack: evidence.numberHaystack + " 1999" });
+  eq("a letter that only states backed figures and real quotes has no faults", clean, []);
+  const dirty = await letterFaults('## Results guaranteed\nWe helped 347 patients. "This changed my life completely and forever" -- truly.', evidence);
+  const rules = dirty.map((f) => f.rule);
+  ok("a guarantee is a fault", rules.includes("guarantee"));
+  ok("an unbacked figure is a fault", rules.includes("unbacked_number"));
+  ok("an invented quotation is a fault", rules.includes("invented_quote"));
+  ok("a double hyphen is a fault", rules.includes("dash"));
+
+  // ‼️ AN APPROVAL IS PINNED TO THE TREATMENT AND THE OUTCOME, NOT TO POSITIONING OR TERMS.
+  const base = offerFingerprint({ treatment: "Lip filler", outcomePromise: "more appointments" });
+  eq("the same offer spelled differently is the same fingerprint", offerFingerprint({ treatment: "lip filler.", outcomePromise: "More appointments" }), base);
+  ok("a new treatment makes an approval stale", offerFingerprint({ treatment: "Botox", outcomePromise: "more appointments" }) !== base);
+  ok("a new outcome makes an approval stale", offerFingerprint({ treatment: "Lip filler", outcomePromise: "more bookings" }) !== base);
+  ok("the letter, short offer and beliefs belong to an offer", kindBelongsToOffer("sales_letter") && kindBelongsToOffer("short_offer") && kindBelongsToOffer("necessary_beliefs"));
+  ok("the research and the avatar sheet belong to the audience", !kindBelongsToOffer("deep_research") && !kindBelongsToOffer("avatar_sheet"));
+
+  const letterSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "sales-letter.ts"), "utf8");
+  ok("a drafted letter's faults block approval", /doc\.source === "drafted" && doc\.faults\.length/.test(letterSrc));
+  ok("the letter is filed without touching output_ref", /storeGeneratedDoc/.test(letterSrc) && !/deliverArtifact/.test(letterSrc));
+  ok("the drafting prompt itself forbids em dashes", /No em dashes, no en dashes, no double hyphens/.test(letterSrc));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ---- C4 ---- the avatar and offer framework at step 11 (2026-09-15)
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const fw = require("../src/lib/clients/avatar-framework") as typeof import("../src/lib/clients/avatar-framework");
+  const cfg = require("../src/config/avatar-framework") as typeof import("../src/config/avatar-framework");
+  const drr = require("../src/lib/clients/artifacts/deep-research-run") as typeof import("../src/lib/clients/artifacts/deep-research-run");
+  const intake = require("../src/lib/clients/research-intake") as typeof import("../src/lib/clients/research-intake");
+
+  // ‼️ THE BLANK TEMPLATE HAS EVERY HEADING AND ANSWERS NOTHING. A sheet the chat sent back unfilled must
+  // never read as a filled one: every placeholder is "[...]" and every one is ignored.
+  const blankSheet = fw.readAvatarSheet(cfg.renderTemplate(cfg.AVATAR_SHEET));
+  ok("the rendered avatar sheet parses with every heading found", blankSheet.ok && blankSheet.parsed.missingHeadings.length === 0);
+  ok("and its placeholders answer nothing", blankSheet.ok && blankSheet.parsed.answered.length === 0);
+  const blankOffer = fw.readShortOffer(cfg.renderTemplate(cfg.SHORT_OFFER));
+  ok("the rendered short offer parses with every heading found", blankOffer.ok && blankOffer.parsed.missingHeadings.length === 0);
+  ok("and \"Low / High\" is a placeholder, not an answer", blankOffer.ok && !blankOffer.parsed.answered.includes("consciousness_level"));
+
+  // A chat answer the way Slack delivers it: shortcodes for emoji, bold headings, content on the heading line.
+  const sheetPaste = [
+    ":mag: **Demographics and General Information:**",
+    "Age range: 35 to 55",
+    "Gender: mostly women",
+    "**Typical identities:** busy moms, nurses who went independent",
+    "",
+    "🚩 Main Challenges and Pain Points",
+    "Pain point 1: patients book once and never return",
+    ...cfg.AVATAR_SHEET.slice(2).map((s, i) => `${i % 2 ? ":sparkles: " : "## "}${s.heading}: ${i === 3 ? "not found in the research" : `real answer ${i}`}`),
+  ].join("\n");
+  const sheet = fw.readAvatarSheet(sheetPaste);
+  ok("a Slack-formatted sheet finds every heading", sheet.ok && sheet.parsed.missingHeadings.length === 0);
+  ok("a labelled line is its own field", sheet.ok && sheet.parsed.subs["demographics.age_range"] === "35 to 55");
+  ok("a bold label with its answer on the same line is read", sheet.ok && /busy moms/.test(sheet.parsed.subs["demographics.identities"] ?? ""));
+  ok("a label the chat left out is not answered", sheet.ok && !sheet.parsed.answered.includes("demographics.income"));
+  ok("\"not found in the research\" is not an answer", sheet.ok && !sheet.parsed.answered.includes(cfg.AVATAR_SHEET[5].key));
+  ok("an answered section is answered", sheet.ok && sheet.parsed.answered.includes(cfg.AVATAR_SHEET[4].key));
+
+  // ‼️ HALF A DOCUMENT IS REFUSED WITH THE MISSING HEADINGS NAMED, NEVER STORED AS "the research did not answer".
+  const half = fw.readAvatarSheet(cfg.AVATAR_SHEET.slice(0, 4).map((s) => `${s.heading}:\nreal`).join("\n"));
+  ok("a sheet missing most headings is refused", !half.ok);
+  ok("and the refusal names a missing heading", !half.ok && half.error.includes(cfg.AVATAR_SHEET[12].heading));
+
+  const offerPaste = cfg.SHORT_OFFER.map((s) =>
+    s.key === "discovery_story" ? `${s.heading}:\nnone yet`
+      : s.key === "ump" ? "⚠️ Unique Mechanism of the Problem: the reminders stop after one visit"
+      : s.key === "notes" ? `${s.heading}:\nProduct: a note that mentions the word\nPrice: $399`
+      : `${s.heading}:\nreal ${s.key}`
+  ).join("\n\n");
+  const offer = fw.readShortOffer(offerPaste);
+  ok("\"none yet\" is the honest answer, so it counts", offer.ok && offer.parsed.answered.includes("discovery_story"));
+  ok("a heading without its parenthetical still opens it", offer.ok && /reminders stop/.test(offer.parsed.sections.ump ?? ""));
+  ok("a \"Product:\" line inside Other Notes does not reopen Product", offer.ok && offer.parsed.sections.product === "real product" && /Price: \$399/.test(offer.parsed.sections.notes ?? ""));
+
+  // Beliefs: 1 to 6, each "I believe that".
+  const six = Array.from({ length: 6 }, (_, i) => `${i + 1}. **I believe that** reason ${i + 1} is true`).join("\n");
+  const readSix = fw.readBeliefs(`Necessary beliefs:\n${six}`);
+  ok("six numbered, bold beliefs under a heading are read", readSix.ok && readSix.beliefs.length === 6 && readSix.beliefs[0] === "I believe that reason 1 is true");
+  ok("a seventh belief is refused", !fw.readBeliefs(`${six}\n- I believe that one more`).ok);
+  const stray = fw.readBeliefs("I believe that pages work\nThis one matters most because it drives the rest.");
+  ok("a line of commentary is refused by name", !stray.ok && /This one matters most/.test(stray.error));
+  ok("no belief at all is refused", !fw.readBeliefs("Here you go:").ok);
+
+  // ‼️ THE RESEARCH SECTIONS ARE APPENDED, AND THE SCRIPT-ONLY ONES ARE A TAIL. The heading contract numbers
+  // every section as RESEARCH_SECTION_KEYS does, and the compact prompt still asks for the first nine only.
+  const contract = drr.researchHeadingContract(briefInput);
+  const numbered = contract.filter((l) => /^## \d+\. /.test(l));
+  eq("the contract numbers every research section", numbered.length, drr.RESEARCH_SECTION_KEYS.length);
+  ok("every printed number is its key's position", numbered.every((l, i) => l.startsWith(`## ${i + 1}. `)));
+  ok("the sixteen sections include the framework's seven", drr.RESEARCH_SECTION_KEYS.length === 16 && drr.RESEARCH_SECTION_KEYS.indexOf("awareness") === 15);
+  const closeAt = contract.findIndex((l) => /^## Phrases worth building pages around/.test(l));
+  ok("the ranked phrases close under an unnumbered heading after section 16", closeAt > contract.indexOf(numbered[numbered.length - 1]));
+  ok("the KEYWORDS worked rows are in the contract", contract.includes("KEYWORDS") && contract.some((l) => l.split("|").length === 4));
+  const compactNumbers = brief.split("\n").filter((l) => /^\d+\. /.test(l)).map((l) => Number(l.split(".")[0]));
+  eq("the compact prompt still asks for sections 1 to 9", compactNumbers, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  const drrSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "artifacts", "deep-research-run.ts"), "utf8");
+  ok("`run` fans out over the compact sections only", /COMPACT_SECTIONS\.map\(\(spec\) => runSection/.test(drrSrc));
+
+  // The script itself.
+  const scriptInput = {
+    clientName: "Acme Med Spa",
+    offer: "Morpheus8",
+    terms: ["microneedling", "skin tightening"],
+    outcome: "more appointments",
+    audienceLabel: "women 35 to 55",
+    city: "Greensboro",
+    letter: "## The Letter Headline\nThe letter body.",
+    headingContract: contract,
+  };
+  const script = fw.buildFrameworkScript(scriptInput);
+  eq("the script is deterministic", script === fw.buildFrameworkScript(scriptInput), true);
+  ok("no em or en dash anywhere in the script", !/[—–]/.test(script));
+  ok("no template placeholder or empty value survives", !/\{|\bundefined\b|\bnull\b|\$\{/.test(script));
+  ok("message 1 carries the approved letter inline", script.includes("## The Letter Headline\nThe letter body."));
+  ok("message 3a carries every numbered heading", numbered.every((l) => script.includes(l)));
+  ok("message 4 carries every avatar sheet heading", cfg.AVATAR_SHEET.every((s) => script.includes(`${s.heading}:`)));
+  ok("message 5 carries every short offer heading", cfg.SHORT_OFFER.every((s) => script.includes(`${s.heading}:`)));
+  ok("messages 1 to 7 are all there, in order", ["1", "2", "3a", "3b", "4", "5", "6", "7"].map((n) => script.indexOf(`MESSAGE ${n}:`)).every((at, i, all) => at >= 0 && (i === 0 || at > all[i - 1])));
+  ok("it tells Matthew all four prefixes", ["research:", "avatar sheet:", "short offer:", "beliefs:"].every((p) => script.includes(p)));
+  ok("the framework config carries no em dash, including the text handed to the AI",
+    !/[—–]/.test(fs.readFileSync(path.join(__dirname, "..", "src", "config", "avatar-framework.ts"), "utf8")));
+  const noCity = fw.buildFrameworkScript({ ...scriptInput, city: null, outcome: null, terms: [] });
+  ok("a client with no city, outcome or terms reads cleanly", !/ in \.| promising |call it: \)/.test(noCity));
+
+  // ‼️ THE PREFIXES CARRY DOCUMENTS, SO NO SECOND-LINE CHECK: a short offer is full of "Price" and "Product" lines.
+  eq("avatar sheet: routes to the sheet", fw.readFrameworkPaste("Avatar Sheet:\nDemographics")?.kind, "avatar_sheet");
+  const so = fw.readFrameworkPaste("short offer:\n```\nProduct:\nx\nPrice: $399\noffer: yes\n```");
+  ok("short offer: keeps its Price and offer lines and loses the fence", so?.kind === "short_offer" && so.body === "Product:\nx\nPrice: $399\noffer: yes");
+  eq("beliefs: routes to the beliefs", fw.readFrameworkPaste("  beliefs: I believe that x")?.kind, "necessary_beliefs");
+  eq("research: is not a framework document", fw.readFrameworkPaste("research: ## 1. x"), null);
+  eq("and a sentence mentioning beliefs is conversation", fw.readFrameworkPaste("the beliefs look good"), null);
+
+  // ‼️ B4: framework research carries this client's letter, so it does not overwrite the SHARED avatar research.
+  ok("research replace: is a research paste", intake.isResearchPaste("research replace: ## 1. x") && intake.isResearchReplace("Research Replace: x"));
+  eq("and its prefix is stripped whole", intake.stripPrefix("research replace: ## 1. x"), "## 1. x");
+  ok("a plain research: paste is not a replace", !intake.isResearchReplace("research: ## 1. x"));
+  const intakeSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "research-intake.ts"), "utf8");
+  ok("the shared research is written only when empty or on replace", /!replace &&\s*\(await avatarBriefFor\(/.test(intakeSrc));
+  const threadSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "framework-thread.ts"), "utf8");
+  ok("a sheet reaches the shared avatar only when the shared one is empty", /shareSheetIfEmpty/.test(threadSrc));
+  ok("the script is not recorded as the avatar's prompt", !/recordAvatarPrompt/.test(threadSrc));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ---- C5 ---- three stories in every skeleton, one or more in every page (2026-09-15)
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const st = require("../src/lib/hub/page-stories") as typeof import("../src/lib/hub/page-stories");
+  const { readOutline } = require("../src/lib/hub/pages") as typeof import("../src/lib/hub/pages");
+  const { loadAeoHeadlineEngine, AEO_HEADLINE_ENGINE } =
+    require("../src/data/reel/aeo-headline-engine") as typeof import("../src/data/reel/aeo-headline-engine");
+
+  const sections = [
+    { heading: "What does Morpheus8 actually do to loose skin?" },
+    { heading: "Why did the creams never tighten anything?" },
+    { heading: "How do you know it is working?" },
+  ];
+  const gaps = [{ id: "G1" }, { id: "G2" }];
+  const refs = new Map<string, string | null>([["S1", "src-review-1"], ["S2", null]]);
+  const args = { refs, beliefIds: ["B1", "B2"], numberHaystack: "12 sessions" };
+  const beats4 = (first = "She sees her jawline in a video call") => [first, "Two years of serums did nothing", "Her injector explains collagen", "She understands why surface creams could never reach it"];
+  const good = [
+    { id: "T1", title: "The video call", beats: beats4(), installs: ["B1"], heading: sections[1].heading, source: { kind: "evidence", ref: "S1" } },
+    { id: "T2", title: "The first week", beats: beats4("Picture a patient checking the mirror"), installs: ["B1", "B2"], heading: null, source: { kind: "illustrative" } },
+    { id: "T3", title: "The owner's own case", beats: beats4(), installs: ["B2"], heading: sections[2].heading.toUpperCase(), source: { kind: "gap", gapId: "G2" } },
+  ];
+  const skel = (stories: unknown) => ({ sections, gaps, stories });
+  const faults = (stories: unknown, a = args) => st.storyFaults(skel(stories), a);
+  const has = (list: string[], re: RegExp) => list.some((f) => re.test(f));
+
+  eq("three sourced, placed, belief-tagged stories have no faults", faults(good), []);
+  ok("a skeleton with no stories is told to write three", has(st.storyFaults({ sections, gaps }, args), /"stories" is missing/));
+  ok("two stories is a fault", has(faults(good.slice(0, 2)), /Write exactly 3/));
+  ok("three beats is a fault", has(faults([{ ...good[0], beats: beats4().slice(0, 3) }, good[1], good[2]]), /3 beats/));
+  ok("a heading that is not a section is a fault", has(faults([{ ...good[0], heading: "Some other heading" }, good[1], good[2]]), /not one of your section headings/));
+  ok("two stories under one heading is a fault", has(faults([good[0], { ...good[1], heading: sections[1].heading }, good[2]]), /both sit under/));
+  ok("no story placed is a fault", has(faults(good.map((s) => ({ ...s, heading: null }))), /At least one has to be told/));
+  ok("a belief id that does not exist is a fault", has(faults([{ ...good[0], installs: ["B7"] }, good[1], good[2]]), /B7, which is not one/));
+  ok("a story installing nothing, when beliefs exist, is a fault", has(faults([{ ...good[0], installs: [] }, good[1], good[2]]), /installs no belief/));
+  eq("with no beliefs on file, installs is not checked", faults([{ ...good[0], installs: [] }, { ...good[1], installs: ["B9"] }, good[2]], { ...args, beliefIds: [] }), []);
+  ok("an unknown evidence ref is a fault", has(faults([{ ...good[0], source: { kind: "evidence", ref: "S9" } }, good[1], good[2]]), /"S9", which is not one/));
+  ok("the audit's summary row is not a real case", has(faults([{ ...good[0], source: { kind: "evidence", ref: "S2" } }, good[1], good[2]]), /summary of the audit/));
+  ok("an unknown gap is a fault", has(faults([good[0], good[1], { ...good[2], source: { kind: "gap", gapId: "G5" } }]), /gap "G5"/));
+  ok("a story with no source is a fault", has(faults([{ ...good[0], source: {} }, good[1], good[2]]), /has no source/));
+  // ‼️ F9: AN INVENTED CASE IS FRAMED AS ONE.
+  ok("an illustrative story that does not open \"Picture a\" is a fault", has(faults([good[0], { ...good[1], beats: beats4() }, good[2]]), /starts "Picture a"/));
+  ok("an illustrative story with a figure is a fault", has(faults([good[0], { ...good[1], beats: beats4("Picture a patient after 3 sessions") }, good[2]]), /contains a digit/));
+  ok("a sourced story may state a figure its source carries", !has(faults([{ ...good[0], beats: beats4("After 12 sessions she stopped") }, good[1], good[2]]), /states/));
+  ok("but not one no source carries", has(faults([{ ...good[0], beats: beats4("After 40 sessions she stopped") }, good[1], good[2]]), /states 40/));
+  ok("a dash in a story is a fault", has(faults([{ ...good[0], title: "The call -- and after" }, good[1], good[2]]), /contains a dash/));
+
+  const resolved = st.resolveStories(skel(good), refs, ["B1", "B2"]);
+  eq("an evidence story stores the source id, never the S# ref", resolved[0].source, { kind: "evidence", sourceId: "src-review-1" });
+  eq("a heading is stored as the section spells it", resolved[2].heading, sections[2].heading);
+  eq("with no beliefs on file, nothing is stored as installed", st.resolveStories(skel(good), refs, [])[1].installs, []);
+
+  // ‼️ AN OUTLINE WITH A BAD STORIES FIELD IS STILL AN OUTLINE.
+  const base = { sections: [{ heading: "What is it?", bullets: ["one"] }], gaps: [], writtenAt: "2026-09-15" };
+  eq("an outline with stories reads them back", readOutline({ ...base, stories: resolved })?.stories?.length, 3);
+  const broken = readOutline({ ...base, stories: [{ id: "T1", title: "x" }] });
+  ok("an invalid stories field drops the stories, not the outline", broken !== null && broken.stories === undefined);
+  ok("an outline written before stories has no stories key", readOutline(base) !== null && !("stories" in (readOutline(base) ?? {})));
+
+  const outline = { sections: sections.map((s) => ({ heading: s.heading, bullets: ["x"] })), gaps: [], stories: resolved, writtenAt: "" };
+  eq("a page outlined without stories skips the placement check", st.storyPlacement({ ...outline, stories: undefined }, []).status, "skip");
+  eq("a body that lost every placed heading fails it", st.storyPlacement(outline, [{ heading: sections[0].heading, body: "x" }]).status, "fail");
+  eq("a body that kept one passes, whatever the heading's case", st.storyPlacement(outline, [{ heading: "why did the creams never tighten anything", body: "She saw it." }]).status, "pass");
+  const illus = { ...outline, stories: [{ ...resolved[1], heading: sections[0].heading }] };
+  eq("an illustrative story told as if real fails it", st.storyPlacement(illus, [{ heading: sections[0].heading, body: "Maria came in last spring." }]).status, "fail");
+  eq("and told as illustrative passes", st.storyPlacement(illus, [{ heading: sections[0].heading, body: "Picture a patient who has tried everything." }]).status, "pass");
+
+  const ctx = { audienceLabel: "women 35 to 55", buyer: "patient", offer: "Morpheus8", beliefs: [{ id: "B1", text: "I believe that creams cannot reach collagen" }], avatarNotes: [] };
+  const lines = st.draftStoryLines(resolved[0], ctx, new Map([["src-review-1", "S4"]])).join("\n");
+  ok("a sourced story cites the ref its source carries in THIS draft", lines.includes("[S4]"));
+  ok("and carries the belief's words, not its id", lines.includes("creams cannot reach collagen"));
+  ok("a source no longer on file says to drop the story", /drop the story/.test(st.draftStoryLines(resolved[0], ctx, new Map()).join("\n")));
+  ok("an illustrative story is told to open with the buyer's noun", st.draftStoryLines(resolved[1], ctx, new Map()).join("\n").includes('"Picture a patient"'));
+
+  const card = st.storyCardLines({ ...outline }).join("\n");
+  ok("the skeleton card lists every idea with its beliefs and where it sits", /T1 The video call \(B1\), told under/.test(card) && /T2 .*kept for later, illustrative/.test(card));
+  ok("and which beliefs the page installs", /installs B1, B2/.test(card));
+  eq("an outline without stories adds nothing to the card", st.storyCardLines(base), []);
+
+  const notes = st.avatarNotesFrom({
+    sections: { fears: "Looking fake\n[Fear 2]" },
+    subs: { "challenges.pain_point_1": "not found in the research", "challenges.pain_point_2": "- sagging jawline" },
+  });
+  eq("the avatar notes keep real lines and drop placeholders", notes, ["Pain point 2: sagging jawline", "Fears: Looking fake"]);
+
+  ok("no em dash in the story rule handed to the model", !/[—–]|--/.test(st.OUTLINE_STORY_RULE + st.DRAFT_STORY_RULES.join("\n")));
+  ok("no em dash anywhere in page-stories.ts", !/[—–]/.test(fs.readFileSync(path.join(__dirname, "..", "src", "lib", "hub", "page-stories.ts"), "utf8")));
+
+  // F3: a headline is written for the exact avatar.
+  eq("a med spa owner gets the engine as it is", loadAeoHeadlineEngine({ avatarLabel: "med spa owner" }), AEO_HEADLINE_ENGINE);
+  ok("any other buyer is told the examples are shape only", /YOUR BUYER IS: women 35 to 55/.test(loadAeoHeadlineEngine({ avatarLabel: "women 35 to 55" })));
+
+  const draftSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "hub", "draft-page.ts"), "utf8");
+  ok("the skeleton is validated against both outline and story faults", /outlineFaults\(v, numberHaystack\), \.\.\.storyFaults\(v, storyArgs\)/.test(draftSrc));
+  ok("the skeleton is handed the page's headline", /outlineStoryLines\(story, ctx\?\.headline/.test(draftSrc));
+  const gateSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "hub", "page-gate.ts"), "utf8");
+  ok("story placement is a gate warning, never a block", /key: "story_placed", tier: "warn"/.test(gateSrc));
+  const headSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "client-headlines.ts"), "utf8");
+  ok("headlines still file on a database without audience_id", /\/audience_id\/\.test\(error\.message\)/.test(headSrc));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ---- Step 11 intake ---- research as a plain-text file with named headings (2026-09-15)
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const profile = require("../src/lib/clients/avatar-profile") as typeof import("../src/lib/clients/avatar-profile");
+  const drr = require("../src/lib/clients/artifacts/deep-research-run") as typeof import("../src/lib/clients/artifacts/deep-research-run");
+  const intake = require("../src/lib/clients/research-intake") as typeof import("../src/lib/clients/research-intake");
+  const harvest = require("../src/lib/clients/harvest") as typeof import("../src/lib/clients/harvest");
+
+  eq("every research section has a name the fallback reads, in the same order", profile.SECTION_NAMES.map((s) => s.key), [...drr.RESEARCH_SECTION_KEYS]);
+
+  // The shape SRT's ChatGPT deep research came back in: plain headings, no numbers, no markdown.
+  const para = (s: string) => `${s} `.repeat(12).trim() + ".";
+  const plain = [
+    "Med Spa Owner Profile",
+    para("Owners are mid-career nurses and physicians running small clinics"),
+    "",
+    "Current Solutions (DIY, Cheap, Nothing)",
+    para("Most have tried Meta ads, Google Ads and agencies"),
+    "Conversion dropouts: Customers from deal sites rarely rebook (e.g. Groupon failures).",
+    "What Owners Like About Existing Options",
+    para("They like control and low monthly cost"),
+    "What Goes Wrong (Failures/Why They Quit)",
+    para("Agencies overpromise and leads dry up"),
+    "Beliefs (True or False)",
+    para("They believe SEO takes a year"),
+    "Blame for Being Stuck",
+    para("They blame the algorithm and their staff"),
+    "Buyer’s Own Words",
+    "“We’re about 30 days out from making the call on whether to shut down our med spa.”",
+    para("More quotes from forums about marketing"),
+    "KEYWORDS",
+    "med spa marketing agency Greensboro | unknown | purchase | [46†L173-L180]",
+    "social media calendar for med spa | unknown | research | [48†L90-L99]",
+  ].join("\n");
+  const sections = profile.parseResearchSections(plain);
+  const answered = sections.filter(profile.sectionAnswered).map((s) => s.number);
+  eq("a plain-text answer with named headings reads its sections by name", answered, [1, 2, 3, 4, 5, 6, 7]);
+  ok("so it is full research, not a fragment", profile.looksLikeFullResearch(plain));
+  ok("a labelled sentence inside a section is body, not a heading", sections.find((s) => s.number === 2)!.body.includes("Conversion dropouts"));
+  ok("\"What Goes Wrong (Failures...)\" is section 4, not 11", sections.some((s) => s.number === 4 && /Goes Wrong/.test(s.title)) && !sections.some((s) => s.number === 11));
+
+  const numberedText = [1, 2, 3, 4].map((n) => `## ${n}. Section ${n}\n${para(`finding ${n}`)}`).join("\n\n");
+  eq("a numbered answer still reads by number", profile.parseResearchSections(numberedText).map((s) => s.title), ["Section 1", "Section 2", "Section 3", "Section 4"]);
+
+  const kw = harvest.extractKeywords(plain);
+  eq("\"purchase\" is the highest intent, not the lowest", kw[0].commercialIntentScore, 3);
+  eq("\"research\" stays the lowest", kw[1].commercialIntentScore, 1);
+
+  ok("a .txt, .md, .docx and .pdf are all read as research", ["a.txt", "a.md", "a.docx", "a.pdf"].every((f) => intake.isResearchDocument(f, "")));
+  ok("a Slack text snippet is read by its type", intake.isResearchDocument("untitled", "text/plain"));
+  ok("an image is not", !intake.isResearchDocument("screenshot.png", "image/png"));
+
+  const routeSrc = fs.readFileSync(path.join(__dirname, "..", "src", "app", "api", "slack", "events", "route.ts"), "utf8");
+  ok("step 11 still refuses a file with nothing to read, by type", !intake.isResearchDocument("clip.mp4", "video/mp4"));
+  ok("step 11 no longer drops a non-PDF file without a reply",/const rest = args\.files\.filter\(\(f\) => !handled\.has\(f\.id\)\)/.test(routeSrc) && !/const pdfs = args\.files\.filter/.test(routeSrc));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ---- Archive and reactivation ---- a duplicate onboarding is caught, an archive re-onboards (2026-09-15)
+// ─────────────────────────────────────────────────────────────────────────────
+{
+  const ar = require("../src/lib/clients/archive") as typeof import("../src/lib/clients/archive");
+  const card = require("../src/lib/clients/duplicate-card") as typeof import("../src/lib/clients/duplicate-card");
+
+  eq("an LLC suffix and punctuation are not identity", ar.nameKey("SRT Agency, LLC"), ar.nameKey("srt agency"));
+  eq("a name too short to mean anything is no key", ar.nameKey("Co"), null);
+  eq("the website's domain, however it was typed", ar.domainKey("https://www.SRTagency.com/about?x=1"), "srtagency.com");
+  eq("a phone matches on its last ten digits", ar.phoneKey("+1 (336) 555-0142"), ar.phoneKey("3365550142"));
+
+  const srt = { legalName: "SRT Agency LLC", website: "srtagency.com", email: "matthew@srtagency.com", phone: "+13365550142" };
+  eq("the same business matches on everything it shares",
+    ar.duplicateReasons(srt, { legalName: "SRT Agency", domain: "srtagency.com", email: "MATTHEW@srtagency.com", phone: "336-555-0142" }).length, 4);
+  eq("a different business at a free email domain does not match",
+    ar.duplicateReasons({ legalName: "Glow Med Spa", email: "glow@gmail.com" }, { legalName: "Luxe Aesthetics", email: "luxe@gmail.com" }), []);
+  eq("a self-serve placeholder name (the email) is not a name match",
+    ar.duplicateReasons({ legalName: "a@x.com" }, { legalName: "a@x.com", email: "b@y.com" }), []);
+
+  const patch = ar.clientFieldsToImport(
+    { legal_name: "SRT Agency LLC", city: "Greensboro", services: ["AEO"], ops_channel_id: "C1", billing_status: "active", phone: "+1336" },
+    { email: "matthew@srtagency.com", legal_name: "matthew@srtagency.com", city: "Raleigh", services: [], phone: null }
+  );
+  eq("an import fills only what the new client has nothing in, and never the channel or billing",
+    patch, { legal_name: "SRT Agency LLC", phone: "+1336", services: ["AEO"] });
+  ok("every table that holds client knowledge is in the archive list", ["client_offers", "audience_documents", "client_audiences", "page_sources", "client_docs", "audit_reports", "client_avatar_runs"].every((t) => (ar.CLIENT_TABLES as readonly string[]).includes(t)));
+
+  // ‼️ A REACTIVATION RE-DECIDES THE OFFER.
+  const proposal = ar.offerAsProposal(
+    { treatment: "AEO Services for med spas", proposed_source: "services_list", terms: ["ai visibility"], locked_at: "2026-09-14", locked_by: "x", is_primary: true, outcome_promise: "more patients" },
+    "new-client", "new-aud", "2026-09-15T00:00:00Z"
+  );
+  eq("the old lock comes back as the proposal", proposal.proposed_treatment, "AEO Services for med spas");
+  ok("and is not locked", proposal.treatment === null && proposal.locked_at === null && proposal.locked_by === null);
+  ok("its terms and outcome come with it", (proposal.terms as string[])[0] === "ai visibility" && proposal.outcome_promise === "more patients");
+
+  const matches = [
+    { kind: "archive" as const, id: "11111111-1111-1111-1111-111111111111", name: "SRT Agency LLC", detail: "archived 2026-09-15", reasons: ["the website srtagency.com"], carries: 'offer "AEO"' },
+    { kind: "client" as const, id: "22222222-2222-2222-2222-222222222222", name: "Other", detail: "https://x/board", reasons: ["the phone number"], carries: null },
+  ];
+  const built = card.duplicateCardBlocks({ clientId: "33333333-3333-3333-3333-333333333333", name: "SRT Agency LLC", board: "https://x/b", matches });
+  const buttons = built.blocks.flatMap((b) => b.elements ?? []).filter((e) => e.type === "button");
+  eq("an archived match gets Import data from duplicate and Keep it fresh; a live one gets no import", buttons.map((b) => b.action_id), [card.IMPORT_ARCHIVE_ACTION, card.KEEP_FRESH_ACTION]);
+  eq("the button carries the new client and the archive", card.readImportValue(buttons[0].value as string), { clientId: "33333333-3333-3333-3333-333333333333", archiveId: "11111111-1111-1111-1111-111111111111" });
+  eq("a malformed value is ignored", card.readImportValue("x:y"), null);
+  ok("no em dash on the card", !/[—–]/.test(JSON.stringify(built)));
+
+  const routeSrc = fs.readFileSync(path.join(__dirname, "..", "src", "app", "api", "clients", "start-pilot", "route.ts"), "utf8");
+  ok("the Start pilot route refuses with the matches until a choice is sent", /status: 409/.test(routeSrc) && /if \(!decision\)/.test(routeSrc));
+  const provSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "provision.ts"), "utf8");
+  ok("the import runs before the ops channel and board are created", provSrc.indexOf("importFromArchive") < provSrc.indexOf("await createOpsChannel(clientId"));
+  const archiveSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "archive.ts"), "utf8");
+  ok("nothing is deleted without an archive of exactly that client", /archive\.source_client_id !== args\.clientId/.test(archiveSrc));
+}
 
 // ‼️ EVERY LANE APPENDS ABOVE THIS SUMMARY, NEVER BELOW IT. scripts/_probe-dm-pitch.ts
 // records what happens otherwise: five checks once sat under the process.exit and never ran.

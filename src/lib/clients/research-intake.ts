@@ -31,16 +31,27 @@ import {
   verticalFor,
   type HarvestedPhrase,
 } from "./harvest";
+import { filterPhrases, droppedLine, DEBRIS_FAULTS } from "./phrase-quality";
 
 /** What a message has to start with to be treated as research. Case-insensitive. */
 export const RESEARCH_PREFIX = /^\s*research\s*:/i;
 
+/**
+ * `research replace:` also makes this paste the SHARED research for the avatar, and replaces a stored one
+ * that answered more sections. Without it, framework research stays on the client that pasted it.
+ */
+export const RESEARCH_REPLACE_PREFIX = /^\s*research\s+replace\s*:/i;
+
 export function isResearchPaste(text: string): boolean {
-  return RESEARCH_PREFIX.test(text);
+  return RESEARCH_PREFIX.test(text) || RESEARCH_REPLACE_PREFIX.test(text);
+}
+
+export function isResearchReplace(text: string): boolean {
+  return RESEARCH_REPLACE_PREFIX.test(text);
 }
 
 export function stripPrefix(text: string): string {
-  return text.replace(RESEARCH_PREFIX, "").trim();
+  return text.replace(RESEARCH_REPLACE_PREFIX, "").replace(RESEARCH_PREFIX, "").trim();
 }
 
 /**
@@ -55,6 +66,25 @@ export function unwrapSlackMarkup(text: string): string {
     .replace(/<([^|>]+)\|([^>]+)>/g, "$2")
     .replace(/<((?:https?|mailto):[^>]+)>/g, "$1")
     .replace(/[*_~`]/g, "")
+    .replace(/&gt;/g, ">")
+    .replace(/&lt;/g, "<")
+    .replace(/&amp;/g, "&");
+}
+
+/**
+ * The research answer as it should be KEPT, rather than as phrases are extracted from it.
+ *
+ * ‼️ NOT unwrapSlackMarkup, WHICH IS RIGHT FOR A PHRASE AND WRONG FOR A DOCUMENT. It deletes every
+ * `*`, `_`, `~` and backtick, because a phrase should be the market's words and not their
+ * formatting. Applied to the whole answer it breaks every source URL with an underscore in it and
+ * turns a bold `**1. Who buys**` heading into a plain line, which parses as no section at all, so an
+ * answer formatted that way would never be saved on the avatar. Slack link syntax and HTML entities
+ * are still unwrapped: those are Slack's encoding, not the author's.
+ */
+export function cleanResearchForStorage(text: string): string {
+  return stripPrefix(text)
+    .replace(/<([^|>]+)\|([^>]+)>/g, "$2")
+    .replace(/<((?:https?|mailto):[^>]+)>/g, "$1")
     .replace(/&gt;/g, ">")
     .replace(/&lt;/g, "<")
     .replace(/&amp;/g, "&");
@@ -77,7 +107,27 @@ export interface ResearchIntakeResult {
    * message for a MISSING block to somebody who had just pasted a hundred keywords.
    */
   keywordsError?: string;
+  /**
+   * How many of those keyword rows arrived with a source URL beside them.
+   *
+   * ‼️ THE ONLY NUMBER THAT SAYS WHETHER THE VOLUME COLUMN MEANS ANYTHING. `extractKeywords`
+   * trusts a volume only when the row cites where it came from and otherwise pins it to 1, so a
+   * block of 100 rows with no URLs ranks exactly like a block of 100 rows that all said
+   * "unknown". Measured 2026-09-13 on SRT's vertical: 306 research phrases, 0 with a source URL,
+   * and nothing in the thread ever said so. Reported now, every run.
+   */
+  keywordsWithUrl?: number;
   runId?: string;
+  /**
+   * What the quality filter refused at the door, so a short result explains itself.
+   *
+   * ‼️ PRINTED, NEVER SWALLOWED. Same rule keyword-set.ts holds: a paste that silently loses
+   * two thirds of itself looks like a thin research run, and "the brief only came back with 56
+   * phrases" sends somebody to run it again when the truth is that 250 of them were debris.
+   */
+  droppedPhrases?: number;
+  droppedKeywords?: number;
+  droppedNote?: string | null;
 }
 
 /**
@@ -133,18 +183,54 @@ export async function ingestResearch(args: {
     };
   }
 
-  const phrases: HarvestedPhrase[] = mergePhrases(extractPhrases(body, "deep_research"));
+  const extracted: HarvestedPhrase[] = mergePhrases(extractPhrases(body, "deep_research"));
+
+  // ‼️ FILTERED BEFORE IT IS STORED, NOT ONLY WHEN IT IS READ BACK.
+  //
+  // Measured on SRT's corpus 2026-09-08: 306 deep_research rows, 56 usable. Eighteen per cent.
+  // The other 250 are URLs glued onto quotes, 【41†L65-L69】 citation markers, brief field names
+  // and whole paragraphs of somebody's prose. phrase-quality.ts filtered them on READ, which
+  // fixed every existing client at once and left this function writing more of them on every
+  // paste, into a table with no client_id that every client in the vertical shares forever.
+  //
+  // The read filter stays. Both sides, same rules, same reason harvest.ts applies isPageChrome
+  // on both: the read side repairs what is stored and the write side stops the pile growing.
+  const phraseFilter = filterPhrases(extracted, (p) => p.phrase);
+  const phrases = phraseFilter.kept;
 
   // ‼️ PARSED SEPARATELY AND STORED UNDER ITS OWN `source`. extractPhrases would drop all 100 of
   // these without saying so: a keyword is rarely question-shaped and often under four words.
   // Absent block returns [], which is every research document written before section 9 existed.
-  const keywords = extractKeywords(body);
+  const rawKeywords = extractKeywords(body);
 
+  // ‼️ A NARROWER RULE SET, AND USING THE FULL ONE HERE WOULD BE A BUG.
+  // A keyword is legitimately two words and legitimately not question-shaped: "botox cost" is
+  // exactly what section 9 asks for and the full filter calls it too_short. DEBRIS_FAULTS is
+  // only the six faults that mean OUR extraction broke, which apply whatever shape the phrase is.
+  const keywordFilter = filterPhrases(rawKeywords, (k) => k.phrase, DEBRIS_FAULTS);
+  const keywords = keywordFilter.kept;
+
+  // ‼️ TWO DIFFERENT EMPTIES AND THEY MUST NOT READ THE SAME.
+  //
+  // "Nothing question-shaped came out of that" is true when the paste had no phrase list in it.
+  // It is a lie when the extractor found forty and the quality filter refused all forty, which
+  // is the case the write-side filter just made possible. One of those means paste the list;
+  // the other means the research came back as prose with its citations glued on, and running it
+  // again the same way produces the same forty.
   if (!phrases.length) {
     return {
       ok: false,
-      error:
-        "nothing question-shaped or objection-shaped came out of that. The brief asks for a ranked list of the exact phrases buyers type; make sure that list is in what you pasted.",
+      error: extracted.length
+        ? `${extracted.length} phrase${extracted.length === 1 ? "" : "s"} came out of that and ` +
+          `none of them survived the quality filter (${Object.entries(phraseFilter.faults)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 3)
+            .map(([fault, n]) => `${n} ${fault.replace(/_/g, " ")}`)
+            .join(", ")}). ` +
+          "That is a formatting problem in the research, not something you pasted wrong: the " +
+          "phrases came back with their citations glued on, or as prose rather than as a list. " +
+          "Nothing was written."
+        : "nothing question-shaped or objection-shaped came out of that. The brief asks for a ranked list of the exact phrases buyers type; make sure that list is in what you pasted.",
     };
   }
 
@@ -209,6 +295,8 @@ export async function ingestResearch(args: {
       // slot, because this table is shared across every client in the vertical.
       avatar: avatar.slug,
       objection_phrase: p.objectionPhrase,
+      kind: p.kind,
+      speaker: p.speaker,
     })),
     // Must match question_bank_phrase_avatar_key exactly. A target that matches no index is
     // 42P10 at PLAN time, so it fails on every run rather than on a collision.
@@ -223,6 +311,7 @@ export async function ingestResearch(args: {
   // A failure here does NOT fail the intake: the eight sections are already filed at this point
   // and returning an error would tell the operator nothing landed when most of it did.
   let keywordsStored = 0;
+  let keywordsWithUrl = 0;
   let keywordsFailed: string | undefined;
   if (keywords.length) {
     const { error: kwError } = await supabaseAdmin.from("question_bank").upsert(
@@ -237,6 +326,8 @@ export async function ingestResearch(args: {
         commercial_intent_score: k.commercialIntentScore,
         avatar: avatar.slug,
         objection_phrase: false,
+        kind: "question",
+        speaker: "buyer",
       })),
       { onConflict: "vertical,avatar,normalized", ignoreDuplicates: false }
     );
@@ -245,6 +336,7 @@ export async function ingestResearch(args: {
       keywordsFailed = kwError.message;
     } else {
       keywordsStored = keywords.length;
+      keywordsWithUrl = keywords.filter((k) => Boolean(k.sourceUrl)).length;
     }
   }
 
@@ -258,9 +350,146 @@ export async function ingestResearch(args: {
     stored: fresh.length,
     seen: phrases.length - fresh.length,
     keywords: keywordsStored,
+    keywordsWithUrl,
     keywordsError: keywordsFailed,
     runId,
+    droppedPhrases: phraseFilter.dropped,
+    droppedKeywords: keywordFilter.dropped,
+    droppedNote: droppedLine(phraseFilter, extracted.length),
   };
+}
+
+/**
+ * After a person pastes research: keep the WHOLE answer on the avatar, then say what the avatar is
+ * still missing.
+ *
+ * ‼️ A PASTE USED TO KEEP ONLY ITS PHRASES. ingestResearch files question_bank rows and nothing else;
+ * the only writer of avatar_briefs.research_text was the automatic Haiku run. So a claude.com deep
+ * research answer, the one Matthew actually runs (D1: research stays a manual paste-back), lost its
+ * demographics, beliefs, blame and quotes the moment it was filed, and the avatar kept whatever the
+ * cheaper automatic run had said. Matthew, 2026-09-15: "THE DEEP RESEARCH MUST PROVIDE" the avatar's
+ * context, so the research that provides it has to be the research that is kept.
+ *
+ * ‼️ ONLY A FULL ANSWER REPLACES THE STORED ONE. The intake reply tells a person whose paste had no
+ * KEYWORDS block to "paste just this block", and a keywords-only paste must never overwrite forty
+ * thousand characters of research with fifty lines of pipes. A paste counts as full when at least
+ * FULL_RESEARCH_MIN_SECTIONS numbered sections are answered; anything shorter keeps its phrases and
+ * leaves the avatar alone, and the reply says which happened.
+ *
+ * ‼️ THE SAVE IS READ BACK. storeAvatarResearch logs a failed write and returns nothing, so this
+ * re-reads the row and only says "saved" when the stored text is the text that was pasted.
+ *
+ * Never throws: the phrases have already landed by the time this runs.
+ */
+export async function afterResearchPaste(clientId: string, rawText: string): Promise<string[]> {
+  try {
+    const body = cleanResearchForStorage(rawText);
+    const [{ audienceFor }, { avatarBriefFor, storeAvatarResearch }, profile] = await Promise.all([
+      import("./audiences"),
+      import("./avatars"),
+      import("./avatar-profile"),
+    ]);
+
+    const aud = await audienceFor(clientId);
+    if (!aud.ok) return [`:warning: Not saved on an avatar: ${aud.error}`];
+    const audience = aud.audience;
+    if (!audience.researchAvatarSlug) {
+      return [`:warning: Not saved on an avatar: the audience *${audience.label}* has no avatar key to file research under.`];
+    }
+
+    const lines: string[] = [];
+    const answered = profile.parseResearchSections(body).filter(profile.sectionAnswered).length;
+
+    const replace = isResearchReplace(rawText);
+    const countAnswered = (text: string | null | undefined) =>
+      text ? profile.parseResearchSections(text).filter(profile.sectionAnswered).length : 0;
+
+    // ‼️ THE CLIENT'S OWN COPY FIRST (audience_documents), BECAUSE FRAMEWORK RESEARCH WAS WRITTEN WITH THIS
+    // CLIENT'S SALES LETTER IN THE PROMPT. Storing it straight into the SHARED avatar_briefs would hand one
+    // client's letter-derived material to every other client targeting the same avatar. Below, the shared
+    // row is written only when it is empty or on `research replace:`.
+    let ownNote: string | null = null;
+    if (answered >= profile.FULL_RESEARCH_MIN_SECTIONS) {
+      const { currentDocument, storeDocument } = await import("./audience-documents");
+      const own = await currentDocument({ audienceId: audience.id, offerId: null, kind: "deep_research" });
+      const ownAnswered = own.ok ? countAnswered(own.doc?.content) : 0;
+      if (own.ok && ownAnswered > answered && !replace) {
+        ownNote =
+          `:paperclip: This client's stored research answers ${ownAnswered} sections and this paste answers ${answered}, ` +
+          "so the stored one was kept. Send it as `research replace:` to replace it anyway.";
+      } else if (own.ok) {
+        const saved = await storeDocument({
+          clientId,
+          audienceId: audience.id,
+          offerId: null,
+          kind: "deep_research",
+          content: body,
+          parsed: { answered },
+          source: "pasted",
+          by: "research paste",
+        });
+        ownNote = saved.ok
+          ? `:floppy_disk: Kept on this client as *${audience.label}*'s research, ${answered} sections answered.`
+          : `:warning: The research could not be kept on this client: ${saved.error}`;
+      }
+      // own.ok false: audience_documents is not there yet. The shared path below still runs as before.
+    }
+    if (ownNote) lines.push(ownNote);
+
+    if (answered < profile.FULL_RESEARCH_MIN_SECTIONS) {
+      lines.push(
+        `:paperclip: Not saved as *${audience.label}*'s research: this paste answers ${answered} numbered ` +
+          `section${answered === 1 ? "" : "s"}, and a full answer answers at least ${profile.FULL_RESEARCH_MIN_SECTIONS}. ` +
+          "What was already stored is untouched. That is expected for a KEYWORDS block pasted on its own."
+      );
+    } else if (
+      !replace &&
+      (await avatarBriefFor(audience.researchVertical, audience.researchAvatarSlug))?.researchText
+    ) {
+      lines.push(
+        `:lock: The shared research every client targeting *${audience.label}* reads was left as it was. ` +
+          "`research replace:` (or `share research`) makes this paste the shared one."
+      );
+    } else {
+      const before = await avatarBriefFor(audience.researchVertical, audience.researchAvatarSlug);
+      await storeAvatarResearch({
+        vertical: audience.researchVertical,
+        avatarSlug: audience.researchAvatarSlug,
+        avatarLabel: audience.label,
+        researchText: body,
+        clientId,
+      });
+      const after = await avatarBriefFor(audience.researchVertical, audience.researchAvatarSlug);
+      if (after?.researchText !== body) {
+        lines.push(
+          `:x: *The research was NOT saved on ${audience.label}.* The phrases landed, but the avatar still ` +
+            "holds what it held before. Paste it again; if this repeats, avatar_briefs is refusing the write."
+        );
+      } else {
+        const prior = before?.researchText?.length ?? 0;
+        lines.push(
+          `:floppy_disk: Saved as *${audience.label}*'s research, ${answered} sections answered. ` +
+            (prior
+              ? `It replaces the ${prior.toLocaleString("en-US")} characters stored before. `
+              : "") +
+            "Every client targeting this avatar reads it."
+        );
+      }
+    }
+
+    const { completenessFor } = await import("./dataset-completeness");
+    const { formatDatasetReport } = await import("./dataset-spec");
+    const primary = (await completenessFor(clientId)).find((c) => c.audience?.isPrimary);
+    if (primary?.audience) {
+      lines.push(
+        "",
+        ...formatDatasetReport(primary.audience.label, true, primary.reports, primary.snapshot.offer.applies)
+      );
+    }
+    return lines;
+  } catch (e) {
+    return [`:warning: The phrases landed, but saving the research on the avatar failed: ${(e as Error).message}`];
+  }
 }
 
 /** The thread reply. Says what landed and what it did NOT do. */
@@ -273,12 +502,51 @@ export function formatIntakeReply(r: ResearchIntakeResult, topPhrases: Harvested
     // Named either way. A keyword block that silently did not arrive looks identical to one
     // that did, and section 9 is the half the page candidates rank on.
     r.keywords
-      ? `:mag: *${r.keywords} keywords* from the KEYWORDS block, tagged \`keywords\` and scored by intent.`
+      ? `:mag: *${r.keywords} keywords* from the KEYWORDS block, tagged \`keywords\` and scored by intent.` +
+        (r.droppedKeywords ? ` ${r.droppedKeywords} were dropped as extraction debris.` : "") +
+        // ‼️ THE URL COUNT IS THE HONEST HALF OF THIS LINE. A row without one has its volume pinned
+        // to 1, so "97 keywords" and "97 keywords, none of them sourced" are the same set as far as
+        // ranking is concerned, and only the second one is true.
+        (r.keywordsWithUrl === r.keywords
+          ? " Every row cites a source URL, so the volumes are used as given."
+          : r.keywordsWithUrl
+            ? ` ${r.keywordsWithUrl} of them cite a source URL; the rest rank by intent alone, because ` +
+              "an unsourced volume is an estimate and an estimate in a ranking column is " +
+              "indistinguishable from a measurement."
+            : " *None of them cite a source URL*, so every volume was pinned to 1 and these rank by " +
+              "intent alone. That is the rule working rather than a fault, but it means the block is " +
+              "worth less than its size suggests.")
       : r.keywordsError
         ? `:x: *The KEYWORDS block was there and the database refused it:* ${r.keywordsError}\n` +
           "The phrases above still landed. This is a schema problem, not something you pasted wrong."
-        : ":mag: No KEYWORDS block found. Section 9 asks for 100 search phrases as `phrase | volume | intent | source`; paste that block and this reply will count them.",
+        : // ‼️ THIS IS THE MESSAGE THAT WOULD HAVE CAUGHT THE LIVE BUG, SO IT SHOWS THE SHAPE.
+          // SRT's vertical, measured 2026-09-13: 306 research phrases and ZERO keyword rows, ever.
+          // The block had never once arrived in the pipe-delimited form. The old line said "No
+          // KEYWORDS block found" in prose and read as a shrug, which is the same mistake the ask
+          // itself was making: a format described in prose comes back as prose.
+          ":rotating_light: *No KEYWORDS block found, and that is the half that matters.*\n" +
+          "Section 9 asks for the 100 phrases this buyer actually searches, and it is the only path " +
+          "into the corpus that carries real commercial intent. Everything else in the paste landed.\n\n" +
+          "It has to be literal rows, not prose. Ask again for just this block:\n" +
+          "```\nKEYWORDS\n" +
+          "lip filler near me | unknown | ready | https://example.com/where-you-saw-it\n" +
+          "lip filler cost | 1900 | price | https://example.com/the-page-with-the-number\n```\n" +
+          "Four pipes on every row, `unknown` where there is no number, no link where there is no " +
+          "source. Re-paste it with `research:` and this reply will count them.",
   ];
+
+  // ‼️ WHAT THE FILTER REFUSED IS PRINTED, NEVER SWALLOWED. A paste that quietly loses two
+  // thirds of itself looks like a thin research run, and "it only came back with 56 phrases"
+  // sends somebody to run the brief again when the truth is that 250 of them were never a
+  // phrase anybody said. Same rule the step 12 PDF and the keyword set already follow.
+  if (r.droppedNote) {
+    lines.push(
+      "",
+      `:broom: ${r.droppedNote}`,
+      "Nothing was rewritten. Debris is refused at the door now as well as filtered on read, so " +
+        "the shared corpus stops growing it."
+    );
+  }
 
   if (topPhrases.length) {
     lines.push("", "Highest commercial intent:");
@@ -318,10 +586,29 @@ export function formatIntakeReply(r: ResearchIntakeResult, topPhrases: Harvested
  * and a phrase that reaches question_bank can end up in a set frozen at Day 0. Dropping a file
  * into a step's thread is not something anybody does by accident, and it is scoped to THAT step.
  */
+/**
+ * ‼️ ANY READABLE DOCUMENT, NOT ONLY A PDF (2026-09-15). SRT's deep research came back from ChatGPT as a
+ * .txt file dropped into step 11 with no words typed, and this read PDFs only, so it was filed and nothing
+ * answered. A research tool exports whatever it exports: PDF, Word, text and Markdown all read here.
+ */
+/** PDF, Word, text or Markdown: what extractFileText reads. */
+export function isResearchDocument(filename: string, contentType: string): boolean {
+  return (
+    /pdf|wordprocessingml|^text\//i.test(contentType) || /\.(pdf|docx|txt|md|markdown)$/i.test(filename)
+  );
+}
+
+export async function ingestResearchFile(args: {
+  clientId: string;
+  slackFileId: string;
+}): Promise<ResearchIntakeResult & { filename?: string; extraLines?: string[] }> {
+  return ingestResearchPdf(args);
+}
+
 export async function ingestResearchPdf(args: {
   clientId: string;
   slackFileId: string;
-}): Promise<ResearchIntakeResult & { filename?: string }> {
+}): Promise<ResearchIntakeResult & { filename?: string; extraLines?: string[] }> {
   const { data: doc } = await supabaseAdmin
     .from("client_docs")
     .select("id, filename, content_type, storage_ref")
@@ -334,8 +621,8 @@ export async function ingestResearchPdf(args: {
 
   const filename = (doc.filename as string | null) ?? "that file";
   const contentType = (doc.content_type as string | null) ?? "";
-  if (!/pdf/i.test(contentType) && !/\.pdf$/i.test(filename)) {
-    return { ok: false, error: "that is not a PDF", filename };
+  if (!isResearchDocument(filename, contentType)) {
+    return { ok: false, error: "that is not a document I can read. Drop the research as a PDF, Word, .txt or .md file", filename };
   }
 
   const dl = await supabaseAdmin.storage.from("onboarding").download(doc.storage_ref as string);
@@ -343,13 +630,14 @@ export async function ingestResearchPdf(args: {
     return { ok: false, error: dl.error?.message ?? "the stored file could not be read", filename };
   }
 
-  const { extractPdfText } = await import("@/lib/deck/extract");
+  const { extractFileText } = await import("@/lib/deck/extract");
   let text: string;
   try {
-    text = await extractPdfText(Buffer.from(await dl.data.arrayBuffer()));
+    text = (await extractFileText(Buffer.from(await dl.data.arrayBuffer()), filename, contentType)) ?? "";
   } catch (e) {
-    return { ok: false, error: `that PDF could not be read: ${(e as Error).message}`, filename };
+    return { ok: false, error: `that file could not be read: ${(e as Error).message}`, filename };
   }
+  if (!text.trim()) return { ok: false, error: "that file has no text in it", filename };
 
   // The prefix is added HERE rather than relaxing the trigger, so ingestResearch keeps exactly
   // one rule about what counts as research and there is no second, looser door into it.
@@ -370,5 +658,6 @@ export async function ingestResearchPdf(args: {
       .eq("step_key", "avatar_harvest");
   }
 
-  return { ...result, filename };
+  const extraLines = result.ok ? await afterResearchPaste(args.clientId, `research: ${text}`) : [];
+  return { ...result, filename, extraLines };
 }

@@ -12,7 +12,8 @@
 //
 //   bunx tsx scripts/_probe-reachinbox-webhook.ts
 
-import { parseReachInboxEvent, normalizeEventType } from "../src/lib/reachinbox/parse";
+import { parseReachInboxEvent, normalizeEventType, cleanReplyText } from "../src/lib/reachinbox/parse";
+import { shouldAnnounceReply, buildReplyNote } from "../src/lib/reachinbox/announce";
 import {
   rate,
   formatPct,
@@ -210,6 +211,101 @@ const base: CampaignFunnel = {
   ];
   sortFunnels(input);
   check("sort: input untouched", input.map((f) => f.campaign), ["b", "a"]);
+}
+
+// -- The Slack announcement: what may reach the channel, and what it says ----
+//
+// The gate is the whole point. #vektor-email-director's invariant is that nothing appears there
+// unless a real prospect did something, and `All Events` is the recommended registration, so every
+// send and open in the campaign passes through shouldAnnounceReply on its way to being ignored.
+
+{
+  const reply = parse({ event: "Reply Received", email: "jane@acme.com", campaign: "7D 3E 6M" });
+  check("gate: a reply with an address announces", shouldAnnounceReply(reply), true);
+
+  for (const ev of ["Email Sent", "Email Opened", "Email Link Clicked", "Email Bounced", "Campaign Completed"]) {
+    check(`gate: ${ev} stays silent`, shouldAnnounceReply(parse({ event: ev, email: "jane@acme.com" })), false);
+  }
+
+  // A reply we cannot address has no person to open a thread for. It still counts in the funnel.
+  check("gate: reply with no address stays silent", shouldAnnounceReply(parse({ event: "Reply Received" })), false);
+  check("gate: unknown event stays silent", shouldAnnounceReply(parse({ event: "quarterly vibes" })), false);
+}
+
+{
+  // A webhook that carries no body must not render as an empty quote, which reads as "they sent a
+  // blank email" rather than "ReachInbox did not tell us what they said".
+  const bare = buildReplyNote({
+    email: "jane@acme.com",
+    campaignName: "7D 3E 6M",
+    replyText: null,
+    occurredAt: "2026-09-16T14:30:00.000Z",
+    mailboxLaneOff: true,
+  });
+  const bareText = JSON.stringify(bare.blocks);
+  check("note: missing body is stated", bareText.includes("no reply text"), true);
+  check("note: missing body quotes nothing at all", bareText.includes(">"), false);
+  check("note: mailbox off says no body is coming", bareText.includes("REACHINBOX_REPLY_MAILBOX"), true);
+  check("note: fallback text names the lead", bare.text, "Reply received - jane@acme.com");
+
+  const withMailbox = buildReplyNote({
+    email: "jane@acme.com", campaignName: "c", replyText: null,
+    occurredAt: "2026-09-16T14:30:00.000Z", mailboxLaneOff: false,
+  });
+  check(
+    "note: mailbox on promises the body",
+    JSON.stringify(withMailbox.blocks).includes("within ~5 minutes"),
+    true
+  );
+
+  const quoted = buildReplyNote({
+    email: "jane@acme.com", campaignName: "7D 3E 6M", replyText: "Sure, what does it cost?",
+    occurredAt: "2026-09-16T14:30:00.000Z", mailboxLaneOff: true,
+  });
+  const quotedText = JSON.stringify(quoted.blocks);
+  check("note: a body is quoted", quotedText.includes(">Sure, what does it cost?"), true);
+  check("note: a body suppresses the apology", quotedText.includes("no reply text"), false);
+
+  // An unparseable timestamp must not put "Invalid Date" in the channel.
+  const bad = buildReplyNote({
+    email: "j@a.com", campaignName: null, replyText: "hi", occurredAt: "not a date", mailboxLaneOff: true,
+  });
+  check("note: bad timestamp degrades", JSON.stringify(bad.blocks).includes("unknown time"), true);
+  check("note: missing campaign is stated", JSON.stringify(bad.blocks).includes("No campaign name"), true);
+}
+
+// -- Reply text extraction ---------------------------------------------------
+
+{
+  check("body: html is stripped", cleanReplyText('<div dir="ltr">Sounds good<br>Jane</div>'), "Sounds good Jane");
+  check("body: entities are decoded", cleanReplyText("Tom &amp; Jerry &quot;yes&quot;"), 'Tom & Jerry "yes"');
+  check("body: empty after stripping is null", cleanReplyText("<div></div>"), null);
+  check("body: null stays null", cleanReplyText(null), null);
+  check("body: capped at 600", cleanReplyText("x".repeat(900))?.length, 600);
+
+  check("body: read from a reply key", parse({ event: "replied", email: "j@a.com", replyText: "yes please" }).replyText, "yes please");
+  check("body: read from a nested body key", parse({ event: "replied", data: { lead: { email: "j@a.com" }, body: "call me" } }).replyText, "call me");
+
+  // THE ONE THAT MATTERS. A Slack Block Kit body puts OUR OWN prose in `text`. Quoting that would
+  // show Matthew a sentence we wrote as though the lead wrote it.
+  const slackShaped = parse({
+    text: "Reply received from jane@acme.com on campaign 7D 3E 6M",
+    blocks: [{ type: "section", text: { type: "mrkdwn", text: "Reply received from jane@acme.com" } }],
+  });
+  check("body: slack prose is never quoted as the reply", slackShaped.replyText, null);
+  check("body: slack prose still parses as a reply", slackShaped.eventType, "replied");
+  check("body: slack prose still yields the address", slackShaped.leadEmail, "jane@acme.com");
+}
+
+// -- Lead name ---------------------------------------------------------------
+
+{
+  check("name: read from leadName", parse({ event: "replied", leadName: "Jane Doe", email: "j@a.com" }).leadName, "Jane Doe");
+  // Bare `name` is not a key. findByKey searches the whole tree, so on {campaign:{name}} it would
+  // address the card to the campaign.
+  check("name: campaign name is not the lead", parse({ event: "replied", campaign: { name: "7D 3E 6M", id: "9" }, email: "j@a.com" }).leadName, null);
+  check("name: campaign still parses", parse({ event: "replied", campaign: { name: "7D 3E 6M", id: "9" }, email: "j@a.com" }).campaignName, "7D 3E 6M");
+  check("name: an address is not a name", parse({ event: "replied", fromName: "j@a.com", email: "j@a.com" }).leadName, null);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

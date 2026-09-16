@@ -15,6 +15,8 @@ import { unstable_cache } from "next/cache";
 import { loadConciergeConfig } from "@/lib/concierge/config";
 import { magnetByKey, pillLabel, resolveMagnet } from "@/lib/concierge/magnets";
 import { conciergeAllowed, PREVIEW_TOKEN_PARAM } from "@/lib/concierge/preview-grant";
+import { mascotAssets, type MascotAssets } from "@/lib/concierge/mascot";
+import { hasBannedDash } from "@/lib/copy-guard";
 
 export const runtime = "nodejs";
 
@@ -26,6 +28,33 @@ interface PublicConfig {
   headline: string | null;
   promise: string | null;
   ctaLabel: string;
+  /** The corner mascot's images, or null for the plain pill. */
+  mascot: MascotAssets | null;
+  /** What the mascot says in its bubble, one at a time, in a random order. */
+  lines: string[];
+}
+
+/**
+ * The mascot's speech bubbles.
+ *
+ * ‼️ WRITTEN HERE FROM ROWS, NEVER BY A MODEL AT VIEW TIME. This is fetched once per page view on a client's
+ * live website; a model call per page view is a bill per bot, and a generated line on a stranger's page is
+ * a line nobody read first. Every line is the offer on the row, the page's magnet, or a fixed sentence.
+ * Matthew, 2026-09-15: "saying things like Meow or Get Lead magnet here or offer every 20 seconds ish".
+ */
+function mascotLines(args: { audience: string; magnetTitle: string | null; treatment: string | null; clientName: string }): string[] {
+  const lines = ["Meow.", "Meow! Click me if you need a hand."];
+  if (args.magnetTitle) lines.push(`Psst. Free: ${args.magnetTitle}`, `Get ${args.magnetTitle} here.`);
+  if (args.audience === "owner") {
+    lines.push(
+      "Does ChatGPT recommend you? I can check in 3 minutes.",
+      "Free AI visibility audit, right here.",
+      args.treatment ? `Ask me about ${args.treatment}.` : "Ask me anything."
+    );
+  } else {
+    lines.push(`Questions before you book with ${args.clientName}?`, "Ask me anything, I answer fast.");
+  }
+  return lines.filter((l) => !hasBannedDash(l)).map((l) => l.slice(0, 90));
 }
 
 /**
@@ -68,8 +97,18 @@ const publicConfig = unstable_cache(
           category,
         });
 
+    const { loadOffer } = await import("@/lib/clients/offers");
+    const offer = await loadOffer(config.clientId).catch(() => null);
+
     const body: PublicConfig = {
       enabled: true,
+      mascot: mascotAssets(config.mascot),
+      lines: mascotLines({
+        audience: config.audience,
+        magnetTitle: magnet?.title ?? null,
+        treatment: offer?.treatment ?? null,
+        clientName: config.clientName,
+      }),
       audience: config.audience,
       headline: magnet?.title ?? null,
       promise: magnet?.promise ?? null,
@@ -113,10 +152,18 @@ export async function GET(req: NextRequest) {
     cached !== null &&
     conciergeAllowed({ enabled: cached.tenantEnabled, clientId: cached.clientId }, token);
 
+  // ‼️ READABLE FROM ANY ORIGIN, AND THAT WAS THE BUG (2026-09-16). embed.js runs on the page that pasted
+  // it (learn.<client domain>, the client's own site) and fetches this from the concierge host, which is
+  // cross-origin. With no allow-origin header the browser threw the answer away and the loader's .catch
+  // swallowed it: no teaser, no label, and a switched-off widget was never removed. It only worked on our
+  // own preview, which is same-origin. `*` is right here because this body is public by construction (the
+  // file header) and carries no credentials; the frame's frame-ancestors is what guards the conversation.
+  const cors = { "access-control-allow-origin": "*", vary: "origin" };
+
   if (!cached || !granted) {
     return NextResponse.json(
       { enabled: false },
-      { headers: { "cache-control": `public, max-age=60, s-maxage=${REVALIDATE_SECONDS}` } }
+      { headers: { "cache-control": `public, max-age=60, s-maxage=${REVALIDATE_SECONDS}`, ...cors } }
     );
   }
 
@@ -132,6 +179,7 @@ export async function GET(req: NextRequest) {
       "cache-control": shared
         ? `public, max-age=60, s-maxage=${REVALIDATE_SECONDS}`
         : "private, no-store",
+      ...cors,
     },
   });
 }

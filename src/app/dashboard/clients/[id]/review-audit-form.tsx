@@ -9,6 +9,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { stepNumber } from "@/config/delivery-steps";
 
 export interface ReviewAuditView {
   id: string;
@@ -92,8 +93,8 @@ export function ReviewAuditForm({
   if (!rows.length) {
     return (
       <p className="text-xs text-[rgba(255,255,255,0.5)]">
-        No grid yet. It is seeded from the three competitors picked at step 7, so pick them
-        first and the rows appear here.
+        No grid yet. It is seeded from the three competitors picked at step{" "}
+        {stepNumber("competitor_shortlist")}, so pick them first and the rows appear here.
       </p>
     );
   }

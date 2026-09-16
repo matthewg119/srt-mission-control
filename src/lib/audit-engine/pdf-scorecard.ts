@@ -11,7 +11,6 @@ import type { ReportView, PromptRowView, WeightedScore } from "./report-view";
 import { displayName } from "./display-name";
 import {
   MIDNIGHT,
-  OCEAN,
   REEF,
   WHITE,
   MUTED,

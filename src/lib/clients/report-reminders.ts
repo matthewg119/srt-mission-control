@@ -161,6 +161,29 @@ export async function runClientReportReminders(opts: { dry?: boolean } = {}): Pr
       reminded.push(due);
 
       if (!opts.dry) {
+        // ‼️ THE RE-TEST FIRES ITSELF, AND ONLY WHEN THERE IS SOMETHING TO COMPARE IT WITH.
+        //
+        // runRetest re-asks the ARCHIVED photograph's own prompts and refuses when no photograph_2
+        // exists, which is also what stops this from spending money by accident: with one engine
+        // keyed, a Day 0 run is filed as a `measurement` and there is no photograph, so nothing
+        // fires and the nudge below is the whole of the reminder, exactly as before.
+        //
+        // It refuses a label it has already run, so a missed cron day cannot double-charge.
+        if (due.day === 30 || due.day === 60 || due.day === 90) {
+          const { runRetest } = await import("@/lib/clients/photograph");
+          const started = await runRetest(due.clientId, due.day).catch((e) => ({
+            ok: false as const,
+            error: (e as Error).message,
+          }));
+          if (started.ok) {
+            await notifyThread(
+              due.clientId,
+              `:repeat: The day ${due.day} re-test is running: ${started.questions} questions, the same ` +
+                `ones the Day 0 photograph asked. The numbers post in this thread when they are back.`
+            ).catch(() => {});
+          }
+        }
+
         await notifyThread(due.clientId, reminderText(due)).catch(() => {});
       }
     } catch (e) {

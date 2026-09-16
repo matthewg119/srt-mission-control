@@ -1,0 +1,1084 @@
+// The page plan: which pages get written, decided before any of them is.
+//
+// Matthew, 2026-09-11: "I thought before writing the first page we needed to come together with
+// the keywords strategy we needed for each client ... All of this needs to be selected and done
+// before we start drafting pages, this way each page is done strategically and not just random for
+// the specific keywords we want and the specific subject we want to bring value to."
+//
+// What existed: an offer, an avatar, a ranked keyword set, and a scored backlog of page
+// candidates. What did not: any record of WHICH pages were chosen, with what keyword, for what
+// purpose. The first persisted decision was a bare digit in a Slack thread, so a page was chosen
+// by being typed at.
+//
+// So a plan row is the decision, made in one place, before drafting:
+//   question        what the page answers, verbatim, from the market's own wording
+//   target_keyword  one phrase from buildKeywordSet(), checked in code, never invented
+//   working_title   how a person would say it
+//   angle           the value it gives the reader, one line
+//   magnet_frame    how this page frames the client's ANCHOR offer (for SRT, the AI visibility
+//                   audit): its pill, its name, the line the widget opens with
+//
+// ‼️ CODE CHOOSES THE PAGES AND A MODEL ONLY WORDS THEM. selectPlan() is pure: it takes the ranked
+// pool and spreads it across themes, so which twenty pages a client gets can be argued with and
+// reproduced. The one model call writes the title, the angle and the framing for pages already
+// chosen, and it may not pick a keyword that is not in the set. A model choosing the pages would
+// re-choose them on every run and make the day 30 comparison meaningless, the same argument
+// page-candidates.ts and keyword-set.ts make for their own rankings.
+
+import { supabaseAdmin } from "@/lib/db";
+import { callClaudeJSON } from "@/lib/claude-calls";
+import {
+  AWARENESS_STAGES,
+  awarenessOf,
+  awarenessTarget,
+  isAwarenessStage,
+  type AwarenessStage,
+} from "@/lib/audit-engine/awareness";
+import { blockFor } from "@/lib/audit-engine/supplied-run";
+import { hasBannedDash } from "@/lib/copy-guard";
+import { CTA_MAX, readFrame, type PlannedFrame } from "@/lib/concierge/magnet-drafts";
+import { normalizePhrase, phraseFaults, type PhraseFault } from "./phrase-quality";
+import { themeOf } from "./artifacts/page-candidates";
+
+/** Matthew's number: "10-20 drafts for different pages on different subjects". The ceiling. */
+export const PLAN_SIZE = 20;
+
+/**
+ * `plan`, `plan new`, `plan approve`, `plan drop N`, `plan swap N`, `plan edit N: <title>`.
+ *
+ * ‼️ ONE GRAMMAR, EXPORTED, READ BY THE STUDIO, THE PRE-CALL STEP'S THREAD AND THE PROBE. It used
+ * to be written inline in page-studio.ts and copied by hand into scripts/_probe-page-plan.ts, which
+ * is how a probe goes green over a regex nobody is running. Exact forms only: "plan ahead for your
+ * first visit" is dictation and must reach the page.
+ */
+export const PLAN_COMMAND =
+  /^plan(?:\s+(new|approve|draft|(?:drop|swap)\s+[0-9]{1,2}|edit\s+[0-9]{1,2}\s*:\s*.+))?$/i;
+
+/** `anchor`, `anchor: <key>`. A colon for the argument: "anchor text" is a phrase an SEO page uses. */
+export const ANCHOR_COMMAND = /^anchor(?:\s*:\s*(\S+))?$/i;
+
+/**
+ * No theme may take more than this many of the twenty.
+ *
+ * ‼️ A SPREAD RULE, NOT A QUOTA. The backlog's own PDF tells the call to "pick from the top of
+ * each theme rather than the top of the whole list, or every page ends up being the same kind of
+ * page". Without a cap, SRT's twenty would be twenty objection pages, because objections carry the
+ * second-largest term in the score.
+ */
+export const MAX_PER_THEME = 5;
+
+export type PlanStatus = "proposed" | "approved" | "claimed";
+
+/**
+ * Where a planned page came from. `keyword` is a phrase from the APPROVED keyword set (the
+ * keyword_set delivery step), which is what the pre-call plan draws from exclusively.
+ */
+export type PlanOrigin = "harvested" | "derived" | "keyword";
+
+/** A pre-call plan row is the offer's PILLAR or one of its SUPPORTS. Studio rows carry neither. */
+export type PlanRole = "pillar" | "support";
+
+export interface PoolItem {
+  question: string;
+  score: number;
+  theme: string;
+  origin: PlanOrigin;
+  /** Set on the pre-call plan only. The pillar's framing is the plainest statement of the anchor. */
+  role?: PlanRole;
+  /** The keyword step's category, when the item came from the approved set. */
+  category?: string;
+  /** client_keywords.id, when the item came from the approved set. */
+  keywordId?: string | null;
+}
+
+export interface PlanRow {
+  id: string;
+  clientId: string;
+  rank: number;
+  question: string;
+  targetKeyword: string;
+  workingTitle: string;
+  angle: string;
+  theme: string;
+  origin: PlanOrigin;
+  frame: PlannedFrame | null;
+  status: PlanStatus;
+  pageId: string | null;
+  /** Read through page_id from client_pages. Never stored on the plan row. */
+  pageStatus: "draft" | "published" | "archived" | null;
+  /** Null on a studio row, and on every row before docs/2026-09-11-one-strategy.sql. */
+  role: PlanRole | null;
+  /** Which pillar a support belongs to. A client may one day have more than one offer. */
+  pillarId: string | null;
+  keywordCategory: string | null;
+  /**
+   * The direct-response H1, from client_headlines. Null until a headline is picked for this page.
+   *
+   * ‼️ NOT workingTitle, AND THE TWO MUST NOT BE COLLAPSED. workingTitle carries the KEYWORD and is
+   * the anchor text the pillar links this page with (plan-links.ts anchorFor); headline carries the
+   * PAIN and is what the reader sees at the top of the page. One of them has to be in the anchor
+   * and the other has to be the H1, and merging them puts the wrong one in both.
+   */
+  headline: string | null;
+  /** 3 to 5 approved variations of targetKeyword, each verbatim from client_keywords. */
+  secondaryKeywords: string[] | null;
+  /**
+   * Where the reader is when they arrive, 5 (unaware) to 1 (most aware), and where the page leaves
+   * them. LOWER IS CLOSER TO BUYING. Null on a row from before docs/2026-09-15-awareness-stages.sql.
+   */
+  awarenessEntry: AwarenessStage | null;
+  awarenessTarget: AwarenessStage | null;
+}
+
+/**
+ * The two awareness numbers for a page, from the question it answers.
+ *
+ * ‼️ THE QUESTION, NOT THE KEYWORD. The reader arrives carrying the question; the target keyword is
+ * how an engine files the page, and a pillar's is the offer plus the city, which reads as a category
+ * search whatever the page is actually for. The keyword is the fallback for a row with no question.
+ */
+export function awarenessForPage(question: string, targetKeyword: string): {
+  awareness_entry: AwarenessStage;
+  awareness_target: AwarenessStage;
+} {
+  const text = question.trim() || targetKeyword.trim();
+  const entry = awarenessOf(text, blockFor(text, null));
+  return { awareness_entry: entry, awareness_target: awarenessTarget(entry) };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pure: what is plannable, and which twenty
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The faults that disqualify a DERIVED idea.
+ *
+ * ‼️ NOT THE FULL SET, AND "LeadXN compared: what each is better at" IS WHY. The full rules call
+ * that a label (a colon early, no question mark) and a derived cost estimator too long, because
+ * they were written for phrases a buyer typed. A derived idea is a page this system proposed, in
+ * its own words, so only the faults that mean the text is broken apply to it.
+ */
+const DERIVED_FAULTS: readonly PhraseFault[] = ["url", "citation_marker", "arrow", "markup", "dangling"];
+
+/**
+ * ‼️ A `keyword` ITEM IS HELD TO THE DERIVED RULES, NOT THE HARVESTED ONES. It was approved by a
+ * person at the keyword step, and its most commercial rows are two-word naming variants ("lip
+ * filler") that the full rules call too short. What still disqualifies it is broken text.
+ */
+export function isPlannable(question: string, origin: PlanOrigin): boolean {
+  const faults = phraseFaults(question);
+  if (origin !== "harvested") return !faults.some((f) => DERIVED_FAULTS.includes(f));
+  return faults.length === 0;
+}
+
+/**
+ * Pick the pages. Highest score first, at most maxPerTheme from any one theme, no two with the
+ * same normal form, and nothing in `exclude`.
+ *
+ * ‼️ THE CAP IS A SPREAD RULE AND NOT A REASON TO SHIP A SHORT PLAN. When the spread pass cannot
+ * fill every slot, because the market's wording really is concentrated in two themes, the rest is
+ * filled in score order from what the cap held back. A twelve-page plan that obeyed the cap is
+ * worse than a twenty-page plan that bent it, and the card prints the theme counts either way.
+ */
+export function selectPlan(
+  pool: readonly PoolItem[],
+  size: number = PLAN_SIZE,
+  maxPerTheme: number = MAX_PER_THEME,
+  exclude: ReadonlySet<string> = new Set()
+): PoolItem[] {
+  const sorted = [...pool].sort((a, b) => b.score - a.score || a.question.localeCompare(b.question));
+
+  const seen = new Set<string>(exclude);
+  const unique: PoolItem[] = [];
+  for (const item of sorted) {
+    if (!isPlannable(item.question, item.origin)) continue;
+    const key = normalizePhrase(item.question);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(item);
+  }
+
+  const picked: PoolItem[] = [];
+  const perTheme = new Map<string, number>();
+  const heldBack: PoolItem[] = [];
+
+  for (const item of unique) {
+    if (picked.length >= size) break;
+    const n = perTheme.get(item.theme) ?? 0;
+    if (n >= maxPerTheme) {
+      heldBack.push(item);
+      continue;
+    }
+    perTheme.set(item.theme, n + 1);
+    picked.push(item);
+  }
+
+  for (const item of heldBack) {
+    if (picked.length >= size) break;
+    picked.push(item);
+  }
+
+  return picked;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pure: the pre-call plan, one pillar and six supports from the approved keywords
+//
+// Matthew, 2026-09-11: "I want 9 pages ready before we actually even talk to the customer on the
+// phone." "We need to make sure the keywords are directly correlated with the offer that the
+// customer wants to sell."
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Matthew, 2026-09-13, revising the count DOWN: "Ideally we want 6 posts ready for each
+// onboarding", then settled as 1 pillar + 6 supports = 7 pages. The batch is now decided in full
+// before any research fires, so the number it has to one-shot is the number that matters.
+//
+// !! KEEP PLAN_KEYWORDS_NEEDED IN `keyword-expansion.ts` IN STEP: it is 1 + this number, and it
+// is what the keyword verifier refuses a short set against.
+export const PRE_CALL_SUPPORTS = 6;
+
+/**
+ * No keyword category may take more than this many of the six supports.
+ *
+ * ‼️ STRICT, UNLIKE selectPlan's MAX_PER_THEME. The addendum: "at most 2 per category, so the 9
+ * pages are not all price pages." selectPlan bends its cap to fill twenty slots; this one does
+ * not bend, because a short honest plan beats a padded one and the card says what would fill it.
+ */
+export const MAX_PER_CATEGORY = 2;
+
+export interface OfferPoolItem {
+  /** The approved query, verbatim. */
+  question: string;
+  score: number;
+  category: string;
+  categoryLabel: string;
+  /** 0 when the market or a person said it, 1 when a model proposed it. Sorted first. */
+  tier: 0 | 1;
+  naming: boolean;
+  /** One of the four buying questions (price, fears, comparisons, how it works). Filled first. */
+  focus: boolean;
+  /** isAboutOffer, computed by the caller with the offer's vocabulary. */
+  relevant: boolean;
+  /** client_keywords.id, so a plan row points at its keyword rather than a copy of its words. */
+  keywordId?: string | null;
+  /** Picked by a person at step 21 before any page is planned. A pick outranks every score. */
+  role?: "pillar" | "support" | null;
+}
+
+export interface OfferPlan {
+  pillar: { item: OfferPoolItem; keyword: string } | null;
+  supports: OfferPoolItem[];
+  /** How many of the six supports could not be filled. */
+  short: number;
+  /** What to do about it, in words, when the plan is short or has no pillar. */
+  fix: string | null;
+}
+
+/**
+ * Pick the pillar and the supports. Pure: the same approved set always gives the same plan.
+ *
+ * ‼️ ONLY RELEVANT ROWS, AND IT NEVER PADS. A support must be about the offer (isAboutOffer).
+ * When the approved set cannot supply eight, the plan is shorter and `fix` says what fills it: the
+ * deep research KEYWORDS block for this offer, or `keywords more <category>`. It does not reach for
+ * a vertical question to make the number up.
+ *
+ * The pillar is the offer page: the top naming-variant query, plus the city when the business is
+ * local and the phrase does not already carry it.
+ */
+export function selectOfferPlan(
+  pool: readonly OfferPoolItem[],
+  opts: { city: string | null; exclude?: ReadonlySet<string> } = { city: null }
+): OfferPlan {
+  const exclude = opts.exclude ?? new Set<string>();
+  const sorted = [...pool]
+    .filter((p) => p.relevant && isPlannable(p.question, "keyword"))
+    .sort((a, b) => a.tier - b.tier || b.score - a.score || a.question.localeCompare(b.question));
+
+  const seen = new Set<string>(exclude);
+  const unique: OfferPoolItem[] = [];
+  for (const p of sorted) {
+    const key = normalizePhrase(p.question);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(p);
+  }
+
+  // ‼️ A PERSON'S PICK FIRST (2026-09-16). Matthew: "get the keywords, and select the keywords before
+  // starting to do the drafts ... so we can build the whole skeleton around the specific keyword."
+  // A picked pillar is the pillar even when a higher-scored naming variant exists; picked supports
+  // fill the supports before the automatic passes below top them up.
+  const pickedPillar = unique.find((p) => p.role === "pillar") ?? null;
+  const pillarItem = pickedPillar ?? unique.find((p) => p.naming) ?? null;
+  let pillar: OfferPlan["pillar"] = null;
+  if (pillarItem) {
+    const city = opts.city?.trim() || null;
+    const hasCity = city ? normalizePhrase(pillarItem.question).includes(normalizePhrase(city)) : true;
+    pillar = { item: pillarItem, keyword: city && !hasCity ? `${pillarItem.question} ${city}` : pillarItem.question };
+  }
+
+  // ‼️ NEVER A NAMING VARIANT AS A SUPPORT: THE PILLAR OWNS THAT SEARCH. Measured on SRT's first
+  // live run: "AEO for med spas" and "AEO services aesthetic clinic" were picked as supports under
+  // a pillar aimed at "AEO agency for medical spas". Three pages answering one search split the
+  // one page that should win it.
+  //
+  // ‼️ THE FOUR BUYING QUESTIONS FIRST: PRICE, FEARS, COMPARISONS, HOW IT WORKS. Matthew,
+  // 2026-09-11: "make sure for the posts we focus on this questions". Two each fills all eight.
+  // Only when those four cannot supply eight does a support come from another category of the
+  // offer, and then one per category before any gets a second (the first live run had filled two
+  // vendor pages and two naming pages before most categories got one).
+  const perCategory = new Map<string, number>();
+  const supports: OfferPoolItem[] = [];
+  for (const p of unique) {
+    if (supports.length >= PRE_CALL_SUPPORTS) break;
+    if (p.role !== "support" || p === pillarItem) continue;
+    perCategory.set(p.category, (perCategory.get(p.category) ?? 0) + 1);
+    supports.push(p);
+  }
+  const passes: Array<{ focus: boolean; cap: number }> = [
+    { focus: true, cap: 1 },
+    { focus: true, cap: MAX_PER_CATEGORY },
+    { focus: false, cap: 1 },
+    { focus: false, cap: MAX_PER_CATEGORY },
+  ];
+  for (const pass of passes) {
+    for (const p of unique) {
+      if (supports.length >= PRE_CALL_SUPPORTS) break;
+      if (p.naming || p === pillarItem || p.focus !== pass.focus || supports.includes(p)) continue;
+      const n = perCategory.get(p.category) ?? 0;
+      if (n >= pass.cap) continue;
+      perCategory.set(p.category, n + 1);
+      supports.push(p);
+    }
+  }
+
+  const short = PRE_CALL_SUPPORTS - supports.length;
+  const fix = !pillar
+    ? "No approved naming variant is about the offer, so there is no pillar. `keywords more naming` (or `keywords more direct naming` for an owner offer) writes some, then approve them."
+    : short > 0
+      ? `Only ${supports.length} supports pass: at most ${MAX_PER_CATEGORY} per category, none a naming variant, all about the offer. ` +
+        "Run the deep research KEYWORDS block for this offer, or `keywords more <category>` for the thin " +
+        "categories, approve, and `plan new` fills the rest. It is not padded with questions about the vertical."
+      : null;
+
+  return { pillar, supports, short, fix };
+}
+
+/** How many of each theme a plan holds, for the line under the card. */
+export function themeCounts(rows: ReadonlyArray<{ theme: string }>): string {
+  const counts = new Map<string, number>();
+  for (const r of rows) counts.set(r.theme, (counts.get(r.theme) ?? 0) + 1);
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([t, n]) => `${n} ${t}`)
+    .join(", ");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The one model call: words for pages already chosen
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface FramedRow {
+  workingTitle: string;
+  angle: string;
+  targetKeyword: string;
+  frame: PlannedFrame;
+}
+
+interface FramedBatch {
+  rows: FramedRow[];
+}
+
+export interface FrameContext {
+  clientName: string;
+  treatment: string;
+  positioning: string | null;
+  avatarLabel: string;
+  anchor: { title: string; promise: string; ctaLabel: string | null };
+  /** Every phrase a target keyword may be chosen from. */
+  keywords: readonly string[];
+}
+
+const FRAME_SYSTEM = `You plan the pages on one business's website. The pages have already been chosen: each one
+answers a question the business's buyers actually ask. You write, for each page, four things.
+
+1. workingTitle. How a person would say the question, under 70 characters. Not the raw phrase.
+2. angle. One sentence on what the reader walks away with. Useful, specific, no promise of results.
+3. targetKeyword. The one phrase this page is aimed at, COPIED EXACTLY from the KEYWORDS list.
+   Usually the page's own question if it is in the list; otherwise the closest phrase in the list.
+   A phrase that is not in the list is rejected.
+4. frame. How the business's ANCHOR OFFER is presented on this page. Every page on this site offers
+   the same one free thing, the anchor, and the frame is the door into it that fits what the reader
+   of THIS page is thinking about:
+     - title: what the offer is called on this page
+     - ctaLabel: the button, ${CTA_MAX} characters or fewer
+     - conciergeEntry: the first thing the chat widget says, first person, ending by asking for the
+       one thing it needs to begin
+   The reader receives exactly what the anchor delivers. A frame may narrow the focus to the part of
+   the anchor this page is about; it may never add a deliverable the anchor does not produce.
+
+A page marked [PILLAR] is the page about the offer itself. Its workingTitle names the offer, and its
+frame is the plainest statement of the anchor. Every other page is a support: its frame presents the
+anchor through that page's own topic.
+
+HARD RULES, and a batch breaking any of them is rejected whole:
+- One entry per page, in the order given. Same count.
+- NO em dashes, en dashes or double hyphens, in any field.
+- No numbers that do not appear in the pages, the keywords or the anchor.
+- No competitor named in a title, angle or frame.`;
+
+const FRAME_SCHEMA = `{
+  "rows": [
+    {
+      "workingTitle": string,
+      "angle": string,
+      "targetKeyword": string,
+      "frame": { "title": string, "ctaLabel": string, "conciergeEntry": string }
+    }
+  ]
+}`;
+
+function numbersNotIn(text: string, haystack: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(/\$?\d[\d,]*(?:\.\d+)?%?/g)) {
+    const bare = m[0].replace(/[,$%]/g, "");
+    if (bare.length < 2) continue;
+    if (!haystack.includes(bare)) out.push(m[0]);
+  }
+  return [...new Set(out)];
+}
+
+/**
+ * Everything wrong with a framed batch, in words.
+ *
+ * Exported for the probe. `keywordSet` holds normal forms, so "How much does this cost?" and
+ * "how much does this cost" are the same phrase, and the check is about the words rather than
+ * the punctuation the model copied.
+ */
+export function frameFaults(
+  v: unknown,
+  count: number,
+  keywordSet: ReadonlySet<string>,
+  numberHaystack: string
+): string[] {
+  const out: string[] = [];
+  const d = v as Partial<FramedBatch>;
+  if (!Array.isArray(d?.rows)) return ['Return { "rows": [...] }.'];
+  if (d.rows.length !== count) {
+    out.push(`There are ${count} pages and you returned ${d.rows.length} rows. One per page, in order.`);
+  }
+
+  d.rows.forEach((r, i) => {
+    const row = r as Partial<FramedRow>;
+    const where = `row ${i + 1}`;
+    const title = typeof row?.workingTitle === "string" ? row.workingTitle.trim() : "";
+    const angle = typeof row?.angle === "string" ? row.angle.trim() : "";
+    const keyword = typeof row?.targetKeyword === "string" ? row.targetKeyword.trim() : "";
+    const frame = readFrame(row?.frame);
+
+    if (!title) out.push(`${where} has no workingTitle.`);
+    if (title.length > 70) out.push(`${where}'s workingTitle is ${title.length} characters. Keep it under 70.`);
+    if (!angle) out.push(`${where} has no angle.`);
+    if (angle.length > 220) out.push(`${where}'s angle is too long. One sentence.`);
+    if (!keyword) out.push(`${where} has no targetKeyword.`);
+    else if (!keywordSet.has(normalizePhrase(keyword))) {
+      out.push(`${where}'s targetKeyword "${keyword}" is not in the KEYWORDS list. Copy one exactly.`);
+    }
+
+    if (!frame) {
+      out.push(`${where}'s frame needs title, ctaLabel and conciergeEntry.`);
+    } else if (frame.ctaLabel.length > CTA_MAX) {
+      out.push(`${where}'s ctaLabel is ${frame.ctaLabel.length} characters, the limit is ${CTA_MAX}: "${frame.ctaLabel}"`);
+    }
+
+    const fields: Array<[string, string]> = [
+      ["workingTitle", title],
+      ["angle", angle],
+      ["frame.title", frame?.title ?? ""],
+      ["frame.ctaLabel", frame?.ctaLabel ?? ""],
+      ["frame.conciergeEntry", frame?.conciergeEntry ?? ""],
+    ];
+    for (const [field, value] of fields) {
+      if (value && hasBannedDash(value)) out.push(`${where}'s ${field} contains a dash.`);
+      const orphans = numbersNotIn(value, numberHaystack);
+      if (orphans.length) out.push(`${where}'s ${field} states ${orphans.join(", ")}, which appears nowhere it could come from.`);
+    }
+  });
+
+  return out;
+}
+
+/** Word the chosen pages. Throws on a model failure; the caller says so in the thread. */
+export async function framePages(pages: readonly PoolItem[], ctx: FrameContext): Promise<FramedRow[]> {
+  const keywordSet = new Set(ctx.keywords.map(normalizePhrase));
+  for (const p of pages) if (p.origin !== "derived") keywordSet.add(normalizePhrase(p.question));
+
+  // The list the model is shown: every page's own question first (so "usually its own question"
+  // is always available), then the ranked set.
+  const shown = [...new Set([...pages.filter((p) => p.origin !== "derived").map((p) => p.question), ...ctx.keywords])];
+
+  const numberHaystack = [
+    ...pages.map((p) => p.question),
+    ...shown,
+    ctx.anchor.title,
+    ctx.anchor.promise,
+    ctx.positioning ?? "",
+  ]
+    .join(" ")
+    .replace(/[,$]/g, "");
+
+  const user = [
+    `THE BUSINESS: ${ctx.clientName}`,
+    `WHAT THEY SELL, which every page is aimed at: ${ctx.treatment}`,
+    ctx.positioning ? `HOW THEY POSITION IT: ${ctx.positioning}` : "",
+    `WHO THE PAGES ARE WRITTEN FOR: ${ctx.avatarLabel}`,
+    "",
+    "THE ANCHOR OFFER, the one free thing every page hands over:",
+    `Name: ${ctx.anchor.title}`,
+    `What it delivers: ${ctx.anchor.promise}`,
+    `Its own pill: ${ctx.anchor.ctaLabel ?? ctx.anchor.title}`,
+    "",
+    "THE PAGES, in order:",
+    ...pages.map((p, i) => `${i + 1}. [${p.theme}]${p.role === "pillar" ? " [PILLAR]" : ""} ${p.question}`),
+    "",
+    "KEYWORDS, the only phrases a targetKeyword may be:",
+    ...shown.map((k) => `- ${k}`),
+  ]
+    .filter((l) => l !== "")
+    .join("\n");
+
+  const res = await callClaudeJSON<FramedBatch>({
+    model: "claude-sonnet-4-6",
+    system: FRAME_SYSTEM,
+    user,
+    maxTokens: 6000,
+    temperature: 0.3,
+    schemaHint: FRAME_SCHEMA,
+    validate: (v): v is FramedBatch => frameFaults(v, pages.length, keywordSet, numberHaystack).length === 0,
+    describeInvalid: (v) =>
+      `Fix these and return every row again:\n${frameFaults(v, pages.length, keywordSet, numberHaystack)
+        .map((f) => `  - ${f}`)
+        .join("\n")}`,
+  });
+
+  return res.data.rows.map((r) => ({
+    workingTitle: r.workingTitle.trim(),
+    angle: r.angle.trim(),
+    targetKeyword: r.targetKeyword.trim(),
+    frame: readFrame(r.frame) as PlannedFrame,
+  }));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Reads and writes
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PLAN_COLUMNS =
+  "id, client_id, rank, question, target_keyword, working_title, angle, theme, origin, magnet_frame, status, page_id";
+
+function toPlanRow(r: Record<string, unknown>): PlanRow {
+  const status = r.status === "approved" || r.status === "claimed" ? r.status : "proposed";
+  return {
+    id: String(r.id),
+    clientId: String(r.client_id),
+    rank: Number(r.rank ?? 0),
+    question: String(r.question ?? ""),
+    targetKeyword: String(r.target_keyword ?? ""),
+    workingTitle: String(r.working_title ?? ""),
+    angle: String(r.angle ?? ""),
+    theme: String(r.theme ?? "General"),
+    origin: r.origin === "derived" ? "derived" : r.origin === "keyword" ? "keyword" : "harvested",
+    frame: readFrame(r.magnet_frame),
+    status,
+    pageId: (r.page_id as string | null) ?? null,
+    pageStatus: null,
+    role: null,
+    pillarId: null,
+    keywordCategory: null,
+    // Merged on afterwards by withHeadlines, for the blast-radius reason it documents.
+    headline: null,
+    secondaryKeywords: null,
+    // Merged on afterwards by withAwareness.
+    awarenessEntry: null,
+    awarenessTarget: null,
+  };
+}
+
+/**
+ * The pre-call columns, merged onto rows already read.
+ *
+ * ‼️ A SEPARATE, TOLERANT SELECT, NOT ADDED TO PLAN_COLUMNS. docs/2026-09-11-one-strategy.sql adds
+ * them after docs/2026-09-11-page-plan.sql, and PostgREST fails a whole select on one unknown
+ * column, so putting them in PLAN_COLUMNS would blank the studio's plan in the window between the
+ * two files being run. Missing columns read as a plan with no roles, which is what it is.
+ */
+async function withRoles(rows: PlanRow[]): Promise<PlanRow[]> {
+  if (rows.length === 0) return rows;
+  const { data, error } = await supabaseAdmin
+    .from("page_plan")
+    .select("id, role, pillar_id, keyword_category")
+    .in("id", rows.map((r) => r.id));
+  if (error) return rows;
+  const byId = new Map(((data ?? []) as Array<Record<string, unknown>>).map((r) => [String(r.id), r]));
+  for (const row of rows) {
+    const extra = byId.get(row.id);
+    if (!extra) continue;
+    row.role = extra.role === "pillar" || extra.role === "support" ? extra.role : null;
+    row.pillarId = (extra.pillar_id as string | null) ?? null;
+    row.keywordCategory = (extra.keyword_category as string | null) ?? null;
+  }
+  return rows;
+}
+
+/**
+ * The headline-first columns, merged the same tolerant way and for the same reason.
+ *
+ * ‼️ A THIRD SELECT RATHER THAN TWO, because docs/2026-09-12-client-headlines.sql lands AFTER
+ * docs/2026-09-11-one-strategy.sql and a database can sit between any two of the three. Folding
+ * `headline` into withRoles would mean a plan with no roles AND no headlines on a database that
+ * actually has roles, which sends somebody to fix the wrong migration.
+ *
+ * Missing columns read as a plan whose pages have no headline yet, which is exactly what it is.
+ */
+async function withHeadlines(rows: PlanRow[]): Promise<PlanRow[]> {
+  if (rows.length === 0) return rows;
+  const { data, error } = await supabaseAdmin
+    .from("page_plan")
+    .select("id, headline, secondary_keywords")
+    .in("id", rows.map((r) => r.id));
+  if (error) return rows;
+  const byId = new Map(((data ?? []) as Array<Record<string, unknown>>).map((r) => [String(r.id), r]));
+  for (const row of rows) {
+    const extra = byId.get(row.id);
+    if (!extra) continue;
+    row.headline = ((extra.headline as string | null) ?? "").trim() || null;
+    row.secondaryKeywords = Array.isArray(extra.secondary_keywords)
+      ? (extra.secondary_keywords as string[]).filter((k) => typeof k === "string" && k.trim() !== "")
+      : null;
+  }
+  return rows;
+}
+
+/**
+ * The awareness columns, merged a FOURTH tolerant way, for the reason withHeadlines gives for being
+ * third: docs/2026-09-15-awareness-stages.sql lands after the other three, and folding these into
+ * an earlier select would blank that select's columns on a database that has them but not these.
+ * Missing columns read as a plan with no stages yet, which is what it is.
+ */
+async function withAwareness(rows: PlanRow[]): Promise<PlanRow[]> {
+  if (rows.length === 0) return rows;
+  const { data, error } = await supabaseAdmin
+    .from("page_plan")
+    .select("id, awareness_entry, awareness_target")
+    .in("id", rows.map((r) => r.id));
+  if (error) return rows;
+  const byId = new Map(((data ?? []) as Array<Record<string, unknown>>).map((r) => [String(r.id), r]));
+  for (const row of rows) {
+    const extra = byId.get(row.id);
+    if (!extra) continue;
+    row.awarenessEntry = isAwarenessStage(extra.awareness_entry) ? extra.awareness_entry : null;
+    row.awarenessTarget = isAwarenessStage(extra.awareness_target) ? extra.awareness_target : null;
+  }
+  return rows;
+}
+
+/**
+ * The plan, in rank order, with each page's live status read through page_id.
+ *
+ * ‼️ A READ FAILURE IS RETURNED, NOT SWALLOWED INTO AN EMPTY PLAN. "No plan" and "the table is not
+ * there" send somebody to two different places, and the second one is what happens between a
+ * deploy and docs/2026-09-11-page-plan.sql being run.
+ */
+export async function loadPlan(clientId: string): Promise<{ rows: PlanRow[] } | { error: string }> {
+  const { data, error } = await supabaseAdmin
+    .from("page_plan")
+    .select(PLAN_COLUMNS)
+    .eq("client_id", clientId)
+    .order("rank", { ascending: true });
+
+  if (error) {
+    return {
+      error:
+        `the page plan could not be read (${error.message}). If that names page_plan, ` +
+        `docs/2026-09-11-page-plan.sql has not been run on this database.`,
+    };
+  }
+
+  const rows = await withAwareness(
+    await withHeadlines(await withRoles(((data ?? []) as Array<Record<string, unknown>>).map(toPlanRow)))
+  );
+  const pageIds = rows.map((r) => r.pageId).filter((id): id is string => Boolean(id));
+
+  if (pageIds.length) {
+    const { data: pages } = await supabaseAdmin
+      .from("client_pages")
+      .select("id, status")
+      .in("id", pageIds);
+    const byId = new Map(((pages ?? []) as Array<Record<string, unknown>>).map((p) => [String(p.id), p.status as string]));
+    for (const r of rows) {
+      const s = r.pageId ? byId.get(r.pageId) : undefined;
+      r.pageStatus = s === "draft" || s === "published" || s === "archived" ? s : null;
+    }
+  }
+
+  return { rows };
+}
+
+/** The rows a digit may claim: approved or already claimed, in rank order. */
+export function claimableRows(rows: readonly PlanRow[]): PlanRow[] {
+  return rows.filter((r) => r.status === "approved" || r.status === "claimed");
+}
+
+/** Everything a plan is built from, read once. */
+export interface PlanInputs {
+  pool: PoolItem[];
+  keywords: string[];
+}
+
+/**
+ * The pool: the ranked keyword set, plus the derived ideas from step 14.
+ *
+ * ‼️ THE KEYWORD SET IS THE SPINE, NOT page_candidates. It already merges the market corpus, the
+ * audit's measured questions and the per-client backlog, filtered for debris, deduped on one
+ * normal form and ranked with the offer bonus. Reading page_candidates straight is how the studio
+ * menu ended up offering "Why: Vendor lock-in fear" as a page.
+ */
+export async function planInputs(clientId: string): Promise<PlanInputs | { error: string }> {
+  const { buildKeywordSet } = await import("./keyword-set");
+  const set = await buildKeywordSet(clientId);
+  if ("error" in set) return { error: set.error };
+
+  const pool: PoolItem[] = set.rows.map((r) => ({
+    question: r.phrase,
+    score: r.score,
+    theme: r.theme,
+    origin: "harvested" as const,
+  }));
+
+  const { data: derived } = await supabaseAdmin
+    .from("page_candidates")
+    .select("question, score")
+    .eq("client_id", clientId)
+    .eq("origin", "derived");
+
+  for (const d of (derived ?? []) as Array<Record<string, unknown>>) {
+    const question = String(d.question ?? "").trim();
+    if (!question) continue;
+    pool.push({ question, score: Number(d.score ?? 0), theme: themeOf(question), origin: "derived" });
+  }
+
+  return { pool, keywords: set.rows.map((r) => r.phrase) };
+}
+
+/** Questions that already have a page, in normal form, so a plan does not propose them twice. */
+async function existingPageQuestions(clientId: string): Promise<Set<string>> {
+  const { data } = await supabaseAdmin
+    .from("client_pages")
+    .select("question")
+    .eq("client_id", clientId)
+    .neq("status", "archived");
+  return new Set(((data ?? []) as Array<Record<string, unknown>>).map((p) => normalizePhrase(String(p.question ?? ""))));
+}
+
+/**
+ * Propose a plan, or top an existing one back up to PLAN_SIZE.
+ *
+ * ‼️ APPROVED AND CLAIMED ROWS ARE KEPT, ONLY PROPOSED ONES ARE REPLACED. `plan new` is "give me
+ * different suggestions", not "forget what I decided". A claimed row has a page being written
+ * against it, and deleting it would orphan that page from the plan it came from.
+ */
+export async function proposePlan(
+  clientId: string,
+  ctx: Omit<FrameContext, "keywords">
+): Promise<{ ok: true; rows: PlanRow[]; added: number } | { ok: false; error: string }> {
+  const current = await loadPlan(clientId);
+  if ("error" in current) return { ok: false, error: current.error };
+
+  const kept = current.rows.filter((r) => r.status !== "proposed");
+  const inputs = await planInputs(clientId);
+  if ("error" in inputs) return { ok: false, error: inputs.error };
+
+  const exclude = await existingPageQuestions(clientId);
+  for (const r of kept) exclude.add(normalizePhrase(r.question));
+
+  const need = Math.max(0, PLAN_SIZE - kept.length);
+  const chosen = selectPlan(inputs.pool, need, MAX_PER_THEME, exclude);
+
+  if (chosen.length === 0 && kept.length === 0) {
+    return {
+      ok: false,
+      error:
+        "there is nothing usable to plan from. The keyword set came back empty after the quality " +
+        "filter, which means the phrase harvest has not produced anything a buyer typed yet.",
+    };
+  }
+
+  let framed: FramedRow[] = [];
+  if (chosen.length) {
+    try {
+      framed = await framePages(chosen, { ...ctx, keywords: inputs.keywords });
+    } catch (e) {
+      return { ok: false, error: `the pages were chosen but could not be worded: ${(e as Error).message}` };
+    }
+  }
+
+  // Delete the old proposals only AFTER the new ones exist in memory, so a failed model call
+  // leaves the previous plan on screen rather than an empty one.
+  const { error: delError } = await supabaseAdmin
+    .from("page_plan")
+    .delete()
+    .eq("client_id", clientId)
+    .eq("status", "proposed");
+  if (delError) return { ok: false, error: delError.message };
+
+  const now = new Date().toISOString();
+  if (chosen.length) {
+    const { error: insError } = await supabaseAdmin.from("page_plan").insert(
+      chosen.map((c, i) => ({
+        client_id: clientId,
+        rank: kept.length + i + 1,
+        question: c.question,
+        target_keyword: framed[i].targetKeyword,
+        working_title: framed[i].workingTitle,
+        angle: framed[i].angle,
+        theme: c.theme,
+        origin: c.origin,
+        magnet_frame: framed[i].frame,
+        status: "proposed",
+        ...awarenessForPage(c.question, framed[i].targetKeyword),
+        updated_at: now,
+      }))
+    );
+    if (insError) return { ok: false, error: insError.message };
+  }
+
+  await rerank(clientId);
+  const after = await loadPlan(clientId);
+  if ("error" in after) return { ok: false, error: after.error };
+  return { ok: true, rows: after.rows, added: chosen.length };
+}
+
+/** Close the gaps in rank after a drop, keeping the order. */
+export async function rerank(clientId: string): Promise<void> {
+  const current = await loadPlan(clientId);
+  if ("error" in current) return;
+  for (const [i, row] of current.rows.entries()) {
+    if (row.rank === i + 1) continue;
+    await supabaseAdmin.from("page_plan").update({ rank: i + 1 }).eq("id", row.id);
+  }
+}
+
+export async function approvePlan(
+  clientId: string,
+  by: string,
+  opts: { roleOnly?: boolean } = {}
+): Promise<{ ok: true; count: number } | { ok: false; error: string }> {
+  let q = supabaseAdmin
+    .from("page_plan")
+    .update({ status: "approved", approved_at: new Date().toISOString(), approved_by: by, updated_at: new Date().toISOString() })
+    .eq("client_id", clientId)
+    .eq("status", "proposed");
+  // The pre-call step's `plan approve` approves the pages IT proposed. A studio row proposed in
+  // another thread is a different decision, made where it was proposed.
+  if (opts.roleOnly) q = q.not("role", "is", null);
+  const { data, error } = await q.select("id");
+
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, count: (data ?? []).length };
+}
+
+async function rowAtRank(clientId: string, rank: number): Promise<PlanRow | { error: string }> {
+  const current = await loadPlan(clientId);
+  if ("error" in current) return { error: current.error };
+  const row = current.rows.find((r) => r.rank === rank);
+  if (!row) return { error: `there is no page ${rank} in the plan. It has ${current.rows.length}.` };
+  return row;
+}
+
+export async function dropPlanRow(clientId: string, rank: number): Promise<{ ok: true; dropped: PlanRow } | { ok: false; error: string }> {
+  const row = await rowAtRank(clientId, rank);
+  if ("error" in row) return { ok: false, error: row.error };
+  if (row.status === "claimed") {
+    return { ok: false, error: `page ${rank} is already being written. Archive the draft on the board instead.` };
+  }
+  const { error } = await supabaseAdmin.from("page_plan").delete().eq("id", row.id);
+  if (error) return { ok: false, error: error.message };
+  await rerank(clientId);
+  await bust(clientId);
+  return { ok: true, dropped: row };
+}
+
+/**
+ * Replace one row with the next best page, same theme when there is one.
+ *
+ * The replacement goes back to `proposed` even when the row it replaced was approved: a different
+ * page is a different decision, and approving it is a separate act.
+ */
+export async function swapPlanRow(
+  clientId: string,
+  rank: number,
+  ctx: Omit<FrameContext, "keywords">,
+  /**
+   * The pre-call step passes its own pool (approved, relevant queries only) so a swapped support is
+   * still about the offer and a swapped pillar is still a naming variant. The studio passes nothing
+   * and draws from the keyword set as before.
+   */
+  opts: { pool?: PoolItem[]; keywords?: string[] } = {}
+): Promise<{ ok: true; row: PlanRow; replaced: string } | { ok: false; error: string }> {
+  const row = await rowAtRank(clientId, rank);
+  if ("error" in row) return { ok: false, error: row.error };
+  if (row.status === "claimed") {
+    return { ok: false, error: `page ${rank} is already being written, so it cannot be swapped out.` };
+  }
+
+  const current = await loadPlan(clientId);
+  if ("error" in current) return { ok: false, error: current.error };
+  const inputs: PlanInputs | { error: string } = opts.pool
+    ? { pool: opts.pool, keywords: opts.keywords ?? opts.pool.map((p) => p.question) }
+    : await planInputs(clientId);
+  if ("error" in inputs) return { ok: false, error: inputs.error };
+
+  const exclude = await existingPageQuestions(clientId);
+  for (const r of current.rows) exclude.add(normalizePhrase(r.question));
+
+  const sameTheme = selectPlan(inputs.pool.filter((p) => p.theme === row.theme), 1, 1, exclude);
+  const next = sameTheme[0] ?? selectPlan(inputs.pool, 1, 1, exclude)[0];
+  if (!next) return { ok: false, error: "there is nothing left in the keyword set that is not already planned." };
+
+  let framed: FramedRow;
+  try {
+    [framed] = await framePages([{ ...next, role: row.role ?? undefined }], { ...ctx, keywords: inputs.keywords });
+  } catch (e) {
+    return { ok: false, error: `the replacement was chosen but could not be worded: ${(e as Error).message}` };
+  }
+
+  const { error } = await supabaseAdmin
+    .from("page_plan")
+    .update({
+      question: next.question,
+      target_keyword: framed.targetKeyword,
+      working_title: framed.workingTitle,
+      angle: framed.angle,
+      theme: next.theme,
+      origin: next.origin,
+      magnet_frame: framed.frame,
+      status: "proposed",
+      approved_at: null,
+      approved_by: null,
+      updated_at: new Date().toISOString(),
+      // Only a pre-call row carries a category, and only after one-strategy.sql, so a studio swap
+      // names no column that may not exist yet.
+      ...(next.category ? { keyword_category: next.category } : {}),
+    })
+    .eq("id", row.id);
+
+  if (error) return { ok: false, error: error.message };
+  await bust(clientId);
+
+  const after = await rowAtRank(clientId, rank);
+  if ("error" in after) return { ok: false, error: after.error };
+  return { ok: true, row: after, replaced: row.workingTitle };
+}
+
+export async function editPlanTitle(
+  clientId: string,
+  rank: number,
+  title: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const clean = title.trim();
+  if (!clean) return { ok: false, error: "that title is empty." };
+  if (clean.length > 70) return { ok: false, error: `that title is ${clean.length} characters. Keep it under 70.` };
+  if (hasBannedDash(clean)) return { ok: false, error: "that title has a dash in it. Use a comma or a period." };
+
+  const row = await rowAtRank(clientId, rank);
+  if ("error" in row) return { ok: false, error: row.error };
+
+  const { error } = await supabaseAdmin
+    .from("page_plan")
+    .update({ working_title: clean, updated_at: new Date().toISOString() })
+    .eq("id", row.id);
+  if (error) return { ok: false, error: error.message };
+  await bust(clientId);
+  return { ok: true };
+}
+
+/**
+ * The live hub reads the plan for its links (working titles are the anchor text), through the
+ * same per-client cache as the pages. Every plan writer busts it, or a renamed support keeps its
+ * old anchor text on a live domain until the cache happens to expire.
+ */
+async function bust(clientId: string): Promise<void> {
+  const { bustPages } = await import("@/lib/hub/pages");
+  bustPages(clientId);
+}
+
+/** A digit claimed this row. Records which page it became. */
+export async function markClaimed(planId: string, pageId: string): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from("page_plan")
+    .update({ status: "claimed", page_id: pageId, updated_at: new Date().toISOString() })
+    .eq("id", planId);
+  if (error) console.error(`[page-plan] claim not recorded: ${error.message}`);
+}
+
+/** The plan row a page came from, for the outline. Null when it did not come off a plan. */
+export async function planRowForPage(clientId: string, pageId: string): Promise<PlanRow | null> {
+  const { data, error } = await supabaseAdmin
+    .from("page_plan")
+    .select(PLAN_COLUMNS)
+    .eq("client_id", clientId)
+    .eq("page_id", pageId)
+    .maybeSingle();
+  if (error || !data) return null;
+  return toPlanRow(data as Record<string, unknown>);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The card
+// ─────────────────────────────────────────────────────────────────────────────
+
+function statusMark(row: PlanRow): string {
+  if (row.pageStatus === "published") return "  `[published]`";
+  if (row.status === "claimed") return "  `[drafting]`";
+  if (row.status === "proposed") return "  _(proposed)_";
+  return "";
+}
+
+/** The plan as Slack reads it. Pure, so the probe can check it carries no dash. */
+/** "Reader: problem aware (4), leaves solution aware (3)". Names, not just numbers: 5-to-1 reads backwards. */
+function awarenessLine(entry: AwarenessStage, target: AwarenessStage): string {
+  const name = (s: AwarenessStage) => AWARENESS_STAGES.find((x) => x.stage === s)?.name ?? String(s);
+  return entry === target
+    ? `Reader: ${name(entry)} (${entry}), already as close to buying as a page can take them`
+    : `Reader: ${name(entry)} (${entry}), leaves ${name(target)} (${target})`;
+}
+
+export function formatPlan(rows: readonly PlanRow[], anchorTitle: string | null): string {
+  if (rows.length === 0) return "No page plan yet. `plan` proposes one.";
+
+  const proposed = rows.filter((r) => r.status === "proposed").length;
+  const lines: string[] = [
+    `*Page plan, ${rows.length} page${rows.length === 1 ? "" : "s"}.*` +
+      (proposed ? ` ${proposed} proposed and waiting on \`plan approve\`.` : " All approved."),
+    anchorTitle ? `_Every page's magnet is a framing of *${anchorTitle}*._` : "",
+    `_Spread: ${themeCounts(rows)}._`,
+    "",
+  ];
+
+  for (const r of rows) {
+    const role = r.role === "pillar" ? "[Pillar] " : r.role === "support" ? "[Support] " : "";
+    lines.push(`*${r.rank}.* ${role}${r.workingTitle}${statusMark(r)}  _(${r.theme})_`);
+    lines.push(`      Keyword: \`${r.targetKeyword}\``);
+    if (r.awarenessEntry && r.awarenessTarget) lines.push(`      ${awarenessLine(r.awarenessEntry, r.awarenessTarget)}`);
+    lines.push(`      ${r.angle}`);
+    if (r.frame) lines.push(`      Pill: "${r.frame.ctaLabel}", ${r.frame.title}`);
+  }
+
+  lines.push(
+    "",
+    "`plan approve` locks the proposed pages in. `plan drop 4` removes one, `plan swap 4` replaces it " +
+      "with the next best page in the same theme, `plan edit 4: <title>` renames it, `plan new` " +
+      "re-proposes everything not yet approved."
+  );
+
+  return lines.filter((l, i, all) => !(l === "" && all[i - 1] === "")).join("\n");
+}

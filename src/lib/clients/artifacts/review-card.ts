@@ -238,6 +238,9 @@ export async function generateReviewCard(
     `The QR points at https://${reviewsHost}${host ? "" : " — NOT YET ATTACHED, so it will not resolve until the domain is added and the CNAME is in"}.`,
     "Same card for every patient. No stars, no staff names, nothing offered.",
   ];
+  // Where the four questions end. On SRT they ended with no button for a whole card run.
+  const { reviewDestinationLine } = await import("../review-link");
+  lines.push(`Where reviews go: ${await reviewDestinationLine(clientId)}`);
   if (language !== "en") lines.push(SPANISH_PENDING_NOTE);
 
   const result = await deliverArtifact({

@@ -6,6 +6,7 @@
 import { unstable_cache, revalidateTag } from "next/cache";
 import { supabaseAdmin } from "@/lib/db";
 import { pagesTag } from "@/lib/hub/resolve";
+import type { PlanLinkRow, PlanLinkRole } from "@/lib/hub/plan-links";
 
 export type PageStatus = "draft" | "published" | "archived";
 export type PromptBlock = "SERVICIO" | "COMPARATIVO" | "INFO" | "MARCA";
@@ -99,6 +100,60 @@ export const getPublished = (clientId: string, slug: string) =>
     { revalidate: 300, tags: [pagesTag(clientId)] }
   )();
 
+// ‼️ ONLY THE LINK COLUMNS, AND ONE STRING LITERAL for the reason COLUMNS gives. A wider select
+// is a wider set of columns that can be missing, and every one of them is a way to lose the links.
+const PLAN_LINK_COLUMNS = "id, page_id, role, pillar_id, theme, working_title, rank";
+
+/**
+ * The page plan's link columns for one client, for the hub template to draw pillar and support
+ * links from. See lib/hub/plan-links.ts.
+ *
+ * ‼️ RETURNS [] ON ANY FAILURE, THE OPPOSITE OF listPublished, AND ON PURPOSE. The links are
+ * decoration on a page that rendered fine without them, and `role` and `pillar_id` arrive with
+ * docs/2026-09-11-one-strategy.sql, which has not run everywhere. PostgREST fails a whole select on
+ * one unknown column, so a throw here would take down every live hub page in that window. No links
+ * is the hub as it was yesterday.
+ *
+ * ‼️ THE THROW HAPPENS INSIDE THE CACHE AND THE CATCH OUTSIDE IT, so a failure is never cached as an
+ * empty plan for five minutes. unstable_cache stores only what returns.
+ */
+export async function planLinkRows(clientId: string): Promise<PlanLinkRow[]> {
+  try {
+    return await unstable_cache(
+      async (): Promise<PlanLinkRow[]> => {
+        const { data, error } = await supabaseAdmin
+          .from("page_plan")
+          .select(PLAN_LINK_COLUMNS)
+          .eq("client_id", clientId)
+          .order("rank", { ascending: true });
+
+        if (error) throw new Error(error.message);
+        return (data ?? []).map((row) => {
+          const r = row as Record<string, unknown>;
+          const role = r.role === "pillar" || r.role === "support" ? (r.role as PlanLinkRole) : null;
+          return {
+            planId: r.id as string,
+            pageId: (r.page_id as string | null) ?? null,
+            role,
+            pillarId: (r.pillar_id as string | null) ?? null,
+            theme: (r.theme as string | null) ?? null,
+            workingTitle: (r.working_title as string | null) ?? "",
+            rank: Number(r.rank) || 0,
+          };
+        });
+      },
+      ["hub-plan-links", clientId],
+      { revalidate: 300, tags: [pagesTag(clientId)] }
+    )();
+  } catch (e) {
+    console.error(
+      `[hub/pages] plan links unavailable for ${clientId} (${(e as Error).message}). If this names ` +
+        `role or pillar_id, docs/2026-09-11-one-strategy.sql has not been run. Rendering without links.`
+    );
+    return [];
+  }
+}
+
 /** Everything, including drafts. For the board only — never rendered on a hub host. */
 export async function listAllForBoard(clientId: string): Promise<ClientPage[]> {
   const { data, error } = await supabaseAdmin
@@ -172,8 +227,11 @@ export interface SavePageInput {
  * Same guard and the same reasoning as `revalidateClientHub()` in hub/resolve.ts and the attach
  * path in hub/vercel-domains.ts, both of which already wrote this down. The tag expires on its
  * own; a lost write does not.
+ *
+ * Exported for the plan writers: a changed role or pillar_id changes which links a live page
+ * draws, and planLinkRows is cached under the same tag.
  */
-function bustPages(clientId: string): void {
+export function bustPages(clientId: string): void {
   try {
     revalidateTag(pagesTag(clientId));
   } catch {
@@ -318,11 +376,19 @@ export async function startPageDraft(input: {
   clientId: string;
   question: string;
   sourceReportId?: string | null;
+  /**
+   * The plan row's working title, when the page came off an approved plan. It becomes the title
+   * AND the source of the slug, because a slug built from a harvested question carries the
+   * question's quote marks and length into a public URL a crawler indexes. Without one the
+   * question is the working title, as before.
+   */
+  title?: string | null;
 }): Promise<{ ok: true; id: string; slug: string; resumed: boolean } | { ok: false; error: string }> {
   const question = input.question.trim();
   if (!question) return { ok: false, error: "There is no question to open a page for." };
 
-  const slug = pageSlug(question);
+  const workingTitle = input.title?.trim() || question;
+  const slug = pageSlug(workingTitle);
   if (!slug) return { ok: false, error: "That question does not produce a usable web address." };
 
   const { data: existing, error: readError } = await supabaseAdmin
@@ -346,9 +412,9 @@ export async function startPageDraft(input: {
     .insert({
       client_id: input.clientId,
       slug,
-      // The question is the working title. A page whose title is still its question is a page
-      // nobody has finished, which is a more useful thing for the board to show than a blank.
-      title: question.slice(0, 200),
+      // The plan's working title, or the question when there is no plan. A page whose title is
+      // still its question is a page nobody has finished, which beats a blank on the board.
+      title: workingTitle.slice(0, 200),
       question,
       answer_md: "",
       source_report_id: input.sourceReportId ?? null,
@@ -428,6 +494,333 @@ export async function appendPageBody(
 
   bustPages(clientId);
   return { ok: true, words: next.split(/\s+/).filter(Boolean).length };
+}
+
+/**
+ * Replace a draft's whole body with text somebody wrote outside Slack.
+ *
+ * ‼️ THIS EXISTS SO THE PAGE STUDIO NEVER HAS TO NAME savePage, AND THAT IS NOT A STYLE CHOICE.
+ * scripts/test-onboarding-artifacts.ts asserts the literal string `savePage` does not appear in
+ * page-studio.ts, under the heading "nothing a model returns can be written to the page from
+ * here". savePage is the path a MODEL's output takes: it carries a title, a question, a meta
+ * description and an evidence map, and wiring the studio to it would give the studio a way to
+ * write all of them. This writes one field, from text a person pasted, and can do nothing else.
+ *
+ * ‼️ NOTHING IN THIS FUNCTION READS THE TEXT, same as appendPageBody. It is his words, verbatim,
+ * including whatever he decided to leave in.
+ *
+ * The evidence map is dropped for the reason appendPageBody drops it: the map described a body
+ * that no longer exists, and a stale map is worse than none because `unbacked_claims` would keep
+ * passing on text it never described.
+ *
+ * Returns the body it replaced, so the caller can park it for `undo`. That is the caller's job and
+ * not this function's: page_studio_sessions.undo_body belongs to a thread, and this is also
+ * reachable from places that have no thread.
+ */
+export async function replacePageBody(
+  clientId: string,
+  pageId: string,
+  text: string
+): Promise<{ ok: true; previous: string; words: number } | { ok: false; error: string }> {
+  const body = text.trim();
+  if (!body) return { ok: false, error: "There was nothing to put in its place." };
+
+  const { data: existing, error: readError } = await supabaseAdmin
+    .from("client_pages")
+    .select("id, answer_md, status")
+    .eq("id", pageId)
+    .eq("client_id", clientId)
+    .maybeSingle();
+
+  if (readError) return { ok: false, error: readError.message };
+  if (!existing) return { ok: false, error: "That page does not exist." };
+  if (existing.status === "published") {
+    return { ok: false, error: "That page is published. Edit it on the client board instead." };
+  }
+
+  const previous = ((existing.answer_md as string | null) ?? "").trim();
+
+  const { error } = await supabaseAdmin
+    .from("client_pages")
+    .update({ answer_md: body, evidence_map: null, updated_at: new Date().toISOString() })
+    .eq("id", pageId)
+    .eq("client_id", clientId);
+
+  if (error) return { ok: false, error: error.message };
+
+  bustPages(clientId);
+  return { ok: true, previous, words: body.split(/\s+/).filter(Boolean).length };
+}
+
+/**
+ * Take the last appended chunk back out of a draft.
+ *
+ * ‼️ THE ONE WAY OUT OF A WRONG APPEND THAT DOES NOT NEED THE BOARD. Matthew typed "1" meaning
+ * "magnet 1", the lane appended it verbatim (correctly: a bare digit after a claim is dictation),
+ * and the only way to get it back out was the board's Edit form. The chunk boundary is the blank
+ * line appendPageBody itself writes between appends. A single message that itself contained a
+ * blank line therefore comes back out one paragraph per `undo`, which errs toward removing too
+ * little rather than too much.
+ *
+ * Refuses on a published page for the reason appendPageBody does. Drops the evidence map for the
+ * reason it does too: the map described a body that no longer exists.
+ */
+export async function undoLastAppend(
+  clientId: string,
+  pageId: string
+): Promise<{ ok: true; removed: string; words: number } | { ok: false; error: string }> {
+  const { data: existing, error: readError } = await supabaseAdmin
+    .from("client_pages")
+    .select("id, answer_md, status")
+    .eq("id", pageId)
+    .eq("client_id", clientId)
+    .maybeSingle();
+
+  if (readError) return { ok: false, error: readError.message };
+  if (!existing) return { ok: false, error: "That page does not exist." };
+  if (existing.status === "published") {
+    return { ok: false, error: "That page is published. Edit it on the client board instead." };
+  }
+
+  const chunks = ((existing.answer_md as string | null) ?? "").trim().split(/\n{2,}/);
+  const removed = (chunks.pop() ?? "").trim();
+  if (!removed) return { ok: false, error: "The page is already empty, so there is nothing to undo." };
+
+  const next = chunks.join("\n\n");
+  const { error } = await supabaseAdmin
+    .from("client_pages")
+    .update({ answer_md: next, evidence_map: null, updated_at: new Date().toISOString() })
+    .eq("id", pageId)
+    .eq("client_id", clientId);
+
+  if (error) return { ok: false, error: error.message };
+
+  bustPages(clientId);
+  return { ok: true, removed, words: next.split(/\s+/).filter(Boolean).length };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The outline a page is written from
+//
+// ‼️ IT LIVES IN client_pages.outline AND NEVER IN answer_md. A model writes it, and machine text in
+// the body with no evidence map behind it is the one thing the gate cannot see: a null map reads
+// as hand-written and skips unbacked_claims. The gaps are answered as page_sources and `draft`
+// writes the body from those, with a map, so the gate keeps working on every page.
+//
+// ‼️ READ AND WRITTEN SEPARATELY FROM COLUMNS, for blast radius. COLUMNS feeds the published hub
+// on every client's domain, and PostgREST fails a whole select on one unknown column, so adding
+// outline there would take live pages down in the window before docs/2026-09-11-page-plan.sql runs.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface OutlineSection {
+  heading: string;
+  bullets: string[];
+  /**
+   * The long-tail phrase this one section is the answer to.
+   *
+   * ‼️ OPTIONAL ON THE TYPE, AND IT HAS TO STAY THAT WAY. Every outline written before
+   * 2026-09-14 is stored without it, and readOutline is the path those come back through. A
+   * required field here would make every one of them fail validation and drop to null, which
+   * readOutline's own contract says means "no outline" and would silently un-outline live pages.
+   */
+  keyword?: string;
+}
+
+export interface OutlineGap {
+  /** "G1", "G2"... referenced in the bullets as [G1]. */
+  id: string;
+  /** Asked out loud, in the second person, the same way an interview topic is. */
+  prompt: string;
+  /** "client" files the answer in the client library, for every later page. */
+  scope: "page" | "client";
+}
+
+/**
+ * Where a story's truth comes from (F9). A story is sourced or it is framed as illustrative, never
+ * presented as a real customer it is not.
+ *
+ * ‼️ A sourceId, NEVER AN S#. Evidence refs are positional per load (page-evidence.ts numberEvidence)
+ * and move as soon as a gap answer is filed, so an "S3" stored today points at a different source
+ * next week. The id is what stays put.
+ */
+export type OutlineStorySource =
+  | { kind: "evidence"; sourceId: string }
+  | { kind: "gap"; gapId: string }
+  | { kind: "illustrative" };
+
+/**
+ * One hero's journey story idea for a page (F2, F10). Every skeleton proposes three; the draft places
+ * one or more; the unused ones stay stored for posts.
+ */
+export interface OutlineStory {
+  /** "T1", "T2", "T3". */
+  id: string;
+  title: string;
+  /** Four short notes in journey order: where she is, what she tried, the turn, what she now understands. */
+  beats: string[];
+  /** This offer's necessary belief ids ("B1"...). Empty when the offer has none on file yet. */
+  installs: string[];
+  /**
+   * The section heading it is told under, or null for an idea kept for later.
+   *
+   * ‼️ A HEADING, NOT A SECTION INDEX. The draft drops sections it cannot fill, so an index would
+   * point at a different section once one is gone. A heading either survived or did not.
+   */
+  heading: string | null;
+  source: OutlineStorySource;
+}
+
+export interface PageOutline {
+  sections: OutlineSection[];
+  gaps: OutlineGap[];
+  /**
+   * ‼️ OPTIONAL, FOR THE SAME REASON OutlineSection.keyword IS. Every outline written before 2026-09-15
+   * is stored without it, and one written after may carry a stories field an older reader cannot
+   * parse. Either way the outline itself stays valid.
+   */
+  stories?: OutlineStory[];
+  writtenAt: string;
+}
+
+function readStorySource(raw: unknown): OutlineStorySource | null {
+  const s = raw as Record<string, unknown> | null;
+  if (!s || typeof s !== "object") return null;
+  if (s.kind === "evidence" && typeof s.sourceId === "string" && s.sourceId.trim()) return { kind: "evidence", sourceId: s.sourceId.trim() };
+  if (s.kind === "gap" && typeof s.gapId === "string" && s.gapId.trim()) return { kind: "gap", gapId: s.gapId.trim() };
+  if (s.kind === "illustrative") return { kind: "illustrative" };
+  return null;
+}
+
+/** The stored stories, or undefined. One invalid story drops the field, never the outline. */
+function readStories(raw: unknown): OutlineStory[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const stories: OutlineStory[] = [];
+  for (const item of raw) {
+    const s = item as Record<string, unknown> | null;
+    const source = readStorySource(s?.source);
+    if (
+      !s ||
+      typeof s.id !== "string" ||
+      typeof s.title !== "string" ||
+      !Array.isArray(s.beats) ||
+      !s.beats.every((b) => typeof b === "string") ||
+      !Array.isArray(s.installs) ||
+      !s.installs.every((b) => typeof b === "string") ||
+      !(s.heading === null || typeof s.heading === "string") ||
+      !source
+    ) {
+      return undefined;
+    }
+    stories.push({
+      id: s.id.trim(),
+      title: s.title.trim(),
+      beats: (s.beats as string[]).map((b) => b.trim()),
+      installs: (s.installs as string[]).map((b) => b.trim()),
+      heading: typeof s.heading === "string" && s.heading.trim() ? s.heading.trim() : null,
+      source,
+    });
+  }
+  return stories.length ? stories : undefined;
+}
+
+/** The stored outline, validated. Drop, never repair: a half-valid outline is no outline. */
+export function readOutline(raw: unknown): PageOutline | null {
+  if (!raw || typeof raw !== "object") return null;
+  const bag = raw as Record<string, unknown>;
+  if (!Array.isArray(bag.sections) || !Array.isArray(bag.gaps)) return null;
+
+  const sections = bag.sections
+    .map((s) => s as Record<string, unknown>)
+    .filter((s) => typeof s?.heading === "string" && Array.isArray(s?.bullets))
+    .map((s) => ({
+      heading: String(s.heading).trim(),
+      bullets: (s.bullets as unknown[]).filter((b): b is string => typeof b === "string" && b.trim() !== ""),
+      // Absent on every outline written before 2026-09-14. Left undefined rather than "" so a
+      // reader can tell "this outline predates per-section keywords" from "this one has none".
+      ...(typeof s.keyword === "string" && s.keyword.trim() !== "" ? { keyword: String(s.keyword).trim() } : {}),
+    }))
+    .filter((s) => s.heading !== "");
+
+  const gaps = bag.gaps
+    .map((g) => g as Record<string, unknown>)
+    .filter((g) => typeof g?.id === "string" && typeof g?.prompt === "string")
+    .map((g) => ({
+      id: String(g.id).trim(),
+      prompt: String(g.prompt).trim(),
+      scope: (g.scope === "client" ? "client" : "page") as "page" | "client",
+    }))
+    .filter((g) => g.id !== "" && g.prompt !== "");
+
+  if (sections.length === 0) return null;
+  const stories = readStories(bag.stories);
+  return {
+    sections,
+    gaps,
+    ...(stories ? { stories } : {}),
+    writtenAt: typeof bag.writtenAt === "string" ? bag.writtenAt : "",
+  };
+}
+
+export async function readPageOutline(clientId: string, pageId: string): Promise<PageOutline | null> {
+  const { data, error } = await supabaseAdmin
+    .from("client_pages")
+    .select("outline")
+    .eq("id", pageId)
+    .eq("client_id", clientId)
+    .maybeSingle();
+
+  if (error) {
+    console.error(
+      `[hub/pages] outline read failed (${error.message}). If this names outline, ` +
+        `docs/2026-09-11-page-plan.sql has not been run on this database.`
+    );
+    return null;
+  }
+  return readOutline(data?.outline);
+}
+
+/** Not gated. An outline is not published and never reaches the hub. */
+export async function setPageOutline(
+  clientId: string,
+  pageId: string,
+  outline: PageOutline | null
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { error } = await supabaseAdmin
+    .from("client_pages")
+    .update({ outline, updated_at: new Date().toISOString() })
+    .eq("id", pageId)
+    .eq("client_id", clientId);
+
+  if (error) return { ok: false, error: error.message };
+
+  // ‼️ WRITTEN HERE BECAUSE THE OUTLINE IS WHERE THE KEYWORDS COME FROM, and written in its OWN
+  // update for the reason the column above gets its own select: one unknown column fails the
+  // whole statement, and section_keywords is newer than outline. A database missing it should
+  // cost the placement check, not the outline.
+  //
+  // The shape is fixed by docs/2026-09-12-client-headlines.sql: [{heading, keyword}] in section
+  // order. That ORDER is load bearing, because keyword-placement.ts checks the primary keyword
+  // against the page's sections in the order they appear.
+  const sectionKeywords = outline
+    ? outline.sections
+        .filter((s) => (s.keyword ?? "").trim() !== "")
+        .map((s) => ({ heading: s.heading, keyword: (s.keyword as string).trim() }))
+    : null;
+
+  const { error: kwError } = await supabaseAdmin
+    .from("client_pages")
+    .update({ section_keywords: sectionKeywords?.length ? sectionKeywords : null })
+    .eq("id", pageId)
+    .eq("client_id", clientId);
+
+  if (kwError) {
+    console.error(
+      `[hub/pages] section_keywords write failed (${kwError.message}). If this names ` +
+        `section_keywords, docs/2026-09-12-client-headlines.sql has not been run on this database.`
+    );
+  }
+
+  return { ok: true };
 }
 
 /**

@@ -809,9 +809,40 @@ export async function POST(request: NextRequest) {
       //
       // The old gate here fired only for a research paste and let everything else fall through,
       // which is precisely how that happened. This one owns the channel: every branch returns.
-      const onboardingChannel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
-      if (onboardingChannel && channel === onboardingChannel) {
+      // ‼️ AND IT OWNS EVERY CLIENT CHANNEL, not just the shared one. A client provisioned
+      // after 2026-09-08 has their own private ops channel with all 41 step threads in it. A
+      // gate that only matched the shared channel would let every one of those threads fall
+      // through to the assistant tail described above, which is the exact failure this block
+      // was written to stop, reproduced once per new client.
+      //
+      // ‼️ THE LOOKUP IS LAST, AND THE ORDER IS THE COST CONTROL. isClientChannel answers the
+      // shared channel from env with no query at all, and only reaches the database for a
+      // channel that matched nothing else. This block already sits below every other channel
+      // constant in this route, so that is a message which was going to the assistant anyway.
+      const { isClientChannel } = await import("@/lib/clients/onboarding-docs");
+      if (await isClientChannel(channel)) {
         const client = parentThreadTs ? await clientForThread(channel, parentThreadTs) : null;
+
+        // ‼️ EVERY MESSAGE IN A CLIENT'S THREAD, LOGGED ONCE, HERE. Matthew: "all of the data of
+        // each customer (inside Slack or Mission Control) needs to be saved with its specific
+        // dataset." Logged at the TOP of the lane rather than in each branch, because there are
+        // fourteen branches and the one that gets forgotten is the one somebody needed. A branch
+        // that HANDLES the message re-labels it `command` on its way out, which is what makes
+        // "what did he type that the system acted on" answerable.
+        if (client && (userText.trim().length > 0 || attachedFiles.length > 0)) {
+          const { logClientEvent } = await import("@/lib/clients/client-events");
+          await logClientEvent({
+            clientId: client.id,
+            stepKey: client.stepKey,
+            source: "slack",
+            kind: "message",
+            author: (event.user as string | undefined) ?? null,
+            text: userText,
+            slackChannel: channel,
+            slackTs: event.ts as string,
+            slackThreadTs: parentThreadTs,
+          });
+        }
 
         // 1. A deep-research dump pasted into a client's thread. Explicit prefix only: see
         //    research-intake.ts for why sniffing is not acceptable here. This is the second
@@ -819,6 +850,61 @@ export async function POST(request: NextRequest) {
         if (client && parentThreadTs && userText.trim().length > 0) {
           const { isResearchPaste } = await import("@/lib/clients/research-intake");
           if (isResearchPaste(userText)) {
+            const { markEventKind } = await import("@/lib/clients/client-events");
+            await markEventKind({
+              slackChannel: channel,
+              slackTs: event.ts as string,
+              kind: "command",
+              handler: "research-intake",
+            });
+            // ‼️ WHICH TABLE A PASTE REACHES DEPENDS ON WHICH STEP'S THREAD IT LANDED IN, and the
+            // two are not interchangeable. Step 11 (avatar_harvest) is research about the BUYER,
+            // shared by every client in the vertical, and question_bank is keyed (vertical,
+            // avatar) with no client_id for exactly that reason. Step 21 (pre_call_pages) is
+            // research about SEVEN SPECIFIC PAGES of one client, tagged [P1] to [P7], and there
+            // is nowhere in question_bank to put a page id.
+            //
+            // Routing both to ingestResearch is what the door did until 2026-09-14, and it would
+            // file a batch answer as vertical-wide buyer phrases: every clinic in the vertical
+            // would inherit one clinic's pricing answer, and the seven pages it was written for
+            // would draft with nothing new behind them.
+            if (client.stepKey === "pre_call_pages") {
+              const { readBatch } = await import("@/lib/clients/page-batch");
+              const { loadBatchPages, ingestBatchResearch, batchIngestLine } = await import(
+                "@/lib/clients/batch-research"
+              );
+
+              const state = await readBatch(client.id);
+              if ("error" in state) {
+                await slack.postThreadReply(channel, parentThreadTs, `:warning: ${state.error}`);
+                return NextResponse.json({ ok: true });
+              }
+
+              const pages = await loadBatchPages(
+                client.id,
+                state.rows.map((r) => r.id)
+              );
+
+              const filed = await ingestBatchResearch({
+                clientId: client.id,
+                pages,
+                text: userText,
+                collectedBy: event.user ? `<@${event.user as string}>` : "someone in Slack",
+                slackTs: event.ts as string,
+              });
+
+              const reply = filed.ok
+                ? batchIngestLine(filed.report, pages.length) +
+                  "\n`plan draft` writes all of them from this."
+                : `:warning: ${filed.error}`;
+
+              const postedBatch = await slack.postThreadReply(channel, parentThreadTs, reply);
+              if (!slackOk(postedBatch)) {
+                console.error("[slack/events] batch research reply failed in", parentThreadTs);
+              }
+              return NextResponse.json({ ok: true });
+            }
+
             const { ingestResearch, formatIntakeReply } = await import("@/lib/clients/research-intake");
             const { extractPhrases, mergePhrases } = await import("@/lib/clients/harvest");
 
@@ -826,11 +912,14 @@ export async function POST(request: NextRequest) {
             const top = result.ok
               ? mergePhrases(extractPhrases(userText, "deep_research")).slice(0, 6)
               : [];
+            // The whole answer onto the avatar, and what the avatar is still missing.
+            const { afterResearchPaste } = await import("@/lib/clients/research-intake");
+            const extra = result.ok ? await afterResearchPaste(client.id, userText) : [];
 
             const posted = await slack.postThreadReply(
               channel,
               parentThreadTs,
-              formatIntakeReply(result, top)
+              [formatIntakeReply(result, top), ...(extra.length ? ["", ...extra] : [])].join("\n")
             );
             if (!slackOk(posted)) {
               console.error("[slack/events] research reply failed in", parentThreadTs);
@@ -850,14 +939,16 @@ export async function POST(request: NextRequest) {
           client &&
           parentThreadTs &&
           client.stepKey === "avatar_harvest" &&
-          /^\s*prompt\s*$/i.test(userText)
+          // ‼️ `prompt short` SINCE 2026-09-15. Bare `prompt` re-posts the framework script now (the
+          // framework handler below); the compact prompt is the way to start without a sales letter.
+          /^\s*prompt\s+short\s*$/i.test(userText)
         ) {
           const { buildContext, buildCompactPrompt } = await import(
             "@/lib/clients/artifacts/deep-research-run"
           );
           const built = await buildContext(client.id);
           const reply = built.ok
-            ? `Here is the prompt for this step. Paste it whole into claude.com deep research.\n\n\`\`\`\n${buildCompactPrompt(built.ctx)}\n\`\`\``
+            ? `Here is the short research prompt (sections 1 to 9, no sales letter needed). Paste it whole into claude.com deep research. The full framework script asks for more; \`prompt\` posts it.\n\n\`\`\`\n${buildCompactPrompt(built.ctx)}\n\`\`\``
             : `:warning: Cannot build the prompt: ${built.error}`;
 
           const posted = await slack.postThreadReply(channel, parentThreadTs, reply);
@@ -913,6 +1004,56 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ ok: true });
         }
 
+        // 1a-bis-2. The framework's paste-backs in step 11's thread: `avatar sheet:`, `short offer:`,
+        // `beliefs:`, plus `prompt` (the script again) and `share research` / `share sheet`.
+        //
+        // ‼️ ABOVE pastedListPointer, WHICH WOULD SWALLOW A BELIEFS LIST: six short "I believe that" lines
+        // under a `beliefs:` line match its shape, and it answers "nothing was saved". And above the
+        // assistant, because a pasted avatar sheet answered as a chat message is a sheet lost.
+        if (client && parentThreadTs && client.stepKey === "avatar_harvest" && userText.trim().length > 0) {
+          const { handleFrameworkThreadReply } = await import("@/lib/clients/framework-thread");
+          const framed = await handleFrameworkThreadReply({
+            clientId: client.id,
+            stepKey: client.stepKey,
+            text: userText,
+            by: event.user ? `<@${event.user as string}>` : "someone in Slack",
+          });
+          if (framed) {
+            const posted = await slack.postThreadReply(channel, parentThreadTs, framed.message);
+            if (!slackOk(posted)) console.error("[slack/events] framework reply failed");
+            return NextResponse.json({ ok: true });
+          }
+        }
+
+        // 1a-bis-3. `rerun`, `rerun step 13`, `rerun 18-21` in a step's thread. Above every other handler so a
+        // re-run is never eaten by a step's own grammar, and before the assistant for the usual reason.
+        if (client && parentThreadTs && userText.trim().length > 0) {
+          const { parseRerun, rerunAck, rerunStep, startRerunRange } = await import("@/lib/clients/step-rerun");
+          const target = parseRerun(userText);
+          if (target) {
+            const by = event.user ? `<@${event.user as string}>` : "someone in Slack";
+            const { isStepKey } = await import("@/config/delivery-steps");
+            const ack = rerunAck(target, client.stepKey);
+            await slack.postThreadReply(channel, parentThreadTs, ack);
+            if ("here" in target) {
+              if (client.stepKey && isStepKey(client.stepKey)) {
+                const key = client.stepKey;
+                waitUntil(
+                  rerunStep({ clientId: client.id, stepKey: key, fresh: false, by })
+                    .then((r) => slack.postThreadReply(channel, parentThreadTs, r.line))
+                    .catch((e) => console.error("[slack/events] rerun failed:", (e as Error).message))
+                );
+              }
+            } else {
+              const started = await startRerunRange({ clientId: client.id, from: target.from, to: target.to, by });
+              if (!started.ok) {
+                await slack.postThreadReply(channel, parentThreadTs, `:warning: Not started: ${started.error}`);
+              }
+            }
+            return NextResponse.json({ ok: true });
+          }
+        }
+
         // 1a-ter. `template clinic` / `skin` / `skin reset` in step 15's or 16's thread.
         //
         // ‼️ ABOVE THE ASSISTANT BRANCH FOR THE SAME REASON THE AVATAR BRANCH BELOW IS.
@@ -946,6 +1087,216 @@ export async function POST(request: NextRequest) {
         //
         // The real logic is in clients/avatars.ts. This is a call, not an implementation: the
         // prefix test, the Day-0 refusal and the question-set regeneration all live there.
+        // 1a-quater. `offer: ...` in the offer step's thread.
+        //
+        // ‼️ ABOVE THE AVATAR BRANCH AND ABOVE THE ASSISTANT, for the same reason every other
+        // typed answer in this gate is: free text in a step thread is answered by a model
+        // otherwise, and an offer typed on a live call would come back as a chat reply instead
+        // of being written to the column. That is the exact shape of the bug that left
+        // clients.primary_avatar with a verifier, a constraint and no writer.
+        //
+        // The prefix is EXACT and the handler returns null on a miss, so a sentence that
+        // mentions an offer falls straight through.
+        // 1a-quinquies. `letter ...` in the same prep call thread: the sales letter the framework's
+        // step 11 script opens with. Above the offer handler so a pasted letter (`letter replace:`) is
+        // never read as anything else; the offer handler already returns null for it either way.
+        if (client && parentThreadTs && userText.trim().length > 0) {
+          const { handleLetterThreadReply } = await import("@/lib/clients/sales-letter");
+          const lettered = await handleLetterThreadReply({
+            clientId: client.id,
+            stepKey: client.stepKey,
+            text: userText,
+            by: event.user ? `<@${event.user as string}>` : "someone in Slack",
+          });
+          if (lettered) {
+            const posted = await slack.postThreadReply(channel, parentThreadTs, lettered.message);
+            if (!slackOk(posted)) console.error("[slack/events] letter reply failed");
+            // The draft's model call runs after the reply and after the ack, the shape `run` uses.
+            if (lettered.after) {
+              waitUntil(
+                lettered.after().catch((e) =>
+                  console.error("[slack/events] letter work failed:", (e as Error).message)
+                )
+              );
+            }
+            return NextResponse.json({ ok: true });
+          }
+        }
+
+        if (client && parentThreadTs && userText.trim().length > 0) {
+          const { handleOfferThreadReply } = await import("@/lib/clients/offers");
+          const locked = await handleOfferThreadReply({
+            clientId: client.id,
+            stepKey: client.stepKey,
+            text: userText,
+            by: event.user ? `<@${event.user as string}>` : "someone in Slack",
+          });
+          if (locked) {
+            const posted = await slack.postThreadReply(channel, parentThreadTs, locked.message);
+            if (!slackOk(posted)) console.error("[slack/events] offer reply failed");
+            // The re-aim reopens the keyword step, whose runner makes a model call inside the
+            // cascade, so it runs after the reply and after the ack, the same shape `run` uses.
+            if (locked.after) {
+              waitUntil(
+                locked.after().catch((e) =>
+                  console.error("[slack/events] offer re-aim failed:", (e as Error).message)
+                )
+              );
+            }
+            return NextResponse.json({ ok: true });
+          }
+        }
+
+        // 1a-quinquies. The keyword step's grammar (`keywords approve`, `keywords drop 12`, ...) and
+        // the pre-call plan's (`plan approve`, `plan swap 4`, `anchor: <key>`), each only in its own
+        // step's thread. Exact forms only; a sentence that merely starts with the word falls
+        // through. Model calls and the drafting run after the reply, in waitUntil.
+        if (client && parentThreadTs && userText.trim().length > 0) {
+          const by = event.user ? `<@${event.user as string}>` : "someone in Slack";
+          const { handleKeywordThreadReply } = await import("@/lib/clients/client-keywords");
+          const { handlePreCallThreadReply } = await import("@/lib/clients/pre-call-pages");
+          // `photograph` in the Day 0 thread: the tracked set, measured. It prints the question
+          // count and the cost before spending anything, and the run itself happens in waitUntil
+          // like every other model-shaped reply here.
+          const { handlePhotographThreadReply } = await import("@/lib/clients/photograph");
+          // `review link: <url>` in the review steps' threads: where the Post button sends a customer.
+          const { handleReviewLinkThreadReply } = await import("@/lib/clients/review-link");
+          const said =
+            (await handleKeywordThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText, by })) ??
+            (await (await import("@/lib/clients/anchor-ladder")).handleLadderThreadReply({
+              clientId: client.id,
+              stepKey: client.stepKey,
+              text: userText,
+              by,
+            })) ??
+            (await handlePreCallThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText, by })) ??
+            (await handlePhotographThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText })) ??
+            (await handleReviewLinkThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText, by })) ??
+            // `concierge install` works in ANY of this client's threads: it is the "come back later" door.
+            (await (await import("@/lib/clients/concierge-addon")).handleConciergeAddonThreadReply({
+              clientId: client.id,
+              stepKey: client.stepKey,
+              text: userText,
+              by,
+            })) ??
+            (await (await import("@/lib/clients/objection-mining")).handleObjectionThreadReply({
+              clientId: client.id,
+              stepKey: client.stepKey,
+              text: userText,
+              by,
+            }));
+          if (said) {
+            const { markEventKind, postClientReply } = await import("@/lib/clients/client-events");
+            await markEventKind({
+              slackChannel: channel,
+              slackTs: event.ts as string,
+              kind: "command",
+              handler: "keyword/plan/photograph",
+            });
+            const posted = await postClientReply({
+              clientId: client.id,
+              stepKey: client.stepKey,
+              channel,
+              threadTs: parentThreadTs,
+              text: said.message,
+            });
+            if (!slackOk(posted)) console.error("[slack/events] keyword/plan reply failed");
+            if (said.after) {
+              waitUntil(
+                said.after().catch((e) =>
+                  console.error("[slack/events] keyword/plan follow-up failed:", (e as Error).message)
+                )
+              );
+            }
+            return NextResponse.json({ ok: true });
+          }
+
+          // ‼️ A COMMAND FOR ANOTHER STEP GETS A POINTER, NEVER THE ASSISTANT. On 2026-09-11 a
+          // `terms:` and two keyword lists went into older cards' threads by their stale numbers,
+          // the assistant answered both, and nothing was saved. See clients/step-commands.ts.
+          const { misroutedCommand } = await import("@/lib/clients/step-commands");
+          const pointer = await misroutedCommand({ clientId: client.id, stepKey: client.stepKey, text: userText });
+          if (pointer) {
+            const { markEventKind, postClientReply } = await import("@/lib/clients/client-events");
+            // A command in the wrong thread IS a command: it is recorded as one, with where it
+            // went, because "nothing was saved" is precisely the thing worth being able to read
+            // back later.
+            await markEventKind({
+              slackChannel: channel,
+              slackTs: event.ts as string,
+              kind: "command",
+              handler: "misrouted",
+            });
+            const posted = await postClientReply({
+              clientId: client.id,
+              stepKey: client.stepKey,
+              channel,
+              threadTs: parentThreadTs,
+              text: pointer,
+            });
+            if (!slackOk(posted)) console.error("[slack/events] misrouted-command pointer failed");
+            return NextResponse.json({ ok: true });
+          }
+
+          // ‼️ A PASTED LIST IS NOT A COMMAND ANYWHERE, AND IT USED TO REACH THE ASSISTANT.
+          // Matthew pasted two keyword lists into the prep call's thread and got a strategic
+          // assessment of them back. Nothing was stored. See clients/step-commands.ts.
+          const { pastedListPointer } = await import("@/lib/clients/step-commands");
+          const listHint = await pastedListPointer({
+            clientId: client.id,
+            stepKey: client.stepKey,
+            text: userText,
+          });
+          if (listHint) {
+            const { markEventKind, postClientReply } = await import("@/lib/clients/client-events");
+            await markEventKind({
+              slackChannel: channel,
+              slackTs: event.ts as string,
+              kind: "command",
+              handler: "pasted-list",
+            });
+            const posted = await postClientReply({
+              clientId: client.id,
+              stepKey: client.stepKey,
+              channel,
+              threadTs: parentThreadTs,
+              text: listHint,
+            });
+            if (!slackOk(posted)) console.error("[slack/events] pasted-list pointer failed");
+            return NextResponse.json({ ok: true });
+          }
+        }
+
+        // `audience: <preset>` in the avatar step's thread: the hand repair for a client whose vertical
+        // maps to no preset, which otherwise gets no audience and no way to create one.
+        if (client && parentThreadTs && userText.trim().length > 0) {
+          const { handleAudienceThreadReply } = await import("@/lib/clients/audiences");
+          const seeded = await handleAudienceThreadReply({
+            clientId: client.id,
+            stepKey: client.stepKey,
+            text: userText,
+            by: event.user ? `<@${event.user as string}>` : "someone in Slack",
+          });
+          if (seeded) {
+            const { markEventKind, postClientReply } = await import("@/lib/clients/client-events");
+            await markEventKind({
+              slackChannel: channel,
+              slackTs: event.ts as string,
+              kind: "command",
+              handler: "audience",
+            });
+            const posted = await postClientReply({
+              clientId: client.id,
+              stepKey: client.stepKey,
+              channel,
+              threadTs: parentThreadTs,
+              text: seeded.message,
+            });
+            if (!slackOk(posted)) console.error("[slack/events] audience reply failed");
+            return NextResponse.json({ ok: true });
+          }
+        }
+
         if (client && parentThreadTs && userText.trim().length > 0) {
           const { handleAvatarThreadReply } = await import("@/lib/clients/avatars");
           const said = await handleAvatarThreadReply({
@@ -955,7 +1306,20 @@ export async function POST(request: NextRequest) {
             by: event.user ? `<@${event.user as string}>` : "someone in Slack",
           });
           if (said) {
-            const posted = await slack.postThreadReply(channel, parentThreadTs, said.message);
+            const { markEventKind, postClientReply } = await import("@/lib/clients/client-events");
+            await markEventKind({
+              slackChannel: channel,
+              slackTs: event.ts as string,
+              kind: "command",
+              handler: "avatar",
+            });
+            const posted = await postClientReply({
+              clientId: client.id,
+              stepKey: client.stepKey,
+              channel,
+              threadTs: parentThreadTs,
+              text: said.message,
+            });
             if (!slackOk(posted)) console.error("[slack/events] avatar reply failed");
             return NextResponse.json({ ok: true });
           }
@@ -1035,16 +1399,38 @@ export async function POST(request: NextRequest) {
           const { toSlackMrkdwn } = await import("@/lib/slack-bot");
           // Scoped to the THREAD, not the channel. `slack-${channel}` gave one client's step
           // thread the last twenty messages from a different client's.
-          const { reply } = await askAssistant({
-            conversationId: `slack-${channel}-${parentThreadTs}`,
+          //
+          // ‼️ AND IT IS KEYED TO THE CLIENT. Matthew: "all of the data of each customer (inside
+          // Slack or Mission Control) needs to be saved with its specific dataset." This
+          // conversation is ABOUT this client, and until 2026-09-12 nothing recorded which one --
+          // nor, because the key was not a uuid, did a single message of it reach the database.
+          const { conversationFor, saveTurn } = await import("@/lib/chat-memory");
+          const conversationId = await conversationFor({
+            externalKey: `slack-${channel}-${parentThreadTs}`,
+            surface: "slack",
+            clientId: client.id,
+            title: `${client.legalName ?? "Client"}${client.stepKey ? ` · ${client.stepKey}` : ""}`,
+          });
+
+          const { reply, response } = await askAssistant({
+            conversationId,
             agentType: getAgentType(channel),
             userText,
             files: attachedFiles,
           });
 
+          // Both halves, saved. Neither side of this exchange was stored before.
+          await saveTurn({ conversationId, userText, assistantText: response });
+
           if (client.stepKey) {
             const { notifyStep } = await import("@/lib/clients/step-board");
-            const res = await notifyStep(client.id, client.stepKey, toSlackMrkdwn(reply));
+            const res = await notifyStep(
+              client.id,
+              client.stepKey,
+              toSlackMrkdwn(reply),
+              undefined,
+              "assistant_reply"
+            );
             if (!res.ok) {
               console.error(
                 `[slack/events] assistant reply failed on ${client.stepKey}: ${res.error}`
@@ -1058,6 +1444,28 @@ export async function POST(request: NextRequest) {
             await notifyThread(client.id, toSlackMrkdwn(reply));
           }
           return NextResponse.json({ ok: true });
+        }
+
+        // 3b. A re-run typed at the TOP LEVEL of a client's own channel. The one top-level command there is,
+        // because "resend steps 18 to 21" is about the channel itself rather than about any one thread.
+        if (!client && userText.trim().length > 0 && (!parentThreadTs || parentThreadTs === event.ts)) {
+          const { parseRerun, rerunAck, clientForOpsChannel, startRerunRange } = await import("@/lib/clients/step-rerun");
+          const target = parseRerun(userText);
+          if (target && !("here" in target)) {
+            const owner = await clientForOpsChannel(channel);
+            if (owner) {
+              const by = event.user ? `<@${event.user as string}>` : "someone in Slack";
+              const started = await startRerunRange({ clientId: owner, from: target.from, to: target.to, by });
+              if (event.user) {
+                await slack.postEphemeral(
+                  channel,
+                  event.user as string,
+                  started.ok ? rerunAck(target, null) : `:warning: Not started: ${started.error}`
+                );
+              }
+              return NextResponse.json({ ok: true });
+            }
+          }
         }
 
         // 4. Top level, or a thread that belongs to no client. There is nothing to answer INTO:
@@ -1252,7 +1660,15 @@ export async function POST(request: NextRequest) {
       }
 
       const agentType = getAgentType(channel);
-      const conversationId = `slack-${channel}`;
+      // ‼️ `slack-${channel}` IS NOT A uuid and the upsert here also wrote `agent_id`, a column
+      // chat_conversations does not have. Both failures were inside a try/catch that supabase-js
+      // never reaches, so this assistant had no memory and nothing said so. See lib/chat-memory.ts.
+      const { conversationFor, saveTurn } = await import("@/lib/chat-memory");
+      const conversationId = await conversationFor({
+        externalKey: `slack-${channel}`,
+        surface: `slack:${agentType}`,
+        title: `Slack ${agentType}: ${userText.slice(0, 60)}`,
+      });
       const { reply, response } = await askAssistant({
         conversationId,
         agentType,
@@ -1263,24 +1679,7 @@ export async function POST(request: NextRequest) {
       // Send reply directly in channel
       await slack.postMessage(channel, reply);
 
-      // Save conversation (best-effort)
-      try {
-        await supabaseAdmin.from("chat_conversations").upsert(
-          {
-            id: conversationId,
-            title: `Slack ${agentType}: ${userText.slice(0, 60)}`,
-            agent_id: agentType,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "id" }
-        );
-        await supabaseAdmin.from("chat_messages").insert([
-          { conversation_id: conversationId, role: "user", content: userText },
-          { conversation_id: conversationId, role: "assistant", content: response },
-        ]);
-      } catch {
-        // Non-critical
-      }
+      await saveTurn({ conversationId, userText, assistantText: response });
     }
 
     // Always return 200 to Slack
@@ -1915,22 +2314,46 @@ async function captureOnboardingUploads(args: {
   // file into the step's own thread is the same explicit act the `research:` prefix is, scoped to
   // the step it belongs to. No model reads the PDF: research-intake.ts says why.
   if (args.client.stepKey === "avatar_harvest") {
-    const { ingestResearchPdf, formatIntakeReply } = await import("@/lib/clients/research-intake");
+    const { ingestResearchFile, formatIntakeReply } = await import("@/lib/clients/research-intake");
 
-    const pdfs = args.files.filter(
-      (f) => /pdf/i.test(f.mimetype ?? "") || /\.pdf$/i.test(f.name ?? "")
-    );
-    if (pdfs.length === 0) return;
+    // ‼️ THE FRAMEWORK'S ANSWERS ARRIVE AS FILES TOO, AND A LONG ONE CAN ONLY ARRIVE AS A FILE. Slack turns a
+    // paste over its message limit into a text snippet, and this branch used to read PDFs only, so a
+    // snippet carrying `avatar sheet:` was filed and nothing else happened. A file whose first line (or
+    // the text typed with it) carries a framework prefix is stored as that document, whatever its type.
+    const { storeFrameworkFile } = await import("@/lib/clients/framework-thread");
+    const handled = new Set<string>();
+    for (const file of args.files) {
+      const framed = await storeFrameworkFile({
+        clientId: args.client.id,
+        slackFileId: file.id,
+        messageText: args.text,
+        by: "someone in Slack",
+      }).catch((e) => ({ message: `:warning: *${file.name ?? "That file"}* could not be read: ${(e as Error).message}` }));
+      if (!framed) continue;
+      handled.add(file.id);
+      const said = await slack.postThreadReply(args.channel, args.threadTs, framed.message);
+      if (!slackOk(said)) console.error("[slack/events] framework file reply failed");
+    }
 
-    for (const file of pdfs) {
-      const result = await ingestResearchPdf({ clientId: args.client.id, slackFileId: file.id });
+    // ‼️ EVERY OTHER FILE IS READ AS THE RESEARCH, AND EVERY FILE GETS A REPLY. This filtered to PDFs and
+    // returned without a word for anything else, so SRT's research, dropped as a .txt on 2026-09-15, was
+    // filed and never answered. A type that cannot be read still gets a reply saying which types can.
+    const rest = args.files.filter((f) => !handled.has(f.id));
+    if (rest.length === 0) return;
+
+    for (const file of rest) {
+      const result = await ingestResearchFile({ clientId: args.client.id, slackFileId: file.id });
       // No sample of the phrases here: the text was never held in this scope and re-reading the
       // PDF to print six lines is a second extraction for decoration. The counts are the answer.
       const top: never[] = [];
       const said = await slack.postThreadReply(
         args.channel,
         args.threadTs,
-        `*${result.filename ?? file.name ?? "That file"}*\n${formatIntakeReply(result, top)}`
+        [
+          `*${result.filename ?? file.name ?? "That file"}*`,
+          formatIntakeReply(result, top),
+          ...(result.extraLines?.length ? ["", ...result.extraLines] : []),
+        ].join("\n")
       );
       if (!slackOk(said)) console.error("[slack/events] research PDF reply failed");
     }
@@ -2041,29 +2464,18 @@ async function captureOnboardingUploads(args: {
  * replaced, so that caller has to route through notifyStep instead.
  */
 async function askAssistant(args: {
-  conversationId: string;
+  /** A chat_conversations.id, already resolved by the caller through chat-memory. */
+  conversationId: string | null;
   agentType: string;
   userText: string;
   files: SlackEventFile[];
 }): Promise<{ reply: string; response: string }> {
   const { conversationId, agentType, userText, files } = args;
 
-  // Load conversation history
-  let history: Array<{ role: "user" | "assistant"; content: string }> = [];
-  try {
-    const { data } = await supabaseAdmin
-      .from("chat_messages")
-      .select("role, content")
-      .eq("conversation_id", conversationId)
-      .order("created_at", { ascending: true })
-      .limit(20);
-    history = (data || []).map((m) => ({
-      role: m.role as "user" | "assistant",
-      content: m.content as string,
-    }));
-  } catch {
-    // Continue without history
-  }
+  // The last twenty turns, oldest first. This used to read `ascending` and take twenty, which is
+  // the FIRST twenty messages: past that, the assistant re-read the opening exchange forever.
+  const { loadHistory } = await import("@/lib/chat-memory");
+  const history = await loadHistory(conversationId);
 
   // Build system prompt with agent personality
   const basePrompt = await buildSystemPrompt();
@@ -2129,6 +2541,19 @@ async function handleFileShared(fileId: string): Promise<void> {
     return;
   }
   const file = info.file;
+
+  // ‼️ THE BOT'S OWN UPLOADS ARE NOT EVIDENCE, AND THIS IS WHY EVERY GENERATED PDF WAS FILED TWICE.
+  //
+  // deliverArtifact stores the document (source 'generated', slack_file_id null) and then uploads
+  // the same bytes into the step's thread. Slack fires `file_shared` for the bot's own upload, and
+  // this handler runs BEFORE the bot filter that guards the message path, so captureOnboardingFile
+  // inserted a SECOND row for it, as `slack` evidence, with a file id the first row did not carry
+  // for the unique index to catch. Measured on SRT: ten client_docs rows for five documents.
+  //
+  // It also mattered beyond tidiness: a thread-tier verifier counts files in the thread, so the
+  // bot's own artifact could confirm a step that asked a PERSON to put something there.
+  const botUserId = process.env.SLACK_BOT_USER_ID || (await slack.getBotUserId().catch(() => null));
+  if (botUserId && file.user === botUserId) return;
 
   const allShareChannels = Object.keys({
     ...(file.shares?.public ?? {}),

@@ -26,13 +26,23 @@ export interface ConciergeTenant {
   audience: Audience;
   vertical: string | null;
   enabled: boolean;
+  /**
+   * The client_audiences row behind this widget, when one is linked.
+   *
+   * ‼️ NULL IS NOT YET AN ERROR HERE, AND THAT IS DELIBERATE FOR THIS STEP. loadConciergeConfig
+   * already refuses to SERVE a widget with no audience. This file answers a different question
+   * for the board and the drafter, which want to know what a page could offer even while the
+   * audience is still being set up. It becomes required when the magnet catalogue is scoped by
+   * audience_id rather than by stance.
+   */
+  audienceId: string | null;
 }
 
 /** The widget's own row, or null when this client has no widget at all. */
 export async function conciergeTenant(clientId: string): Promise<ConciergeTenant | null> {
   const { data } = await supabaseAdmin
     .from("concierge_configs")
-    .select("audience, vertical, enabled")
+    .select("audience, vertical, enabled, audience_id")
     .eq("client_id", clientId)
     .maybeSingle();
 
@@ -44,6 +54,8 @@ export async function conciergeTenant(clientId: string): Promise<ConciergeTenant
     audience,
     vertical: typeof data.vertical === "string" && data.vertical.trim() ? data.vertical : null,
     enabled: data.enabled === true,
+    audienceId:
+      typeof data.audience_id === "string" && data.audience_id.trim() ? data.audience_id : null,
   };
 }
 

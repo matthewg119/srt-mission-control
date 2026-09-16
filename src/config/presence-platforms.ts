@@ -15,8 +15,12 @@
 // replying in the thread files it. `api` exists to describe reality, not aspiration — the day a
 // key lands, flip one flag rather than rediscovering which platforms even have an API.
 //
-// ‼️ ONE VERTICAL. med_spa only, per CONSTRAINTS. RealSelf, Healthgrades and the NPI Registry
-// are med_spa rows. Do not build a second vertical's list speculatively.
+// ‼️ ONE LIST OF PLATFORMS, AND THE AUDIENCE DECIDES WHICH OF THEM A CLIENT IS SWEPT ON.
+// RealSelf, Healthgrades and the NPI Registry are med spa rows. They used to be swept for every
+// client, a restaurant and an agency included, so a taco shop's card asked for a RealSelf profile.
+// Since 2026-09-15 client_audiences.presence_platform_keys names the subset, platformsFor() below
+// resolves it, and presence-sweep.ts applies it. The list itself stays ONE list: a platform is a
+// fact about the internet, which of them matters is a fact about who the client sells to.
 
 export type PresenceTier = "core_six" | "extended";
 
@@ -223,6 +227,39 @@ export const RECOMMENDED: PresencePlatform[] = RECOMMENDED_KEYS.map(
 
 export function platformByKey(key: string): PresencePlatform | undefined {
   return ALL_PLATFORMS.find((p) => p.key === key);
+}
+
+/**
+ * The platforms an audience is swept on, from the keys on its row, in ALL_PLATFORMS order.
+ *
+ * ‼️ AN EXPLICIT KEY LIST MAPPED OVER ALL_PLATFORMS, NEVER A FILTER OF CORE_SIX. An audience's
+ * list crosses the tier boundary: bbb and trustpilot (the agency) and foursquare (the restaurant)
+ * are EXTENDED rows. REVIEW_PLATFORM_KEYS in review-audit.ts is the same shape for the same reason.
+ *
+ * ‼️ PURE AND IT STAYS PURE. It takes the keys, not a client id, because this file is imported by
+ * client components. presence-sweep.ts does the reading.
+ *
+ * `unknown` is returned rather than dropped silently: a key nobody recognises is a typo on a row a
+ * person owns, and the card should say which one rather than quietly sweep one platform fewer.
+ */
+export function platformsFor(keys: readonly string[]): {
+  platforms: PresencePlatform[];
+  unknown: string[];
+} {
+  const wanted = new Set(keys.map((k) => k.trim().toLowerCase()).filter(Boolean));
+  const platforms = ALL_PLATFORMS.filter((p) => wanted.has(p.key));
+  const known = new Set(platforms.map((p) => p.key));
+  return { platforms, unknown: [...wanted].filter((k) => !known.has(k)) };
+}
+
+/**
+ * How many distinct platforms close the sweep for a list of this size.
+ *
+ * SWEEP_GATE_COUNT, unless the audience is swept on fewer platforms than that. An audience with
+ * three platforms and a gate of four could never close, and nothing on the card would say why.
+ */
+export function sweepGateFor(listed: number): number {
+  return Math.max(1, Math.min(SWEEP_GATE_COUNT, listed));
 }
 
 /**

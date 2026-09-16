@@ -99,6 +99,28 @@ export interface StartPilotInput {
   language?: "en" | "es" | "both";
   /** 'pilot' today. The paid caller passes 'active'. */
   billingStatus?: "pilot" | "active";
+  /**
+   * A reactivation: the client_archives row to restore into this new client, chosen on the Start pilot form
+   * after its duplicate warning. Imported inside the provisioning claim, before the board exists.
+   */
+  importArchiveId?: string | null;
+  /**
+   * The person starting this already saw the duplicate warning and chose. Without it, a match posts the
+   * warning card (with Import data from duplicate) to the onboarding channel, which is the only way a door
+   * with nobody to ask (the public /start page, a signed agreement) can still show it.
+   */
+  duplicateAcknowledged?: boolean;
+  /**
+   * Which door this came through, and so who announces it and whether the intake-link email goes.
+   *
+   * ‼️ `booking` IS THE DOOR (2026-09-15). Audit report, Get Started, the /onboarding2 chat, a Calendly
+   * booking: the booking opens the board and sends the appointment confirmation, and its booked card is
+   * the one announcement. `dashboard` is the manual fallback and opens the board the same way. Neither
+   * sends the /onboarding?t= welcome email nor posts the Pilot started card, because both callers post
+   * their own card with the channel link, and two cards per client is the wall this channel had before.
+   * `self_serve` is the legacy /start behaviour, unchanged.
+   */
+  door?: "booking" | "dashboard" | "self_serve";
 }
 
 export type StartPilotResult =
@@ -109,7 +131,11 @@ export type StartPilotResult =
       /** Null when the secret is unset. The caller must show it, not swallow it. */
       onboardingUrl: string | null;
       alreadyProvisioned: boolean;
+      /** The client's private board channel, or null when it could not be created (board falls back). */
+      opsChannelId?: string | null;
       warnings: string[];
+      /** What a reactivation restored, one line per kind. Empty when nothing was imported. */
+      imported?: string[];
     }
   | { ok: false; error: string };
 
@@ -302,15 +328,23 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
     // stored, so the link genuinely cannot be re-derived. Re-issuing one is a
     // deliberate, separate action, which is the correct cost for handing out a new
     // bearer credential.
+    const { data: prior } = await supabaseAdmin
+      .from("clients")
+      .select("ops_channel_id")
+      .eq("id", clientId)
+      .maybeSingle();
     return {
       ok: true,
       clientId,
       slug,
       onboardingUrl: null,
       alreadyProvisioned: true,
+      opsChannelId: (prior?.ops_channel_id as string | null) ?? null,
       warnings: [],
     };
   }
+
+  const door = input.door ?? "self_serve";
 
   const warnings: string[] = [];
   const warn = (msg: string) => {
@@ -332,6 +366,24 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
     );
   if (seedError) warn(`stage seeding failed: ${seedError.message}`);
 
+  // ── A reactivation, or a duplicate nobody has been asked about ──
+  //
+  // ‼️ BEFORE THE CHANNEL AND THE BOARD, so every step that later verifies against the record reads the
+  // restored intake, audience and offer instead of an empty client. See src/lib/clients/archive.ts.
+  let imported: string[] = [];
+  if (input.importArchiveId) {
+    const { importFromArchive } = await import("@/lib/clients/archive");
+    const res = await importFromArchive({ archiveId: input.importArchiveId, clientId, by: "Start pilot" }).catch(
+      (e) => ({ ok: false as const, error: (e as Error).message })
+    );
+    if (res.ok) imported = res.lines;
+    else warn(`import from the archive failed: ${res.error}`);
+  } else if (!input.duplicateAcknowledged) {
+    await warnDuplicate(clientId, { legalName, dbaName: input.dbaName, website, domain, email, phone: input.phone }).catch((e) =>
+      warn(`duplicate check failed: ${(e as Error).message}`)
+    );
+  }
+
   // ── Market check. Flags, never blocks. ──
   await checkMarket(clientId, input).catch((e) =>
     warn(`market check failed: ${(e as Error).message}`)
@@ -348,12 +400,45 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
     );
   }
 
-  // No client Slack channel is created. Slack is INTERNAL ONLY as of 2026-08-20: guests
-  // bill at 5 per PAID ACTIVE MEMBER, so fifty clients would mean buying ten seats for a
-  // workspace with one human in it. Client conversation is WhatsApp, contracts are email.
-  // See src/lib/clients/client-drafts.ts. The slack_channel_id / slack_channel_name
-  // columns still exist and still hold the one channel that was created before this
-  // reversed, but nothing writes them any more.
+  // ── An INTERNAL channel for this client's board ──
+  //
+  // ‼️ THIS IS NOT THE THING THAT WAS RETIRED ON 2026-08-20, AND THE DIFFERENCE IS WHO IS IN IT.
+  //
+  // What was retired was CLIENT-FACING channels, and the blocker was billing rather than
+  // doctrine: guests bill at 5 per PAID ACTIVE MEMBER, so fifty clients would have meant buying
+  // ten seats for a workspace with one human in it. This channel is PRIVATE, holds the bot and
+  // SRT, and no client is ever invited, so that blocker does not apply and "Slack is internal
+  // only" is untouched. Client conversation is still WhatsApp and contracts are still email.
+  //
+  // ‼️ NOT clients.slack_channel_id. That column is KEPT and still holds the one channel created
+  // before the reversal; the clients list renders it as "legacy Slack". Writing to it would make
+  // a dead record indistinguishable from a live one.
+  //
+  // ‼️ IT HAPPENS HERE, BEHIND THE PROVISIONING CLAIM, AND THE POSITION IS LOAD-BEARING.
+  // ops_channel_id is write-once: every step anchor stores a bare ts with no channel beside it,
+  // so moving the channel after a board exists orphans all 41 anchors silently. Creating it
+  // here means it is set before ops_thread_ts is claimed and before any anchor exists, and the
+  // claim above guarantees this runs at most once ever for this client.
+  //
+  // A failure is a warning, never fatal: channelFor() falls back to the shared onboarding
+  // channel, so a client whose channel could not be created works exactly as every client
+  // provisioned before today does.
+  //
+  // ‼️ WITH MATTHEW INVITED. A private channel is invisible to anybody not in it, and until
+  // 2026-09-15 this call passed no invite, so SRT Agency LLC's board sat in #srt-srt-agency-llc with
+  // only the bot in it and "no channel was created" was the only reasonable reading.
+  const owner = onboardingOwnerId();
+  const made = await createOpsChannel(clientId, slug, { name: opsChannelNameFor(slug), invite: owner }).catch(
+    (e) => {
+      warn(`ops channel not created: ${(e as Error).message}`);
+      return null;
+    }
+  );
+  if (made?.inviteError) warn(`could not invite ${owner} into #${made.name}: ${made.inviteError}`);
+  const opsChannelId: string | null =
+    made?.channelId ??
+    (((await supabaseAdmin.from("clients").select("ops_channel_id").eq("id", clientId).maybeSingle()).data
+      ?.ops_channel_id as string | null) ?? null);
 
   // ── Onboarding token ──
   let onboardingUrl: string | null = null;
@@ -374,7 +459,11 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
   }
 
   // ── Welcome email ──
-  if (onboardingUrl) {
+  // Only for the legacy self-serve door. A booking gets the appointment confirmation from its own
+  // route (booking-confirmation-email.ts), and a dashboard start has nobody waiting on a form.
+  if (door !== "self_serve") {
+    // Nothing to send here.
+  } else if (onboardingUrl) {
     await sendPilotWelcome({
       to: email,
       firstName: input.contactFirstName?.trim() || null,
@@ -396,22 +485,47 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
   }).catch((e) => warn(`CRM link failed: ${(e as Error).message}`));
 
   // ── Post to #onboarding-srt-aeo ──
-  await postOnboardingCard({
-    legalName: legalName || email,
-    slug,
-    email,
-    website,
-    onboardingUrl,
-    clientId,
-  }).catch((e) => warn(`onboarding card failed: ${(e as Error).message}`));
+  // The booking and dashboard doors announce for themselves, once the board is open, with the
+  // channel link and the call time. See StartPilotInput.door.
+  if (door === "self_serve") {
+    await postOnboardingCard({
+      legalName: legalName || email,
+      slug,
+      email,
+      website,
+      onboardingUrl,
+      clientId,
+      opsChannelId,
+    }).catch((e) => warn(`onboarding card failed: ${(e as Error).message}`));
+  }
 
   if (warnings.length) {
     await postInfraAlert(
-      [`:warning: Provisioning for *${legalName}* finished with problems:`, ...warnings.map((w) => `- ${w}`)].join("\n")
+      [`:warning: Provisioning for *${legalName || email}* finished with problems:`, ...warnings.map((w) => `- ${w}`)].join("\n")
     ).catch(() => {});
   }
 
-  return { ok: true, clientId, slug, onboardingUrl, alreadyProvisioned: false, warnings };
+  return { ok: true, clientId, slug, onboardingUrl, alreadyProvisioned: false, opsChannelId, warnings, imported };
+}
+
+/**
+ * The duplicate warning, for a door that could not ask first. One card in the onboarding channel naming
+ * every match, with Import data from duplicate on each archived one.
+ */
+async function warnDuplicate(clientId: string, identity: import("@/lib/clients/archive").Identity): Promise<void> {
+  const { findDuplicates } = await import("@/lib/clients/archive");
+  const matches = await findDuplicates({ ...identity, excludeClientId: clientId });
+  if (!matches.length) return;
+  const channel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
+  if (!channel) return;
+  const { duplicateCardBlocks } = await import("@/lib/clients/duplicate-card");
+  const { text, blocks } = duplicateCardBlocks({
+    clientId,
+    name: identity.dbaName || identity.legalName || identity.email || "this client",
+    board: `${appUrl()}/dashboard/clients/${clientId}`,
+    matches,
+  });
+  await slack.postMessage(channel, text, blocks);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -603,9 +717,141 @@ async function linkToCrm(
 }
 
 /**
+ * Create this client's private internal channel and record it, once.
+ *
+ * ‼️ IDEMPOTENT ON THE COLUMN, NOT ON THE SLACK CALL. The write is conditional on
+ * ops_channel_id still being null, so a second run cannot replace a channel that already has a
+ * board in it. If Slack says name_taken, the existing channel is adopted rather than a second
+ * one created with a suffix: a re-provisioned client should land back in the channel that
+ * already holds their history.
+ *
+ * ‼️ conversations.join DOES NOT WORK ON A PRIVATE CHANNEL, and it is not needed: the bot that
+ * calls conversations.create is a member of what it creates. That is also why nothing here
+ * invites anybody. Humans join from the channel browser.
+ */
+export async function createOpsChannel(
+  clientId: string,
+  slug: string,
+  /**
+   * `name` overrides the srt-<slug> convention, which reads badly for a client whose slug already
+   * starts with srt (srt-srt-agency-llc). `invite` is a Slack member id.
+   *
+   * ‼️ THE INVITE IS NOT OPTIONAL IN PRACTICE, WHATEVER THE TYPE SAYS. This creates a PRIVATE
+   * channel, and a private channel is invisible to everybody who is not in it: there is no channel
+   * browser entry to find, so a board posted into one nobody was added to is a board nobody can
+   * read. The comment below used to say humans join from the browser, which is true of public
+   * channels and false of these.
+   */
+  opts: { name?: string; invite?: string | null } = {}
+): Promise<{ channelId: string; name: string; inviteError?: string } | null> {
+  const { data: existing } = await supabaseAdmin
+    .from("clients")
+    .select("ops_channel_id")
+    .eq("id", clientId)
+    .maybeSingle();
+
+  if (existing?.ops_channel_id) return null;
+
+  // Slack channel names: lower case, no spaces, 80 chars. The slug is already that shape (the
+  // DDL comment on clients.slug says it IS the channel name) but it is truncated here anyway,
+  // because "srt-" plus an 80-character slug is not.
+  const name = (opts.name?.trim() || `srt-${slug}`).slice(0, 78).replace(/-+$/, "");
+
+  const created = await slack.createChannel(name, true);
+
+  let channelId = created.ok ? created.id : undefined;
+  let channelName = created.ok ? created.name : undefined;
+
+  if (!created.ok) {
+    // ‼️ ratelimited IS NOT name_taken, AND BEFORE slackFetch LEARNED Retry-After THE TWO WERE
+    // THE SAME STRING AT THIS CALL SITE. It retries there now; this is what is left after it.
+    if (created.error !== "name_taken") {
+      throw new Error(created.error ?? "conversations.create failed");
+    }
+    // Adopt it. Nothing else in this workspace is called srt-<slug>, and if a person made it by
+    // hand for this client then that is the channel they are already using.
+    const found = await slack.findChannel(name, true);
+    if (!found) throw new Error(`name_taken but ${name} could not be resolved`);
+    channelId = found.id;
+    channelName = found.name;
+  }
+
+  if (!channelId) throw new Error("no channel id came back");
+
+  const { error } = await supabaseAdmin
+    .from("clients")
+    .update({
+      ops_channel_id: channelId,
+      ops_channel_name: channelName ?? name,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", clientId)
+    // The claim. A concurrent provision that already set it wins and this one is a no-op.
+    .is("ops_channel_id", null);
+
+  if (error) throw new Error(`could not record the channel: ${error.message}`);
+
+  // Into the channel it just made, so the person who owns this board can see it at all.
+  let inviteError: string | undefined;
+  if (opts.invite) {
+    const invited = (await slack.inviteToChannel(channelId, opts.invite)) as {
+      ok?: boolean;
+      error?: string;
+    };
+    // already_in_channel is the normal answer on a re-run and is not a failure.
+    if (!invited?.ok && invited?.error !== "already_in_channel") {
+      inviteError = invited?.error ?? "unknown";
+      console.error(`[clients/provision] could not invite ${opts.invite}:`, inviteError);
+    }
+  }
+
+  // channelFor memoises on the assumption the column never changes. It is changing right now,
+  // from null to a real channel, and anything earlier in this same provisioning run that asked
+  // would have cached the null. Dropping the entry is cheaper than reasoning about who asked.
+  const { forgetChannel } = await import("./step-board");
+  forgetChannel(clientId);
+
+  return { channelId, name: channelName ?? name, inviteError };
+}
+
+/**
+ * srt-<slug>, except for a slug that already starts with srt-, which would read srt-srt-agency-llc.
+ */
+export function opsChannelNameFor(slug: string): string {
+  return /^srt-/.test(slug) ? slug : `srt-${slug}`;
+}
+
+/**
+ * The line every card that announces a client leads with (Matthew, 2026-09-15): "get started onboarding
+ * here, for X client", linking the client's own channel.
+ */
+export function channelLine(opsChannelId: string | null | undefined, clientName?: string | null): string {
+  const who = clientName?.trim() ? ` for ${clientName.trim()}` : "";
+  return opsChannelId
+    ? `:point_right: *Get started onboarding here${who}:* <#${opsChannelId}>`
+    : `:warning: *No channel was created${who}*, so the board is in this channel instead`;
+}
+
+/**
+ * Who is added to every client's private channel. Matthew, unless MATTHEW_SLACK_USER_ID says otherwise.
+ *
+ * ‼️ A FALLBACK, NOT `|| null`. A private channel with nobody in it is invisible, which is exactly the
+ * "no channel was created" SRT Agency LLC hit on 2026-09-15. An unset env var must not reproduce it.
+ */
+export const DEFAULT_ONBOARDING_OWNER = "U074ZQ1K0UE";
+export function onboardingOwnerId(): string {
+  return process.env.MATTHEW_SLACK_USER_ID || DEFAULT_ONBOARDING_OWNER;
+}
+
+/**
  * The INTERNAL card in #onboarding-srt-aeo. This is not the client's view of anything and
  * never was; it is the row of the team's own board. The guest-invite line and the invite
  * reminder email that used to hang off it are gone with the client channel.
+ *
+ * ‼️ THIS ONE STAYS IN THE SHARED CHANNEL DELIBERATELY, even though the board has moved. It is
+ * the "a new client exists" announcement, and the whole point of it is that every new client
+ * appears in ONE place somebody watches. Moving it into the client's own channel would put the
+ * notice that a channel exists inside the channel.
  */
 async function postOnboardingCard(args: {
   legalName: string;
@@ -614,6 +860,7 @@ async function postOnboardingCard(args: {
   website: string | null;
   onboardingUrl: string | null;
   clientId: string;
+  opsChannelId: string | null;
 }): Promise<void> {
   const channel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
   if (!channel) {
@@ -626,6 +873,7 @@ async function postOnboardingCard(args: {
   const text = [
     `:seedling: *Pilot started: ${args.legalName}*`,
     ``,
+    channelLine(args.opsChannelId, args.legalName),
     args.website ? `*Website:* ${args.website}` : `*Website:* not given yet`,
     `*Board:* ${appUrl()}/dashboard/clients/${args.clientId}`,
     args.onboardingUrl ? `*Their link:* ${args.onboardingUrl}` : `*Their link:* not generated`,

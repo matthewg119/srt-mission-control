@@ -60,30 +60,87 @@ export async function widgetHostReachable(): Promise<HostVerdict> {
       detail: `answered ${res.status} for /embed.js rather than serving the loader`,
     };
   } catch (e) {
-    // ‼️ THE REASON IS IN `cause`, NOT IN `message`, AND READING ONLY THE MESSAGE LOSES IT.
-    // Node's fetch collapses every transport failure into the string "fetch failed" and hangs the
-    // real error off `cause`. Matching on the message alone reported a missing DNS record as
-    // "could not be reached", which sends somebody to look at the route and at Deployment
-    // Protection when the answer was that the hostname does not exist. Walk the chain instead.
-    const parts: string[] = [];
-    for (let err: unknown = e, hops = 0; err && hops < 4; hops++) {
-      const o = err as { message?: string; code?: string; cause?: unknown };
-      if (o.code) parts.push(o.code);
-      if (o.message) parts.push(o.message);
-      err = o.cause;
-    }
-    const message = parts.join(" ");
-    const dns = /ENOTFOUND|EAI_AGAIN|getaddrinfo|ERR_NAME|NXDOMAIN/i.test(message);
-    const timedOut = /abort|timeout|timed out|ETIMEDOUT/i.test(message);
+    return { ok: false, host, detail: transportFailure(e, TIMEOUT_MS) };
+  }
+}
 
-    return {
-      ok: false,
-      host,
-      detail: dns
-        ? "does not resolve, so there is no DNS record for it"
-        : timedOut
-          ? `did not answer within ${TIMEOUT_MS / 1000} seconds`
-          : `could not be reached (${message.slice(0, 120)})`,
-    };
+/**
+ * Why a fetch threw, as the middle of a sentence: "`host` does not resolve, ...".
+ *
+ * ‼️ THE REASON IS IN `cause`, NOT IN `message`, AND READING ONLY THE MESSAGE LOSES IT.
+ * Node's fetch collapses every transport failure into the string "fetch failed" and hangs the
+ * real error off `cause`. Matching on the message alone reported a missing DNS record as
+ * "could not be reached", which sends somebody to look at the route and at Deployment
+ * Protection when the answer was that the hostname does not exist. Walk the chain instead.
+ */
+function transportFailure(e: unknown, timeoutMs: number): string {
+  const parts: string[] = [];
+  for (let err: unknown = e, hops = 0; err && hops < 4; hops++) {
+    const o = err as { message?: string; code?: string; cause?: unknown };
+    if (o.code) parts.push(o.code);
+    if (o.message) parts.push(o.message);
+    err = o.cause;
+  }
+  const message = parts.join(" ");
+  const dns = /ENOTFOUND|EAI_AGAIN|getaddrinfo|ERR_NAME|NXDOMAIN/i.test(message);
+  const timedOut = /abort|timeout|timed out|ETIMEDOUT/i.test(message);
+
+  return dns
+    ? "does not resolve, so there is no DNS record for it"
+    : timedOut
+      ? `did not answer within ${timeoutMs / 1000} seconds`
+      : `could not be reached (${message.slice(0, 120)})`;
+}
+
+export type ProbeResult =
+  | { ok: true; status: number }
+  | { ok: false; status: number | null; detail: string };
+
+/**
+ * Did this exact URL answer 200, just now?
+ *
+ * For the links a step card hands a person (the step 20 demo link, the step 19 review tool), so a
+ * card can print a link only after it was actually requested. Same never-throws rule as
+ * widgetHostReachable above, and `detail` reads the same way: the middle of a sentence.
+ *
+ * ‼️ A REDIRECT OFF THE HOST WE ASKED IS A FAILURE, NOT A 200. Deployment Protection answers a
+ * protected URL with a 302 to Vercel's login page, which then answers 200. Following that and
+ * reporting success is the green tick over a dead link this file exists to prevent.
+ *
+ * ‼️ cache: "no-store" IS LOAD BEARING. Next patches fetch on the server and may answer a GET
+ * from its data cache, and a cached 200 from last week says nothing about the link today.
+ */
+export async function probeUrl(url: string, timeoutMs: number = TIMEOUT_MS): Promise<ProbeResult> {
+  let host: string;
+  try {
+    host = new URL(url).host.toLowerCase();
+  } catch {
+    return { ok: false, status: null, detail: "is not a valid URL" };
+  }
+
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      cache: "no-store",
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: { accept: "text/html,*/*" },
+    });
+    // The body is not read, so release the connection rather than leave it for the GC.
+    await res.body?.cancel().catch(() => {});
+
+    let landed = host;
+    try {
+      landed = new URL(res.url || url).host.toLowerCase();
+    } catch {
+      // No final URL to compare: judge on the status alone.
+    }
+    if (landed !== host) {
+      return { ok: false, status: res.status, detail: `redirected to ${landed} instead of answering` };
+    }
+    if (res.status === 200) return { ok: true, status: 200 };
+    return { ok: false, status: res.status, detail: `answered ${res.status}` };
+  } catch (e) {
+    return { ok: false, status: null, detail: transportFailure(e, timeoutMs) };
   }
 }

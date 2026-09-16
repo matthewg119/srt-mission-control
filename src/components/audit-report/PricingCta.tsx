@@ -31,14 +31,16 @@
 // restoring a second, softer link is the first thing to try, and buildAdsFunnelUrl() in
 // lib/onboarding2-link.ts is deliberately left in place for exactly that.
 //
-// BOOKING_LINK is tri-state and null is a real state. With none configured this renders WITHOUT
-// that button rather than a dead `href="#"`, for the same reason the Loom script prints a
-// correction instead of the close: a link that goes nowhere is discovered by the prospect.
+// ‼️ THE "Or book the onboarding call" BUTTON IS GONE (2026-09-15). It pointed at BOOKING_LINK, a
+// bare Calendly page, and a booking made there never reaches this app: no client, no channel, no
+// board. Get Started opens /onboarding2 with r=<slug>, where the booking provisions the client and
+// opens the board tied to THIS report. One door, so every booking starts onboarding.
 //
 // ‼️ EVERY PROP IS OPTIONAL AND THE COMPONENT STILL RENDERS WITHOUT THEM. A pending or failed
 // report has no score, no competitor and no counts. A missing param renders the generic hero on
 // the destination, which is documented behaviour over there, so there is nothing to guard here.
-import { BOOKING_LINK } from "@/config/pitch";
+// BOOKING_LINK is gone with the second button, which main deleted on 2026-09-15: it pointed at a
+// bare Calendly page and a booking made there reached this app not at all. One door now.
 import { buildOnboarding2Url, scaleToSample, type ReportUtm } from "@/lib/onboarding2-link";
 
 export function PricingCta({
@@ -95,16 +97,6 @@ export function PricingCta({
       >
         Get Started
       </a>
-      {BOOKING_LINK ? (
-        <a
-          href={BOOKING_LINK}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mt-3 block w-full rounded-lg border border-surface-border py-3 text-center text-sm font-semibold text-text-secondary transition hover:opacity-90"
-        >
-          Or book the onboarding call
-        </a>
-      ) : null}
     </div>
   );
 }

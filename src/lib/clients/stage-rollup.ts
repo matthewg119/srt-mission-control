@@ -17,7 +17,7 @@
 //
 // The two step lists stay at their own altitudes and this is the only thing that joins
 // them: client_onboarding_steps is the EIGHT client-facing stages, client_delivery_steps
-// is the THIRTY-THREE operational steps SRT works through, several of which live inside
+// is the FORTY-ONE operational steps SRT works through, several of which live inside
 // one stage. Nothing here merges them.
 
 import { supabaseAdmin } from "@/lib/db";

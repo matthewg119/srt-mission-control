@@ -31,11 +31,24 @@
 // download-and-transcribe path, which is imported rather than copied.
 
 import { supabaseAdmin } from "@/lib/db";
-import { slack } from "@/lib/slack-bot";
+import { stepNumber } from "@/config/delivery-steps";
+import { slack, type SlackBlock } from "@/lib/slack-bot";
 import { isVoiceNote, transcribeAudio } from "./voice-notes";
-import { startPageDraft, appendPageBody, listAllForBoard, type ClientPage } from "@/lib/hub/pages";
+import {
+  startPageDraft,
+  appendPageBody,
+  listAllForBoard,
+  undoLastAppend,
+  replacePageBody,
+  readPageOutline,
+  setPageOutline,
+  type ClientPage,
+  type PageOutline,
+  type OutlineGap,
+} from "@/lib/hub/pages";
 import {
   recordSource,
+  deleteSource,
   loadEvidenceFor,
   evidenceSummary,
   nextTopic,
@@ -43,6 +56,9 @@ import {
   topicPosition,
   type EvidenceTopic,
 } from "./page-evidence";
+import type { PlanRow, FrameContext } from "./page-plan";
+import { BATCH_COMMAND, HEADLINE_COMMAND, SKELETON_COMMAND } from "./page-batch";
+import { storyCardLines } from "@/lib/hub/page-stories";
 
 /**
  * The channel this lane owns.
@@ -59,6 +75,56 @@ export function pageStudioChannel(): string {
 /** How the channel is NAMED in another feature's card. A raw id helps nobody. */
 export function pageStudioHint(): string {
   return `<#${pageStudioChannel()}>`;
+}
+
+/**
+ * The same words with Slack's formatting wrappers taken off, for COMMAND MATCHING ONLY.
+ *
+ * ‼️ THIS IS A REAL BUG FIX AND THE SYMPTOM WAS SILENCE. Matthew typed `page SRT Agency LLC`
+ * as an inline code span. Slack delivers the backticks as literal characters, every command
+ * test below is anchored at the start of the message, so nothing matched and the branch fell
+ * through to the nudge. Typing a command in a code span is the most natural thing in the world
+ * in a channel whose entire vocabulary is commands.
+ *
+ * ‼️ IT IS DELIBERATELY NOT APPLIED TO WHAT GETS STORED. The body append and the evidence
+ * answer both take the RAW text, because those are his words going verbatim onto a page on the
+ * client's own domain, and an asterisk he typed on purpose is his.
+ *
+ * Four wrappers: a fenced block, an inline code span, bold and italic. This is not a mrkdwn
+ * parser and must not become one.
+ *
+ * ‼️ IT PEELS UNTIL NOTHING COMES OFF, NOT ONCE PER MARKER, and the difference is a real case.
+ * A single pass in a fixed order leaves `*` + backtick + text + backtick + `*` half-wrapped,
+ * because bold is stripped after the code span it was hiding. Bounded by MAX_PEELS so a
+ * pathological string cannot spin.
+ *
+ * A marker with only one side is left alone: a message opening with a backtick and never
+ * closing it is prose, not a command wearing a costume. And an emphasised word MID-sentence is
+ * untouched, which matters because this same message may be dictation headed verbatim onto a
+ * page.
+ */
+const MAX_PEELS = 4;
+
+export function unwrapFormatting(text: string): string {
+  let out = text.trim();
+  const pairs: ReadonlyArray<readonly [string, string]> = [
+    ["```", "```"],
+    ["`", "`"],
+    ["*", "*"],
+    ["_", "_"],
+  ];
+
+  for (let pass = 0; pass < MAX_PEELS; pass += 1) {
+    const before = out;
+    for (const [open, close] of pairs) {
+      if (out.length > open.length + close.length && out.startsWith(open) && out.endsWith(close)) {
+        out = out.slice(open.length, out.length - close.length).trim();
+      }
+    }
+    if (out === before) break;
+  }
+
+  return out;
 }
 
 function appUrl(): string {
@@ -84,6 +150,15 @@ interface MenuItem {
   question: string;
   score: number;
   origin: "harvested" | "derived";
+  /**
+   * Set on every item of a menu built from an approved page plan, and absent on a menu written
+   * before plans existed. A digit claims by `rank`, the same number `plan drop 4` and the plan
+   * card use, so one number means one page everywhere in the thread.
+   */
+  planId?: string;
+  rank?: number;
+  workingTitle?: string;
+  targetKeyword?: string;
 }
 
 /**
@@ -169,8 +244,8 @@ async function setMode(
  * here. An unchecked failure in this lane is the worst kind: he dictates for two minutes, the
  * reply never lands, and there is nothing on screen saying whether the words were kept.
  */
-async function say(threadTs: string, text: string): Promise<boolean> {
-  const res = (await slack.postThreadReply(pageStudioChannel(), threadTs, text)) as {
+async function say(threadTs: string, text: string, blocks?: SlackBlock[]): Promise<boolean> {
+  const res = (await slack.postThreadReply(pageStudioChannel(), threadTs, text, blocks)) as {
     ok?: boolean;
     error?: string;
   };
@@ -220,31 +295,92 @@ async function resolveClient(term: string): Promise<ClientRow[]> {
   return exact.length === 1 ? exact : rows;
 }
 
-/** The ranked menu, harvested first and derived after, each labelled. */
-async function buildMenu(clientId: string): Promise<MenuItem[]> {
+/**
+ * The top of the backlog, for display only. Nothing here can be claimed.
+ *
+ * ‼️ FILTERED, AND THE LIVE MENU IS WHY. This read page_candidates straight, sorted by score, and
+ * on 2026-09-11 SRT's card offered "Why: Compliance and privacy concern", a lone quote mark and a
+ * quote with a URL glued on as the pages to write. The quality filter already existed; this was
+ * the one reader that skipped it. isPlannable is the same rule the plan itself uses.
+ */
+async function backlogPreview(clientId: string): Promise<MenuItem[]> {
+  const { isPlannable } = await import("./page-plan");
+  const { normalizePhrase } = await import("./phrase-quality");
+
   const { data } = await supabaseAdmin
     .from("page_candidates")
     .select("question, score, origin")
     .eq("client_id", clientId)
     .order("score", { ascending: false })
-    .limit(MENU_SIZE * 3);
+    .limit(MENU_SIZE * 6);
 
-  const rows: MenuItem[] = (data ?? [])
+  const seen = new Set<string>();
+  const rows: MenuItem[] = [];
+  for (const r of data ?? []) {
+    const question = ((r.question as string) ?? "").trim();
+    // Rows written before docs/2026-08-25-lane-4-pages.sql carry no origin, and everything that
+    // table held before that migration was harvested.
+    const origin = ((r.origin as string | null) ?? "harvested") === "derived" ? "derived" : "harvested";
+    if (!question || !isPlannable(question, origin)) continue;
+    const key = normalizePhrase(question);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push({ question, score: Number(r.score ?? 0), origin });
+  }
+
+  return rows.slice(0, 8);
+}
+
+/** The claimable menu, from the approved plan rows. Numbered by plan rank. */
+function planMenu(rows: readonly PlanRow[]): MenuItem[] {
+  return rows
+    .filter((r) => r.status === "approved" || r.status === "claimed")
     .map((r) => ({
-      question: ((r.question as string) ?? "").trim(),
-      score: Number(r.score ?? 0),
-      // Rows written before docs/2026-08-25-lane-4-pages.sql carry no origin. Defaulting them
-      // to harvested is correct: everything this table held before that migration was.
-      origin:
-        (((r.origin as string | null) ?? "harvested") === "derived" ? "derived" : "harvested") as
-          | "harvested"
-          | "derived",
-    }))
-    .filter((r) => r.question.length > 0);
+      question: r.question,
+      score: 0,
+      // A keyword-origin row is a phrase from the approved set, which the menu labels like a
+      // harvested one: only a DERIVED idea gets the "we proposed this" label.
+      origin: r.origin === "derived" ? "derived" : "harvested",
+      planId: r.id,
+      rank: r.rank,
+      workingTitle: r.workingTitle,
+      targetKeyword: r.targetKeyword,
+    }));
+}
 
-  const harvested = rows.filter((r) => r.origin === "harvested").slice(0, MENU_SIZE);
-  const derived = rows.filter((r) => r.origin === "derived").slice(0, 4);
-  return [...harvested, ...derived];
+/**
+ * Re-freeze this thread's menu from the plan as it now stands.
+ *
+ * ‼️ CALLED AFTER EVERY PLAN CHANGE, because the menu is frozen on the session row on purpose (see
+ * MenuItem). `plan approve` in a thread whose card was posted before the plan existed would
+ * otherwise leave a digit claiming nothing, and `plan drop 4` would leave "5" pointing at a row
+ * that is now rank 4.
+ */
+async function refreshSessionMenu(session: Session): Promise<void> {
+  const { loadPlan } = await import("./page-plan");
+  const plan = await loadPlan(session.clientId);
+  if ("error" in plan) return;
+  const menu = planMenu(plan.rows);
+  const { error } = await supabaseAdmin
+    .from("page_studio_sessions")
+    .update({ candidates: menu, updated_at: new Date().toISOString() })
+    .eq("thread_ts", session.threadTs);
+  if (error) console.error("[page-studio] menu refresh failed:", error.message);
+  session.candidates = menu;
+}
+
+/** The steps, in order, printed on the card so nobody has to remember them. */
+function howToLines(): string[] {
+  return [
+    "*How a page gets built here:*",
+    "  1. `offer: ...`, `avatar: ...` and `anchor: <magnet key>` set what every page aims at and the one offer it hands over.",
+    "  2. `plan` proposes the pages, each with a target keyword and a framing of the anchor. `plan approve` locks them in.",
+    "  3. A number claims an approved page, and five framings of the anchor are written for it. `magnet 1` picks one.",
+    "  4. `outline` writes the skeleton and asks for the gaps one at a time. Talk or type; `next` skips one.",
+    "  5. `draft` writes the page from your answers, `check` runs the quality gate, `done` finishes.",
+    "  6. To edit it outside Slack: `text` prints the whole body to copy, `replace: <the edited body>` puts it back, `preview` opens it.",
+    "`keywords` shows the ranked phrases. `undo` takes the last thing added back out, or undoes a whole `replace:`. `cancel` drops this thread.",
+  ];
 }
 
 function statusMark(question: string, pages: ClientPage[]): string {
@@ -285,50 +421,71 @@ async function startSession(text: string, messageTs: string): Promise<void> {
   }
 
   const client = matches[0];
-  const [menu, pages] = await Promise.all([buildMenu(client.id), listAllForBoard(client.id)]);
+  const { loadPlan, PLAN_SIZE } = await import("./page-plan");
+  const [plan, backlog, pages, aim] = await Promise.all([
+    loadPlan(client.id),
+    backlogPreview(client.id),
+    listAllForBoard(client.id),
+    // ‼️ THE OFFER, THE AVATAR AND THE ANCHOR GO ON THE CARD BEFORE ANY PAGE, because a page
+    // claimed without them is a page aimed at nobody, and its magnet is written from all three.
+    aimLines(client.id),
+  ]);
 
-  if (menu.length === 0) {
+  const planRows = "error" in plan ? [] : plan.rows;
+  const menu = planMenu(planRows);
+
+  if (!("error" in plan) && planRows.length === 0 && backlog.length === 0) {
     await say(
       messageTs,
-      `*${client.name}* has no scored page candidates yet. That is step 13 on the delivery ` +
-        "checklist, and it needs the phrase harvest (step 10) to have run first.\n" +
+      `*${client.name}* has no scored page candidates yet. That is step ` +
+        `${stepNumber("page_candidates")} on the delivery checklist, and it needs the phrase ` +
+        `harvest (step ${stepNumber("avatar_harvest")}) to have run first.\n` +
         `${appUrl()}/dashboard/clients/${client.id}`
     );
     return;
   }
 
-  const harvested = menu.filter((m) => m.origin === "harvested");
-  const derived = menu.filter((m) => m.origin === "derived");
+  const lines: string[] = [`*${client.name}*, the page studio.`, "", ...aim, ""];
 
-  const lines: string[] = [
-    `*${client.name}* — page candidates, best first.`,
+  // ‼️ NOTHING IS CLAIMABLE WITHOUT AN APPROVED PLAN, AND THE CARD SAYS SO FIRST. Matthew: "all of
+  // this needs to be selected and done before we start drafting pages". The backlog is still
+  // shown when there is no plan, labelled as what the plan will choose from, because hiding it
+  // would leave nothing on the card to argue with.
+  if ("error" in plan) {
+    lines.push(`:warning: ${plan.error}`, "");
+  } else if (menu.length) {
+    lines.push(`*The page plan.* ${menu.length} approved page${menu.length === 1 ? "" : "s"}; a number claims one.`);
+    for (const row of planRows.filter((r) => r.status !== "proposed")) {
+      const live =
+        row.pageStatus === "published" ? "  `[published]`" : row.status === "claimed" ? "  `[drafting]`" : "";
+      lines.push(`*${row.rank}.* ${row.workingTitle}${live}  _(${row.theme}, keyword \`${row.targetKeyword}\`)_`);
+    }
+    const proposed = planRows.filter((r) => r.status === "proposed").length;
+    if (proposed) lines.push("", `_${proposed} more proposed and not approved yet. \`plan\` shows them._`);
+  } else if (planRows.length) {
+    lines.push(
+      `*A page plan is proposed and not approved yet* (${planRows.length} pages). ` +
+        "`plan` shows it, `plan approve` locks it in. Nothing can be claimed until then."
+    );
+  } else {
+    lines.push(
+      "*No page plan yet.* Pages are chosen before any of them is drafted, so a number does nothing until there is one.",
+      `\`plan\` proposes ${PLAN_SIZE}, each with a target keyword and a framing of the anchor offer.`,
+      "",
+      "_The top of the backlog it chooses from, not claimable:_",
+      ...backlog.map((b) => `  • ${b.question}${statusMark(b.question, pages)}${b.origin === "derived" ? "  _(an idea we proposed)_" : ""}`)
+    );
+  }
+
+  lines.push(
     "",
     // The distinction, said on the card rather than assumed. It is the question Matthew asked
     // about these two steps, and it is a question rather than a defect.
-    "_This is step 13, the PUBLISHING backlog: what is worth writing._",
-    "_Step 12 is the MEASUREMENT set, frozen at Day 0, and nothing is ever published from it._",
+    `_Step ${stepNumber("page_candidates")} is the PUBLISHING backlog the plan is chosen from. ` +
+      `Step ${stepNumber("custom_question_set")} is the MEASUREMENT set, frozen at Day 0, and nothing is ever published from it._`,
     "",
-  ];
-
-  harvested.forEach((m, i) => {
-    lines.push(`*${i + 1}.* ${m.question}${statusMark(m.question, pages)}  _(${m.score})_`);
-  });
-
-  if (derived.length) {
-    lines.push("");
-    lines.push("*Ideas we proposed*, not questions anybody typed. Tools, guides and comparisons:");
-    derived.forEach((m, i) => {
-      const n = harvested.length + i + 1;
-      lines.push(`*${n}.* ${m.question}${statusMark(m.question, pages)}  _(derived, ${m.score})_`);
-    });
-  }
-
-  lines.push("");
-  lines.push("Reply with a number to claim one. Five lead magnet offers get written for it there");
-  lines.push("and then. `ask` walks the interview, or just talk and your words go into the page");
-  lines.push("exactly as you said them. `magnet` picks what this page offers from those five,");
-  lines.push("`draft` writes it from the evidence, `polish` tidies what you wrote,");
-  lines.push("`check` runs the quality gate, `done` when you are finished, `cancel` to drop this.");
+    ...howToLines()
+  );
 
   const posted = (await slack.postThreadReply(channel, messageTs, lines.join("\n"))) as {
     ok?: boolean;
@@ -370,13 +527,41 @@ async function startSession(text: string, messageTs: string): Promise<void> {
  * bot being down.
  */
 async function claim(session: Session, n: number): Promise<void> {
-  const item = session.candidates[n - 1];
-  if (!item) {
-    await say(session.threadTs, `Pick a number between 1 and ${session.candidates.length}.`);
+  if (session.candidates.length === 0) {
+    await say(
+      session.threadTs,
+      "There is no approved page plan in this thread, so there is nothing to claim. `plan` " +
+        "proposes the pages, `plan approve` locks them in, and then a number claims one."
+    );
     return;
   }
 
-  const opened = await startPageDraft({ clientId: session.clientId, question: item.question });
+  // ‼️ A MENU FROM BEFORE PLANS EXISTED IS NOT HONOURED. It is a frozen list of raw backlog
+  // questions, which is exactly what the plan exists to stop pages being chosen from.
+  if (!session.candidates.some((c) => c.planId)) {
+    await say(
+      session.threadTs,
+      "This thread's list is from before page plans existed. Post `page <client>` again for a " +
+        "fresh card, and claim from the plan."
+    );
+    return;
+  }
+
+  const item = session.candidates.find((c) => c.rank === n);
+  if (!item || !item.planId) {
+    await say(
+      session.threadTs,
+      `There is no approved page ${n}. Approved: ${session.candidates.map((c) => c.rank).join(", ")}. ` +
+        "`plan` shows the whole plan."
+    );
+    return;
+  }
+
+  const opened = await startPageDraft({
+    clientId: session.clientId,
+    question: item.question,
+    title: item.workingTitle ?? null,
+  });
   if (!opened.ok) {
     await say(session.threadTs, `:warning: ${opened.error}`);
     return;
@@ -400,19 +585,22 @@ async function claim(session: Session, n: number): Promise<void> {
     return;
   }
 
+  const { markClaimed } = await import("./page-plan");
+  await markClaimed(item.planId, opened.id);
+
   await say(
     session.threadTs,
     (opened.resumed ? "*Back on a draft you already started.*\n" : "*Draft opened.*\n") +
-      `> ${item.question}\n` +
+      `> ${item.workingTitle ?? item.question}\n` +
+      (item.targetKeyword ? `_Aimed at \`${item.targetKeyword}\`._\n` : "") +
       (item.origin === "derived"
         ? "_A page we proposed rather than a question anybody typed._\n"
         : "") +
-      "\n*`ask`* walks the interview: what only they know, filed as evidence rather than as page " +
-      "copy, and the drafter is then held to it.\n" +
-      "Or just talk, and everything you send lands in the body word for word.\n" +
-      "*`magnet`* lists what this page can offer and `magnet <number>` picks one, before you draft.\n" +
-      "`draft` writes it from the evidence, `polish` tidies what you wrote, `check` runs the " +
-      "quality gate, `done` finishes."
+      "\n*Next:*\n" +
+      "  1. `magnet 1` to `magnet 5` picks how this page frames the offer. The five are below.\n" +
+      "  2. `outline` writes the skeleton and asks for the gaps, one at a time.\n" +
+      "  3. `draft` writes the page from your answers, `check` runs the quality gate, `done` finishes.\n" +
+      "Or just talk, and what you send goes into the page word for word. `undo` takes the last one back out."
   );
 
   // ‼️ THE OFFERS ARE WRITTEN WITH THE PAGE, NOT ASKED FOR AFTERWARDS.
@@ -546,6 +734,13 @@ async function recordAnswer(
   via: "slack_voice" | "slack_typed",
   messageTs: string
 ): Promise<void> {
+  // An outline's gaps ride the same mode and the same column, keyed `gap:G1`. They are walked by
+  // their own functions because they come off the page's outline rather than EVIDENCE_TOPICS.
+  if (session.evidenceTopic?.startsWith("gap:")) {
+    await recordGapAnswer(session, text, via, messageTs);
+    return;
+  }
+
   const topic = session.evidenceTopic ? topicByKey(session.evidenceTopic) : null;
   if (!topic) {
     // The stored topic no longer exists, which happens if EVIDENCE_TOPICS is edited under a
@@ -599,6 +794,16 @@ async function recordAnswer(
 
 /** `next` / `skip` — nothing to say about this one. */
 async function skipTopic(session: Session): Promise<void> {
+  if (session.evidenceTopic?.startsWith("gap:")) {
+    const state = await gapState(session);
+    if (!state) {
+      await leaveInterview(session);
+      return;
+    }
+    await advanceGap(session, state, `Skipped ${state.gap.id}.`);
+    return;
+  }
+
   const following = nextTopic(session.evidenceTopic);
   if (!following) {
     await setMode(session, "body", null);
@@ -619,6 +824,840 @@ async function leaveInterview(session: Session): Promise<void> {
     session.threadTs,
     "Back to page mode. Everything you say now goes into the page body word for word."
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// `outline` and its gaps
+//
+// Matthew, 2026-09-11: "can't we simply have one version drafted, delete 80%, leave bullet points
+// and we can fill the gaps?" The skeleton is that version with the 80% never written: headings,
+// bullets saying what each part covers, and numbered gaps for what only the business knows. The
+// gaps are asked one at a time exactly like `ask`, filed as evidence, and `draft` then writes the
+// body from the outline and those answers.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function gapCard(gap: OutlineGap, at: number, of: number): string {
+  return (
+    `*Gap ${gap.id}, ${at} of ${of}.* ${gap.prompt}\n` +
+    (gap.scope === "client"
+      ? "_About the business as a whole, so every later page can use it. Answer it once._\n"
+      : "_About this page._\n") +
+    "Talk or type. `next` skips it, `body` goes back to writing the page itself."
+  );
+}
+
+function formatOutline(outline: PageOutline): string {
+  const lines = [
+    "*The skeleton.* The headings the page will have and what each part covers. A [G] mark is " +
+      "something only you can supply.",
+    "",
+  ];
+  for (const section of outline.sections) {
+    lines.push(`*${section.heading}*`);
+    for (const bullet of section.bullets) lines.push(`  • ${bullet}`);
+  }
+  const stories = storyCardLines(outline, "");
+  if (stories.length) lines.push("", ...stories);
+  lines.push(
+    "",
+    "_Nothing here goes on the page. `draft` writes the page from this and your answers. " +
+      "`outline new` writes a different skeleton._"
+  );
+  return lines.join("\n");
+}
+
+interface GapState {
+  outline: PageOutline;
+  gap: OutlineGap;
+  index: number;
+}
+
+async function gapState(session: Session): Promise<GapState | null> {
+  if (!session.pageId || !session.evidenceTopic?.startsWith("gap:")) return null;
+  const outline = await readPageOutline(session.clientId, session.pageId);
+  if (!outline) return null;
+  const id = session.evidenceTopic.slice(4);
+  const index = outline.gaps.findIndex((g) => g.id === id);
+  if (index < 0) return null;
+  return { outline, gap: outline.gaps[index], index };
+}
+
+async function advanceGap(session: Session, state: GapState, lead: string): Promise<void> {
+  const following = state.outline.gaps[state.index + 1];
+  if (!following) {
+    await setMode(session, "body", null);
+    await say(
+      session.threadTs,
+      `${lead}\n\n*That was the last gap.* Back to page mode. \`draft\` writes the page from the ` +
+        "skeleton and your answers, `check` runs the quality gate, `done` finishes."
+    );
+    return;
+  }
+  await setMode(session, "evidence", `gap:${following.id}`);
+  await say(
+    session.threadTs,
+    `${lead}\n\n${gapCard(following, state.index + 2, state.outline.gaps.length)}`
+  );
+}
+
+async function recordGapAnswer(
+  session: Session,
+  text: string,
+  via: "slack_voice" | "slack_typed",
+  messageTs: string
+): Promise<void> {
+  const state = await gapState(session);
+  if (!state) {
+    await say(
+      session.threadTs,
+      ":warning: This page's skeleton changed and that gap is gone. `outline` shows it again, `body` goes back to writing."
+    );
+    return;
+  }
+
+  const res = await recordSource({
+    clientId: session.clientId,
+    // Same scoping rule as the interview: a client-scoped gap (pricing, credentials) files in the
+    // library and grounds every later page, a page-scoped one files against this page only.
+    pageId: state.gap.scope === "client" ? null : session.pageId,
+    sourceType: "CLIENT_VOICE",
+    sourceContent: text,
+    // The draft prompt tells the model a gap's answer sits under a topic beginning "Gap Gn".
+    topic: `Gap ${state.gap.id}: ${state.gap.prompt}`,
+    collectedVia: via,
+    slackTs: messageTs,
+  });
+
+  if (!res.ok) {
+    await say(session.threadTs, `:warning: That was not filed: ${res.error}\nSay it again.`);
+    return;
+  }
+
+  const words = text.split(/\s+/).filter(Boolean).length;
+  await advanceGap(session, state, `Filed, word for word. ${words} words against *${state.gap.id}*.`);
+}
+
+/** `outline` shows the skeleton (writing one if there is none), `outline new` rewrites it. */
+async function outlineCommand(session: Session, fresh: boolean): Promise<void> {
+  if (!session.pageId) {
+    await say(session.threadTs, "Pick a number first, then `outline` writes the skeleton for that page.");
+    return;
+  }
+
+  let outline = fresh ? null : await readPageOutline(session.clientId, session.pageId);
+
+  if (!outline) {
+    const { data: page } = await supabaseAdmin
+      .from("client_pages")
+      .select("question")
+      .eq("id", session.pageId)
+      .eq("client_id", session.clientId)
+      .maybeSingle();
+
+    const { planRowForPage } = await import("./page-plan");
+    const row = await planRowForPage(session.clientId, session.pageId);
+
+    await say(session.threadTs, "Writing the skeleton. The page body is not touched.");
+
+    const { draftOutline } = await import("@/lib/hub/draft-page");
+    const res = await draftOutline(session.clientId, (page?.question as string) ?? "", {
+      pageId: session.pageId,
+      context: row
+        ? { workingTitle: row.workingTitle, targetKeyword: row.targetKeyword, angle: row.angle, headline: row.headline }
+        : null,
+    });
+
+    if (!res.ok) {
+      await say(session.threadTs, `:warning: Could not write the skeleton: ${res.error}`);
+      return;
+    }
+
+    const saved = await setPageOutline(session.clientId, session.pageId, res.outline);
+    if (!saved.ok) {
+      await say(
+        session.threadTs,
+        `:warning: The skeleton was written but not saved: ${saved.error}. If that names ` +
+          "outline, docs/2026-09-11-page-plan.sql has not been run."
+      );
+      return;
+    }
+    outline = res.outline;
+  }
+
+  await say(session.threadTs, formatOutline(outline));
+
+  const first = outline.gaps[0];
+  if (!first) {
+    await say(session.threadTs, "No gaps: what is on file already covers it. `draft` writes the page.");
+    return;
+  }
+
+  await setMode(session, "evidence", `gap:${first.id}`);
+  await say(session.threadTs, gapCard(first, 1, outline.gaps.length));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// `undo`
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Take the last thing added to the body back out, and the source it was filed as. */
+async function undoCommand(session: Session): Promise<void> {
+  if (!session.pageId) {
+    await say(session.threadTs, "Nothing is claimed in this thread, so there is nothing to undo.");
+    return;
+  }
+
+  // ‼️ A PARKED BODY WINS, AND undoLastAppend CANNOT DO THIS JOB. It splits answer_md on blank
+  // lines and pops the LAST PARAGRAPH, which is right after an append and actively wrong after a
+  // `replace:`: it would strip a paragraph off the NEW body and the old one would be gone for
+  // good. So a replace parks what it overwrote and `undo` puts that back whole, clearing the park
+  // so a second `undo` means what it has always meant.
+  const parked = await readUndoBody(session.threadTs);
+  if (parked !== null) {
+    const restored = await replacePageBody(session.clientId, session.pageId, parked);
+    if (!restored.ok) {
+      await say(session.threadTs, `:warning: ${restored.error}`);
+      return;
+    }
+    await writeUndoBody(session.threadTs, null);
+    await say(
+      session.threadTs,
+      `Put the body back as it was before the replace. The page is now ${restored.words} words.`
+    );
+    return;
+  }
+
+  const res = await undoLastAppend(session.clientId, session.pageId);
+  if (!res.ok) {
+    await say(session.threadTs, `:warning: ${res.error}`);
+    return;
+  }
+
+  // ‼️ THE SOURCE GOES WITH IT. append() filed the same words as CLIENT_VOICE evidence, so leaving
+  // that row would keep grounding the page in something that is no longer on it, and the gate
+  // would accept a number from words he took back.
+  const { data: filed } = await supabaseAdmin
+    .from("page_sources")
+    .select("id")
+    .eq("client_id", session.clientId)
+    .eq("page_id", session.pageId)
+    .eq("topic", "Dictated straight into the page")
+    .eq("source_content", res.removed)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (filed?.id) await deleteSource(session.clientId, filed.id as string);
+
+  const preview = res.removed.length > 120 ? `${res.removed.slice(0, 120)}…` : res.removed;
+  await say(session.threadTs, `Took back out: "${preview}". The page is now ${res.words} words.`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// `batch`, `headline N pick M`, `skeleton N more`
+//
+// ‼️ THE ORDER IS D3 AND THE CARDS ENFORCE IT: pillar, headlines, skeletons, ONE research, then
+// seven drafts. Each command refuses politely when the batch is not at its stage, rather than
+// doing the work out of order, because a skeleton written before its headline is a skeleton for a
+// page that does not know what it is promising.
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function batchCommand(session: Session, arg: string | null): Promise<void> {
+  const { readBatch, existingPillars, pillarQuestionLines, stageLine, headlineCardLines, skeletonCardLines, optionsFor } =
+    await import("./page-batch");
+
+  const verb = (arg ?? "").trim().toLowerCase();
+
+  // ‼️ THE PILLAR QUESTION IS ASKED HERE AND NEVER IN THE ONBOARDING CHANNEL (D2). An onboarding
+  // always starts one pillar plus six supports, so there is nothing to ask; runPreCallPlan keeps
+  // the behaviour it has. A later batch in this channel may sit under a pillar that exists.
+  if (!verb) {
+    const state = await readBatch(session.clientId);
+    if ("error" in state) {
+      await say(session.threadTs, `:warning: ${state.error}`);
+      return;
+    }
+
+    if (state.stage === "no_plan") {
+      const pillars = await existingPillars(session.clientId);
+      await say(session.threadTs, pillarQuestionLines(pillars).join("\n"));
+      return;
+    }
+
+    // A batch already underway: say where it is and show the card for that stage.
+    const lines = [stageLine(state)];
+    if (state.stage === "headlines") {
+      lines.push("", ...headlineCardLines(state.rows, await optionsFor(session.clientId, state.rows)));
+    } else if (state.stage === "skeletons" || state.stage === "research") {
+      lines.push("", ...skeletonCardLines(state.rows, state.outlines));
+    }
+    await say(session.threadTs, lines.join("\n"));
+    return;
+  }
+
+  if (verb === "new" || verb.startsWith("under")) {
+    await say(
+      session.threadTs,
+      "Building the plan for this batch. One pillar and six supports, from the approved keywords."
+    );
+    await planCommand(session, "new");
+    await say(session.threadTs, "Now `batch` again to write the headlines.");
+    return;
+  }
+
+  if (verb === "approve") {
+    await batchApprove(session);
+    return;
+  }
+}
+
+/**
+ * The three options per page, read back from the bank.
+ *
+ * ‼️ READ FROM client_headlines RATHER THAN HELD IN THE THREAD. A Slack thread is not storage: the
+ * candidate numbering has to survive a restart, a second person opening the thread, and the gap
+ * between writing the options and picking one, which at 14 onboardings a day is hours.
+ */
+async function headlineCommand(session: Session, page: number, pick: number | null): Promise<void> {
+  const { readBatch, headlineCardLines, optionsFor, writeHeadlinesFor, pickHeadlineFor } =
+    await import("./page-batch");
+
+  const state = await readBatch(session.clientId);
+  if ("error" in state) {
+    await say(session.threadTs, `:warning: ${state.error}`);
+    return;
+  }
+
+  const row = state.rows[page - 1];
+  if (!row) {
+    await say(session.threadTs, `There is no page ${page} in this batch. There are ${state.rows.length}.`);
+    return;
+  }
+
+  if (pick === null) {
+    await say(session.threadTs, `Writing three new headlines for page ${page}.`);
+    const got = await writeHeadlinesFor(session.clientId, row);
+    if (!got.ok) {
+      await say(session.threadTs, `:warning: ${got.error}`);
+      return;
+    }
+    await say(session.threadTs, headlineCardLines(state.rows, await optionsFor(session.clientId, state.rows)).join("\n"));
+    return;
+  }
+
+  const res = await pickHeadlineFor(session.clientId, row, pick, "page studio");
+  if (!res.ok) {
+    await say(session.threadTs, `:warning: ${res.error}`);
+    return;
+  }
+
+  const after = await readBatch(session.clientId);
+  const left = "error" in after ? 0 : after.needHeadline.length;
+  await say(
+    session.threadTs,
+    `Page ${page} is now "${res.headline}". ` +
+      (left
+        ? `${left} page${left === 1 ? "" : "s"} still need one.`
+        : "All pages have a headline. `skeleton` writes the outlines.")
+  );
+}
+
+async function skeletonCommand(session: Session, page: number | null): Promise<void> {
+  const { readBatch, skeletonCardLines, writeSkeletonsFor } = await import("./page-batch");
+
+  const state = await readBatch(session.clientId);
+  if ("error" in state) {
+    await say(session.threadTs, `:warning: ${state.error}`);
+    return;
+  }
+
+  if (state.needHeadline.length) {
+    await say(
+      session.threadTs,
+      `:warning: ${state.needHeadline.length} page${state.needHeadline.length === 1 ? "" : "s"} still need a headline. ` +
+        "A skeleton written before its headline is an outline for a page that does not know what it is promising."
+    );
+    return;
+  }
+
+  const targets =
+    page === null ? state.rows.filter((r) => !state.outlines.get(r.id)) : [state.rows[page - 1]];
+  if (!targets[0]) {
+    await say(session.threadTs, `There is no page ${page} in this batch. There are ${state.rows.length}.`);
+    return;
+  }
+
+  await say(
+    session.threadTs,
+    `Writing ${targets.length} skeleton${targets.length === 1 ? "" : "s"}. This takes a moment.`
+  );
+
+  const res = await writeSkeletonsFor(session.clientId, targets);
+  for (const f of res.failures) await say(session.threadTs, `:warning: ${f}`);
+
+  const after = await readBatch(session.clientId);
+  if ("error" in after) {
+    await say(session.threadTs, `:warning: ${after.error}`);
+    return;
+  }
+  await say(session.threadTs, skeletonCardLines(after.rows, after.outlines).join("\n"));
+}
+
+/**
+ * `batch approve`: build the ONE research prompt and stop.
+ *
+ * ‼️ IT POSTS A PROMPT AND STOPS (D10). The research stays a manual paste-back: Matthew was asked
+ * directly on 2026-09-14 and chose it over automating this by API, because he reads every answer.
+ */
+async function batchApprove(session: Session): Promise<void> {
+  const { buildBatchPrompt } = await import("./page-batch");
+  const built = await buildBatchPrompt(session.clientId);
+  if (!built.ok) {
+    await say(session.threadTs, `:warning: ${built.error}`);
+    return;
+  }
+
+  await say(
+    session.threadTs,
+    `*One prompt, ${built.questions} questions across ${built.pages} pages.* Run it, then paste the whole ` +
+      "answer back here with `research:` in front of it.\n```\n" +
+      built.prompt +
+      "\n```"
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The round trip: `text` out, edit anywhere, `replace:` back in, `preview` to look
+//
+// ‼️ THE LANE COULD ONLY EVER ADD. Everything a person typed was appended and `undo` popped the
+// last paragraph, so the only way to restructure a page was the board's Edit form in a browser.
+// That is fine for a dictated sentence and hopeless for a 14-section page somebody wants to
+// rewrite in an editor. These three verbs are the way out and back.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Where `undo` gets the body back from after a `replace:`.
+ *
+ * ‼️ READ AND WRITTEN IN ITS OWN SELECT, NEVER ADDED TO readSession's COLUMN LIST. Same rule the
+ * `outline` column is held to in pages.ts: PostgREST fails a WHOLE select on one unknown column,
+ * and readSession is what every message in this channel goes through. Folding undo_body in there
+ * would make the entire lane go silent on any database where this migration has not run, which is
+ * exactly the failure the studio_mode note above it describes.
+ */
+async function readUndoBody(threadTs: string): Promise<string | null> {
+  const { data, error } = await supabaseAdmin
+    .from("page_studio_sessions")
+    .select("undo_body")
+    .eq("thread_ts", threadTs)
+    .maybeSingle();
+
+  if (error) {
+    console.error(
+      `[page-studio] undo_body read failed (${error.message}). If this names undo_body, ` +
+        `the 2026-09-14 migration has not been run on this database.`
+    );
+    return null;
+  }
+  return (data?.undo_body as string | null) ?? null;
+}
+
+async function writeUndoBody(threadTs: string, body: string | null): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from("page_studio_sessions")
+    .update({ undo_body: body, updated_at: new Date().toISOString() })
+    .eq("thread_ts", threadTs);
+  if (error) console.error(`[page-studio] undo_body write failed: ${error.message}`);
+}
+
+/**
+ * The whole body, in one block somebody can select and copy.
+ *
+ * ‼️ ONE MESSAGE AND ONE FENCE, NOT A PRETTY RENDER. The entire point is that what comes out can
+ * be pasted into an editor and sent back through `replace:` unchanged. Slack renders markdown
+ * inside a normal message, so a body posted plainly comes back with its "##" turned into
+ * formatting and its structure gone. A fence is the only thing that survives the round trip.
+ */
+async function textCommand(session: Session): Promise<void> {
+  if (!session.pageId) {
+    await say(session.threadTs, "Pick a number first, then `text` prints that page's body.");
+    return;
+  }
+
+  const { data: page } = await supabaseAdmin
+    .from("client_pages")
+    .select("answer_md, title")
+    .eq("id", session.pageId)
+    .eq("client_id", session.clientId)
+    .maybeSingle();
+
+  const body = ((page?.answer_md as string | null) ?? "").trim();
+  if (!body) {
+    await say(session.threadTs, "That page has no body yet, so there is nothing to copy out.");
+    return;
+  }
+
+  // ‼️ SLACK REFUSES A MESSAGE OVER 40k CHARACTERS AND SAYS msg_too_long. A 14-section page at the
+  // top of its range is around 8k, so this is headroom rather than a real limit, but a body that
+  // somehow exceeded it would fail with an error naming nothing a person here can act on.
+  const LIMIT = 38_000;
+  if (body.length > LIMIT) {
+    await say(
+      session.threadTs,
+      `:warning: That body is ${body.length} characters, which is too long for one Slack message. ` +
+        `Edit it on the client board instead.`
+    );
+    return;
+  }
+
+  await say(
+    session.threadTs,
+    `*${(page?.title as string) ?? "This page"}*, ${body.split(/\s+/).filter(Boolean).length} words. ` +
+      `Copy it out, edit it anywhere, and send it back with \`replace:\` and the whole thing after it.\n` +
+      "```\n" +
+      body +
+      "\n```"
+  );
+}
+
+/**
+ * Put an edited body back, word for word.
+ *
+ * ‼️ IT DOES NOT CALL savePage, AND replacePageBody EXISTS SO IT NEVER HAS TO. See that function's
+ * own note: test-onboarding-artifacts.ts asserts the literal string does not appear in this file,
+ * because savePage is the path a MODEL's output takes and it can write a title, a question, a meta
+ * description and an evidence map. This writes one field from text a person pasted.
+ *
+ * ‼️ READ OFF THE RAW TEXT, exactly as `add:` is, so backticks, "##" and everything else land as
+ * typed. Going through unwrapFormatting here would eat the fence a person pasted back from `text`.
+ */
+async function replaceCommand(session: Session, body: string, messageTs: string): Promise<void> {
+  if (!session.pageId) {
+    await say(session.threadTs, "Pick a number first, then `replace:` puts an edited body back.");
+    return;
+  }
+
+  // A body pasted out of `text`'s fence usually comes back inside one. Strip a fence that wraps
+  // the WHOLE message and nothing else: a fence in the middle is part of what he wrote.
+  const fenced = /^\s*```(?:[a-z]*\n)?([\s\S]*?)```\s*$/i.exec(body);
+  const next = (fenced ? fenced[1] : body).trim();
+
+  const res = await replacePageBody(session.clientId, session.pageId, next);
+  if (!res.ok) {
+    await say(session.threadTs, `:warning: ${res.error}`);
+    return;
+  }
+
+  // Parked BEFORE anything else can fail, so `undo` is armed even if the source filing below
+  // throws. Losing the ability to undo a replace is the worst outcome available here.
+  await writeUndoBody(session.threadTs, res.previous);
+
+  // ‼️ FILED AS A SOURCE FOR THE REASON append() FILES ONE. Without this row the gate reads a page
+  // he wrote himself as a page with nothing behind it, and orphan_numbers would refuse a price he
+  // put there on purpose. Fire and forget: a missing source row must not lose the edit.
+  void recordSource({
+    clientId: session.clientId,
+    pageId: session.pageId,
+    sourceType: "CLIENT_VOICE",
+    sourceContent: next,
+    topic: "Dictated straight into the page",
+    collectedVia: "slack_typed",
+    slackTs: messageTs,
+  }).catch((e) => console.error("[page-studio] replace source filing failed:", (e as Error).message));
+
+  // ‼️ THE EDIT, CAPTURED AS ITS OWN SNAPSHOT. This is the row that says what a person changed
+  // about a model's draft, which is the whole reason the dataset keeps more than the final
+  // version. Fire and forget: capturePage swallows its own failures.
+  const { capturePage } = await import("@/lib/clients/page-dataset");
+  void capturePage({ clientId: session.clientId, pageId: session.pageId, reason: "edited" });
+
+  await say(
+    session.threadTs,
+    `Replaced. The page is now ${res.words} words. \`undo\` puts the old body back, \`check\` runs the gate.`
+  );
+}
+
+/** Where to look at the page as a reader would. */
+async function previewCommand(session: Session): Promise<void> {
+  if (!session.pageId) {
+    await say(session.threadTs, "Pick a number first, then `preview` links to that page.");
+    return;
+  }
+
+  const { data: page } = await supabaseAdmin
+    .from("client_pages")
+    .select("slug, answer_md, status")
+    .eq("id", session.pageId)
+    .eq("client_id", session.clientId)
+    .maybeSingle();
+
+  const slug = (page?.slug as string | null) ?? "";
+  if (!slug) {
+    await say(session.threadTs, "That page has no slug yet, so there is nothing to open.");
+    return;
+  }
+
+  // The same URL the pre-call draft summary posts. Built through appUrl() so a local run does not
+  // put a localhost link in a production channel, which has happened once already.
+  const url = `${appUrl()}/dashboard/clients/${session.clientId}/preview/${slug}`;
+  const body = ((page?.answer_md as string | null) ?? "").trim();
+  const state =
+    page?.status === "published"
+      ? "It is published."
+      : body
+        ? "It is still a draft, and nothing here publishes it."
+        : "It has no body yet, so the page will be empty.";
+
+  await say(session.threadTs, `${url}\n${state}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// `anchor` and `plan`
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `anchor`, `anchor: <key>`, `anchor: none`.
+ *
+ * ‼️ A COLON FOR THE ARGUMENT, for the reason `avatar` needs one: anything that is not a command is
+ * appended to the page verbatim, and "anchor text matters for links" is a sentence somebody will
+ * dictate into an SEO page.
+ */
+async function anchorCommand(session: Session, arg: string): Promise<void> {
+  const { magnetsForClient } = await import("@/lib/concierge/for-client");
+  const { loadOffer, setAnchorMagnet } = await import("./offers");
+  const wanted = arg.trim();
+
+  const [choices, offer] = await Promise.all([magnetsForClient(session.clientId), loadOffer(session.clientId)]);
+
+  if (choices.length === 0) {
+    await say(
+      session.threadTs,
+      "This client has no concierge widget, so there is no catalogue to anchor on. The " +
+        "`concierge_preview` delivery step creates it."
+    );
+    return;
+  }
+
+  if (!wanted) {
+    const current = offer.magnetKey ? choices.find((c) => c.magnetKey === offer.magnetKey) : null;
+    await say(session.threadTs, [
+      current
+        ? `The anchor is *${current.title}* (\`${current.magnetKey}\`). Every page's magnet is a framing of it.`
+        : "No anchor is set. Every page's magnet should lead back to one offer, and this names it.",
+      "",
+      "*The catalogue:*",
+      ...choices.map((c) => `  • \`${c.magnetKey}\` is ${c.title} (${c.scope})${c.deliverable ? "" : ", asset missing"}`),
+      "",
+      "`anchor: <key>` sets it, `anchor: none` clears it.",
+    ].join("\n"));
+    return;
+  }
+
+  if (wanted.toLowerCase() === "none") {
+    const res = await setAnchorMagnet({ clientId: session.clientId, magnetKey: null });
+    await say(
+      session.threadTs,
+      res.ok
+        ? "Cleared. Magnets drafted from now on are standalone offers again."
+        : `That did not save: ${res.error}`
+    );
+    return;
+  }
+
+  const picked = choices.find((c) => c.magnetKey.toLowerCase() === wanted.toLowerCase());
+  if (!picked) {
+    await say(session.threadTs, `There is no \`${wanted}\` in this client's catalogue. \`anchor\` on its own lists it.`);
+    return;
+  }
+  if (!picked.deliverable) {
+    await say(
+      session.threadTs,
+      `:warning: *${picked.title}* has no asset configured, so the widget could not hand it over. ` +
+        "Every page framed around it would promise nothing. Pick another, or configure it first."
+    );
+    return;
+  }
+
+  const res = await setAnchorMagnet({ clientId: session.clientId, magnetKey: picked.magnetKey });
+  if (!res.ok) {
+    await say(session.threadTs, `:warning: ${res.error}`);
+    return;
+  }
+
+  await say(session.threadTs, [
+    `:white_check_mark: Anchor set: *${picked.title}*.`,
+    "Every page's five magnets are now written as framings of it, and whichever one you pick, the " +
+      "widget hands over this one offer.",
+    "",
+    "*Next:* `plan` proposes the pages.",
+  ].join("\n"));
+}
+
+/** What a plan needs before it may be proposed, or the list of what is missing. */
+async function planContext(
+  clientId: string
+): Promise<
+  | { ok: true; ctx: Omit<FrameContext, "keywords">; anchorTitle: string }
+  | { ok: false; missing: string[] }
+> {
+  const { loadOffer, isLocked } = await import("./offers");
+  const { confirmedAvatarFor } = await import("./avatars");
+  const { conciergeTenant } = await import("@/lib/concierge/for-client");
+  const { anchorFor } = await import("@/lib/concierge/magnet-drafts");
+
+  const [offer, avatar, tenant, client] = await Promise.all([
+    loadOffer(clientId),
+    confirmedAvatarFor(clientId),
+    conciergeTenant(clientId),
+    supabaseAdmin.from("clients").select("legal_name, dba_name").eq("id", clientId).maybeSingle(),
+  ]);
+  const anchor = tenant ? await anchorFor(clientId, tenant.audience) : null;
+
+  const missing: string[] = [];
+  if (!isLocked(offer)) missing.push("`offer: <what they sell>`");
+  if (!avatar) missing.push("`avatar: <who buys it>`");
+  if (!anchor) missing.push("`anchor: <magnet key>`");
+  if (missing.length || !avatar || !anchor || !offer.treatment) return { ok: false, missing };
+
+  const name =
+    ((client.data?.dba_name as string | null) || (client.data?.legal_name as string | null)) ?? "this business";
+
+  return {
+    ok: true,
+    anchorTitle: anchor.title,
+    ctx: {
+      clientName: name,
+      treatment: offer.treatment,
+      positioning: offer.positioning,
+      avatarLabel: avatar.label,
+      anchor: { title: anchor.title, promise: anchor.promise, ctaLabel: anchor.ctaLabel },
+    },
+  };
+}
+
+/**
+ * `plan`, `plan new`, `plan approve`, `plan drop N`, `plan swap N`, `plan edit N: <title>`.
+ *
+ * ‼️ THE GRAMMAR IS EXACT AND THE DISPATCH BELOW ONLY MATCHES THESE FORMS. "plan ahead for your
+ * first session" is dictation and must reach the page, the lesson `avatar` and `review` already
+ * record in this file.
+ */
+async function planCommand(session: Session, arg: string): Promise<void> {
+  const plan = await import("./page-plan");
+  const sub = arg.trim();
+  const lower = sub.toLowerCase();
+
+  const show = async (lead: string): Promise<void> => {
+    const current = await plan.loadPlan(session.clientId);
+    if ("error" in current) {
+      await say(session.threadTs, `:warning: ${current.error}`);
+      return;
+    }
+    const { conciergeTenant } = await import("@/lib/concierge/for-client");
+    const { anchorFor } = await import("@/lib/concierge/magnet-drafts");
+    const tenant = await conciergeTenant(session.clientId);
+    const anchor = tenant ? await anchorFor(session.clientId, tenant.audience) : null;
+    await say(session.threadTs, [lead, plan.formatPlan(current.rows, anchor?.title ?? null)].filter(Boolean).join("\n\n"));
+  };
+
+  const propose = async (): Promise<void> => {
+    const ready = await planContext(session.clientId);
+    if (!ready.ok) {
+      await say(
+        session.threadTs,
+        `‼️ *Set ${ready.missing.length === 1 ? "this" : "these"} before planning:* ${ready.missing.join(", ")}.\n` +
+          "The plan words every page's keyword and magnet from all three, so a plan without them is aimed at nobody."
+      );
+      return;
+    }
+    await say(
+      session.threadTs,
+      `Choosing up to ${plan.PLAN_SIZE} pages from the keyword set and wording each one. This takes about a minute.`
+    );
+    const res = await plan.proposePlan(session.clientId, ready.ctx);
+    if (!res.ok) {
+      await say(session.threadTs, `:warning: No plan: ${res.error}`);
+      return;
+    }
+    await refreshSessionMenu(session);
+    await say(session.threadTs, plan.formatPlan(res.rows, ready.anchorTitle));
+  };
+
+  if (lower === "") {
+    const current = await plan.loadPlan(session.clientId);
+    if ("error" in current) {
+      await say(session.threadTs, `:warning: ${current.error}`);
+      return;
+    }
+    if (current.rows.length === 0) {
+      await propose();
+      return;
+    }
+    await show("");
+    return;
+  }
+
+  if (lower === "new") {
+    await propose();
+    return;
+  }
+
+  if (lower === "approve") {
+    const res = await plan.approvePlan(session.clientId, "page studio");
+    if (!res.ok) {
+      await say(session.threadTs, `:warning: ${res.error}`);
+      return;
+    }
+    await refreshSessionMenu(session);
+    await show(
+      res.count
+        ? `:white_check_mark: Approved ${res.count} page${res.count === 1 ? "" : "s"}. A number now claims one.`
+        : "Nothing was waiting on approval."
+    );
+    return;
+  }
+
+  const drop = /^drop\s+([0-9]{1,2})$/i.exec(sub);
+  if (drop) {
+    const res = await plan.dropPlanRow(session.clientId, Number(drop[1]));
+    if (!res.ok) {
+      await say(session.threadTs, `:warning: ${res.error}`);
+      return;
+    }
+    await refreshSessionMenu(session);
+    await show(`Dropped *${res.dropped.workingTitle}*. The pages after it moved up one.`);
+    return;
+  }
+
+  const swap = /^swap\s+([0-9]{1,2})$/i.exec(sub);
+  if (swap) {
+    const ready = await planContext(session.clientId);
+    if (!ready.ok) {
+      await say(session.threadTs, `‼️ Set ${ready.missing.join(", ")} first.`);
+      return;
+    }
+    await say(session.threadTs, `Finding the next best page for slot ${swap[1]}.`);
+    const res = await plan.swapPlanRow(session.clientId, Number(swap[1]), ready.ctx);
+    if (!res.ok) {
+      await say(session.threadTs, `:warning: ${res.error}`);
+      return;
+    }
+    await refreshSessionMenu(session);
+    await show(
+      `Swapped *${res.replaced}* for *${res.row.workingTitle}*. It is proposed again, so \`plan approve\` locks it in.`
+    );
+    return;
+  }
+
+  const edit = /^edit\s+([0-9]{1,2})\s*:\s*(.+)$/i.exec(sub);
+  if (edit) {
+    const res = await plan.editPlanTitle(session.clientId, Number(edit[1]), edit[2]);
+    if (!res.ok) {
+      await say(session.threadTs, `:warning: ${res.error}`);
+      return;
+    }
+    await refreshSessionMenu(session);
+    await show(`Renamed page ${edit[1]}.`);
+    return;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -652,12 +1691,20 @@ async function draft(session: Session): Promise<void> {
     await say(
       session.threadTs,
       "There is nothing on file for this page or this client, so a draft would be a page about " +
-        "the topic rather than about them, and the gate would refuse it. Run `ask` first."
+        "the topic rather than about them, and the gate would refuse it. Run `outline` and answer " +
+        "the gaps first, or `ask` for the full interview."
     );
     return;
   }
 
-  await say(session.threadTs, `Writing from ${evidenceSummary(sources)} Nothing in the page changes.`);
+  // The approved skeleton, when there is one. Its headings become the page's subheadings and its
+  // gaps were answered as the sources counted above.
+  const outline = await readPageOutline(session.clientId, session.pageId);
+
+  await say(
+    session.threadTs,
+    `Writing from ${evidenceSummary(sources)}${outline ? " Following the skeleton." : ""} Nothing in the page changes.`
+  );
 
   const { draftPage } = await import("@/lib/hub/draft-page");
   const res = await draftPage(session.clientId, (page?.question as string) ?? "", {
@@ -665,6 +1712,7 @@ async function draft(session: Session): Promise<void> {
     // Whatever `magnet` set on this page, so the Slack lane writes toward the same offer the
     // board would. Null when nobody chose, which the gate reports as a warn on `check`.
     magnetKey: (page?.lead_magnet_key as string | null) ?? null,
+    outline,
   });
 
   if (!res.ok) {
@@ -884,9 +1932,10 @@ async function magnet(session: Session, arg: string): Promise<void> {
     await say(
       session.threadTs,
       `This page now earns *${approved.title}*. The pill will read "${approved.ctaLabel}".\n` +
-        `It is in this client's catalogue as \`${approved.magnetKey}\`, so any other page can name ` +
-        `it too.\n` +
-        "`draft` will write the answer to stop where that offer begins."
+        (approved.framesKey
+          ? `It is a framing of the anchor \`${approved.framesKey}\`, so the widget hands over that one offer.\n`
+          : `It is in this client's catalogue as \`${approved.magnetKey}\`, so any other page can name it too.\n`) +
+        "*Next:* `outline` writes the skeleton. `draft` will write the answer to stop where that offer begins."
     );
     return;
   }
@@ -1030,6 +2079,245 @@ async function finish(session: Session): Promise<void> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// `review`: a customer's published review becomes evidence, aimed at the offer
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `review` (with a screenshot), `review` (bare), `review quotes`.
+ *
+ * ‼️ IT PROPOSES AND A PERSON CONFIRMS. The read lands in proposed_review and the card carries
+ * a [Use this quote] button. Nothing reaches page_sources until somebody presses it, which is
+ * the same slot discipline review-read.ts holds for review_audit_rows.proposed.
+ *
+ * ‼️ THE QUOTE IS SHOWN BACK IN FULL BEFORE IT IS CONFIRMED, and that is not politeness. The
+ * thing being confirmed is that this is what the customer actually wrote, and that cannot be
+ * confirmed against a summary of itself.
+ */
+async function reviewCommand(
+  session: Session,
+  arg: string,
+  files: StudioFile[],
+  messageTs: string
+): Promise<void> {
+  const {
+    isReviewImage,
+    MAX_VISION_BYTES,
+    proposeReviewFromImage,
+    proposeReviewFromTool,
+    loadToolQuotes,
+    positionQuote,
+    formatPositioning,
+  } = await import("./page-review");
+
+  // `review quotes` — the other door, for a client whose own review tool is collecting.
+  if (/^quotes?$/i.test(arg.trim())) {
+    const quotes = await loadToolQuotes(session.clientId);
+    if (!quotes.length) {
+      await say(session.threadTs, [
+        "Nothing in this client's own review tool yet.",
+        "",
+        "*Next:* screenshot a review off their Google, Yelp or Trustpilot listing and drop it " +
+          "here with `review`, or hand the tool over so it starts collecting.",
+      ].join("\n"));
+      return;
+    }
+    await say(session.threadTs, [
+      `*${quotes.length} review${quotes.length === 1 ? "" : "s"} from this client's own tool.*`,
+      ...quotes.map((q) => `  ${q.index}. ${q.text.slice(0, 240)}${q.text.length > 240 ? "…" : ""}`),
+      "",
+      "*Next:* `review quote <n>` to propose one, or drop a screenshot with `review` for a " +
+        "review published somewhere public.",
+    ].join("\n"));
+    return;
+  }
+
+  // `review quote <n>` — take one of the above.
+  const pick = /^quote\s+([0-9]{1,2})$/i.exec(arg.trim());
+  if (pick) {
+    const quotes = await loadToolQuotes(session.clientId);
+    const chosen = quotes.find((q) => q.index === Number(pick[1]));
+    if (!chosen) {
+      await say(session.threadTs, `There is no ${pick[1]} in that list. \`review quotes\` shows it again.`);
+      return;
+    }
+    const held = await proposeReviewFromTool({ threadTs: session.threadTs, quote: chosen.text });
+    if (!held.ok) {
+      await say(session.threadTs, `:warning: Could not hold that: ${held.error}`);
+      return;
+    }
+    await sayProposal(session, chosen.text, "their own review tool", null);
+    return;
+  }
+
+  const images = files.filter((f) => isReviewImage(f));
+
+  if (!images.length) {
+    await say(session.threadTs, [
+      "*`review` turns a customer's published review into a page they can rest on.*",
+      "",
+      "  • Drop a *screenshot* of the review with `review` in the message, and I read it out " +
+        "word for word.",
+      "  • `review quotes` lists what this client's own review tool has already collected.",
+      "",
+      "Nothing is filed until you press the button on what comes back. The quote is used " +
+        "verbatim or not at all: nothing here rewrites what a customer wrote.",
+    ].join("\n"));
+    return;
+  }
+
+  if (images.length > 1) {
+    await say(
+      session.threadTs,
+      `That is ${images.length} images. One review at a time: each quote goes on a page under a ` +
+        "customer's name, so each one is worth its own look. Send the first."
+    );
+    return;
+  }
+
+  const file = images[0];
+  if (!file.url_private_download) {
+    await say(session.threadTs, "Slack gave no download URL for that image. Try re-uploading it.");
+    return;
+  }
+
+  // ‼️ THE ACK GOES OUT BEFORE THE VISION CALL. Slack re-delivers any event it has not heard
+  // back from inside three seconds, and a re-delivery here is a second read of the same
+  // screenshot overwriting the first proposal.
+  await say(session.threadTs, "Reading that review, word for word…");
+
+  let image: { media_type: string; data: string };
+  try {
+    const buf = await slack.downloadFile(file.url_private_download);
+    if (buf.byteLength > MAX_VISION_BYTES) {
+      await say(session.threadTs, "That image is over 6 MB. Crop it to the review and send it again.");
+      return;
+    }
+    image = { media_type: (file.mimetype ?? "image/png").toLowerCase(), data: buf.toString("base64") };
+  } catch (e) {
+    // slack.downloadFile is the one helper in that client that throws.
+    await say(session.threadTs, `:warning: Could not download that image: ${(e as Error).message}`);
+    return;
+  }
+
+  const res = await proposeReviewFromImage({
+    clientId: session.clientId,
+    threadTs: session.threadTs,
+    image,
+  });
+
+  if (!res.ok) {
+    await say(session.threadTs, `:warning: ${res.error}`);
+    return;
+  }
+
+  const attribution = [res.proposal.authorAsPrinted, res.proposal.platform, res.proposal.reviewedAtAsPrinted]
+    .filter(Boolean)
+    .join(", ");
+
+  await sayProposal(
+    session,
+    res.proposal.quote,
+    attribution || res.read.evidence,
+    res.proposal.rating
+  );
+
+  // The positioning is the half Matthew actually asked for, and it is posted whether or not the
+  // quote is ever confirmed: knowing it carries none of the market's wording is a reason NOT to
+  // press the button, so it has to arrive before the decision rather than after it.
+  const placed = await positionQuote(session.clientId, res.proposal.quote);
+  await say(session.threadTs, formatPositioning(placed).join("\n"));
+}
+
+/**
+ * [Use this quote] came back. File it, and say where it now sits.
+ *
+ * ‼️ EXPORTED FOR THE ACTIONS ROUTE AND FOR NOTHING ELSE. The route's job is to answer Slack
+ * inside three seconds; the work belongs next to the session it acts on, which is here.
+ */
+export async function confirmStudioReviewQuote(args: {
+  threadTs: string;
+  by: string;
+}): Promise<void> {
+  const session = await readSession(args.threadTs);
+  if (!session) {
+    await say(args.threadTs, ":warning: That thread is no longer an open page session.");
+    return;
+  }
+
+  const { confirmProposedReview, positionQuote, formatPositioning } = await import("./page-review");
+
+  const filed = await confirmProposedReview({
+    clientId: session.clientId,
+    threadTs: session.threadTs,
+    pageId: session.pageId,
+    by: args.by,
+  });
+
+  if (!filed.ok) {
+    await say(session.threadTs, `:warning: Nothing was filed: ${filed.error}`);
+    return;
+  }
+
+  const placed = await positionQuote(session.clientId, filed.proposal.quote);
+
+  // ‼️ THE SCOPE IS STATED, because null page_id is not a failure to attach and must not read
+  // as one. A source with no page is the CLIENT LIBRARY and feeds every page they ever have.
+  const scope = session.pageId
+    ? "It backs the page open in this thread."
+    : "No page is claimed, so it went to this client's library and is available to every page " +
+      "drafted for them from now on.";
+
+  await say(session.threadTs, [
+    `:ballot_box_with_check: Filed as evidence by ${args.by}, word for word.`,
+    scope,
+    "",
+    ...formatPositioning(placed),
+    "",
+    "*Next:*",
+    session.pageId
+      ? "  • `draft` writes the page from the evidence, and quotes this one exactly as it stands."
+      : "  • Pick a number from the menu to claim a page, then `draft`.",
+    "  • `review` again for another one.",
+    "  • `keywords` for the phrases this client's market actually uses.",
+  ].join("\n"));
+}
+
+/** The proposal card, with the one button that turns it into a record. */
+async function sayProposal(
+  session: Session,
+  quote: string,
+  attribution: string,
+  rating: number | null
+): Promise<void> {
+  const head = [
+    "*Read, not recorded.* This is what the customer wrote, character for character:",
+    "",
+    ...quote.split("\n").map((l) => `> ${l}`),
+    "",
+    `_${attribution}${rating !== null ? `, ${rating} stars` : ""}_`,
+    "",
+    "Check it against the screenshot. If a word is wrong, say so and send a clearer shot: a " +
+      "quote is only worth anything if it is exactly what they said.",
+  ].join("\n");
+
+  await say(session.threadTs, head, [
+    { type: "section", text: { type: "mrkdwn", text: head } },
+    {
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: { type: "plain_text", text: "Use this quote", emoji: true },
+          style: "primary",
+          action_id: "page_review_use",
+          value: session.threadTs,
+        },
+      ],
+    },
+  ]);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Voice notes
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1110,6 +2398,287 @@ async function handleVoice(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Offer, then avatar, then the questions
+//
+// Matthew: "OFFER (this client's, or the seven stock library rows), then AVATAR (pick, or create
+// a new one right there, no separate channel), then HEADLINES AND STRATEGY QUESTIONS against the
+// keyword set."
+//
+// ‼️ IT IS A CARD, NOT A WIZARD, AND THE DIFFERENCE IS THAT NOTHING IS ASKED TWICE.
+//
+// The obvious build is a stage machine: ask for the offer, wait, ask for the avatar, wait, then
+// show the menu. But the offer and the avatar are not page state, they are CLIENT state, and
+// both already have a home: clients.offer written at offer_locked, clients.primary_avatar_slug
+// written at avatar_confirmed. A wizard would make somebody re-answer, in a page thread, two
+// questions that were settled on the call, and then have to decide which answer wins.
+//
+// So the card READS both, says what they are, and offers the commands to change either. When one
+// is missing it leads with that instead of the menu, because a page drafted against no offer and
+// no avatar is a page aimed at nobody. Nothing is stored on the session: there is no new column
+// here and no second copy of either answer.
+//
+// ‼️ AND IT NEEDS NO NEW SESSION COLUMNS FOR EXACTLY THAT REASON. page_studio_sessions gains
+// nothing, so readSession's select is unchanged, which matters because PostgREST fails the whole
+// select on one unknown column and that failure silences EVERY thread in the channel.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** What this client is aimed at, as the studio card says it. */
+async function aimLines(clientId: string): Promise<string[]> {
+  const { loadOffer, offerLine, isLocked } = await import("./offers");
+  const { confirmedAvatarFor } = await import("./avatars");
+
+  const { conciergeTenant } = await import("@/lib/concierge/for-client");
+  const { anchorFor } = await import("@/lib/concierge/magnet-drafts");
+
+  const [offer, avatar, tenant] = await Promise.all([
+    loadOffer(clientId),
+    confirmedAvatarFor(clientId),
+    conciergeTenant(clientId),
+  ]);
+  const anchor = tenant ? await anchorFor(clientId, tenant.audience) : null;
+
+  const lines: string[] = ["*What this is aimed at*", `  • Offer: ${offerLine(offer)}`];
+
+  lines.push(
+    avatar
+      ? `  • Avatar: *${avatar.label}* (\`${avatar.slug}\`), confirmed.`
+      : "  • Avatar: *none confirmed*. Every page is written for somebody; nobody is not a somebody."
+  );
+
+  // ‼️ THE THIRD ANSWER. Matthew, 2026-09-11: every page's lead magnet leads back to one offer.
+  // Without an anchor the five magnets on each page are five unrelated giveaways.
+  lines.push(
+    anchor
+      ? `  • Anchor offer: *${anchor.title}* (\`${anchor.magnetKey}\`). Every page's magnet is a framing of it.`
+      : "  • Anchor offer: *none set*. Every page's magnet should lead back to one offer. `anchor` lists the catalogue."
+  );
+
+  const missing: string[] = [];
+  if (!isLocked(offer)) missing.push("`offer: <what they sell>`");
+  if (!avatar) missing.push("`avatar: <who buys it>`");
+  if (!anchor) missing.push("`anchor: <magnet key>`");
+
+  if (missing.length) {
+    lines.push(
+      "",
+      `‼️ *Set ${missing.length === 1 ? "this" : "these"} before planning:* ${missing.join(", ")}.`,
+      "The plan words every page's keyword and magnet from these, so a page planned without them " +
+        "is aimed at nobody."
+    );
+  } else {
+    lines.push("", "Change any of them with `offer: ...`, `avatar: ...` or `anchor: ...`.");
+  }
+
+  return lines;
+}
+
+/**
+ * `offer`, `offer: ...` in a studio thread.
+ *
+ * ‼️ IT WRITES clients.offer THROUGH lockOffer, THE SAME DOOR THE CALL USES. Not a copy of it,
+ * and not a page-scoped field: an offer decided in a page thread is the same decision as one
+ * decided on the call, and two places to record it is two answers to one question.
+ */
+async function offerCommand(session: Session, arg: string): Promise<void> {
+  const { loadOffer, offerLine, lockOffer, usableTreatment } = await import("./offers");
+  const body = arg.trim();
+
+  if (!body) {
+    const offer = await loadOffer(session.clientId);
+    await say(session.threadTs, [
+      offerLine(offer),
+      "",
+      "`offer: <what they sell>` to set it, or `offer: <what they sell> | <positioning>` for both.",
+      "It writes the client record, so the call sheet, the tracked questions, the page " +
+        "candidates and the magnet ladder all follow it.",
+    ].join("\n"));
+    return;
+  }
+
+  const [rawTreatment, ...rest] = body.split("|");
+  if (!usableTreatment(rawTreatment)) {
+    await say(
+      session.threadTs,
+      ":warning: That is not a service anybody can aim a page at. One thing they sell, in their " +
+        "own words, not \"any\" or \"everything\"."
+    );
+    return;
+  }
+
+  const res = await lockOffer({
+    clientId: session.clientId,
+    treatment: rawTreatment.trim(),
+    positioning: rest.join("|").trim() || undefined,
+    by: "page studio",
+  });
+
+  if (!res.ok) {
+    await say(session.threadTs, `:warning: Could not set that: ${res.error}`);
+    return;
+  }
+
+  await say(session.threadTs, [
+    `:white_check_mark: Locked on *${res.offer.treatment}*.`,
+    ...(res.offer.positioning ? [`_Positioning: ${res.offer.positioning}_`] : []),
+    "",
+    "*Next:* `keywords` for the phrases this offer earns, `avatar` for who buys it, or pick a " +
+      "number from the menu to claim a page.",
+  ].join("\n"));
+
+  // ‼️ THE SAME RE-AIM THE STEP THREAD RUNS, because this is the second door to the same lock and
+  // SRT was locked through this one. Already inside waitUntil (the events route runs the studio
+  // there), so it is awaited. reaimDownstream does nothing while the offer step is not done.
+  if (res.treatmentChanged) {
+    const { reaimDownstream } = await import("./offer-cascade");
+    await reaimDownstream(session.clientId, { treatmentChanged: true, termsChanged: false }).catch((e) =>
+      console.error("[page-studio] re-aim after offer change failed:", (e as Error).message)
+    );
+  }
+}
+
+/**
+ * `avatar`, `avatar: ...`, `avatar new <label>` in a studio thread.
+ *
+ * ‼️ NO SEPARATE AVATAR CHANNEL, WHICH MATTHEW ASKED FOR BY NAME, AND NO THIRD RESEARCHER.
+ * `avatar new` writes the (vertical, avatar_slug) row and hands back the SAME prompt step 10
+ * hands back, built by the same buildCompactPrompt. avatar_briefs has no client_id on purpose,
+ * so the second client in a vertical inherits the research and times_reused counts it.
+ */
+async function avatarCommand(session: Session, arg: string): Promise<void> {
+  const {
+    avatarCandidatesFor,
+    confirmedAvatarFor,
+    confirmAvatar,
+    slotForTypedAvatar,
+    slugifyAvatar,
+    avatarBriefFor,
+    recordAvatarPrompt,
+  } = await import("./avatars");
+
+  const body = arg.trim();
+
+  if (!body) {
+    const [current, candidates] = await Promise.all([
+      confirmedAvatarFor(session.clientId),
+      avatarCandidatesFor(session.clientId),
+    ]);
+    await say(session.threadTs, [
+      current ? `Confirmed: *${current.label}*.` : "No avatar confirmed for this client.",
+      "",
+      ...(candidates.candidates.length
+        ? [
+            "*From the vertical's brief:*",
+            ...candidates.candidates.map((c) => `  • ${c.label}`),
+            "",
+          ]
+        : ["_No candidates on the vertical's brief, so name one yourself._", ""]),
+      "`avatar: <who buys it>` to confirm one, or `avatar new <who buys it>` to create one and " +
+        "get the research prompt for it.",
+    ].join("\n"));
+    return;
+  }
+
+  // ── Create ────────────────────────────────────────────────────────────────
+  const creating = body.match(/^new\s+(.+)$/i);
+  if (creating) {
+    const label = creating[1].trim();
+    const slug = slugifyAvatar(label);
+    if (!slug) {
+      await say(session.threadTs, ":warning: I could not make a slug out of that. Plain words.");
+      return;
+    }
+
+    const { verticalFor } = await import("./harvest");
+    const resolved = await verticalFor(session.clientId);
+    if (!resolved.ok) {
+      await say(session.threadTs, `:warning: ${resolved.error}`);
+      return;
+    }
+
+    // ‼️ ALREADY RESEARCHED IS NOT AN ERROR, IT IS THE WHOLE POINT OF THE TABLE. The second med
+    // spa aiming at the same buyer inherits the first one's research rather than paying for the
+    // run again, and reuseAvatarResearch is what counts it.
+    const existing = await avatarBriefFor(resolved.vertical, slug);
+    if (existing?.researchText) {
+      await say(session.threadTs, [
+        `:recycle: *${label}* already has deep research on file for this vertical, from an ` +
+          `earlier client. Nothing to run.`,
+        "",
+        `\`avatar: ${label}\` confirms it for this client and reuses that research.`,
+      ].join("\n"));
+      return;
+    }
+
+    const { buildContext, buildCompactPrompt } = await import("./artifacts/deep-research-run");
+    const ctx = await buildContext(session.clientId);
+    if (!ctx.ok) {
+      await say(session.threadTs, `:warning: Could not build the research prompt: ${ctx.error}`);
+      return;
+    }
+
+    const prompt = buildCompactPrompt(ctx.ctx);
+    await recordAvatarPrompt({ vertical: resolved.vertical, avatarSlug: slug, avatarLabel: label, promptText: prompt, clientId: session.clientId });
+
+    await say(session.threadTs, [
+      `:new: *${label}* created for \`${resolved.vertical}\`, as \`${slug}\`.`,
+      "",
+      "‼️ *It has no research yet.* Paste this into claude.com and bring the answer back with " +
+        `\`research:\` in step ${stepNumber("avatar_harvest")}'s thread, which is where the extractor lives:`,
+      "```",
+      prompt.slice(0, 2400),
+      "```",
+      "",
+      `*Next:* \`avatar: ${label}\` confirms it for this client either way. The research makes ` +
+        "the magnets and the pages better; it does not gate them.",
+    ].join("\n"));
+    return;
+  }
+
+  // ── Confirm ───────────────────────────────────────────────────────────────
+  const candidates = await avatarCandidatesFor(session.clientId);
+  const slot = slotForTypedAvatar(body, candidates.candidates);
+  const res = await confirmAvatar({
+    clientId: session.clientId,
+    slot,
+    label: body,
+    by: "page studio",
+  });
+
+  if (!res.ok) {
+    await say(session.threadTs, `:warning: Could not confirm that: ${res.error}`);
+    return;
+  }
+
+  await say(session.threadTs, [
+    `:white_check_mark: Avatar is *${body}*.`,
+    ...(res.audience?.note ? [res.audience.note] : []),
+    "",
+    "*Next:* `keywords` for what this avatar asks, or pick a number to claim a page.",
+  ].join("\n"));
+}
+
+/** `keywords` in a studio thread. The 99, ranked, aimed at whatever offer is set. */
+async function keywordsCommand(session: Session): Promise<void> {
+  const { buildKeywordSet, formatKeywordSet } = await import("./keyword-set");
+  const set = await buildKeywordSet(session.clientId);
+
+  if ("error" in set) {
+    await say(session.threadTs, `:warning: ${set.error}`);
+    return;
+  }
+
+  await say(
+    session.threadTs,
+    [
+      ...formatKeywordSet(set, 20),
+      "",
+      "*Next:* pick a number from the menu to claim a page, or `offer: ...` to aim this list at " +
+        "one thing they sell.",
+    ].join("\n")
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // The one entry point
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1126,12 +2695,16 @@ export async function handlePageStudioEvent(args: {
   files: StudioFile[];
 }): Promise<boolean> {
   const text = (args.text ?? "").trim();
+  // ‼️ TWO VIEWS OF THE SAME MESSAGE, AND WHICH ONE A BRANCH READS IS THE POINT.
+  // `command` is unwrapped so a backticked command still fires; `text` stays raw so
+  // anything that lands on a page lands exactly as he typed it. See unwrapFormatting.
+  const command = unwrapFormatting(text);
   const inThread = Boolean(args.threadTs && args.threadTs !== args.messageTs);
 
   // Top level: `page <client>` is the only thing that starts anything.
   if (!inThread) {
-    if (/^page\b/i.test(text)) {
-      await startSession(text, args.messageTs);
+    if (/^page\b/i.test(command)) {
+      await startSession(command, args.messageTs);
       return true;
     }
     if (text || args.files.length) {
@@ -1154,18 +2727,18 @@ export async function handlePageStudioEvent(args: {
   // ‼️ THE ABANDON BRANCH, AND IT IS NOT OPTIONAL. Every thread session in this repo has one.
   // Without it a menu left half-finished eats a digit typed days later and claims a question
   // nobody meant to claim.
-  if (/^(cancel|nevermind|never mind|stop)$/i.test(text)) {
+  if (/^(cancel|nevermind|never mind|stop)$/i.test(command)) {
     await supabaseAdmin.from("page_studio_sessions").delete().eq("thread_ts", session.threadTs);
     await say(session.threadTs, "Dropped. Nothing else in this thread will be read as a page.");
     return true;
   }
 
-  if (/^done$/i.test(text)) {
+  if (/^done$/i.test(command)) {
     await finish(session);
     return true;
   }
 
-  if (/^polish$/i.test(text)) {
+  if (/^polish$/i.test(command)) {
     await polish(session);
     return true;
   }
@@ -1173,7 +2746,7 @@ export async function handlePageStudioEvent(args: {
   // ‼️ IT TAKES AN ARGUMENT, WHICH NO OTHER COMMAND HERE DOES, so the pattern is anchored and the
   // rest of the line is the key rather than dictation. A bare `magnet` lists rather than clearing,
   // because a command that silently erased the offer would be the one mistake nobody would notice.
-  const magnetCmd = /^magnet(?:\s+(.+))?$/i.exec(text);
+  const magnetCmd = /^magnet(?:\s+(.+))?$/i.exec(command);
   if (magnetCmd) {
     await magnet(session, magnetCmd[1] ?? "");
     return true;
@@ -1183,28 +2756,155 @@ export async function handlePageStudioEvent(args: {
   // They are whole-word only, for the reason `done` and `polish` already are: a sentence that
   // happens to begin with "next" is a sentence, and swallowing it as a command would lose
   // dictation with no sign that it did.
-  if (/^ask$/i.test(text)) {
+  // ‼️ OFFER, AVATAR AND KEYWORDS SIT ABOVE THE BODY APPEND AND BELOW NOTHING ELSE, the same
+  // placement rule every other command in this switch follows. They take an argument, so they
+  // are anchored like `magnet` rather than whole-word like `done`: a sentence that begins
+  // "offer them a discount" is dictation and must reach the page, which is why the colon or the
+  // end of the line is required.
+  const offerCmd = /^offer(?:\s*[:]\s*(.+))?$/i.exec(command);
+  if (offerCmd) {
+    await offerCommand(session, offerCmd[1] ?? "");
+    return true;
+  }
+
+  // ‼️ EXACT, AND TWO LIVE CASES FORCED IT THERE. page-studio.ts's own rule is that the
+  // prefixes are exact "for the same reason isResearchPaste refuses to sniff": anything not a
+  // command is appended to the page VERBATIM, so a pattern one character too loose swallows a
+  // sentence of dictation and puts nothing on screen to say it did.
+  //
+  // Caught before this was tightened: "avatars are hard to write" captured "s are hard to
+  // write", and "avatar research takes a while" captured "research takes a while".
+  //
+  // So the argument form needs a COLON, and `new` is the single named exception, because
+  // `avatar new busy clinic manager` reads better than `avatar: new busy clinic manager` and it
+  // is a keyword rather than an open capture.
+  const avatarCmd = /^avatar(?:\s*:\s*(.+)|\s+(new\s+.+))?$/i.exec(command);
+  if (avatarCmd) {
+    await avatarCommand(session, avatarCmd[1] ?? avatarCmd[2] ?? "");
+    return true;
+  }
+
+  if (/^keywords?$/i.test(command)) {
+    await keywordsCommand(session);
+    return true;
+  }
+
+  // Exact forms only; see planCommand. "plan ahead for your first visit" is dictation.
+  const { PLAN_COMMAND, ANCHOR_COMMAND } = await import("./page-plan");
+  const planCmd = PLAN_COMMAND.exec(command);
+  if (planCmd) {
+    await planCommand(session, planCmd[1] ?? "");
+    return true;
+  }
+
+  // A colon for the argument, like `avatar`: "anchor text" is a phrase an SEO page uses.
+  const anchorCmd = ANCHOR_COMMAND.exec(command);
+  if (anchorCmd) {
+    await anchorCommand(session, anchorCmd[1] ?? "");
+    return true;
+  }
+
+  const outlineCmd = /^outline(\s+new)?$/i.exec(command);
+  if (outlineCmd) {
+    await outlineCommand(session, Boolean(outlineCmd[1]));
+    return true;
+  }
+
+  // ‼️ BEFORE `undo` AND AFTER `plan`, WHICH IS WHERE THE BATCH SITS IN THE ORDER OF WORK. `plan`
+  // decides which pages exist; `batch` walks those pages through headline, skeleton, one research
+  // and seven drafts. Each grammar is exported from its own module and shared with the step thread
+  // and the probe, the precedent PLAN_COMMAND set.
+  if (BATCH_COMMAND.test(command)) {
+    await batchCommand(session, BATCH_COMMAND.exec(command)?.[1] ?? null);
+    return true;
+  }
+
+  const headlineCmd = HEADLINE_COMMAND.exec(command);
+  if (headlineCmd) {
+    await headlineCommand(session, Number(headlineCmd[1]), headlineCmd[2] ? Number(headlineCmd[2]) : null);
+    return true;
+  }
+
+  const skeletonCmd = SKELETON_COMMAND.exec(command);
+  if (skeletonCmd) {
+    await skeletonCommand(session, skeletonCmd[1] ? Number(skeletonCmd[1]) : null);
+    return true;
+  }
+
+  if (/^undo$/i.test(command)) {
+    await undoCommand(session);
+    return true;
+  }
+
+  // `add: <text>` puts something into the body that would otherwise read as a command, a bare
+  // number above all. Read off the RAW text so the words land exactly as typed.
+  const addCmd = /^\s*add\s*:\s*([\s\S]+)$/i.exec(text);
+  if (addCmd && session.mode === "body") {
+    await append(session, addCmd[1], "typed", args.messageTs);
+    return true;
+  }
+
+  // `replace: <whole body>`, beside `add:` and read off the RAW text for the same reason: what
+  // follows the colon is the page, verbatim, fences and "##" included.
+  const replaceCmd = /^\s*replace\s*:\s*([\s\S]+)$/i.exec(text);
+  if (replaceCmd && session.mode === "body") {
+    await replaceCommand(session, replaceCmd[1], args.messageTs);
+    return true;
+  }
+
+  if (/^ask$/i.test(command)) {
     await startInterview(session);
     return true;
   }
 
-  if (session.mode === "evidence" && /^(next|skip)$/i.test(text)) {
+  if (session.mode === "evidence" && /^(next|skip)$/i.test(command)) {
     await skipTopic(session);
     return true;
   }
 
-  if (/^body$/i.test(text)) {
+  if (/^body$/i.test(command)) {
     await leaveInterview(session);
     return true;
   }
 
-  if (/^draft$/i.test(text)) {
+  // ‼️ ANCHORED AT BOTH ENDS, like everything else in this dispatch. "text me the draft" and
+  // "text her back" are both things somebody types into a channel about writing, and an unanchored
+  // /text/ would swallow them into the page. _probe-page-studio.ts holds those as fixtures.
+  if (/^text$/i.test(command)) {
+    await textCommand(session);
+    return true;
+  }
+
+  if (/^draft$/i.test(command)) {
     await draft(session);
     return true;
   }
 
-  if (/^check$/i.test(text)) {
+  if (/^check$/i.test(command)) {
     await check(session);
+    return true;
+  }
+
+  if (/^preview$/i.test(command)) {
+    await previewCommand(session);
+    return true;
+  }
+
+  // ‼️ ANCHORED AT BOTH ENDS, WHICH IS THE THIRD TIME THAT HAS BEEN FORCED IN THIS DISPATCH.
+  //
+  // See the note above `offer` and `avatar`: anything that is not a command is appended to the
+  // page VERBATIM, so a pattern one character too loose eats a sentence and says nothing. The
+  // two live captures recorded there were "avatars are hard to write" and "avatar research
+  // takes a while". The same shapes exist here in quantity, because this is a lane about
+  // reviews and somebody WILL type "reviews are up this month", "review the copy before it
+  // ships" and "our review tool is live" into it as dictation.
+  //
+  // So: `review` alone, or `review quotes`, or `review quote <n>`, and nothing else. The
+  // plural `reviews` is deliberately not a command. _probe-page-studio.ts holds a copy of this
+  // pattern and asserts all three sentences above still classify as body.
+  const reviewCmd = /^review(?:\s+(quotes?|quote\s+[0-9]{1,2}))?$/i.exec(command);
+  if (reviewCmd) {
+    await reviewCommand(session, reviewCmd[1] ?? "", args.files, args.messageTs);
     return true;
   }
 
@@ -1219,9 +2919,24 @@ export async function handlePageStudioEvent(args: {
   // something he said about the page and belongs in the body. Same doctrine as
   // thread-assistant.ts, where a bare digit means different things at different moments and
   // the stored state is what decides.
-  const digit = /^([0-9]{1,2})$/.exec(text);
+  const digit = /^([0-9]{1,2})$/.exec(command);
   if (digit && !session.pageId) {
     await claim(session, Number(digit[1]));
+    return true;
+  }
+
+  // ‼️ A BARE NUMBER IN BODY MODE IS ASKED ABOUT, NOT APPENDED. Measured 2026-09-11: Matthew typed
+  // "1" right under five numbered offers, meaning `magnet 1`, and the page became the word "1".
+  // Nobody dictates a lone number as page copy, and `add: 1` exists for the day somebody does.
+  // Only in body mode: in the interview a bare "12" is an answer ("how many years?") and must be
+  // filed.
+  if (digit && session.pageId && session.mode === "body") {
+    await say(
+      session.threadTs,
+      `A bare number is not added to the page. \`magnet ${digit[1]}\` picks offer ${digit[1]}, and ` +
+        `\`add: ${digit[1]}\` puts it in the page word for word. To start a different planned ` +
+        "page, say `done` here and post `page <client>` again."
+    );
     return true;
   }
 

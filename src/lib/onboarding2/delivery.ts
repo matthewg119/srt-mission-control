@@ -6,15 +6,15 @@
 // api/onboarding/save finishing the v1 intake form. A signed client sat in Slack with nothing
 // seeded and nothing running.
 //
-// ‼️ TWO ENTRY POINTS, AT TWO DIFFERENT MOMENTS, AND THE SPLIT IS DELIBERATE (Matthew, 2026-09-02).
+// ‼️ SUPERSEDED 2026-09-15: THE BOARD OPENS AT BOOKING. The split below was "thread at signature,
+// board at the last answer". Matthew: "once they book we automatically start onboarding them". The
+// booking route now calls openClientBoard (src/lib/clients/open-board.ts), which writes
+// intake_completed_at on its claim, so step 1 is true at booking and nothing stalls behind it. What
+// is left here:
 //
-//   openOpsThread()  at SIGNATURE. The client exists, so it gets a thread.
-//   startDelivery()  at the LAST ANSWER. The intake is genuinely complete, so the board opens.
-//
-// Opening the board at signature instead would look tidier and would be wrong: intake_received's
-// verifier (step-verify.ts:239) requires clients.intake_completed_at, and baseline_scan,
-// site_dns_intel, nap_sweep and hub_preview are all blockedBy intake_received. Somebody who
-// signs and then abandons the chat would get a board stalled on step 1 with four steps behind it.
+//   openOpsThread()          the board header, posted in the client's own channel.
+//   applyQualifyingAnswers() at the LAST ANSWER, fills the row in place over blanks.
+//   intakePatchFrom()        the mapping both of those callers share.
 //
 // ‼️ NOTHING HERE MAY COST THE SIGNATURE OR AN ANSWER. Both are committed before either function
 // runs. Every step is caught, collected as a warning and returned. Nothing throws to a caller.
@@ -226,18 +226,26 @@ export function intakePatchFrom(
 export async function openOpsThread(args: {
   clientId: string;
   name: string;
+  /** The first line of the header before refreshHeader rewrites it. Defaults to the booking wording. */
+  headline?: string;
 }): Promise<{ ts: string | null; warning: string | null }> {
-  const channel = onboardingChannel();
+  // ‼️ channelFor, NOT THE SHARED CHANNEL (2026-09-15). refreshHeader and pinHeader edit and pin
+  // ops_thread_ts in channelFor(clientId), which is the client's private channel whenever one exists.
+  // Posting the header in #onboarding-srt-aeo made every edit and pin fail with message_not_found, so
+  // a per-client board had no header at all. The announcement card stays in the shared channel; the
+  // header lives with the board it heads.
+  const { channelFor } = await import("@/lib/clients/step-board");
+  const channel = (await channelFor(args.clientId)) ?? onboardingChannel();
   if (!channel) {
     return {
       ts: null,
       warning:
-        "SLACK_CLIENT_ONBOARDING_CHANNEL is unset, so no ops thread was opened and the delivery board cannot be posted.",
+        "SLACK_CLIENT_ONBOARDING_CHANNEL is unset and the client has no channel, so no ops thread was opened and the delivery board cannot be posted.",
     };
   }
 
   const lines = [
-    `:white_check_mark: *${args.name}* signed the onboarding agreement.`,
+    args.headline ?? `:calendar: *${args.name}* booked the onboarding call.`,
     `${appUrl()}/dashboard/clients/${args.clientId}`,
   ];
 
@@ -265,20 +273,46 @@ export async function openOpsThread(args: {
 }
 
 export interface DeliveryResult {
+  /** True when this call opened the board (only when booking could not). */
   started: boolean;
-  /** False when another request already ran the cascade for this client. */
+  /** False when nothing was written. */
   claimed: boolean;
   warnings: string[];
 }
 
+/** The jsonb bags intakePatchFrom fills. Merged key by key, never replaced. */
+const BAGS = ["services", "ideal_patient", "review_workflow", "access_inventory"] as const;
+
+/** Columns the board's own claim owns. The answers never touch them. */
+const BOARD_OWNED = new Set(["intake_completed_at", "onboarding_status", "updated_at"]);
+
+function isBlank(v: unknown): boolean {
+  if (v === null || v === undefined) return true;
+  if (typeof v === "string") return v.trim() === "";
+  if (typeof v === "object") return Object.keys(v as Record<string, unknown>).length === 0;
+  return false;
+}
+
 /**
- * The ninth answer landed. Complete the intake and open the board.
+ * The last qualifying answer landed. Fill the client row in place. THE BOARD IS ALREADY OPEN.
  *
- * ORDER IS LOAD-BEARING. The domain and the subdomain have to exist before
- * postDeliveryChecklist runs, because that function runs the ready auto steps and hub_preview
- * attaches hostnames built from exactly those two columns.
+ * ‼️ THIS REPLACED startDelivery ON 2026-09-15, AND THE DIFFERENCE IS WHEN THE BOARD OPENS. It used
+ * to open here, at the last of eight answers, because intake_received's verifier needs
+ * clients.intake_completed_at. Matthew: "once they book we automatically start onboarding them".
+ * The booking route now opens the board through openClientBoard (src/lib/clients/open-board.ts),
+ * which writes that column on its claim. So what is left for the answers is to land.
+ *
+ * ‼️ OVER BLANKS ONLY. By now the row carries what the audit report knew and anything a person has
+ * corrected on the board since booking. An answer typed into a funnel does not outrank either, with
+ * one exception: legal_name, when it is still the email-address placeholder startPilot writes.
+ *
+ * ‼️ THE FALLBACK STILL OPENS A BOARD. If the booking never opened one (its background work was
+ * killed, provisioning failed and was fixed by hand), the answers must not be the second dead end:
+ * openClientBoard runs here with the full patch, exactly as startDelivery did.
+ *
+ * ‼️ NO BASELINE SCAN, on either path. See open-board.ts.
  */
-export async function startDelivery(
+export async function applyQualifyingAnswers(
   signed: Onboarding2SigningRow,
   lead: Onboarding2LeadRow | null
 ): Promise<DeliveryResult> {
@@ -290,55 +324,84 @@ export async function startDelivery(
 
   const clientId = signed.client_id;
   if (!clientId) {
-    // The seat cap deletes the row startPilot inserted, so this is a real and expected state.
-    // The signature stands; there is simply nothing to open a board against.
     return {
       started: false,
       claimed: false,
-      warnings: ["No client row for this signing, so no delivery board was opened."],
+      warnings: ["No client row for this session, so the answers were kept on the lead only."],
     };
   }
 
-  // ‼️ DEMO MODE. A preview walk-through must not seed a board or fire a baseline scan.
+  // ‼️ DEMO MODE. A preview walk-through must not touch a client row.
   if (signed.is_demo) {
-    console.info(
-      `[onboarding2 DEMO] intake complete for signing ${signed.id}. No board, no scan, no Slack.`
-    );
+    console.info(`[onboarding2 DEMO] answers complete for signing ${signed.id}. Nothing written.`);
     return { started: false, claimed: false, warnings: [] };
   }
 
-  const { patch, domain } = intakePatchFrom(signed, lead);
+  const { patch } = intakePatchFrom(signed, lead);
 
-  // ── 1. The claim. Whoever sets intake_completed_at first runs the rest. ──
-  const { data: claimed, error: claimErr } = await supabaseAdmin
+  const { data: client, error: readErr } = await supabaseAdmin
     .from("clients")
-    .update(patch)
+    .select("*")
     .eq("id", clientId)
-    .is("intake_completed_at", null)
-    .select("id, domain, subdomain")
     .maybeSingle();
-
-  if (claimErr) {
-    warn(`intake write failed: ${claimErr.message}`);
-    return { started: false, claimed: false, warnings };
-  }
-  if (!claimed) {
-    // Already complete. Another request won, or this client finished their v1 intake first.
+  if (readErr || !client) {
+    warn(`client row unreadable: ${readErr?.message ?? "not found"}`);
     return { started: false, claimed: false, warnings };
   }
 
-  // ── 2. The subdomain. Needs the domain that step 1 just wrote. ──
-  // Skipped without one, because a DNS lookup of "learn.null" is not a check worth running, and
-  // guarded on a still-null subdomain so a re-run cannot flip a convention somebody has already
-  // read down a phone.
-  if (domain && !claimed.subdomain) {
+  // The board never opened. Open it now, with everything.
+  if (!client.intake_completed_at) {
+    const { openClientBoard } = await import("@/lib/clients/open-board");
+    const board = await openClientBoard(clientId, {
+      name: (patch.legal_name as string) || (client.legal_name as string) || "New client",
+      reportSlug: signed.report_slug,
+      intakePatch: patch,
+    });
+    return { started: board.claimed, claimed: board.claimed, warnings: board.warnings };
+  }
+
+  const update: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (BOARD_OWNED.has(key) || isBlank(value)) continue;
+
+    if ((BAGS as readonly string[]).includes(key)) {
+      const current = (client[key] as Record<string, unknown> | null) ?? {};
+      const merged = { ...current };
+      let changed = false;
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        if (isBlank(merged[k])) {
+          merged[k] = v;
+          changed = true;
+        }
+      }
+      if (changed) update[key] = merged;
+      continue;
+    }
+
+    const current = client[key];
+    const placeholderName =
+      key === "legal_name" &&
+      typeof current === "string" &&
+      current.trim().toLowerCase() === String(client.email ?? "").trim().toLowerCase();
+    if (isBlank(current) || placeholderName) update[key] = value;
+  }
+
+  if (Object.keys(update).length) {
+    update.updated_at = new Date().toISOString();
+    const { error } = await supabaseAdmin.from("clients").update(update).eq("id", clientId);
+    if (error) {
+      warn(`the answers could not be written: ${error.message}`);
+      return { started: false, claimed: false, warnings };
+    }
+  }
+
+  // A domain that only arrived now still needs its subdomain, and the hub caches the NAP.
+  if (update.domain && !client.subdomain) {
     const { chooseSubdomain } = await import("@/lib/clients/provision");
-    await chooseSubdomain(clientId, domain).catch((e) =>
+    await chooseSubdomain(clientId, update.domain as string).catch((e) =>
       warn(`subdomain choice failed: ${(e as Error).message}`)
     );
   }
-
-  // ── 3. The hub caches the canonical NAP for five minutes. We just wrote it. ──
   try {
     const { revalidateClientHub } = await import("@/lib/hub/resolve");
     revalidateClientHub();
@@ -346,49 +409,40 @@ export async function startDelivery(
     warn(`hub revalidate failed: ${(e as Error).message}`);
   }
 
-  // ── 4. The eight-stage record, so the client board reads right. ──
-  await supabaseAdmin
-    .from("client_onboarding_steps")
-    .update({ status: "complete", completed_at: new Date().toISOString() })
-    .eq("client_id", clientId)
-    .eq("stage", "intake")
-    .then(({ error }) => {
-      if (error) warn(`intake stage update failed: ${error.message}`);
-    });
-
-  // ── 5. The board. Each piece caught separately, exactly as api/onboarding/save does it. ──
-  const { seedDeliverySteps, autoCompleteStep, postDeliveryChecklist } = await import(
-    "@/lib/clients/delivery-checklist"
-  );
-
-  await seedDeliverySteps(clientId).catch((e) =>
-    warn(`seeding the delivery steps failed: ${(e as Error).message}`)
-  );
-  await autoCompleteStep(clientId, "intake_received").catch((e) =>
-    warn(`intake_received could not be ticked: ${(e as Error).message}`)
-  );
-  await postDeliveryChecklist(clientId).catch((e) =>
-    warn(`the delivery board did not post: ${(e as Error).message}`)
-  );
-
-  // ── 6. Photograph I. ──
-  // ‼️ NOT OPTIONAL AND NOT COVERED BY THE LINE ABOVE. postDeliveryChecklist runs the ready auto
-  // steps, but api/onboarding/save calls this explicitly as well, and baseline_scan gates
-  // competitor_shortlist, avatar_confirmed and avatar_harvest. Skipping it stalls the board at
-  // step 2. NOT awaited into the caller: runAuditPipeline takes minutes.
-  try {
-    const { startBaselineScan } = await import("@/lib/clients/baseline-scan");
-    const { waitUntil } = await import("@vercel/functions");
-    waitUntil(
-      startBaselineScan(clientId).catch((e) =>
-        console.error("[onboarding2/delivery] baseline scan failed:", (e as Error).message)
-      )
-    );
-  } catch (e) {
-    warn(`baseline scan could not be started: ${(e as Error).message}`);
+  // ‼️ offer_proposed READS services.primary_treatment, AND AT BOOKING NOBODY HAD SAID IT YET. It
+  // parks in `error` when intake names no service, so a board opened at booking always has it
+  // errored by the time the answer arrives. Re-run it once the service is actually on the row.
+  if (update.services) {
+    const { data: step } = await supabaseAdmin
+      .from("client_delivery_steps")
+      .select("status")
+      .eq("client_id", clientId)
+      .eq("step_key", "offer_proposed")
+      .maybeSingle();
+    if (step?.status === "error") {
+      const { runOneStep } = await import("@/lib/clients/step-engine");
+      const res = await runOneStep(clientId, "offer_proposed").catch((e) => ({
+        ran: false,
+        error: (e as Error).message,
+      }));
+      if (res.error) warn(`offer_proposed re-run: ${res.error}`);
+    }
   }
 
-  return { started: true, claimed: true, warnings };
+  // One line in the client's own header thread, so the board's channel has the answers too.
+  if (lead) {
+    const { notifyThread } = await import("@/lib/clients/delivery-checklist");
+    const lines = (lead.qualifying ?? [])
+      .filter((a) => (a.answer ?? "").trim())
+      .map((a) => `- ${a.key}: ${a.answer}`);
+    if (lines.length) {
+      await notifyThread(clientId, [":speech_balloon: Qualifying answers from the chat:", ...lines].join("\n")).catch(
+        () => {}
+      );
+    }
+  }
+
+  return { started: false, claimed: Object.keys(update).length > 0, warnings };
 }
 
 /** How many of the six are answered. Used by the chat route to decide whether to start. */

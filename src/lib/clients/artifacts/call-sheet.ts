@@ -17,6 +17,7 @@
 // said on the call has to be reconstructed from memory afterwards.
 
 import { supabaseAdmin } from "@/lib/db";
+import { stepNumber } from "@/config/delivery-steps";
 import {
   MATERIALIZATION_FALLBACKS,
   composeTrackedSet,
@@ -33,6 +34,7 @@ import { selectedCompetitors } from "../competitors";
 import { platformByKey } from "@/config/presence-platforms";
 import { clickPathFor } from "../dns-records";
 import { subdomainLabel } from "../normalize";
+import { CALL_PACK_STEP_KEY, callPackFilename } from "./call-pack";
 import type { SiteIntel } from "../site-intel";
 import {
   startDoc,
@@ -78,6 +80,52 @@ interface CallSheetData {
   reviewOwner: string | null;
   reviewDestination: string;
   incentiveFlag: boolean;
+  /** The pre-call pages off the plan. See loadPlanPages. */
+  planPages: PlanPages;
+}
+
+interface PlanPageRow {
+  rank: number;
+  role: "pillar" | "support";
+  targetKeyword: string;
+  workingTitle: string;
+  drafted: boolean;
+}
+
+/** `unreadable` carries the reason the plan could not be read, which prints as "not made yet". */
+interface PlanPages {
+  rows: PlanPageRow[];
+  unreadable: string | null;
+}
+
+/**
+ * The plan's pre-call pages: rows with a role, in rank order.
+ *
+ * ‼️ NEVER THROWS. `role` arrives with docs/2026-09-11-one-strategy.sql, and a call sheet that
+ * failed to render because of one missing column would cost the whole document the call runs on.
+ * A failed read prints as "the plan has not been made yet", with the reason, and the rest prints.
+ */
+async function loadPlanPages(clientId: string): Promise<PlanPages> {
+  const { data, error } = await supabaseAdmin
+    .from("page_plan")
+    .select("rank, role, target_keyword, working_title, page_id")
+    .eq("client_id", clientId)
+    .not("role", "is", null)
+    .order("rank", { ascending: true });
+
+  if (error) return { rows: [], unreadable: error.message };
+  return {
+    rows: (data ?? [])
+      .filter((r) => r.role === "pillar" || r.role === "support")
+      .map((r) => ({
+        rank: Number(r.rank) || 0,
+        role: r.role as "pillar" | "support",
+        targetKeyword: (r.target_keyword as string | null) ?? "",
+        workingTitle: (r.working_title as string | null) ?? "",
+        drafted: !!r.page_id,
+      })),
+    unreadable: null,
+  };
 }
 
 function findings(state: PageState, d: CallSheetData) {
@@ -181,6 +229,9 @@ function questions(state: PageState, d: CallSheetData) {
   const SOURCE_WORD: Record<SubProvenance[keyof SubProvenance], string> = {
     intake: "from intake",
     selected_competitor: "the competitor you picked",
+    // Deliberately not "from intake". This is what they said when asked, which is the stronger
+    // claim, and the point of printing a source at all is that a person can tell them apart.
+    locked_offer: "the offer you locked on the call",
     fallback: "stand-in",
     missing: "nothing on record",
   };
@@ -234,7 +285,10 @@ function questions(state: PageState, d: CallSheetData) {
     { color: d.questionSetVersion ? MUTED : RED, size: 9 }
   );
 
-  paragraph(state, "The custom set is drafted at step 12 and prints here once it exists.", {
+  paragraph(
+    state,
+    `The custom set is drafted at step ${stepNumber("custom_question_set")} and prints here once it exists.`,
+    {
     color: MUTED,
     size: 9,
   });
@@ -273,7 +327,7 @@ function dns(state: PageState, d: CallSheetData) {
   if (i && !i.resolverHealthy) {
     paragraph(
       state,
-      "THE DNS LOOKUP DID NOT COMPLETE, so the provider below is not confirmed. Re-run step 3 before this call.",
+      `THE DNS LOOKUP DID NOT COMPLETE, so the provider below is not confirmed. Re-run step ${stepNumber("site_dns_intel")} before this call.`,
       { color: RED, bold: true }
     );
   }
@@ -379,6 +433,41 @@ function preview(state: PageState, d: CallSheetData) {
   correctionBox(state, "Pages they picked", { lines: 3 });
 }
 
+function planPages(state: PageState, d: CallSheetData) {
+  sectionHeading(state, "The pre-call pages on the plan");
+
+  const { rows, unreadable } = d.planPages;
+  if (rows.length === 0) {
+    paragraph(
+      state,
+      unreadable
+        ? `The plan has not been made yet (the page plan could not be read: ${unreadable}). There are no pre-call pages to walk.`
+        : "The plan has not been made yet. There are no pre-call pages to walk.",
+      { color: AMBER, bold: true, size: 10 }
+    );
+    return;
+  }
+
+  const drafted = rows.filter((r) => r.drafted).length;
+  paragraph(
+    state,
+    `${rows.length} pages, pillar first. ${drafted} of ${rows.length} have a draft. Walk them in the preview in this order.`,
+    { color: MUTED, size: 9 }
+  );
+
+  keyValueTable(
+    state,
+    rows.map((r) => ({
+      label: `${r.rank}. ${r.role === "pillar" ? "Pillar" : "Support"}`,
+      value: `${r.workingTitle}  (keyword: ${r.targetKeyword || "none on the row"}; ${
+        r.drafted ? "draft exists" : "no draft yet"
+      })`,
+      tone: r.drafted ? ("good" as const) : ("warn" as const),
+    })),
+    { labelWidth: 30, size: 8.5 }
+  );
+}
+
 function consent(state: PageState) {
   sectionHeading(state, "55 to 60 · Consent, confirmed aloud");
   paragraph(state, "Read the consent block from the pilot doc section 16.4 verbatim. Confirm aloud.", {
@@ -442,14 +531,22 @@ export function renderCallSheet(d: CallSheetData): Buffer {
   dns(state, d);
   reviewMechanism(state, d);
   preview(state, d);
+  planPages(state, d);
   consent(state);
   capturePage(state);
 
   return finishDoc(state);
 }
 
+/**
+ * The call sheet, and the document the call pack is named for.
+ *
+ * It runs LAST in the pack: deliverArtifact rewrites the step's output_ref on every call, so the
+ * last document generated is the one the step points at, and that should be this one.
+ */
 export async function generateCallSheet(
-  clientId: string
+  clientId: string,
+  opts: { stepKey?: string } = {}
 ): Promise<{ ok: boolean; error?: string; docId?: string }> {
   // The select list is wide enough that supabase-js gives up on inferring a row type and hands
   // back GenericStringError. Read it as a plain record and pull fields explicitly, which is what
@@ -467,6 +564,7 @@ export async function generateCallSheet(
   const canonical = await canonicalFor(clientId);
   const sweep = await loadSweep(clientId);
   const competitors = await selectedCompetitors(clientId);
+  const plan = await loadPlanPages(clientId);
 
   const { data: dnsRows } = await supabaseAdmin
     .from("client_dns_records")
@@ -556,6 +654,7 @@ export async function generateCallSheet(
     reviewOwner: (client.review_owner_name as string | null) ?? null,
     reviewDestination: (client.review_destination_primary as string) ?? "google",
     incentiveFlag: (client.review_incentive_flag as boolean) ?? false,
+    planPages: plan,
   };
 
   let buffer: Buffer;
@@ -579,12 +678,13 @@ export async function generateCallSheet(
     );
   }
   if (!set.frozen) warnings.push("the question set could not be frozen, so nothing can cite a tracked version");
+  if (!plan.rows.length) warnings.push("no pre-call pages on the plan yet, so there is nothing to walk");
   if (set.note) warnings.push(set.note);
 
   const result = await deliverArtifact({
     clientId,
-    stepKey: "call_sheet",
-    filename: `Call sheet (internal) - ${data.clientName}.pdf`,
+    stepKey: opts.stepKey ?? CALL_PACK_STEP_KEY,
+    filename: callPackFilename("sheet", data.clientName),
     buffer,
     message: [
       `:memo: Call sheet for *${data.clientName}*. Internal — do not send this to the client.`,

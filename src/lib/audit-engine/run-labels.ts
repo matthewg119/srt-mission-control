@@ -1,0 +1,186 @@
+// Which KIND of audit run a report is, and the one rule that keeps the kinds apart.
+//
+// docs/2026-08-18-measurement.sql created `audit_reports.run_label` and
+// `excluded_from_scorecard` on 2026-08-18 and NOTHING in src has read or written either since.
+// Every report in production is therefore the default, `prospect_audit`. This file is where that
+// column starts being used, because the supplied-prompt runs added on 2026-09-12 (the keyword
+// measurement, Photograph II, the day 30/60/90 re-tests) put rows in `audit_reports` that are NOT
+// the client's baseline, and every reader of "this client's newest report" would otherwise pick
+// one up.
+//
+// ‼️ THE READERS FILTER BY EXCLUSION, NEVER BY `run_label = 'prospect_audit'`.
+// measurement.sql:31-32 says the SRT test tenant's own step-2 run is relabelled `test_run`, so an
+// equality test would drop the baseline of the one client this repo is developed against. The
+// question a reader is really asking is "is this the client's own baseline photograph", and the
+// honest way to ask it is "it is not one of the runs we fire ourselves".
+//
+// ‼️ A2 D-P16: A ONE-ENGINE RUN IS NEVER A PHOTOGRAPH FOR A PAYING OR PILOT CLIENT.
+// measurement.sql:138-140 states it and the Day 0 wall in day-zero.ts repeats it: `photograph_2`
+// means a real archived run wrote it. One engine is keyed today, so `resolveRunLabel` DOWNGRADES a
+// requested photograph to a `measurement`: the questions are still asked, the keywords are still
+// measured, and the Day 0 stamp is simply not earned. Matthew's call, 2026-09-12, with both
+// options in front of him: keep the rule, and let the runner upgrade itself the day a second
+// engine is keyed. Nothing here asserts a photograph happened; it reports what ran.
+
+/** Run labels this system fires for itself. None of them is a client's baseline. */
+export const SUPPLIED_LABELS = [
+  "measurement",
+  "photograph_2",
+  "retest_30",
+  "retest_60",
+  "retest_90",
+] as const;
+
+export type SuppliedLabel = (typeof SUPPLIED_LABELS)[number];
+
+/** The labels that mean "a real archived measurement", as opposed to a run we simply took. */
+export const PHOTOGRAPH_LABELS: readonly SuppliedLabel[] = [
+  "photograph_2",
+  "retest_30",
+  "retest_60",
+  "retest_90",
+];
+
+/**
+ * What actually runs today.
+ *
+ * ‼️ ONE ENTRY, AND THAT IS THE WHOLE OF D-P16's TEETH. `AuditEngine` in types.ts is the single
+ * source for which engines a new run may use: Perplexity was dropped on 2026-08-05 because its key
+ * had never once returned data. Adding a second keyed engine here is what turns Photograph II on,
+ * and it must be done by adding the engine, never by editing the threshold below.
+ */
+export const KEYED_ENGINES: readonly string[] = ["chatgpt_web"];
+
+/** A photograph needs more than one engine. A2 D-P16, and A2 §3 on undisclosed confounds. */
+export const PHOTOGRAPH_MIN_ENGINES = 2;
+
+export function isPhotographLabel(label: string): boolean {
+  return (PHOTOGRAPH_LABELS as readonly string[]).includes(label);
+}
+
+/**
+ * The label a run may actually carry, and why.
+ *
+ * A caller asks for `photograph_2`; with one engine keyed it gets `measurement` back plus the
+ * reason, which belongs on the card. The caller never decides this for itself: a label is a claim
+ * about fidelity, and the only honest source for that claim is how many engines ran.
+ */
+export function resolveRunLabel(requested: SuppliedLabel): {
+  label: SuppliedLabel;
+  downgraded: boolean;
+  reason: string | null;
+} {
+  if (!isPhotographLabel(requested)) return { label: requested, downgraded: false, reason: null };
+  if (KEYED_ENGINES.length >= PHOTOGRAPH_MIN_ENGINES) {
+    return { label: requested, downgraded: false, reason: null };
+  }
+  return {
+    label: "measurement",
+    downgraded: true,
+    reason:
+      `${KEYED_ENGINES.length} engine is keyed (${KEYED_ENGINES.join(", ")}), and A2 D-P16 says a ` +
+      `one-engine run is never a photograph for a pilot client. The questions were still asked and ` +
+      `the keywords still measured; this run is filed as a measurement and Day 0 is not stamped ` +
+      `from it. Key a second engine and the same command writes ${requested}.`,
+  };
+}
+
+/**
+ * TRUE for the scorecard-excluded kinds (measurement.sql:64-65 sets the same thing at the
+ * database). A photograph and a re-test ARE the numbers, so they count; a measurement we fired to
+ * fill in `currently_named` is not a scorecard and must never be averaged into one.
+ */
+export function excludedFromScorecard(label: SuppliedLabel): boolean {
+  return !isPhotographLabel(label);
+}
+
+export function isSuppliedRun(row: { run_label?: string | null }): boolean {
+  return (SUPPLIED_LABELS as readonly string[]).includes(row.run_label ?? "");
+}
+
+/**
+ * Restrict a PostgREST query on `audit_reports` to the client's own baseline runs.
+ *
+ * ‼️ EVERY READER OF "THIS CLIENT'S NEWEST REPORT" NEEDS THIS. Without it, the first Photograph II
+ * becomes the row that `universalSetFor` freezes the tracked question set from, that the baseline
+ * verifier reports a score off, that `adoptAuditClassification` reads a vertical out of, and that
+ * the presence PDF and the findings print their fidelity footer from. The newest report stops
+ * meaning the baseline the day this ships, for every one of them at once.
+ *
+ * `run_label.is.null` is in the OR because rows written before measurement.sql have no label at
+ * all, and the column's default only applies to new inserts.
+ */
+export const BASELINE_ONLY = `run_label.is.null,run_label.not.in.(${SUPPLIED_LABELS.join(",")})`;
+
+export function baselineReportsOnly<T extends { or(filter: string): T }>(query: T): T {
+  return query.or(BASELINE_ONLY);
+}
+
+/** The client_link_source value meaning "this run was fired FOR this client". */
+export const FIRED_FOR_CLIENT = "fired_for_client";
+
+/** The client_link_source value meaning "a prospect audit, attached to the client who later booked". */
+export const ADOPTED_PROSPECT_AUDIT = "backfilled_by_domain";
+
+/** The lead_source every client scan carries (baseline-scan.ts). */
+export const CLIENT_ONBOARDING_SOURCE = "aeo_client_onboarding";
+
+/**
+ * TRUE when a report was fired for somebody who is already a client, so it must never be pitched.
+ *
+ * ‼️ THE #hot-leads CARD AND THE OUTLOOK PITCH DRAFT ARE PROSPECT MACHINERY. On 2026-09-15 SRT Agency
+ * LLC finished the intake form, Photograph I ran with the client's own email as requester_email, and
+ * finishReport drafted "SRT Agency scored 13/100 on AI visibility" to the client and pinged #hot-leads
+ * as though a new lead had come in. Either marker alone is enough: client_link_source is written at
+ * insert for a run fired for a client, and lead_source is what baseline-scan.ts passes.
+ */
+export function isClientRun(row: { client_link_source?: string | null; lead_source?: string | null }): boolean {
+  return row.client_link_source === FIRED_FOR_CLIENT || row.lead_source === CLIENT_ONBOARDING_SOURCE;
+}
+
+/**
+ * Restrict a query to the client's own baseline PHOTOGRAPH, not merely to a report it is linked to.
+ *
+ * ‼️ BASELINE_ONLY ALONE STOPPED BEING ENOUGH ON 2026-09-14, AND NOTHING ABOUT IT LOOKS WRONG.
+ * It filters by EXCLUSION (`run_label` is not one of the runs we fire ourselves), which was
+ * sufficient while client_id could only mean "fired for this client". On 2026-09-14 a backfill
+ * linked 13 prospect audits to clients by matching the website host, which is the exact domain
+ * fallback step-verify.ts refuses in capitals, applied in SQL instead of in code. `prospect_audit`
+ * is not in SUPPLIED_LABELS, so every one of those rows passes BASELINE_ONLY. See
+ * docs/2026-09-14-audit-foundation.sql section 4.
+ *
+ * ‼️ THIS IS NOT APPLIED TO EVERY BASELINE_ONLY CALLER, AND THE ONES LEFT ALONE ARE THE POINT OF
+ * THE BACKFILL. Fifteen call sites use BASELINE_ONLY. For most of them "any audit we hold for this
+ * client" is the RIGHT answer and is the improvement Matthew asked for: the keyword set, the
+ * harvest, the competitor shortlist, page candidates, the content digest and the evidence layer all
+ * get better when they can read the scan we already ran on that business. Narrowing those would
+ * throw away the thing the link was created for.
+ *
+ * It is applied where the report is a MEASUREMENT THE BUSINESS IS JUDGED AGAINST, where reading a
+ * prospecting run instead is not merely imprecise but wrong:
+ *
+ *   - step-verify.ts's baseline_scan verifier, which reports that score AS the baseline the day
+ *     30/60/90 numbers are measured against.
+ *   - question-sets.ts's universalSetFor, whose own comment calls its filter the most load-bearing
+ *     in the set: the tracked set is DERIVED from that report and then FROZEN forever, and every
+ *     later client in the vertical inherits it.
+ *
+ * ‼️ SUPERSEDED FOR BOTH OF THOSE ON 2026-09-15, BY THE BOOKING DOOR. Onboarding no longer fires a
+ * scan: the audit Matthew ran before the Loom is adopted at booking, by the exact report slug the
+ * client clicked Get Started on, and the measured baseline is the Day 0 run at day_zero_archive. Both
+ * readers now take a fired_for_client run first and fall back to ADOPTED_PROSPECT_AUDIT, and the step 2
+ * evidence line names which one it found. See src/lib/clients/open-board.ts.
+ *
+ * ‼️ DELIBERATELY NOT APPLIED TO adoptAuditClassification, and that one is worth the sentence.
+ * It reads vertical_slug and business_type and writes them only over NULL. An adopted prospect
+ * audit classified the same business independently, so its answer is a real classification rather
+ * than a round trip. Requiring fired_for_client there would make it refuse for every client whose
+ * only audit was adopted, which is now the common case, leaving vertical_slug NULL and breaking
+ * verticalFor() and the harvest behind it. The fix would cause a worse regression than the one it
+ * repairs.
+ */
+export function ownBaselineOnly<
+  T extends { or(filter: string): T; eq(column: string, value: string): T },
+>(query: T): T {
+  return query.or(BASELINE_ONLY).eq("client_link_source", FIRED_FOR_CLIENT);
+}

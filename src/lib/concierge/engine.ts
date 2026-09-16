@@ -22,7 +22,8 @@ import type { AmmoCandidate } from "@/lib/ammo/supply";
 import { conciergeAmmo } from "./ammo";
 import type { ConciergeConfig } from "./config";
 import {
-  assetUrlFor,
+  deliveryUrlFor,
+  framesKeysOf,
   magnetByKey,
   nextInChain,
   resolveMagnet,
@@ -37,6 +38,7 @@ import {
 } from "./session";
 import { resolveBooking } from "./booking";
 import { conciergeOrigin } from "./origin";
+import { classifyHost } from "@/lib/hub/host-classify";
 import { safeTimeZone } from "@/lib/calendly";
 import { MAX_REPLY_WORDS, systemPrompt, toolsFor } from "./tools";
 
@@ -89,6 +91,34 @@ function onboardingUrl(session: ConciergeSession, place: Place | null, business:
 }
 
 /**
+ * Which host the booking hop goes through.
+ *
+ * ‼️ THE FRAME'S OWN ORIGIN WHEN THAT IS OUR INTERNAL HOST, OTHERWISE THE CONCIERGE HOST. A preview
+ * frame is served from Mission Control (previewOrigin() in ./origin.ts), and a hop through the
+ * concierge host would be the one dead button in a demo that otherwise needs no DNS. /start
+ * recorded the frame's Origin on the session, so the hop follows the frame that actually served
+ * this conversation instead of a guess about what kind of page it was on.
+ *
+ * ‼️ ONLY AN INTERNAL CLASSIFICATION IS TRUSTED, AND THAT IS WHAT MAKES A FORGED Origin HARMLESS.
+ * A browser cannot set Origin but a script calling /start can, and *.vercel.app classifies
+ * internal. The worst that buys is that script's OWN session getting a booking link on a host it
+ * chose: the link is returned only to the holder of that session token, and /booked still
+ * allowlists the destination. A live frame on the concierge host classifies "concierge" and keeps
+ * conciergeOrigin(), so live pages are unchanged.
+ */
+function bookingHopOrigin(session: ConciergeSession): string {
+  if (session.embedOrigin) {
+    try {
+      const frame = new URL(session.embedOrigin);
+      if (classifyHost(frame.host) === "internal") return frame.origin;
+    } catch {
+      // A malformed or opaque ("null") Origin falls back to the concierge host, same as none.
+    }
+  }
+  return conciergeOrigin();
+}
+
+/**
  * Wrap an outbound booking link so the click is recorded before the browser leaves.
  *
  * ‼️ THE HOP IS WHAT MAKES "SOMEBODY WENT TO BOOK" MEASURABLE. A slot button is a link to
@@ -98,7 +128,7 @@ function onboardingUrl(session: ConciergeSession, place: Place | null, business:
  * redirect until it does.
  */
 function trackedUrl(session: ConciergeSession, target: string): string {
-  const url = new URL("/api/concierge/booked", conciergeOrigin());
+  const url = new URL("/api/concierge/booked", bookingHopOrigin(session));
   url.searchParams.set("t", session.sessionToken);
   url.searchParams.set("u", target);
   return url.toString();
@@ -134,7 +164,7 @@ export function openingFor(args: {
   }
   if (args.evidence) return args.evidence.detail;
   if (args.degradeLine) return args.degradeLine;
-  return "Tell me your city and I will show you which clinics ChatGPT actually names there, or tell you plainly that we have not measured it yet.";
+  return "Tell me your city and I will show you which businesses ChatGPT actually names there, or tell you plainly that we have not measured it yet.";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -194,11 +224,23 @@ export function makeExecutor(ctx: ExecutorContext) {
       }
       ctx.place = place;
 
-      // ‼️ THE SERVICE DEFAULTS, IT IS NEVER INFERRED FROM THEIR WEBSITE. This lane is published to
-      // med spa owners, so medspa is the honest default. Guessing a vertical from a domain is the
-      // inference for-prospect.ts calls out as the one that puts a med spa's rivals in a plumber's
-      // inbox.
-      const service = String(input.service ?? "").slice(0, 60).trim() || "medspa";
+      // ‼️ THE SERVICE DEFAULTS, IT IS NEVER INFERRED FROM THEIR WEBSITE. Guessing a vertical from
+      // a domain is the inference for-prospect.ts calls out as the one that puts a med spa's rivals
+      // in a plumber's inbox.
+      //
+      // ‼️ THE GAP RECORDED HERE ON 2026-09-14 IS CLOSED. This is the market the BUYER'S OWN
+      // BUSINESS competes in, and it is now client_audiences.buyer_market, seeded from the preset
+      // and read through the config. It was the fourth and last of four independent routes to
+      // "this client is a med spa", and the only one that could not be fixed without a column:
+      // the vocabulary describes the buyer and what the client sells them, and neither of those
+      // is a market to look rivals up in.
+      //
+      // ‼️ NO FALLBACK, AND THE EMPTY STRING IS DELIBERATE. competitorAmmo already answers a
+      // blank service with "we do not know what this business sells yet", which is true. A
+      // default would file a second avatar's evidence under the first avatar's market and keep
+      // doing it silently, which is the opposite of what the market layer is being built for.
+      const service =
+        String(input.service ?? "").slice(0, 60).trim() || (ctx.config.buyerMarket ?? "");
 
       const ammo = await conciergeAmmo({
         audience: "owner",
@@ -251,7 +293,9 @@ export function makeExecutor(ctx: ExecutorContext) {
       const asked = String(input.magnet_key ?? "");
       const overridden = asked.length > 0 && asked !== magnet.magnetKey;
 
-      const url = assetUrlFor(magnet);
+      // A framing of the client's anchor hands over the ANCHOR's asset: the page named it
+      // "Check my citations now", and what the visitor receives is the audit itself.
+      const url = await deliveryUrlFor(magnet);
       if (magnet.magnetKey) {
         await recordDelivered(ctx.session, magnet.magnetKey, magnet.id);
         ctx.attachments.push({ kind: "magnet", key: magnet.magnetKey, title: magnet.title, url });
@@ -367,7 +411,7 @@ export function makeExecutor(ctx: ExecutorContext) {
       if (offer.mode === "link") {
         ctx.attachments.push({
           kind: "booking",
-          key: ctx.config.audience === "owner" ? "onboarding2" : "clinic",
+          key: ctx.config.audience === "owner" ? "onboarding2" : "client",
           title: offer.label,
           url: trackedUrl(ctx.session, offer.url),
         });
@@ -381,13 +425,13 @@ export function makeExecutor(ctx: ExecutorContext) {
         return ok({
           offered: true,
           phone: offer.phone,
-          say: `Tell them the clinic books by phone on ${offer.phone}.`,
+          say: `Tell them the ${ctx.config.vocabulary.business} books by phone on ${offer.phone}.`,
         });
       }
 
       return ok({
         offered: true,
-        say: "Ask for their name and the best number, and tell them the clinic will call them back.",
+        say: `Ask for their name and the best number, and tell them the ${ctx.config.vocabulary.business} will call them back.`,
       });
     }
 
@@ -407,7 +451,7 @@ export function makeExecutor(ctx: ExecutorContext) {
  * over, both still excluding everything already delivered. Re-applying the key after delivery
  * would offer the same thing twice, which `exclude` exists to prevent.
  */
-async function allowedMagnet(ctx: ExecutorContext): Promise<LeadMagnet | null> {
+export async function allowedMagnet(ctx: Pick<ExecutorContext, "config" | "session">): Promise<LeadMagnet | null> {
   const delivered = ctx.session.magnetsDelivered;
 
   if (delivered.length === 0) {
@@ -428,8 +472,14 @@ async function allowedMagnet(ctx: ExecutorContext): Promise<LeadMagnet | null> {
     );
   }
 
+  // ‼️ WHAT WAS HANDED OVER INCLUDES WHAT IT FRAMED. Delivering "Check my citations now" on an
+  // anchored client delivered the audit, so the audit, and every other page's framing of it, is
+  // excluded from here on. Without this the ladder would offer the same deliverable again under a
+  // different pill as the "second" free thing.
+  const exclude = [...delivered, ...(await framesKeysOf(delivered, ctx.config.audience))];
+
   const last = await magnetByKey(delivered[delivered.length - 1], ctx.config.audience);
-  const chained = last ? await nextInChain(last, { exclude: delivered }) : null;
+  const chained = last ? await nextInChain(last, { exclude }) : null;
   if (chained) return chained;
 
   // The chain ended or its target was already given. Fall back to the ladder, still excluding
@@ -442,7 +492,7 @@ async function allowedMagnet(ctx: ExecutorContext): Promise<LeadMagnet | null> {
       treatment: null,
       category: ctx.session.pageCategory,
     },
-    { exclude: delivered }
+    { exclude }
   );
 }
 
@@ -495,6 +545,10 @@ export async function runConciergeTurn(args: RunTurnArgs): Promise<TurnResult> {
 
   const prompt = systemPrompt({
     audience: args.config.audience,
+    // Loaded once in config.ts from the client's own audience row. There is no fallback behind
+    // these: loadConciergeConfig refuses to serve a widget whose audience will not resolve.
+    vocabulary: args.config.vocabulary,
+    hardLines: args.config.hardLines,
     tenantName: args.config.clientName,
     delivered: args.session.magnetsDelivered,
     spentDetails: args.session.ammoUsed.map((a) => a.detail),

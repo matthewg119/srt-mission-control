@@ -16,16 +16,37 @@
 // list is how "the client said this" and "a model wrote this" quietly become the same thing.
 
 import { supabaseAdmin } from "@/lib/db";
+import { baselineReportsOnly } from "@/lib/audit-engine/run-labels";
 
 export type SourceType =
   | "CLIENT_VOICE"
   | "CLIENT_DOCUMENT"
   | "CLIENT_WEBSITE"
   | "FIRST_PARTY_DATA"
+  /**
+   * A customer's own published review, quoted VERBATIM.
+   *
+   * !! IT IS QUOTED OR IT IS NOT USED, and that is what keeps it on the right side of FTC
+   * 16 CFR Part 465. See the header of src/lib/clients/review-quote-read.ts and the argument
+   * draft-page.ts:3-8 already makes: the regulated thing is a tool that GENERATES review
+   * content, and reproducing what somebody already published is the opposite of that. The
+   * drafter is told to quote it or drop it, and a claim citing one of these is rejected
+   * unless it appears in the source character for character.
+   */
+  | "CUSTOMER_REVIEW"
   | "EXTERNAL_RESEARCH"
   | "AI_DERIVED";
 
-export type CollectedVia = "slack_voice" | "slack_typed" | "board" | "crawl" | "audit";
+export type CollectedVia =
+  | "slack_voice"
+  | "slack_typed"
+  | "board"
+  | "crawl"
+  | "audit"
+  /** Read off a screenshot of a public listing dropped in the page studio. */
+  | "review_screenshot"
+  /** Read out of the client's own review tool, review_tool_submissions. */
+  | "review_tool";
 
 export interface PageSource {
   id: string;
@@ -84,7 +105,12 @@ export function isFirstParty(type: SourceType): boolean {
     type === "CLIENT_VOICE" ||
     type === "CLIENT_DOCUMENT" ||
     type === "CLIENT_WEBSITE" ||
-    type === "FIRST_PARTY_DATA"
+    type === "FIRST_PARTY_DATA" ||
+    // A customer's own words about this business, published by them and transcribed by us.
+    // It came from a real person about this client rather than from a model or from a market,
+    // and it is checkable against the screenshot it was read off. Outside research is neither,
+    // which is why it stays out of this set even though it is real evidence.
+    type === "CUSTOMER_REVIEW"
   );
 }
 
@@ -104,6 +130,8 @@ export function sourceLabel(type: SourceType): string {
       return "Their website";
     case "FIRST_PARTY_DATA":
       return "Their own data";
+    case "CUSTOMER_REVIEW":
+      return "A customer's own review";
     case "EXTERNAL_RESEARCH":
       return "Outside research";
     case "AI_DERIVED":
@@ -282,11 +310,21 @@ export async function recordSource(
  * Returns the page_sources id, or null when there was nothing to file. site-replica.ts stores it
  * on the replica row so the page it generated can be traced back to the exact snapshot it was
  * written from, which is what its step verifier checks rather than trusting that a crawl ran.
+ *
+ * ‼️ sourceDate IS THE DATE THE CRAWL HAPPENED, NOT THE DATE IT WAS FILED, and it is optional
+ * only because every caller until now filed its crawl the moment it ran. A prospect audit
+ * promoted at intake did NOT: its crawl can be weeks old, and stamping it with today's date is
+ * exactly the failure the paragraph above describes. Pass the audit's own created_at for that
+ * path; omit it when the crawl just happened and today is the truth.
  */
 export async function recordWebsiteSnapshot(args: {
   clientId: string;
   url: string;
   content: string;
+  /** YYYY-MM-DD the content was CRAWLED. Defaults to today, which is right only for a live crawl. */
+  sourceDate?: string;
+  /** How it reached us. 'crawl' is a live read; 'audit' is a promoted prospect scan. */
+  collectedVia?: CollectedVia;
 }): Promise<string | null> {
   const content = args.content.trim();
   if (!content) return null;
@@ -301,13 +339,15 @@ export async function recordWebsiteSnapshot(args: {
     .maybeSingle();
 
   const now = new Date().toISOString();
+  // The crawl date, which is only today when nobody told us otherwise.
+  const crawledOn = args.sourceDate ?? now.slice(0, 10);
 
   if (existing?.id) {
     await supabaseAdmin
       .from("page_sources")
       .update({
         source_content: content,
-        source_date: now.slice(0, 10),
+        source_date: crawledOn,
         updated_at: now,
       })
       .eq("id", existing.id as string);
@@ -321,8 +361,8 @@ export async function recordWebsiteSnapshot(args: {
     sourceContent: content,
     topic: "What their own website says",
     sourceUrl: args.url,
-    sourceDate: now.slice(0, 10),
-    collectedVia: "crawl",
+    sourceDate: crawledOn,
+    collectedVia: args.collectedVia ?? "crawl",
   });
 
   return filed.ok ? filed.id : null;
@@ -493,28 +533,73 @@ export async function loadNumberedEvidence(
   const stored = await loadEvidenceFor(clientId, pageId);
   const refs = numberEvidence(stored);
 
+  // ‼️ THIS DROPPED THE CLIENT'S OWN WORDS OUT OF EVERY PAGE DRAFT, SILENTLY, FOR WEEKS.
+  //
+  // docs/2026-08-16-audit-call-notes.sql was never applied, so `call_notes` did not exist. A
+  // PostgREST select fails WHOLE on one unknown column, and this destructured only `{ data }`, so
+  // `report` came back null, the function returned early, and intake_answers -- which does exist
+  // and is the business's own words -- was dropped too. Nothing errored anywhere.
+  //
+  // Three changes, and each one is a different failure: the error is READ, the lookup prefers
+  // client_id (contact_id matches a prospect audit, and a client's baseline is keyed on the client),
+  // and a missing call_notes column degrades to intake answers rather than to nothing.
   const { data: client } = await supabaseAdmin
     .from("clients")
     .select("contact_id")
     .eq("id", clientId)
     .maybeSingle();
 
-  if (!client?.contact_id) return refs;
+  const contactId = (client?.contact_id as string | null) ?? null;
 
-  const { data: report } = await supabaseAdmin
-    .from("audit_reports")
-    .select("intake_answers, call_notes")
-    .eq("contact_id", client.contact_id as string)
-    .eq("status", "done")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const read = async (columns: string) => {
+    const byClient = await baselineReportsOnly(
+      supabaseAdmin
+        .from("audit_reports")
+        .select(columns)
+        .eq("client_id", clientId)
+        .eq("status", "done")
+    )
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (byClient.error) return byClient;
+    if (byClient.data) return byClient;
+    if (!contactId) return byClient;
+
+    return baselineReportsOnly(
+      supabaseAdmin
+        .from("audit_reports")
+        .select(columns)
+        .eq("contact_id", contactId)
+        .eq("status", "done")
+    )
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+  };
+
+  let { data: report, error } = await read("intake_answers, call_notes");
+
+  if (error && /call_notes/.test(error.message)) {
+    console.error(
+      "[page-evidence] audit_reports.call_notes is missing: run docs/2026-08-16-audit-call-notes.sql. " +
+        "Falling back to intake answers so pages keep their first-party ground."
+    );
+    ({ data: report, error } = await read("intake_answers"));
+  }
+
+  if (error) {
+    console.error("[page-evidence] first-party sources could not be read:", error.message);
+    return refs;
+  }
 
   if (!report) return refs;
 
+  const row = report as unknown as { intake_answers?: string | null; call_notes?: string | null };
   const extra: Array<[string | null, string]> = [
-    [(report.intake_answers as string | null)?.trim() || null, "What they told us at intake"],
-    [(report.call_notes as string | null)?.trim() || null, "What they said on the call"],
+    [row.intake_answers?.trim() || null, "What they told us at intake"],
+    [row.call_notes?.trim() || null, "What they said on the call"],
   ];
 
   for (const [text, topic] of extra) {

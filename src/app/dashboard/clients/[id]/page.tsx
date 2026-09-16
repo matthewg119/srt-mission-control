@@ -5,9 +5,11 @@
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { BarChart3 } from "lucide-react";
+import { BarChart3, Network } from "lucide-react";
 import { supabaseAdmin } from "@/lib/db";
+import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { INTAKE_STEPS } from "@/config/client-intake";
+import { stepNumber } from "@/config/delivery-steps";
 import { ONBOARDING_STAGES } from "@/lib/clients/provision";
 import { DELIVERY_STEPS } from "@/lib/clients/delivery-checklist";
 import { DRAFTS } from "@/lib/clients/client-drafts";
@@ -222,16 +224,28 @@ export default async function ClientDetailPage({
   // Steps 29 and 30. `review_workflow` is intake step 4's bag; the two URL keys are added to it
   // by the Review handover panel and are read by destinationsFor() in the hub's review tool.
   const reviewWorkflowBag = (client.review_workflow ?? {}) as Record<string, unknown>;
+  // ‼️ THE WHOLE BAG, NOT TWO PICKED KEYS. It used to lift google_url and realself_url by name,
+  // which is how the panel came to have two boxes for six platforms and how a client whose
+  // chosen destination was Trustpilot ended up with nowhere to put its link. The panel reads
+  // REVIEW_PLATFORMS now and the route MERGES on save, so the intake keys sitting in this same
+  // bag are never touched by passing it down.
+  //
+  // Live only when a reviews host is ATTACHED, not when one is merely composed from the record.
+  // A hostname nothing serves is not somewhere to send a QR code.
+  const reviewsHostRow = (hostRows ?? []).find(
+    (r) => r.kind === "reviews" && Boolean(r.vercel_attached_at)
+  );
   const reviewWorkflowView: ReviewWorkflowView = {
     mode: (client.review_request_mode as ReviewWorkflowView["mode"]) ?? null,
     ownerName: (client.review_owner_name as string | null) ?? null,
-    googleUrl: typeof reviewWorkflowBag.google_url === "string" ? reviewWorkflowBag.google_url : null,
-    realselfUrl:
-      typeof reviewWorkflowBag.realself_url === "string" ? reviewWorkflowBag.realself_url : null,
+    workflow: reviewWorkflowBag,
+    primaryKey: (client.review_destination_primary as string | null) ?? null,
     intakeDestinations: Array.isArray(reviewWorkflowBag.destinations)
       ? (reviewWorkflowBag.destinations as string[])
       : [],
     bookingSoftware: (client.booking_software as string | null) ?? null,
+    reviewsHost: (reviewsHostRow?.host as string | undefined) ?? null,
+    previewUrl: `/dashboard/clients/${id}/preview?kind=reviews`,
   };
 
   // What unlocks delivery step 21. `clients.select("*")` already carries the four columns, so
@@ -308,6 +322,8 @@ export default async function ClientDetailPage({
     .select("id, created_at")
     .eq("client_id", id)
     .eq("status", "done")
+    // The baseline photograph, not a measurement fired for this client. See run-labels.ts.
+    .or(BASELINE_ONLY)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -470,6 +486,17 @@ export default async function ClientDetailPage({
       <div className="mb-6 mt-2">
         <div className="flex items-center justify-between gap-3">
           <h1 className="text-xl font-medium text-white">{name}</h1>
+          <div className="flex items-center gap-2">
+          {/* The plan as a picture: pillar in the middle, supports around it. Shared on the call. */}
+          <Link
+            href={`/dashboard/clients/${id}/plan`}
+            title="Plan map"
+            aria-label="Plan map"
+            className="flex items-center gap-1.5 rounded-lg border border-[rgba(255,255,255,0.07)] px-2.5 py-1.5 text-xs text-[rgba(255,255,255,0.5)] hover:bg-[rgba(255,255,255,0.03)] hover:text-white"
+          >
+            <Network className="h-4 w-4" aria-hidden />
+            Plan map
+          </Link>
           {/* Traffic. The one number this whole hub exists to move, one click away. */}
           <Link
             href={`/dashboard/clients/${id}/metrics`}
@@ -480,6 +507,7 @@ export default async function ClientDetailPage({
             <BarChart3 className="h-4 w-4" aria-hidden />
             Traffic
           </Link>
+          </div>
         </div>
         <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-[rgba(255,255,255,0.4)]">
           <span>{client.website as string}</span>
@@ -626,7 +654,9 @@ export default async function ClientDetailPage({
       >
         <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="text-sm font-medium text-white">Avatar</h2>
-          <span className="text-xs text-[rgba(255,255,255,0.4)]">step 8</span>
+          <span className="text-xs text-[rgba(255,255,255,0.4)]">
+            step {stepNumber("avatar_confirmed")}
+          </span>
         </div>
         <AvatarForm
           clientId={id}
@@ -652,7 +682,8 @@ export default async function ClientDetailPage({
         <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="text-sm font-medium text-white">Review handover</h2>
           <span className="text-xs text-[rgba(255,255,255,0.4)]">
-            steps 29 and 30
+            steps {stepNumber("review_request_configured")} and{" "}
+            {stepNumber("review_tool_handed")}
           </span>
         </div>
         <ReviewWorkflowForm clientId={id} view={reviewWorkflowView} />
@@ -672,7 +703,9 @@ export default async function ClientDetailPage({
         <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="text-sm font-medium text-white">Payment</h2>
           <span className="text-xs text-[rgba(255,255,255,0.4)]">
-            {paymentView.recordedAt ? "recorded, step 21 is open" : "not recorded, step 21 is held"}
+            {paymentView.recordedAt
+              ? `recorded, step ${stepNumber("access_granted")} is open`
+              : `not recorded, step ${stepNumber("access_granted")} is held`}
           </span>
         </div>
         <PaymentForm clientId={id} view={paymentView} />

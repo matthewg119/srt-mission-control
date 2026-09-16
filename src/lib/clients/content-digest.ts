@@ -23,7 +23,9 @@
 // unanswered questions left the week is SKIPPED rather than filled with invented ones.
 
 import { supabaseAdmin } from "@/lib/db";
+import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { postDraft, recurringDraftKey, type RecurringDraft } from "@/lib/clients/client-drafts";
+import { filterPhrases } from "@/lib/clients/phrase-quality";
 
 /**
  * Which weekday carries which ask. 0 is Sunday, UTC.
@@ -134,8 +136,12 @@ export async function pickQuestions(clientId: string, limit = QUESTIONS_PER_WEEK
     .order("score", { ascending: false })
     .limit(50);
 
-  const ranked = (candidates ?? [])
-    .filter((c) => !taken.has(((c.question as string) ?? "").trim()))
+  // ‼️ THE SAME QUALITY FILTER THE STUDIO MENU AND THE KEYWORD LIST USE. Rows written before
+  // phrase-quality.ts existed are extraction debris ("Why: Vendor lock-in fear", a lone quote
+  // mark), and this digest read them straight, so the weekly picker could hand somebody a
+  // citation marker to write a page about.
+  const ranked = filterPhrases(candidates ?? [], (c) => String(c.question ?? ""))
+    .kept.filter((c) => !taken.has(((c.question as string) ?? "").trim()))
     .sort((a, b) => Number(a.currently_named === true) - Number(b.currently_named === true))
     .map((c) => c.question as string);
 
@@ -151,6 +157,9 @@ export async function pickQuestions(clientId: string, limit = QUESTIONS_PER_WEEK
   let q = supabaseAdmin
     .from("audit_reports")
     .select("id")
+    // Baseline runs only: the `website ilike` rung below would otherwise match a measurement we
+    // fired for this client ourselves. See run-labels.ts.
+    .or(BASELINE_ONLY)
     .order("created_at", { ascending: false })
     .limit(1);
 

@@ -93,6 +93,59 @@ interface SlackInteractivePayload {
   container?: { message_ts?: string; channel_id?: string };
 }
 
+const UUID_PREFIX = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?::(.*))?$/i;
+
+/**
+ * Record a button press against the client it was about.
+ *
+ * Never awaited by the handler and never able to fail it: a log that can delay or break the thing
+ * it is logging is worse than no log, and this one sits in front of every action in the switch.
+ */
+async function logButtonPress(
+  action: { action_id: string; value?: string },
+  channel: string,
+  slackTs: string,
+  userId: string
+): Promise<void> {
+  try {
+    const value = action.value ?? "";
+    const matched = UUID_PREFIX.exec(value);
+
+    let clientId = matched?.[1] ?? null;
+    let stepKey = matched?.[2] ?? null;
+
+    if (!clientId && channel) {
+      const { clientForThread } = await import("@/lib/clients/onboarding-docs");
+      const found = await clientForThread(channel, slackTs);
+      if (found) {
+        clientId = found.id;
+        stepKey = found.stepKey;
+      }
+    }
+
+    if (!clientId) return;
+
+    const { logClientEvent } = await import("@/lib/clients/client-events");
+    await logClientEvent({
+      clientId,
+      stepKey,
+      source: "slack",
+      kind: "button",
+      author: userId,
+      text: action.action_id,
+      slackChannel: channel,
+      // NOT slackTs: that is the CARD's timestamp, and a card is pressed more than once (Done,
+      // then Re-check). Using it would make the unique constraint drop every press after the
+      // first, which is exactly the history worth having.
+      slackTs: null,
+      slackThreadTs: slackTs,
+      payload: { actionId: action.action_id, value },
+    });
+  } catch (e) {
+    console.error("[slack/actions] button not logged:", (e as Error).message);
+  }
+}
+
 async function handleBlockAction(payload: SlackInteractivePayload): Promise<NextResponse> {
   const action = payload.actions?.[0];
   console.log("[slack/actions] hit", { type: payload.type, action: action?.action_id });
@@ -103,6 +156,15 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
   const userId = payload.user.id;
 
   if (!slackTs) return NextResponse.json({ ok: true });
+
+  // ‼️ EVERY BUTTON, BEFORE THE SWITCH DECIDES WHAT IT IS. A press is a decision somebody made
+  // about a client -- Done, Re-check, Skip, an avatar pick -- and it left no trace anywhere except
+  // in whatever the handler happened to write. Logged here rather than in forty cases, so a new
+  // button is recorded the day it is added rather than the day somebody remembers to log it.
+  //
+  // The client comes from the button's own value (`<clientId>:<stepKey>` on every step button) and
+  // falls back to the thread. A press on something that is not about a client logs nothing.
+  void logButtonPress(action, channel, slackTs, userId);
 
   switch (action.action_id) {
     case "ai_approve":
@@ -164,6 +226,9 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
         userId,
         reportId: action.value ?? "",
       });
+    case "client_import_archive":
+    case "client_import_fresh":
+      return duplicateImportAction({ actionId: action.action_id, channel, slackTs, userId, value: action.value ?? "" });
     case "fo_track":
     case "fo_ignore":
       return followupTrackAction({
@@ -205,6 +270,16 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
         value: action.value ?? "",
       });
 
+    // ── The prep call: RingOut to the client, from the offer step's card ──
+    case "step_ringout":
+      return stepRingOutAction({
+        channel,
+        slackTs,
+        userName: payload.user?.username ?? null,
+        userId,
+        clientId: action.value ?? "",
+      });
+
     case "client_msg_sent":
       return clientMessageSentAction({
         channel,
@@ -227,6 +302,54 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
         slackTs,
         userName: payload.user?.username ?? null,
         userId,
+        clientId: action.value ?? "",
+      });
+    // ── The concierge add-on: bought on the call, or installed later ──
+    case "concierge_addon_include":
+    case "concierge_addon_decline":
+      waitUntil(
+        (async () => {
+          const clientId = (action.value ?? "").trim();
+          const actor = payload.user?.username ? `@${payload.user.username}` : userId;
+          const { setConciergeAddon } = await import("@/lib/clients/concierge-addon");
+          const res = await setConciergeAddon({
+            clientId,
+            status: action.action_id === "concierge_addon_include" ? "included" : "declined",
+            by: actor,
+          });
+          await slack.postThreadReply(channel, slackTs, res.ok ? res.lines.join("\n") : `:warning: ${res.error}`);
+          if (res.ok) {
+            const { setDeliveryStep } = await import("@/lib/clients/delivery-checklist");
+            const done = await setDeliveryStep({ clientId, stepKey: "concierge_preview", transition: "complete", actor });
+            if (!done.ok) {
+              const todo = done.verdict && !done.verdict.ok && done.verdict.kind === "not_yet" ? ` ${done.verdict.todo}` : "";
+              await slack.postThreadReply(channel, slackTs, `:hourglass: Decision saved, step not ticked yet: ${done.error ?? "the check refused"}.${todo}`);
+            }
+          }
+          const { postStep } = await import("@/lib/clients/step-engine");
+          await postStep(clientId, "concierge_preview");
+        })().catch((e) => console.error("[slack/actions] concierge addon failed:", e))
+      );
+      return NextResponse.json({ ok: true });
+    // ── Step 21: the awareness ladder's rung, then the pillar keyword ──
+    case "ladder_write":
+    case "ladder_pick":
+    case "kw_pillar":
+    case "kw_supports_auto":
+      return step21Action({
+        actionId: action.action_id,
+        channel,
+        slackTs,
+        userName: payload.user?.username ?? null,
+        userId,
+        value: action.value ?? "",
+      });
+    // ── Where the review page's Post button sends a customer ──
+    case "review_link_open":
+      return reviewLinkOpenAction({
+        channel,
+        slackTs,
+        triggerId: payload.trigger_id ?? "",
         clientId: action.value ?? "",
       });
     // ── The offer this client's assistant hands over, approved before the call ──
@@ -273,6 +396,13 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
         userName: payload.user?.username ?? null,
         userId,
         clientId: action.value ?? "",
+      });
+    // ── A customer's published review becomes evidence, on a person's tap ──
+    case "page_review_use":
+      return pageReviewUseAction({
+        userName: payload.user?.username ?? null,
+        userId,
+        threadTs: action.value ?? "",
       });
     default:
       return NextResponse.json({ ok: true });
@@ -596,6 +726,9 @@ async function openEditModal(args: { slackTs: string; channel: string; userId: s
 async function handleViewSubmission(payload: SlackInteractivePayload): Promise<NextResponse> {
   if (payload.view?.callback_id === "imsg_remix_submit") {
     return handleRemixSubmit(payload);
+  }
+  if (payload.view?.callback_id === "review_link_submit") {
+    return reviewLinkSubmit(payload);
   }
   if (payload.view?.callback_id !== "ai_edit_submit") {
     return NextResponse.json({ ok: true });
@@ -1107,6 +1240,47 @@ async function auditPitchAction(args: {
  * with no audit behind it. Tracking is what makes a row schedulable — until
  * this fires, an unconfirmed prospect is never drafted for and never due.
  */
+/**
+ * Import data from duplicate / Keep it fresh, on the duplicate onboarding card (src/lib/clients/duplicate-card.ts).
+ *
+ * ‼️ ANSWERED IN THE CARD'S THREAD, AND THE IMPORT RUNS AFTER THE ACK. An import is a few dozen writes and
+ * Slack gives three seconds, so the press is acknowledged at once and the result is posted when it is done.
+ * Pressing it twice is safe: an archive is claimed before it is imported and refuses every import after that.
+ */
+async function duplicateImportAction(args: {
+  actionId: string; channel: string; slackTs: string; userId: string; value: string;
+}): Promise<NextResponse> {
+  const { readImportValue } = await import("@/lib/clients/duplicate-card");
+  const target = readImportValue(args.value);
+  if (!target) return NextResponse.json({ ok: true });
+
+  if (args.actionId === "client_import_fresh") {
+    await slack.postThreadReply(
+      args.channel,
+      args.slackTs,
+      `:seedling: <@${args.userId}> kept this onboarding fresh. The archive stays where it is and can still be imported.`
+    );
+    return NextResponse.json({ ok: true });
+  }
+
+  waitUntil(
+    (async () => {
+      const { importFromArchive } = await import("@/lib/clients/archive");
+      const res = await importFromArchive({ archiveId: target.archiveId, clientId: target.clientId, by: `<@${args.userId}>` }).catch(
+        (e) => ({ ok: false as const, error: (e as Error).message })
+      );
+      await slack.postThreadReply(
+        args.channel,
+        args.slackTs,
+        res.ok
+          ? [`:recycle: <@${args.userId}> imported the archived data into this onboarding:`, ...res.lines.map((l) => `  • ${l}`)].join("\n")
+          : `:warning: The import did not run: ${res.error}`
+      );
+    })()
+  );
+  return NextResponse.json({ ok: true });
+}
+
 async function followupTrackAction(args: {
   actionId: string; channel: string; slackTs: string; prospectId: string;
 }): Promise<NextResponse> {
@@ -1316,6 +1490,31 @@ async function deliveryStepAction(args: {
         const gate = await stepPrecondition(clientId, stepKey);
         if (!gate.ok) {
           await tellActor(args, clientId, gate.message ?? "Not yet.");
+
+          // ‼️ A REFUSAL IS THE ONE MOMENT THE CARD IS KNOWN TO BE OUT OF DATE, SO RE-RENDER IT.
+          //
+          // Until now NOTHING in production re-ran a card body. postStep is called only by
+          // scripts, postReadySteps skips any step that already has a slack_message_ts, and the
+          // three buttons either answer ephemerally (here) or REPLACE the card with a one-line
+          // outcome. So a card rendered wrong stayed wrong, and the standing advice to "press a
+          // button and let production re-render it" was describing behaviour that did not exist.
+          // It cost SRT Agency's hub_preview card a preview link: rendered from a shell with no
+          // CLIENT_LINK_SECRET, it read "no shareable link could be minted" for a day, which is
+          // a true sentence about the wrong environment sitting in a card about production.
+          //
+          // ‼️ AND IT WRITES NOTHING. postStep edits the existing slack_message_ts rather than
+          // re-posting, so the anchor keeps its position (Slack orders by post time and a
+          // delete-and-repost moves a step to the bottom permanently). Its trailing status
+          // update is gated `.in("status", ["pending","blocked","ready","error"])` and a card
+          // that exists sits at awaiting_me, so that statement matches no row. It also
+          // early-returns on complete/skipped, so it cannot resurrect a resolved step.
+          //
+          // The refusal goes first and the render is caught, because the person pressed the
+          // button to be told why it will not go through. A render fault must not swallow that.
+          const { postStep } = await import("@/lib/clients/step-engine");
+          await postStep(clientId, stepKey).catch((e: Error) =>
+            console.error(`[slack/actions] card re-render failed for ${stepKey}:`, e.message)
+          );
           return;
         }
 
@@ -1356,7 +1555,18 @@ async function deliveryStepAction(args: {
           return;
         }
 
-        await resolveStepCard(args.channel, clientId, stepKey, `:white_check_mark: *${step.label}* — done by ${actor}.`);
+        // ‼️ A CARD THAT COMPLETES AND OFFERS NOTHING IS THE BUG BEING FIXED. This was one
+        // line and a full stop, on the single most-pressed button on the board. The footer is
+        // derived from DELIVERY_STEPS rather than typed, so it cannot name a step number that
+        // has moved. asDone, because what comes next is computed as though this step is done,
+        // which at this point it is.
+        const doneNext = await nextStepFooter(clientId, stepKey, { asDone: true });
+        await resolveStepCard(
+          args.channel,
+          clientId,
+          stepKey,
+          `:white_check_mark: *${step.label}* — done by ${actor}.${doneNext}`
+        );
         return;
       }
 
@@ -1382,13 +1592,15 @@ async function deliveryStepAction(args: {
           return;
         }
 
+        // A skip advances the board exactly as a completion does, so it owes the same footer.
+        const skipNext = await nextStepFooter(clientId, stepKey, { asDone: true });
         await resolveStepCard(
           args.channel,
           clientId,
           stepKey,
           `:heavy_minus_sign: *${step.label}* — skipped by ${actor}. ` +
             `It renders as "not checked" everywhere, never as "no issues found". ` +
-            `Reply here with why, so the artifact can say it.`
+            `Reply here with why, so the artifact can say it.${skipNext}`
         );
         return;
       }
@@ -1422,7 +1634,12 @@ async function deliveryStepAction(args: {
         clientId,
         stepKey,
         `:warning: *${step.label}* — ${actor} hit a problem. Say what happened in this thread. ` +
-          `It is now in the #alerts-infra digest and it will not advance on its own.`
+          `It is now in the #alerts-infra digest and it will not advance on its own.` +
+          // NOT asDone: a flagged step blocks whatever was waiting on it, so naming the step it
+          // unblocks would be pointing at work that is now further away, not closer.
+          (await nextStepFooter(clientId, stepKey, {
+            own: ["  • Re-open it with the buttons on the card once the problem is fixed."],
+          }))
       );
     })().catch(async (e) => {
       // ‼️ THIS IIFE HAD NO CATCH, unlike every neighbouring handler in this file.
@@ -1794,6 +2011,62 @@ async function reviewConfirmReadingsAction(args: {
   return NextResponse.json({ ok: true });
 }
 
+/**
+ * [Use this quote] in a page-studio thread.
+ *
+ * ‼️ IT TAKES THE STUDIO THREAD TS, NOT A CLIENT ID, and that is what makes it self-contained.
+ * The session row IS the thread, so one value resolves the client, the claimed page and the
+ * proposal together, and a button pressed in the wrong thread finds nothing rather than filing
+ * a quote against whoever was last worked on.
+ *
+ * ‼️ IT POSTS BACK INTO THE STUDIO THREAD, not into args.channel/slackTs. The card lives in the
+ * page studio channel and the conversation about this page is that thread; a reply hung off the
+ * card would start a second thread inside it.
+ */
+async function pageReviewUseAction(args: {
+  userName: string | null;
+  userId: string;
+  threadTs: string;
+}): Promise<NextResponse> {
+  if (!args.threadTs) return NextResponse.json({ ok: true });
+  const actor = args.userName ? `@${args.userName}` : args.userId;
+
+  waitUntil(
+    (async () => {
+      const { confirmStudioReviewQuote } = await import("@/lib/clients/page-studio");
+      await confirmStudioReviewQuote({ threadTs: args.threadTs, by: actor });
+    })().catch((e) =>
+      console.error("[actions] page_review_use failed:", (e as Error).message)
+    )
+  );
+
+  return NextResponse.json({ ok: true });
+}
+
+/**
+ * The `*Next:*` block, as a string ready to append to a reply.
+ *
+ * ‼️ IT NEVER THROWS AND NEVER BLOCKS THE REPLY. This runs between a person pressing a button
+ * and the message that says what happened. A footer is worth having; it is not worth losing the
+ * confirmation over, so a failure here returns "" and the reply goes out without it.
+ */
+async function nextStepFooter(
+  clientId: string,
+  stepKey: string,
+  opts: { asDone?: boolean; own?: string[] } = {}
+): Promise<string> {
+  try {
+    const { nextStepLines } = await import("@/lib/clients/next-steps");
+    const { isStepKey } = await import("@/config/delivery-steps");
+    if (!isStepKey(stepKey)) return "";
+    const lines = await nextStepLines(clientId, stepKey, opts);
+    return lines.length ? `\n\n${lines.join("\n")}` : "";
+  } catch (e) {
+    console.error("[slack/actions] next-step footer failed:", (e as Error).message);
+    return "";
+  }
+}
+
 async function cleanupConfirmAllAction(args: {
   channel: string;
   slackTs: string;
@@ -1857,6 +2130,236 @@ async function cleanupConfirmAllAction(args: {
 // first real client the step came out `skipped`. The panel exists now; so does the button, in the
 // place the decision is actually being read.
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * [Call now] on the prep call card (offer_locked).
+ *
+ * ‼️ initiateRingOut, NOT triggerSpeedToLead. The speed-to-lead path is lead-shaped: it checks the
+ * DNC list, a thirty minute cooldown and business hours, writes call_log as speed_to_lead and
+ * posts to the hot leads channel. A client being onboarded is none of those. RingOut itself dials
+ * any number: it rings RC_AGENT_NUMBER first and, once that is answered, rings the client from
+ * RC_BUSINESS_NUMBER. Checked 2026-09-11: no new permission and no new number was needed.
+ *
+ * The phone is read fresh from the client row, never from the button's value, so a card posted
+ * before somebody corrected the number dials the corrected one.
+ */
+async function stepRingOutAction(args: {
+  channel: string;
+  slackTs: string;
+  userName: string | null;
+  userId: string;
+  clientId: string;
+}): Promise<NextResponse> {
+  const clientId = args.clientId.trim();
+  if (!clientId) return NextResponse.json({ ok: true });
+  const actor = args.userName ? `@${args.userName}` : args.userId;
+
+  waitUntil(
+    (async () => {
+      const { supabaseAdmin } = await import("@/lib/db");
+      const { data: client } = await supabaseAdmin
+        .from("clients")
+        .select("phone, legal_name, dba_name")
+        .eq("id", clientId)
+        .maybeSingle();
+
+      const phone = ((client?.phone as string | null) ?? "").trim();
+      const name = ((client?.dba_name as string | null) || (client?.legal_name as string | null)) ?? "the client";
+
+      if (!phone) {
+        await slack.postThreadReply(
+          args.channel,
+          args.slackTs,
+          ":warning: There is no phone on the client record, so there is nothing to dial. Add it on the board and press Call now again."
+        );
+        return;
+      }
+
+      const agent = (process.env.RC_AGENT_NUMBER ?? "").trim();
+      if (!agent) {
+        await slack.postThreadReply(
+          args.channel,
+          args.slackTs,
+          `:warning: RC_AGENT_NUMBER is not set, so RingOut has no phone of yours to ring first. Dial ${phone} by hand.`
+        );
+        return;
+      }
+
+      const { initiateRingOut } = await import("@/lib/ringcentral");
+      const res = await initiateRingOut(agent, phone, (process.env.RC_AGENT_EXTENSION ?? "").trim() || undefined);
+
+      await slack.postThreadReply(
+        args.channel,
+        args.slackTs,
+        res.success
+          ? `:telephone_receiver: Ringing your phone now, then ${name} at ${phone}. Started by ${actor}.`
+          : `:warning: RingOut did not start: ${res.error ?? "no reason given"}. Dial ${phone} by hand.`
+      );
+    })().catch((e) => console.error("[slack/actions] step_ringout failed:", e))
+  );
+
+  return NextResponse.json({ ok: true });
+}
+
+/**
+ * Step 21's buttons. Every one is the same function as its thread command, so the card and the thread
+ * cannot disagree about what picking a rung does.
+ */
+async function step21Action(args: {
+  actionId: string;
+  channel: string;
+  slackTs: string;
+  userName: string | null;
+  userId: string;
+  value: string;
+}): Promise<NextResponse> {
+  const [clientId, arg] = args.value.split(":");
+  if (!clientId) return NextResponse.json({ ok: true });
+  const actor = args.userName ? `@${args.userName}` : args.userId;
+
+  waitUntil(
+    (async () => {
+      const ladder = await import("@/lib/clients/anchor-ladder");
+      let text: string;
+      if (args.actionId === "ladder_write") {
+        await slack.postThreadReply(args.channel, args.slackTs, ":hourglass_flowing_sand: Writing the awareness ladder. About a minute.");
+        const res = await ladder.writeLadder(clientId, actor);
+        text = res.ok ? res.lines.join("\n") : `:warning: No ladder: ${res.error}`;
+      } else if (args.actionId === "ladder_pick") {
+        const res = await ladder.pickRung(clientId, Number(arg), actor);
+        text = res.ok ? res.message : `:warning: ${res.error}`;
+      } else if (args.actionId === "kw_pillar") {
+        text = (await ladder.pickPillar(clientId, arg ?? "", actor)).message;
+      } else {
+        text = (await ladder.pickSupports(clientId, "auto", actor)).message;
+      }
+      await slack.postThreadReply(args.channel, args.slackTs, text);
+      if (args.actionId === "kw_pillar" || args.actionId === "kw_supports_auto") {
+        const note = await ladder.proposeWhenPicked(clientId);
+        if (note) await slack.postThreadReply(args.channel, args.slackTs, note);
+      }
+      const { postStep } = await import("@/lib/clients/step-engine");
+      await postStep(clientId, "pre_call_pages");
+    })().catch((e) => console.error("[slack/actions] step 21 action failed:", e))
+  );
+  return NextResponse.json({ ok: true });
+}
+
+/**
+ * [Paste review link] on the review steps' cards: a modal with the six platforms and a URL box.
+ *
+ * The same writer as `review link: <url>` in the thread (lib/clients/review-link.ts), so a Yelp
+ * link picked as Trustpilot is refused here exactly as it is there.
+ */
+async function reviewLinkOpenAction(args: {
+  channel: string;
+  slackTs: string;
+  triggerId: string;
+  clientId: string;
+}): Promise<NextResponse> {
+  const token = process.env.SLACK_BOT_TOKEN || "";
+  const clientId = args.clientId.trim();
+  if (!clientId || !args.triggerId) return NextResponse.json({ ok: true });
+
+  const { REVIEW_PLATFORMS } = await import("@/lib/hub/review-destinations");
+  const { data: client } = await supabaseAdmin
+    .from("clients")
+    .select("review_destination_primary")
+    .eq("id", clientId)
+    .maybeSingle();
+  const primary = REVIEW_PLATFORMS.find((p) => p.key === (client?.review_destination_primary as string | null));
+  const option = (p: (typeof REVIEW_PLATFORMS)[number]) => ({
+    text: { type: "plain_text", text: p.name },
+    value: p.key,
+  });
+
+  const view = {
+    type: "modal",
+    callback_id: "review_link_submit",
+    private_metadata: JSON.stringify({ clientId, channel: args.channel, slackTs: args.slackTs }),
+    title: { type: "plain_text", text: "Review link" },
+    submit: { type: "plain_text", text: "Save" },
+    close: { type: "plain_text", text: "Cancel" },
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "The page a customer lands on to write the review. The review tool's Post button opens it.",
+        },
+      },
+      {
+        type: "input",
+        block_id: "platform_block",
+        label: { type: "plain_text", text: "Platform" },
+        element: {
+          type: "static_select",
+          action_id: "platform_input",
+          options: REVIEW_PLATFORMS.map(option),
+          ...(primary ? { initial_option: option(primary) } : {}),
+        },
+      },
+      {
+        type: "input",
+        block_id: "url_block",
+        label: { type: "plain_text", text: "Review page URL" },
+        element: {
+          type: "plain_text_input",
+          action_id: "url_input",
+          placeholder: { type: "plain_text", text: primary?.placeholder ?? "https://g.page/r/..." },
+        },
+      },
+    ],
+  };
+
+  const res = await fetch(`${SLACK_API}/views.open`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ trigger_id: args.triggerId, view }),
+  });
+  const json = (await res.json()) as { ok: boolean; error?: string };
+  if (!json.ok) {
+    await slack.postThreadReply(args.channel, args.slackTs, `:warning: Could not open the review link box: ${json.error}`);
+  }
+  return NextResponse.json({ ok: true });
+}
+
+async function reviewLinkSubmit(payload: SlackInteractivePayload): Promise<NextResponse> {
+  const meta = JSON.parse(payload.view?.private_metadata ?? "{}") as { clientId?: string; channel?: string; slackTs?: string };
+  const values = payload.view?.state.values ?? {};
+  const platformKey = values.platform_block?.platform_input?.selected_option?.value ?? null;
+  const url = values.url_block?.url_input?.value ?? "";
+  if (!meta.clientId) return NextResponse.json({ ok: true });
+
+  const actor = payload.user.username ? `@${payload.user.username}` : payload.user.id;
+  const { setReviewLink } = await import("@/lib/clients/review-link");
+  const res = await setReviewLink({ clientId: meta.clientId, url, platformKey, actor, source: "slack" });
+
+  // A refusal stays in the modal, under the box that caused it, instead of a thread message nobody sees.
+  if (!res.ok) {
+    return NextResponse.json({ response_action: "errors", errors: { url_block: res.error.slice(0, 150) } });
+  }
+
+  const clientId = meta.clientId;
+  waitUntil(
+    (async () => {
+      if (meta.channel && meta.slackTs) {
+        await slack.postThreadReply(
+          meta.channel,
+          meta.slackTs,
+          `:white_check_mark: *${res.platform.name}* link saved by ${actor}. The review page now ends with "${res.platform.label}".\n${res.line}`
+        );
+      }
+      const { setDeliveryStep } = await import("@/lib/clients/delivery-checklist");
+      const { postStep } = await import("@/lib/clients/step-engine");
+      await setDeliveryStep({ clientId, stepKey: "review_card_pdf", transition: "complete", actor }).catch(() => null);
+      await postStep(clientId, "review_card_pdf").catch(() => {});
+      await postStep(clientId, "review_tool_preview").catch(() => {});
+    })().catch((e) => console.error("[slack/actions] review link follow-up failed:", e))
+  );
+
+  return NextResponse.json({ response_action: "clear" });
+}
 
 /**
  * [Patient lane] and [Owner lane] on the concierge_preview card.
@@ -1997,6 +2500,7 @@ async function avatarPickAction(args: {
         result.changed && result.previous
           ? `It replaces *${result.previous.label}*, which is kept in this client's avatar history.`
           : "",
+        result.audience?.note ?? "",
         "The phrase harvest researches this buyer, and the custom question set and the page",
         "candidates are both scored against them. Press [Done] on this step when you are happy.",
       ].filter(Boolean);
@@ -2055,23 +2559,22 @@ async function avatarResearchAction(args: {
         // design before last: there is no brief and there are no three messages. It re-posts the
         // prompt now, which is the thing the step actually hands over.
         const cached = await avatarBriefFor(resolved.vertical, avatar.slug);
-        const { buildContext, buildCompactPrompt } = await import(
-          "@/lib/clients/artifacts/deep-research-run"
-        );
-        const built = await buildContext(args.clientId);
+        // ‼️ SINCE 2026-09-15 THIS RE-POSTS STEP 11's FRAMEWORK SCRIPT, the same thing the runner hands over,
+        // or the note saying it waits for an approved sales letter. `prompt short` still gives the compact
+        // prompt for anybody who wants to start without the letter.
+        const { postFrameworkScript } = await import("@/lib/clients/framework-thread");
+        const posted = await postFrameworkScript(args.clientId);
 
         await slack.postThreadReply(
           args.channel,
           args.slackTs,
           [
             `:arrows_counterclockwise: Running it again for *${avatar.label}*, asked by ${actor}.`,
-            built.ok
-              ? "Paste this into claude.com deep research and bring the answer back into this " +
-                "thread, with `research:` in front of it or as a PDF dropped straight in."
-              : `:warning: The prompt could not be rebuilt: ${built.error}`,
-            built.ok ? "```" : "",
-            built.ok ? buildCompactPrompt(built.ctx) : "",
-            built.ok ? "```" : "",
+            !posted.ok
+              ? `:warning: The framework script could not be posted: ${posted.error}`
+              : posted.posted
+                ? "The framework script is posted in step 11's thread. Bring the four answers back there."
+                : "The framework script waits for an approved sales letter (see step 11's thread). `prompt short` there gives the short research prompt now.",
             cached?.researchText
               ? "What is already stored is left alone until the new answer lands. It belongs to every client in this vertical, not just this one."
               : "",

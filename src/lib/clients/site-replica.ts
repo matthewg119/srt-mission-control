@@ -296,21 +296,42 @@ export async function buildSiteReplica(clientId: string): Promise<AutoResult> {
   // could not load anywhere. That is a green tick over unchecked work, on the one artifact whose
   // entire job is to be walked in front of a stranger.
   //
-  // So the reachable half is OBSERVED: one request for the loader, short timeout, reported either
-  // way. Same doctrine as verified_source, applied to card copy. A line may describe only what was
+  // So the reachable half is OBSERVED: one request, short timeout, reported either way. Same
+  // doctrine as verified_source, applied to card copy. A line may describe only what was
   // actually checked.
-  const { widgetHostReachable } = await import("@/lib/concierge/host-check");
-  const host = await widgetHostReachable();
+  //
+  // ‼️ SINCE 2026-09-11 THE REQUEST IS FOR THE PREVIEW FRAME, NOT FOR THE CONCIERGE HOST. These
+  // pages hand their preview token to ConciergeEmbed, which now loads the widget from Mission
+  // Control (previewOrigin() in concierge/origin.ts), so the concierge host no longer decides
+  // whether the box appears here. Checking it alone would put a false "will not load" on a
+  // replica whose assistant works. It is still checked, below, but only to say what the LIVE
+  // embed on their own website will need.
+  const { widgetHostReachable, probeUrl } = await import("@/lib/concierge/host-check");
+  const { previewOrigin } = await import("@/lib/concierge/origin");
+  const previewHost = new URL(previewOrigin()).host;
+
+  // The same /w/{slug}?pt= the pill opens on these pages. No row means no widget, so no request.
+  let frameFailure: string | null = null;
+  if (conf) {
+    const { conciergePreviewUrlFor } = await import("./concierge-setup");
+    const frame = await conciergePreviewUrlFor(clientId);
+    const seen = frame ? await probeUrl(frame, 10_000) : null;
+    if (!seen) {
+      frameFailure =
+        "No preview token could be minted for it: CLIENT_LINK_SECRET is not set on this " +
+        "environment, or this client has no slug.";
+    } else if (!seen.ok) {
+      frameFailure = `Its preview frame on \`${previewHost}\` ${seen.detail}.`;
+    }
+  }
 
   lines.push("");
-  if (!host.ok) {
+  if (conf && frameFailure) {
     lines.push(
-      ":rotating_light: *The assistant will not load on these pages.* `" +
-        host.host +
-        "` " +
-        host.detail +
-        ", and that is the hostname every embed tag names. The pages above render; the box in " +
-        "the corner does not appear. Attach the host, add its DNS record, then re-run this step."
+      ":rotating_light: *The assistant will not load on these pages.* " +
+        frameFailure +
+        " The pages above render; the box in the corner does not appear. Fix that, then " +
+        "re-run this step."
     );
   } else if (!conf) {
     // ‼️ "AI Concierge", NOT "AI Skin Concierge", AND conciergeLaneName() CANNOT BE USED HERE.
@@ -332,6 +353,25 @@ export async function buildSiteReplica(clientId: string): Promise<AutoResult> {
         "only. It is still switched off everywhere else until the `concierge_live` step, and it " +
         "is not on their real website."
     );
+  }
+
+  // ‼️ SAID EVEN WHEN THE REPLICA WORKS, BECAUSE THIS IS THE NEXT THING THAT WILL NOT. The live
+  // embed on their own website is the only thing that loads from the concierge host, and finding
+  // it NXDOMAIN on go-live day is the same surprise this block was written to prevent.
+  if (conf) {
+    const live = await widgetHostReachable();
+    if (!live.ok) {
+      lines.push(
+        ":information_source: `" +
+          live.host +
+          "` " +
+          live.detail +
+          ". These pages do not need it: previews load the assistant from `" +
+          previewHost +
+          "`. Only the LIVE embed on their own website needs that hostname, so attach it and " +
+          "add the concierge CNAME before the `concierge_live` step."
+      );
+    }
   }
 
   lines.push("");

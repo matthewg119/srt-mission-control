@@ -26,8 +26,8 @@
 // a guard.
 
 import { callClaudeJSON } from "@/lib/claude-calls";
+import { bookingUrlForReport } from "@/lib/onboarding2-link";
 import {
-  BOOKING_LINK,
   DELIVERY_MAX_WORDS,
   DELIVERY_REQUIRED_LINES,
   FREE_UNTIL_LINE,
@@ -162,9 +162,8 @@ function factsBlock(report: AuditReportRow, view: ReportView, topAbsent: { name:
     guarantee
       ? `The guarantee, and you may state it ONLY in these exact words: "${guarantee}". It is a visibility commitment. It is not a refund and not a trial.`
       : `There is NO guarantee on this one. Never imply one, and never write risk-free, money-back or refund.`,
-    BOOKING_LINK
-      ? `Booking link for the onboarding call, this is the next step: ${BOOKING_LINK}`
-      : `Booking link: NONE CONFIGURED. Write [LINK DE AGENDA] where the link belongs.`,
+    // The report's own booking chat, never a bare Calendly page: only a booking there starts onboarding.
+    `Booking link for the onboarding call, this is the next step: ${bookingUrlForReport(report)}`,
     `The onboarding call itself takes ${ONBOARDING_WINDOW}.`,
     `Phone for questions: ${LOOM_TEXT_NUMBER}`,
     site ? `Thing on their own site: ${site}` : "",
@@ -229,10 +228,6 @@ export async function draftDeliveryEmail(
   // and an email that says something else is the same broken promise it always was.
   const phrase = replyPhrase(transcript);
 
-  // What DOES need flagging is a close with nowhere to send them.
-  if (!BOOKING_LINK) {
-    flags.push("No hay link de agenda configurado (SRT_ONBOARDING_CALL_URL). Dejé [LINK DE AGENDA] en el cierre.");
-  }
   if (!QUALIFIED_INQUIRY_DEF) {
     flags.push('No hay definición de "qualified AI-sourced inquiry" (QUALIFIED_INQUIRY_DEF). Esa frase es la que arranca el cobro, así que acordala en la llamada de onboarding.');
   }

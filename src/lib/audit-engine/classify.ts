@@ -3,6 +3,7 @@
 // anywhere in this file or its callers. Buyer language, not marketer language.
 
 import { callClaudeJSON, type ClaudeModel } from "@/lib/claude-calls";
+import { AWARENESS_STAGES, isAwarenessStage, type AwarenessSource, type AwarenessStage } from "./awareness";
 import type { SiteResearch } from "./site-research";
 import type { ResearchSource } from "./types";
 
@@ -11,6 +12,16 @@ export type AuditBlock = "SERVICIO" | "COMPARATIVO" | "INFO" | "MARCA";
 export interface AuditPrompt {
   block: AuditBlock;
   prompt: string;
+  /**
+   * Where the person typing this sits, 5 (unaware) to 1 (most aware). See awareness.ts.
+   *
+   * ‼️ OPTIONAL IN THE TYPE AND NEVER ABSENT ON A NEW ROW. Every report written before 2026-09-15
+   * lacks it, and nothing re-validates a stored row, so a reader must handle its absence. Every
+   * writer since sets it: the classifier for its own twenty, awarenessOf() for everything else.
+   */
+  awareness?: AwarenessStage;
+  /** Which of the two made the label. A `rule` label is a floor, not a judgement. */
+  awareness_by?: AwarenessSource;
 }
 
 export interface LikelyCompetitor {
@@ -60,7 +71,7 @@ const SCHEMA_HINT = `{
   "city_detected": string | null,   // "City, ST" format, or null if not local or not confidently found
   "city_confidence": "high" | "low", // meaningless when is_local is false — still return "low" then
   "buyer_persona": string,          // one line: who buys and what hurts
-  "prompts": [ { "block": "SERVICIO" | "COMPARATIVO" | "INFO" | "MARCA", "prompt": string } ], // exactly 20
+  "prompts": [ { "block": "SERVICIO" | "COMPARATIVO" | "INFO" | "MARCA", "prompt": string, "awareness": 1 | 2 | 3 | 4 | 5 } ], // exactly 20, awareness is an integer
   "likely_competitors": [ { "name": string, "domain": string } ] // hypotheses only, confirmed later by real runs
 }`;
 
@@ -81,13 +92,59 @@ function isAuditClassification(v: unknown): v is AuditClassification {
         p !== null &&
         BLOCKS.includes((p as AuditPrompt).block) &&
         typeof (p as AuditPrompt).prompt === "string" &&
-        (p as AuditPrompt).prompt.trim().length > 0
+        (p as AuditPrompt).prompt.trim().length > 0 &&
+        // ‼️ IN THIS GATE, NOT A SECOND ONE, AND SHIPPED WITH THE PROMPT THAT ASKS FOR IT. A
+        // validator demanding a field the prompt never asked for rejects the classification, and a
+        // rejected classification kills the run AFTER the crawl and the paid research are bought.
+        isAwarenessStage((p as AuditPrompt).awareness)
     )
   ) {
     return false;
   }
   if (!Array.isArray(c.likely_competitors)) return false;
   return true;
+}
+
+/**
+ * Why a classification was rejected, in words the correction retry can act on.
+ *
+ * ‼️ THIS DID NOT EXIST, SO EVERY REJECTION RETRIED BLIND ("it did not match the required shape").
+ * Adding the awareness field adds a new way to be rejected, and a blind retry of a twenty-row answer
+ * is a coin toss spent on the most expensive call in the run. Named, the model fixes the one field.
+ */
+function whyNotClassification(v: unknown): string {
+  const c = (v ?? {}) as Partial<AuditClassification>;
+  if (!Array.isArray(c.prompts)) return "there was no prompts array";
+  if (c.prompts.length !== 20) return `prompts has ${c.prompts.length} entries and it must have exactly 20`;
+  const bad = c.prompts.findIndex((p) => !isAwarenessStage((p as AuditPrompt | null)?.awareness));
+  if (bad >= 0) {
+    return (
+      `prompts[${bad}] has awareness ${JSON.stringify((c.prompts[bad] as AuditPrompt | null)?.awareness)}; ` +
+      "every prompt needs awareness as a whole number from 1 to 5"
+    );
+  }
+  const badBlock = c.prompts.findIndex((p) => !BLOCKS.includes((p as AuditPrompt | null)?.block as AuditBlock));
+  if (badBlock >= 0) return `prompts[${badBlock}] has a block that is not one of ${BLOCKS.join(", ")}`;
+  for (const field of ["business_name", "business_type", "vertical_slug", "buyer_persona"] as const) {
+    if (typeof c[field] !== "string" || !(c[field] as string).trim()) return `${field} is missing or empty`;
+  }
+  if (typeof c.is_local !== "boolean") return "is_local must be true or false";
+  if (c.city_confidence !== "high" && c.city_confidence !== "low") return 'city_confidence must be "high" or "low"';
+  if (!Array.isArray(c.likely_competitors)) return "likely_competitors must be an array";
+  return "it did not match the required shape";
+}
+
+/** "3" is a model being loose about a number, not a different answer. Anything else is left for the gate. */
+function coerceAwareness(v: unknown): unknown {
+  const c = v as Partial<AuditClassification> | null;
+  if (!c || !Array.isArray(c.prompts)) return v;
+  return {
+    ...c,
+    prompts: c.prompts.map((p) => {
+      const a = (p as { awareness?: unknown } | null)?.awareness;
+      return p && typeof a === "string" && /^[1-5]$/.test(a.trim()) ? { ...p, awareness: Number(a.trim()) } : p;
+    }),
+  };
 }
 
 /** What the research text IS, in the model's words. On a search run it is looking at Yelp and
@@ -148,6 +205,9 @@ function buildSystemPrompt(source: ResearchSource): string {
     "   - INFO (~5): pre-purchase questions the buyer researches privately before ever contacting the business (concerns, side effects, 'is it worth it', how it works).",
     "   - MARCA (~3): brand-name queries, e.g. '{brand} reviews', 'is {brand} legit'.",
     "   Use real buyer language throughout — the way someone actually types into a search box, not marketing copy.",
+    "   Give every prompt an awareness number: where the person typing it sits, judged from what they already know. 5 is least aware and 1 is most aware:",
+    ...AWARENESS_STAGES.map((s) => `     ${s.stage} ${s.name}: ${s.means}.`),
+    "   Judge the person, not the block. A brand query is usually 1, but an INFO question can be 5 or 3 depending on whether the person has even named the problem.",
     "6. List likely_competitors: 2-4 businesses you'd expect to also show up in these searches, based on the research text and general knowledge of the space. These are hypotheses ONLY — label them as such implicitly by putting them in this field, never present them as confirmed.",
     "",
     "Zero vertical-specific hardcoding: this same instruction set must work for a TRT clinic, a sausage shop, a law firm, or anything else — reason from the actual research text every time, never assume a vertical.",
@@ -210,15 +270,24 @@ export async function classifyBusiness(
   research: SiteResearch,
   overrides?: ClassifyOverrides
 ): Promise<AuditClassification> {
-  const { data: raw } = await callClaudeJSON<AuditClassification>({
+  const { data: validated } = await callClaudeJSON<AuditClassification>({
     model: model(),
     system: buildSystemPrompt(research.source),
     user: buildUserPrompt(research, overrides),
     schemaHint: SCHEMA_HINT,
     maxTokens: 4000,
     temperature: 0.4,
+    coerce: coerceAwareness,
     validate: isAuditClassification,
+    describeInvalid: whyNotClassification,
   });
+
+  // Stamped in code, never asked of the model: which of the two paths made a label is a fact about
+  // this call, not something to generate.
+  const raw: AuditClassification = {
+    ...validated,
+    prompts: validated.prompts.map((p) => ({ ...p, awareness_by: "classifier" as const })),
+  };
 
   // A confirmed name is pinned in CODE, not left to the prompt, for the same reason the city
   // override is: the prompt asks, and asking is not a guarantee. The one edit allowed is the

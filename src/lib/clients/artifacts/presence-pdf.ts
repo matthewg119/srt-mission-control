@@ -1,4 +1,5 @@
-// The presence and consistency report — delivery step 6, Runner v3 section 3c.
+// The presence and consistency report — one of the four call pack documents (it was delivery
+// step 6 until the 2026-09-12 merge), Runner v3 section 3c.
 //
 // "Same generator and visual treatment as the AI visibility audit report" — that is
 // @/lib/pdf/kit, which is the audit scorecard's own primitives lifted out so there is one
@@ -18,6 +19,8 @@
 // This PDF is findings section 2's evidence, and it is attached to it rather than folded in.
 
 import { supabaseAdmin } from "@/lib/db";
+import { verticalFor } from "@/lib/clients/harvest";
+import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { platformByKey } from "@/config/presence-platforms";
 import { canonicalFor, loadSweep, effectiveStatus, countByStatus, worstFirst, type SweepRow } from "../presence-sweep";
 import { canonicalAddress, type Canonical } from "../nap-compare";
@@ -41,6 +44,7 @@ import {
   type TableRow,
 } from "@/lib/pdf/kit";
 import { deliverArtifact } from "./deliver";
+import { CALL_PACK_STEP_KEY, callPackFilename } from "./call-pack";
 
 const STATUS_WORDS: Record<SweepRow["status"], string> = {
   match: "matches",
@@ -334,9 +338,15 @@ export async function renderPresencePdf(args: {
   return finishDoc(state);
 }
 
-/** Step 6. */
+/**
+ * One of the four call pack documents.
+ *
+ * `stepKey` is which step the file is filed against. It defaults to the pack, so a caller that
+ * does not care gets the current board's behaviour, and the runner passes it explicitly.
+ */
 export async function generatePresencePdf(
-  clientId: string
+  clientId: string,
+  opts: { stepKey?: string } = {}
 ): Promise<{ ok: boolean; error?: string; docId?: string }> {
   const canonical = await canonicalFor(clientId);
   if (!canonical) return { ok: false, error: "client not found" };
@@ -350,14 +360,25 @@ export async function generatePresencePdf(
     .from("audit_reports")
     .select("engines")
     .eq("client_id", clientId)
+    // The baseline's engine list, for the fidelity footer. A supplied run would print the engines
+    // of a measurement taken weeks later on a document about the starting state. See run-labels.ts.
+    .or(BASELINE_ONLY)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
 
-  const { data: versions } = await supabaseAdmin
-    .from("question_set_versions")
-    .select("version")
-    .eq("vertical", "med_spa");
+  // ‼️ THE CLIENT'S OWN VERTICAL, NOT THE LITERAL "med_spa". freezeUniversalV1 stores the version
+  // as `universal_v1@${vertical}` where vertical is clients.vertical_slug, which classify.ts writes
+  // as kebab-case free text and is instructed never to emit as snake_case. So this filter matched
+  // only a client whose slug was literally `med_spa`, a spelling nothing produces, and the footer
+  // has printed "question set not frozen" for every real client since it was written.
+  const ownVertical = await verticalFor(clientId);
+  const { data: versions } = ownVertical.ok
+    ? await supabaseAdmin
+        .from("question_set_versions")
+        .select("version")
+        .eq("vertical", ownVertical.vertical)
+    : { data: null };
 
   // The manual sweep STEP, not its rows. A skipped step and an unfinished one leave the
   // eighteen rows looking identical, and this document is shown to the client on the call.
@@ -400,8 +421,8 @@ export async function generatePresencePdf(
 
   const result = await deliverArtifact({
     clientId,
-    stepKey: "presence_pdf",
-    filename: `Presence and consistency - ${canonical.name}.pdf`,
+    stepKey: opts.stepKey ?? CALL_PACK_STEP_KEY,
+    filename: callPackFilename("presence", canonical.name),
     buffer,
     message,
   });

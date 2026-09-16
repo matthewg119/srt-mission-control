@@ -15,6 +15,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { stepNumber } from "@/config/delivery-steps";
 
 export interface AvatarCandidateView {
   slot: string;
@@ -89,8 +90,9 @@ export function AvatarForm({
         </p>
       ) : (
         <p className="text-sm text-[rgba(255,255,255,0.6)]">
-          Nothing is confirmed yet. Step 10 researches whoever is picked here, and the custom
-          question set and the page candidates are both scored against it.
+          Nothing is confirmed yet. Step {stepNumber("avatar_harvest")} researches whoever is
+          picked here, and the custom question set and the page candidates are both scored
+          against it.
         </p>
       )}
 

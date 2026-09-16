@@ -15,6 +15,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { stepNumber } from "@/config/delivery-steps";
 
 export interface SweepView {
   id: string;
@@ -101,8 +102,8 @@ export function PresenceSweepForm({
   if (!rows.length) {
     return (
       <p className="text-xs text-[rgba(255,255,255,0.5)]">
-        Nothing seeded yet. Step 4 writes one row per platform. If it is sitting in error, the
-        Retry on the delivery checklist re-runs it.
+        Nothing seeded yet. Step {stepNumber("nap_sweep")} writes one row per platform. If it
+        is sitting in error, the Retry on the delivery checklist re-runs it.
       </p>
     );
   }

@@ -120,5 +120,6 @@ export async function POST(
     avatar: result.avatar,
     changed: result.changed ?? false,
     previous: result.previous ?? null,
+    audience: result.audience ?? null,
   });
 }
