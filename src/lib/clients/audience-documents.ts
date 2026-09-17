@@ -45,6 +45,14 @@ export interface AudienceDocument {
   approvedAt: string | null;
   approvedBy: string | null;
   offerFingerprint: string | null;
+  /**
+   * Set when this row has been replaced.
+   *
+   * ‼️ IT IS CARRIED SO A READER CAN TELL WHICH HALF OF "live, else the newest" IT GOT. Without it a
+   * superseded row read through the fallback below is indistinguishable from a live one, and a caller
+   * reporting freshness would call a half-failed replacement current.
+   */
+  supersededAt: string | null;
   createdAt: string;
   createdBy: string | null;
 }
@@ -86,6 +94,7 @@ function rowToDocument(r: Record<string, unknown>): AudienceDocument {
     approvedAt: (r.approved_at as string | null) ?? null,
     approvedBy: (r.approved_by as string | null) ?? null,
     offerFingerprint: (r.offer_fingerprint as string | null) ?? null,
+    supersededAt: (r.superseded_at as string | null) ?? null,
     createdAt: String(r.created_at),
     createdBy: (r.created_by as string | null) ?? null,
   };
@@ -202,4 +211,52 @@ export async function approveDocument(args: {
   if (error) return { ok: false, error: error.message };
   if (!data?.length) return { ok: false, error: "that version has been replaced since it was shown, so it was not approved." };
   return { ok: true };
+}
+
+/** The key a document is held under in the map `documentsFor` returns. */
+export function documentKey(audienceId: string, offerId: string | null, kind: DocumentKind): string {
+  return `${audienceId}|${offerId ?? ""}|${kind}`;
+}
+
+/**
+ * Every document a client holds, in ONE select, under the same rule as `currentDocument`.
+ *
+ * ‼️ SAME RULE, NOT A SECOND ONE. The order below is `currentDocument`'s order verbatim, so the first row
+ * of each group is the row that function would have returned: the live one, else the newest. Anything that
+ * changes there has to change here, which is why the two orders are written identically rather than one
+ * being "tidied".
+ *
+ * ‼️ THIS EXISTS BECAUSE THE PER-DOCUMENT READ WAS AN N+1. dataset-completeness.ts asks for five kinds per
+ * audience, one round trip each, and a card that reads every audience paid five selects per audience to
+ * learn what is on file. One select answers all of them.
+ *
+ * An empty `audienceIds` is an empty answer, never a client-wide read: an absent filter and a filter that
+ * matched nothing are different questions, and `.in()` with an empty array is the one place PostgREST
+ * would quietly answer the wrong one.
+ */
+export async function documentsFor(args: {
+  clientId: string;
+  audienceIds?: readonly string[];
+}): Promise<{ ok: true; docs: Map<string, AudienceDocument> } | { ok: false; error: string }> {
+  if (args.audienceIds && args.audienceIds.length === 0) return { ok: true, docs: new Map() };
+
+  let query = supabaseAdmin
+    .from("audience_documents")
+    .select("*")
+    .eq("client_id", args.clientId)
+    .order("superseded_at", { ascending: false, nullsFirst: true })
+    .order("created_at", { ascending: false });
+  if (args.audienceIds) query = query.in("audience_id", args.audienceIds as string[]);
+
+  const { data, error } = await query;
+  if (error) return { ok: false, error: `audience_documents is unreadable (${error.message})` };
+
+  const docs = new Map<string, AudienceDocument>();
+  for (const row of (data ?? []) as Record<string, unknown>[]) {
+    const doc = rowToDocument(row);
+    const key = documentKey(doc.audienceId, doc.offerId, doc.kind);
+    // First wins: the order above already put each group's winner in front of its older versions.
+    if (!docs.has(key)) docs.set(key, doc);
+  }
+  return { ok: true, docs };
 }

@@ -386,69 +386,147 @@ export async function clientPages(clientId: string): Promise<
   }));
 }
 
+/** How a report came to be about this lead. A domain match is not the same claim as a link. */
+export type AuditLinkedBy = "client_id" | "contact_id" | "domain";
+
+export interface LeadAudit {
+  id: string;
+  runLabel: string | null;
+  kind: string;
+  status: string;
+  score: number | null;
+  questions: number;
+  answered: number;
+  engines: string[];
+  createdAt: string;
+  callNotes: string | null;
+  reportUrl: string;
+  /** Which identity matched. `client_id` outranks the other two when a report matches more than one. */
+  linkedBy: AuditLinkedBy;
+  /** `fired_for_client` or `backfilled_by_domain`, straight off the row. Null on the 89 older reports. */
+  linkSource: string | null;
+}
+
+const AUDIT_COLUMNS = "id, slug, run_label, status, score, prompts, engines, created_at, call_notes, client_link_source";
+
+/**
+ * Every audit that is ABOUT this lead, by link and by host, newest first.
+ *
+ * ‼️ RESOLVING BY DOMAIN FINDS AN AUDIT THAT WAS FIRED BEFORE THE CLIENT EXISTED. Three of SRT's
+ * fifteen carry `backfilled_by_domain`, so this path is how they were found in the first place.
+ *
+ * ‼️ AND ON THE ONE REAL CLIENT IT CURRENTLY ADDS NOTHING, MEASURED 2026-09-17. 104 reports exist
+ * and 89 carry no client_id, but ZERO of those 89 name srtagency.com: they are prospect audits of
+ * other businesses. The 89 are not hidden reports about this lead, and a comment claiming they were
+ * would send the next reader hunting for data that is not there. The domain arm earns its place on
+ * the NEXT client onboarded after a prospect audit, not on this one.
+ *
+ * Every row still says which identity matched, because "this report is about you and nothing links
+ * it to you" is a finding, not an implementation detail.
+ *
+ * ‼️ ONE QUERY PER IDENTITY RATHER THAN AN `or` FILTER, the rule adopt-audit.ts states at its head:
+ * PostgREST's `or` with embedded commas inside an ilike pattern is a parsing hazard and a domain can
+ * legitimately contain one. Three small selects beat one clever one that breaks on a hostname.
+ *
+ * ‼️ IT DOES NOT WRITE. adoptPriorAudit() is what LINKS a report, with its own "never steal a linked
+ * audit" re-check at the write. This only reads, so a report seen here by host is still unlinked
+ * afterwards and the count does not drift just because somebody looked.
+ */
+export async function auditsForLead(args: {
+  clientId: string;
+  domain?: string | null;
+  contactId?: string | null;
+  limit?: number;
+}): Promise<LeadAudit[]> {
+  const cap = Math.min(Math.max(args.limit ?? 10, 1), 50);
+  const base = () =>
+    supabaseAdmin.from("audit_reports").select(AUDIT_COLUMNS).order("created_at", { ascending: false }).limit(cap);
+
+  const found: Array<Record<string, unknown> & { __linkedBy: AuditLinkedBy }> = [];
+  const collect = async (linkedBy: AuditLinkedBy, apply: (q: ReturnType<typeof base>) => ReturnType<typeof base>) => {
+    const { data, error } = await apply(base());
+    if (error) {
+      console.error(`[client-reads] audits by ${linkedBy} could not be read:`, error.message);
+      return;
+    }
+    for (const row of data ?? []) {
+      // First wins, and the order of the calls below is the precedence: a report that is linked is
+      // reported as linked even when its host also matches.
+      if (!found.some((f) => f.id === row.id)) found.push({ ...row, __linkedBy: linkedBy });
+    }
+  };
+
+  await collect("client_id", (q) => q.eq("client_id", args.clientId));
+  if (args.contactId) await collect("contact_id", (q) => q.eq("contact_id", args.contactId as string));
+  if (args.domain) await collect("domain", (q) => q.ilike("website", `%${args.domain}%`));
+
+  found.sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
+  const rows = found.slice(0, cap);
+  if (!rows.length) return [];
+
+  // ‼️ ONE SELECT FOR EVERY REPORT'S RUN COUNT, NOT ONE PER REPORT. This was a count() inside a
+  // Promise.all over up to 50 reports, so a lead context assembling the audit slice paid 50 round
+  // trips to learn 50 integers.
+  const answered = new Map<string, number>();
+  const ids = rows.map((r) => r.id as string);
+  const RUN_CAP = 20000;
+  const { data: runs, error: runErr } = await supabaseAdmin
+    .from("audit_runs")
+    .select("report_id")
+    .in("report_id", ids)
+    .eq("status", "ok")
+    .limit(RUN_CAP);
+  if (runErr) {
+    console.error("[client-reads] audit_runs tally could not be read:", runErr.message);
+  } else {
+    // A tally that silently hit the row cap would under-report `answered` on every report at once,
+    // and an answered count lower than the truth reads as a half-finished audit. Say so instead.
+    if ((runs ?? []).length >= RUN_CAP) {
+      console.error(`[client-reads] audit_runs tally hit the ${RUN_CAP} row cap; answered counts are not reliable`);
+    }
+    for (const r of runs ?? []) {
+      const key = String((r as { report_id: string }).report_id);
+      answered.set(key, (answered.get(key) ?? 0) + 1);
+    }
+  }
+
+  const { isSuppliedRun } = await import("@/lib/audit-engine/run-labels");
+
+  return rows.map((r) => {
+    const label = (r.run_label as string | null) ?? null;
+    return {
+      id: r.id as string,
+      runLabel: label,
+      kind: isSuppliedRun({ run_label: label })
+        ? "a run we fired for this client, not their baseline"
+        : "the client's baseline photograph",
+      status: r.status as string,
+      score: (r.score as number | null) ?? null,
+      questions: Array.isArray(r.prompts) ? (r.prompts as unknown[]).length : 0,
+      answered: answered.get(r.id as string) ?? 0,
+      engines: (r.engines as string[] | null) ?? [],
+      createdAt: r.created_at as string,
+      callNotes: (r.call_notes as string | null) ?? null,
+      reportUrl: `${appUrl()}/r/${r.slug as string}`,
+      linkedBy: r.__linkedBy,
+      linkSource: (r.client_link_source as string | null) ?? null,
+    };
+  });
+}
+
 /**
  * Their audit runs, baseline and measurements alike, newest first.
  *
  * ‼️ THE LABEL IS RETURNED AND THE DIFFERENCE IS STATED. A `prospect_audit` and a `photograph_2`
  * are different kinds of fact about a business (A2 D-P14), and an answer that lists them together
  * without saying which is which invites exactly the comparison the label exists to prevent.
+ *
+ * ‼️ LINKED AUDITS ONLY, AND THAT IS WHY IT STILL EXISTS. Its two callers (the chatbot tool and the
+ * post-call email) mean "this client's audits", so widening them to host matches would quietly put
+ * a stranger's audit in a client email. auditsForLead() is the wider read and names its own scope.
  */
-export async function clientAudits(clientId: string, limit = 10): Promise<
-  Array<{
-    id: string;
-    runLabel: string | null;
-    kind: string;
-    status: string;
-    score: number | null;
-    questions: number;
-    answered: number;
-    engines: string[];
-    createdAt: string;
-    callNotes: string | null;
-    reportUrl: string;
-  }>
-> {
-  const { data, error } = await supabaseAdmin
-    .from("audit_reports")
-    .select("id, slug, run_label, status, score, prompts, engines, created_at, call_notes")
-    .eq("client_id", clientId)
-    .order("created_at", { ascending: false })
-    .limit(Math.min(Math.max(limit, 1), 50));
-
-  if (error) {
-    console.error("[client-reads] audits could not be read:", error.message);
-    return [];
-  }
-
-  const { isSuppliedRun } = await import("@/lib/audit-engine/run-labels");
-
-  return Promise.all(
-    (data ?? []).map(async (r) => {
-      const { count } = await supabaseAdmin
-        .from("audit_runs")
-        .select("id", { count: "exact", head: true })
-        .eq("report_id", r.id as string)
-        .eq("status", "ok");
-
-      const label = (r.run_label as string | null) ?? null;
-
-      return {
-        id: r.id as string,
-        runLabel: label,
-        kind: isSuppliedRun({ run_label: label })
-          ? "a run we fired for this client, not their baseline"
-          : "the client's baseline photograph",
-        status: r.status as string,
-        score: (r.score as number | null) ?? null,
-        questions: Array.isArray(r.prompts) ? (r.prompts as unknown[]).length : 0,
-        answered: count ?? 0,
-        engines: ((r.engines as string[] | null) ?? []),
-        createdAt: r.created_at as string,
-        callNotes: (r.call_notes as string | null) ?? null,
-        reportUrl: `${appUrl()}/r/${r.slug as string}`,
-      };
-    })
-  );
+export async function clientAudits(clientId: string, limit = 10): Promise<LeadAudit[]> {
+  return auditsForLead({ clientId, limit });
 }
 
 /** Documents filed against this client: uploads and generated artifacts alike. */

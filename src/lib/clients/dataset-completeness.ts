@@ -15,6 +15,28 @@ import {
   type DatasetReport,
   type DatasetSnapshot,
 } from "./dataset-spec";
+import type { AudienceDocument, DocumentKind } from "./audience-documents";
+import type { StoredOffer } from "./offers";
+
+/**
+ * Rows a caller has ALREADY loaded, handed in rather than read again.
+ *
+ * ‼️ THIS IS THE ANTI-DOUBLE-FETCH LEVER AND IT IS THE ONLY ONE. lead-context.ts assembles the same
+ * audiences, offers and documents for its own purposes; without this it would either read them twice or
+ * grow its own copy of the rules below, and a second copy of "which offer applies to an option audience"
+ * is exactly the drift this file exists to prevent. Every field is optional and every absent field is
+ * read here as before, so an existing caller passing nothing behaves identically.
+ */
+export interface CompletenessInputs {
+  audiences?: readonly ResolvedAudience[];
+  primaryOffer?: StoredOffer;
+  /** Keyed by audience id. A present key with a null value means "looked, and this audience has none". */
+  offersByAudience?: ReadonlyMap<string, StoredOffer | null>;
+  /** From documentsFor(), keyed by documentKey(). */
+  documents?: ReadonlyMap<string, AudienceDocument>;
+  audit?: DatasetSnapshot["audit"];
+  reviews?: number;
+}
 
 export interface AudienceCompleteness {
   audience: ResolvedAudience | null;
@@ -89,70 +111,88 @@ const NO_DOCUMENTS: DatasetSnapshot["documents"] = { avatarSheet: null, shortOff
  * audience first and reaches the shared avatar_briefs only when that was empty or on `share research`, so
  * the shared copy can be another client's. This audience's card says what THIS audience has.
  *
- * Degrades to nothing on any read error, the table missing included: a card that errors tells less than a
- * card that says a document is not on file.
+ * ‼️ IT READS A MAP NOW, AND ISSUES NO QUERY. This used to fire five currentDocument() calls per audience,
+ * so a three-audience client paid fifteen round trips to learn what was on file. documentsFor() answers
+ * all of them in one select and this picks out of the result. Pure: the read error, when there is one, is
+ * the caller's to report, which is what lets lead-context.ts tell "no document" from "could not read".
+ *
+ * An absent key is still "not on file", the same answer the degraded read used to give.
  */
-async function documentsState(
+function documentsState(
   audience: ResolvedAudience | null,
-  offer: import("./offers").StoredOffer
-): Promise<{ documents: DatasetSnapshot["documents"]; ownResearch: string | null }> {
+  offer: StoredOffer,
+  docs: ReadonlyMap<string, AudienceDocument>,
+  fingerprintOf: (o: StoredOffer) => string,
+  keyOf: (audienceId: string, offerId: string | null, kind: DocumentKind) => string
+): { documents: DatasetSnapshot["documents"]; ownResearch: string | null } {
   if (!audience) return { documents: NO_DOCUMENTS, ownResearch: null };
-  const { currentDocument, offerFingerprint } = await import("./audience-documents");
   const answeredOf = (doc: { parsed: Record<string, unknown> | null } | null) =>
     doc && Array.isArray(doc.parsed?.answered) ? (doc.parsed!.answered as string[]) : doc ? [] : null;
 
-  const [research, sheet] = await Promise.all([
-    currentDocument({ audienceId: audience.id, offerId: null, kind: "deep_research" }),
-    currentDocument({ audienceId: audience.id, offerId: null, kind: "avatar_sheet" }),
-  ]);
-  const byOffer = offer.id
-    ? await Promise.all(
-        (["short_offer", "necessary_beliefs", "sales_letter"] as const).map((kind) =>
-          currentDocument({ audienceId: audience.id, offerId: offer.id, kind })
-        )
-      )
-    : null;
-  const pick = (r: Awaited<ReturnType<typeof currentDocument>> | undefined) => (r && r.ok ? r.doc : null);
+  const pick = (offerId: string | null, kind: DocumentKind) => docs.get(keyOf(audience.id, offerId, kind)) ?? null;
 
-  const letter = pick(byOffer?.[2]);
-  const beliefs = pick(byOffer?.[1]);
+  const research = pick(null, "deep_research");
+  const sheet = pick(null, "avatar_sheet");
+  const shortOffer = offer.id ? pick(offer.id, "short_offer") : null;
+  const beliefs = offer.id ? pick(offer.id, "necessary_beliefs") : null;
+  const letter = offer.id ? pick(offer.id, "sales_letter") : null;
+
   return {
-    ownResearch: pick(research)?.content ?? null,
+    ownResearch: research?.content ?? null,
     documents: {
-      avatarSheet: answeredOf(pick(sheet)),
-      shortOffer: answeredOf(pick(byOffer?.[0])),
+      avatarSheet: answeredOf(sheet),
+      shortOffer: answeredOf(shortOffer),
       beliefs: beliefs && Array.isArray(beliefs.parsed?.beliefs) ? (beliefs.parsed!.beliefs as unknown[]).length : 0,
-      letterApproved: Boolean(letter && letter.status === "approved" && letter.offerFingerprint === offerFingerprint(offer)),
+      letterApproved: Boolean(letter && letter.status === "approved" && letter.offerFingerprint === fingerprintOf(offer)),
     },
   };
 }
 
 /** Every audience this client has, each with its completeness. A client with none gets one empty report. */
-export async function completenessFor(clientId: string): Promise<AudienceCompleteness[]> {
+export async function completenessFor(
+  clientId: string,
+  given: CompletenessInputs = {}
+): Promise<AudienceCompleteness[]> {
   const [audiences, primaryOffer, audit, reviews] = await Promise.all([
-    audiencesFor(clientId),
-    loadOffer(clientId),
-    auditState(clientId),
-    count(
-      supabaseAdmin
-        .from("page_sources")
-        .select("id", { count: "exact", head: true })
-        .eq("client_id", clientId)
-        .eq("source_type", "CUSTOMER_REVIEW")
-    ),
+    given.audiences ?? audiencesFor(clientId),
+    given.primaryOffer ?? loadOffer(clientId),
+    given.audit ?? auditState(clientId),
+    given.reviews ??
+      count(
+        supabaseAdmin
+          .from("page_sources")
+          .select("id", { count: "exact", head: true })
+          .eq("client_id", clientId)
+          .eq("source_type", "CUSTOMER_REVIEW")
+      ),
   ]);
 
-  const targets: Array<ResolvedAudience | null> = audiences.length ? audiences : [null];
+  const { documentsFor, documentKey, offerFingerprint } = await import("./audience-documents");
+  // One select for every document this client holds, replacing five per audience.
+  let docs: ReadonlyMap<string, AudienceDocument> = given.documents ?? new Map();
+  if (!given.documents) {
+    const read = await documentsFor({ clientId, audienceIds: audiences.map((a) => a.id) });
+    // Degrades to "nothing on file", the contract this card has always had: a card that errors tells
+    // you less than one that says a document is not there. lead-context.ts does NOT degrade; it calls
+    // documentsFor itself so it can report `unreadable` and never ask for work already done.
+    docs = read.ok ? read.docs : new Map();
+  }
+
+  const targets: ReadonlyArray<ResolvedAudience | null> = audiences.length ? audiences : [null];
   const out: AudienceCompleteness[] = [];
   for (const audience of targets) {
     // ‼️ OFFERS LIVE UNDER AUDIENCES SINCE 2026-09-15 (client_offers). Each audience reads its OWN
     // primary offer. The offer section applies to the primary audience always (it is the one being
     // worked, so a missing offer there is a real gap) and to an option audience only once it has an
     // offer of its own: an option nobody has sold to yet is not "missing six offer fields".
-    const own = audience ? await loadOfferForAudience(audience.id) : null;
+    const own = audience
+      ? given.offersByAudience?.has(audience.id)
+        ? given.offersByAudience.get(audience.id) ?? null
+        : await loadOfferForAudience(audience.id)
+      : null;
     const offer = audience && !audience.isPrimary ? (own ?? EMPTY_OFFER) : (own ?? primaryOffer);
     const offerApplies = audience === null || audience.isPrimary || own !== null;
-    const { documents, ownResearch } = await documentsState(audience, offer);
+    const { documents, ownResearch } = documentsState(audience, offer, docs, offerFingerprint, documentKey);
     const avatar = await avatarState(audience);
     const snapshot: DatasetSnapshot = {
       audience: audience
