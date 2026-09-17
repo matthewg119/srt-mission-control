@@ -72,6 +72,20 @@ export async function capturePage(input: CaptureInput): Promise<void> {
     const sourceCount = await countSources(input.clientId, input.pageId);
     const headlineCandidates = plan ? await candidatesFor(input.clientId, plan.headline) : null;
 
+    // ‼️ THE DATASETS THE DRAFT IS A VARIATION OF (2026-09-17). Everything above records what was
+    // PRODUCED. Without these the corpus could never answer "what was this written from", which is
+    // the only question a model trained on it would need answered. Matthew: "when we have a draft
+    // is just a bunch of different variation of all of the required datasets".
+    const angle = input.planRowId ? await readAngle(input.clientId, input.planRowId) : null;
+    const magnetKey = await readOne("client_pages", "lead_magnet_key", input.pageId, input.clientId);
+    const magnetCandidates = input.planRowId
+      ? await magnetsFor(input.clientId, input.planRowId, magnetKey as string | null)
+      : null;
+    // Which attempt this is. Counted from the runs table rather than held on a counter column: a
+    // counter is a second source of truth that drifts the first time a row is inserted by hand.
+    const { planRunCount } = await import("./page-plan-runs");
+    const variantNo = await planRunCount(input.clientId).catch(() => 0);
+
     const { error } = await supabaseAdmin.from("page_dataset").insert({
       client_id: input.clientId,
       page_id: input.pageId,
@@ -104,6 +118,18 @@ export async function capturePage(input: CaptureInput): Promise<void> {
 
       captured_reason: input.reason,
       published_at: (page.published_at as string | null) ?? null,
+
+      audience_id: plan?.audienceId ?? null,
+      offer_id: plan?.offerId ?? null,
+      angle_id: angle?.id ?? null,
+      angle: angle?.idea ?? plan?.angle ?? null,
+      narrative: angle?.narrative ?? null,
+      indoctrination: angle?.indoctrination ?? null,
+      awareness_entry: angle?.awarenessEntry ?? plan?.awarenessEntry ?? null,
+      awareness_target: angle?.awarenessTarget ?? plan?.awarenessTarget ?? null,
+      lead_magnet_key: (magnetKey as string | null) ?? null,
+      magnet_candidates: magnetCandidates,
+      variant_no: variantNo,
     });
 
     if (error) {
@@ -144,12 +170,19 @@ interface PlanAim {
   targetKeywordId: string | null;
   secondaryKeywords: string[] | null;
   role: "pillar" | "support" | null;
+  audienceId: string | null;
+  offerId: string | null;
+  angle: string | null;
+  awarenessEntry: number | null;
+  awarenessTarget: number | null;
 }
 
 async function readPlan(clientId: string, planRowId: string): Promise<PlanAim | null> {
   const { data, error } = await supabaseAdmin
     .from("page_plan")
-    .select("headline, target_keyword, target_keyword_id, secondary_keywords, role")
+    .select(
+      "headline, target_keyword, target_keyword_id, secondary_keywords, role, audience_id, offer_id, angle, awareness_entry, awareness_target"
+    )
     .eq("id", planRowId)
     .eq("client_id", clientId)
     .maybeSingle();
@@ -166,7 +199,84 @@ async function readPlan(clientId: string, planRowId: string): Promise<PlanAim | 
     targetKeywordId: (data.target_keyword_id as string | null) ?? null,
     secondaryKeywords: Array.isArray(data.secondary_keywords) ? (data.secondary_keywords as string[]) : null,
     role: (data.role as "pillar" | "support" | null) ?? null,
+    audienceId: (data.audience_id as string | null) ?? null,
+    offerId: (data.offer_id as string | null) ?? null,
+    angle: (data.angle as string | null) ?? null,
+    awarenessEntry: (data.awareness_entry as number | null) ?? null,
+    awarenessTarget: (data.awareness_target as number | null) ?? null,
   };
+}
+
+interface CapturedAngle {
+  id: string;
+  idea: string | null;
+  narrative: string | null;
+  indoctrination: string | null;
+  awarenessEntry: number | null;
+  awarenessTarget: number | null;
+}
+
+/** The angle the page was actually written from: the approved one for this plan row. */
+async function readAngle(clientId: string, planRowId: string): Promise<CapturedAngle | null> {
+  const { data, error } = await supabaseAdmin
+    .from("page_angles")
+    .select("id, idea, narrative, indoctrination, awareness_entry, awareness_target")
+    .eq("client_id", clientId)
+    .eq("plan_id", planRowId)
+    .eq("status", "approved")
+    .maybeSingle();
+
+  if (error) {
+    console.error(`[page-dataset] angle read failed: ${error.message}`);
+    return null;
+  }
+  if (!data) return null;
+
+  return {
+    id: String(data.id),
+    idea: (data.idea as string | null) ?? null,
+    narrative: (data.narrative as string | null) ?? null,
+    indoctrination: (data.indoctrination as string | null) ?? null,
+    awarenessEntry: (data.awareness_entry as number | null) ?? null,
+    awarenessTarget: (data.awareness_target as number | null) ?? null,
+  };
+}
+
+/**
+ * Every magnet offered for this page, marking which one won.
+ *
+ * ‼️ THE REJECTS ARE THE POINT, the same reasoning candidatesFor already carries for headlines. A
+ * corpus of only the chosen offer shows what a good one looks like and says nothing about what made
+ * it better than the two beside it.
+ */
+async function magnetsFor(
+  clientId: string,
+  planRowId: string,
+  chosenKey: string | null
+): Promise<unknown | null> {
+  const { data, error } = await supabaseAdmin
+    .from("page_magnet_candidates")
+    .select("title, promise, cta_label, concierge_entry, status, minted_magnet_key, rationale")
+    .eq("client_id", clientId)
+    .eq("plan_id", planRowId)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    console.error(`[page-dataset] magnet candidates read failed: ${error.message}`);
+    return null;
+  }
+
+  const rows = (data ?? []).map((r) => ({
+    title: (r.title as string | null) ?? null,
+    promise: (r.promise as string | null) ?? null,
+    ctaLabel: (r.cta_label as string | null) ?? null,
+    conciergeEntry: (r.concierge_entry as string | null) ?? null,
+    status: String(r.status),
+    chosen: Boolean(chosenKey) && r.minted_magnet_key === chosenKey,
+    rationale: (r.rationale as string | null) ?? null,
+  }));
+
+  return rows.length ? rows : null;
 }
 
 /**

@@ -124,12 +124,22 @@ async function offerPool(clientId: string): Promise<
       namingKey: string | null;
       labels: (key: string) => string;
       idByPhrase: Map<string, string>;
+      /** client_offers.id, null on a client still reading the deprecated clients.offer mirror. */
+      offerId: string | null;
+      /** The primary audience that offer is sold to. */
+      audienceId: string | null;
     }
   | { error: string }
 > {
   const { planKeywords } = await import("./client-keywords");
   const pk = await planKeywords(clientId);
   if ("error" in pk) return { error: pk.error };
+
+  // ‼️ READ, NEVER REQUIRED. A null id is legitimate on a client whose offer is still the
+  // deprecated clients.offer mirror, and refusing the plan over it would block step 21 on a
+  // migration rather than on a decision. The column is nullable for the same reason.
+  const { loadOffer } = await import("./offers");
+  const offer = await loadOffer(clientId).catch(() => null);
 
   const naming = pk.ctx.categories.find((c) => c.naming)?.key ?? null;
   const labels = (key: string) => categoryLabel(pk.ctx.categories, key);
@@ -147,7 +157,16 @@ async function offerPool(clientId: string): Promise<
     role: r.role ?? null,
   }));
   const idByPhrase = new Map(pk.rows.map((r) => [normalizePhrase(r.phrase), r.id]));
-  return { pool, keywords: pk.rows.map((r) => r.phrase), city: pk.ctx.city, namingKey: naming, labels, idByPhrase };
+  return {
+    pool,
+    keywords: pk.rows.map((r) => r.phrase),
+    city: pk.ctx.city,
+    namingKey: naming,
+    labels,
+    idByPhrase,
+    offerId: offer?.id ?? null,
+    audienceId: offer?.audienceId ?? null,
+  };
 }
 
 /** Questions a new plan row may not repeat: every plan row, and every page that is not archived. */
@@ -232,6 +251,18 @@ async function proposePreCallPlan(
     return { ok: false, error: `the pages were chosen but could not be worded: ${(e as Error).message}` };
   }
 
+  // ‼️ THE PLAN IS SNAPSHOTTED BEFORE IT IS REPLACED, AND BEFORE THE DELETE RATHER THAN AFTER.
+  // Reading afterwards would record the plan that replaced the one being asked about. The body has
+  // always had a history in page_dataset; until 2026-09-17 the decisions that produced it did not,
+  // so a rerun erased the half of the record that explains the other half. Never fails the run.
+  const { snapshotPlan } = await import("./page-plan-runs");
+  const snapshot = await snapshotPlan({
+    clientId,
+    reason: plan.rows.length ? "rerun" : "first_run",
+    offerId: pool.offerId,
+    audienceId: pool.audienceId,
+  });
+
   // Old proposals go only once the new ones exist in memory, so a failed call leaves the old plan.
   const { error: delError } = await supabaseAdmin
     .from("page_plan")
@@ -263,6 +294,12 @@ async function proposePreCallPlan(
     // framing call may choose a different approved phrase than the item's own; the id follows the
     // phrase actually written, and falls back to the item's keyword when the phrase is not in the set.
     target_keyword_id: pool.idByPhrase.get(normalizePhrase(framed[i].targetKeyword)) ?? item.keywordId ?? null,
+    // ‼️ WHICH AUDIENCE AND WHICH OFFER THIS PAGE IS FOR (2026-09-17). A client has many audiences
+    // and an offer hangs under one, so "the client's offer" stopped being a single answer on
+    // 2026-09-15. Without these a drafted page could not say what it was selling, and page_dataset
+    // could not record it, which made the corpus show what was produced and never what from.
+    audience_id: pool.audienceId,
+    offer_id: pool.offerId,
     ...awarenessForPage(item.question, framed[i].targetKeyword),
     updated_at: now,
   });
@@ -300,6 +337,14 @@ async function proposePreCallPlan(
       `:clipboard: *Plan proposed: ${total} page${total === 1 ? "" : "s"}*, one pillar for the offer and ` +
         `${total - 1} support${total - 1 === 1 ? "" : "s"}, every keyword from the approved set and about the offer.`,
       ...(sel.fix ? [`:warning: ${sel.fix}`] : []),
+      // ‼️ SAID OUT LOUD, because a snapshot nobody is told about is one nobody trusts is happening.
+      // It also makes a silent failure visible: no line means the insert did not land.
+      ...(snapshot.runId
+        ? [
+            `:floppy_disk: The previous plan was kept: ${snapshot.rowCount} row${snapshot.rowCount === 1 ? "" : "s"} ` +
+              `snapshotted, ${snapshot.keptCount} kept in place, ${snapshot.replacedCount} replaced. Nothing was lost.`,
+          ]
+        : []),
       "Read the card below, then `plan approve` and all of them are drafted in full.",
     ].join("\n"),
   };
