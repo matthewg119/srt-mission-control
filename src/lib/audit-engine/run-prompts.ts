@@ -10,7 +10,6 @@
 // finish-report.ts enforces the other half: a report that has no usable data for
 // every prompt is failed, never published with the gaps scored as absences.
 
-import { getOrFetch, cacheKeyOf } from "@/lib/data/dataset-cache";
 import { isMentioned } from "./mention-match";
 
 export interface EngineOk {
@@ -126,90 +125,19 @@ interface OpenAIResponsesBody {
   error?: { message?: string };
 }
 
-/** Thrown to decline keeping an answer we did not get. getOrFetch writes nothing when fetch throws. */
-class FanoutUnusable extends Error {
-  constructor(readonly result: EngineResult) {
-    super("the engine returned no usable data");
-    this.name = "FanoutUnusable";
-  }
-}
-
-/**
- * How long a fanout answer may be SERVED for. Six hours, written as a fraction of a day.
- *
- * ‼️ SHORT, AND THE REASON IS THE PRODUCT RATHER THAN THE MONEY. An audit is a MEASUREMENT of what
- * the engines said at a moment. A thirty-day window here would hand a day-30 re-audit the day-0
- * answers and every report would show no change, which is the one number this whole system exists
- * to produce. So the serving window covers only what a re-kick needs: the audit watchdog
- * restarting a stalled report, and the retry above.
- *
- * ‼️ THE ARCHIVE DOES NOT EXPIRE WITH IT, AND THAT IS WHY THIS LANE IS WORTH ROUTING AT ALL.
- * expires_at gates whether a row is SERVED, never whether it is kept. audit_runs is
- * delete-then-insert per batch (run-batch.ts), so a re-run overwrites raw_response and the
- * original engine answer is gone. The client_datasets row survives that, permanently, whatever
- * this constant says.
- */
-const FANOUT_TTL_DAYS = 0.25;
-
 export async function runOpenAI(prompt: string, city: string | null): Promise<EngineResult> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     return { status: "no_data", raw: null, citations: [], fanoutQueries: [], latencyMs: 0, error: "OPENAI_API_KEY not set" };
   }
 
-  const input = city ? `I'm in ${city}. ${prompt}` : prompt;
-  const engineModel = model("OPENAI_AUDIT_MODEL", "gpt-4.1-mini");
-
-  try {
-    const { payload } = await getOrFetch<EngineResult>({
-      // ‼️ null, AND IT IS THE SAME ARGUMENT question_bank MAKES. The composed input carries the
-      // question and the city and nothing about who is asking; `mentioned` is filled in afterwards
-      // by withMention from each caller's own aliases. Two clients in one city asking one question
-      // are asking one question, and the answer is a fact about the market, not about either.
-      clientId: null,
-      kind: "openai.fanout",
-      // Exactly what reaches the provider, the rule claude-research.ts states for its own key. The
-      // model is in it because a model change is a different question, not a fresher answer.
-      cacheKey: cacheKeyOf({ input, model: engineModel }),
-      ttlDays: FANOUT_TTL_DAYS,
-      provider: "openai responses + web_search",
-      // The input is kept in params so the archive is readable: a row nobody can tell the question
-      // for is a receipt, not a record.
-      params: { model: engineModel, city, input },
-      fetch: async () => {
-        const fresh = await askOpenAI(input, engineModel, apiKey);
-        // no_data is "we could not measure", never "the engines said nothing". Keeping it would
-        // serve our own outage back as a measurement for six hours, and finish-report.ts fails a
-        // report whose prompts all came back empty rather than scoring the gaps as absences.
-        if (fresh.status !== "ok") throw new FanoutUnusable(fresh);
-        // No OpenAI rate card exists, so this zero is UNPRICED rather than free. Same known gap
-        // search-research.ts documents at its own call; do not invent a number to fill it.
-        return { payload: fresh, costUsd: 0 };
-      },
-    });
-    return payload;
-  } catch (e) {
-    if (e instanceof FanoutUnusable) return e.result;
-    const error = e instanceof Error ? e.message : String(e);
-    return { status: "no_data", raw: null, citations: [], fanoutQueries: [], latencyMs: 0, error };
-  }
-}
-
-/**
- * The call itself, retries and all.
- *
- * ‼️ latencyMs TRAVELS WITH THE ANSWER IT DESCRIBES. A cache hit reports the latency of the call
- * that produced the text, not a few milliseconds of database read, because the field means "how
- * long this answer took to produce" and re-stamping it would make a cached lane look like an
- * engine that got fast.
- */
-async function askOpenAI(input: string, engineModel: string, apiKey: string): Promise<EngineResult> {
   return withOneRetry(async () => {
+    const input = city ? `I'm in ${city}. ${prompt}` : prompt;
     const res = await fetchWithTimeout("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: engineModel,
+        model: model("OPENAI_AUDIT_MODEL", "gpt-4.1-mini"),
         input,
         tools: [{ type: "web_search" }],
       }),
