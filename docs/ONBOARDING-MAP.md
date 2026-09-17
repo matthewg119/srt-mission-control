@@ -24,6 +24,59 @@ either dead or a gap, and both are findings; the Downstream row is where that sh
 - Live row counts are NOT here. They are in `docs/ONBOARDING-MAP-MEASURED.md`, which carries its
   measurement date on line 1 and is deliberately not checked for drift.
 
+## Every place the system buys something from the web
+
+**22 sites, 2 through `getOrFetch()`.**
+
+Every row is declared and then verified: the file has to exist, it has to contain the named
+function, and the file claimed to keep the response has to name that table. The `getOrFetch`
+column is grepped and never written by hand, so a lane routed through the door flips its own
+column in this table the moment the code lands.
+
+‼️ **Buying and keeping are usually different files**, and that gap is where a raw response
+gets dropped. `run-prompts.ts` buys the fanout answer and `run-batch.ts` stores it;
+`classify.ts` buys the classification and `run-audit-pipeline.ts` stores it. The first version
+of this check asserted the fetching file named the table and failed on six rows, correctly.
+
+| lane | file | call | provider | through the door | raw response survives |
+| --- | --- | --- | --- | --- | --- |
+| audit engine | `src/lib/audit-engine/run-prompts.ts` | `runOpenAI()` | openai responses + web_search | no | `audit_runs.raw_response`, written by `src/lib/audit-engine/run-batch.ts` |
+| audit engine | `src/lib/audit-engine/search-research.ts` | `researchViaSearch()` | openai | **yes** | `client_datasets.payload` |
+| audit engine | `src/lib/audit-engine/claude-research.ts` | `researchViaClaudeDetailed()` | anthropic + web_search | **yes** | `client_datasets.payload` |
+| audit engine | `src/lib/audit-engine/classify.ts` | `classifyBusiness()` | anthropic | no | `audit_reports.classification`, written by `src/lib/audit-engine/run-audit-pipeline.ts` |
+| audit engine | `src/lib/audit-engine/extract-recommended.ts` | `extractRecommendedBatch()` | anthropic | no | `audit_runs.recommended`, written by `src/lib/audit-engine/run-batch.ts` |
+| audit engine | `src/lib/audit-engine/intel-brief.ts` | `getIntelBrief()` | anthropic + web_search | no | `niche_briefs.brief` |
+| audit engine | `src/lib/audit-engine/site-research.ts` | `researchWebsite()` | the prospect's own site | no | `audit_reports.site_crawl`, written by `src/lib/audit-engine/run-audit-pipeline.ts` |
+| audit engine | `src/lib/audit-engine/robots-check.ts` | `checkRobots()` | the prospect's own robots.txt | no | `audit_reports.robots_check`, written by `src/lib/audit-engine/run-audit-pipeline.ts` |
+| shared | `src/lib/claude-calls.ts` | `callClaudeJSON()` | anthropic | no | **nowhere** |
+| onboarding | `src/lib/clients/artifacts/deep-research-run.ts` | `runDeepResearch()` | anthropic + web_search | no | `question_bank` |
+| onboarding | `src/lib/clients/harvest.ts` | `runHarvest()` | the client's own site | no | `question_bank` |
+| onboarding | `src/lib/clients/site-intel.ts` | `gatherSiteIntel()` | rdap + the client's own site | no | `clients` |
+| onboarding | `src/lib/clients/geocode.ts` | `geocodeAddress()` | us census geocoder | no | **nowhere** |
+| onboarding | `src/lib/clients/voice-notes.ts` | `transcribeAudio()` | openai whisper | no | **nowhere** |
+| scraper | `src/lib/scraper/dataforseo.ts` | `postTasks()` | dataforseo | no | **nowhere** |
+| scraper | `src/lib/outscraper.ts` | `submitMapsSearch()` | outscraper | no | `raw_leads.raw`, written by `src/lib/scraper/pull.ts` |
+| scraper | `src/lib/scraper/millionverifier.ts` | `uploadEmails()` | millionverifier | no | `scraper_rows.mv_result`, written by `src/lib/scraper/store.ts` |
+| scraper | `src/lib/scraper/mx.ts` | `hasMx()` | cloudflare dns-over-https | no | **nowhere** |
+| scraper | `src/lib/scraper/enrich.ts` | `enrichOne()` | none wired: PROVIDERS is empty | no | **nowhere** |
+| media | `src/lib/providers/image-gen.ts` | `generateImages()` | openai images, higgsfield, elevenlabs | no | **nowhere** |
+| media | `src/lib/reel/motion-adapter.ts` | `getMotionAdapter()` | elevenlabs, fal.ai, higgsfield | no | **nowhere** |
+| hub | `src/lib/hub/vercel-domains.ts` | `attachHost()` | vercel domains | no | `client_hosts` |
+
+A pull that survives **nowhere** is bought and thrown away. `select kind, sum(cost_usd) from
+client_datasets group by 1` is only a real number once every row above says yes.
+
+### The census behind this table
+
+A `fetch("https://...")` grep was tried first and it lied: forty files, missing `run-prompts.ts`,
+`dataforseo.ts`, `outscraper.ts` and `site-research.ts`, every one of which builds its URL in a
+variable or goes through a timeout wrapper. A completeness check that omits the four biggest
+spenders is worse than no check.
+
+So the census keys on credentials instead. A provider you pay needs a key, so a new provider is a
+new credential-shaped env var, and one classified neither as a paid provider nor as something
+else fails `--check` **by name**. There is no way to add a paid provider to this repo quietly.
+
 ## The steps
 
 ### 1. `intake_received`

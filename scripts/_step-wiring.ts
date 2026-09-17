@@ -343,6 +343,211 @@ function mapSections(): string {
   return blocks.join("\n\n");
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The paid-pull inventory: every place the system buys something from the web
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface PaidPull {
+  lane: string;
+  file: string;
+  /** The exported function that makes the call. Asserted to exist in the file. */
+  fn: string;
+  provider: string;
+  /** Where the raw response survives, as `table.column`, or null when it does not. */
+  survives: string | null;
+  /**
+   * The file that persists it, when that is not the file that fetches it.
+   *
+   * ‼️ USUALLY A DIFFERENT FILE, AND THAT IS THE POINT. run-prompts.ts buys the answer and
+   * run-batch.ts stores it; classify.ts buys and run-audit-pipeline.ts stores. Asserting the
+   * fetching file names the table failed on six of these rows, correctly: the gap between buying
+   * and keeping is exactly where a raw response gets dropped.
+   */
+  storedBy?: string;
+}
+
+/**
+ * Declared, because no grep can find them all.
+ *
+ * ‼️ A `fetch(` CENSUS WAS TRIED FIRST AND IT LIED. Matching `fetch("https://...")` under src/lib
+ * and src/app/api returns forty files and MISSES run-prompts.ts, dataforseo.ts, outscraper.ts and
+ * site-research.ts, every one of which builds its URL in a variable or goes through a timeout
+ * wrapper. A completeness check that silently omits the four biggest spenders is worse than none.
+ *
+ * The census below keys on CREDENTIALS instead: a provider you pay needs a key, so a new provider
+ * is a new credential-shaped env var, and one that is classified nowhere fails --check by name.
+ */
+const PAID_PULLS: readonly PaidPull[] = [
+  { lane: "audit engine", file: "src/lib/audit-engine/run-prompts.ts", fn: "runOpenAI", provider: "openai responses + web_search", survives: "audit_runs.raw_response", storedBy: "src/lib/audit-engine/run-batch.ts" },
+  { lane: "audit engine", file: "src/lib/audit-engine/search-research.ts", fn: "researchViaSearch", provider: "openai", survives: "client_datasets.payload" },
+  { lane: "audit engine", file: "src/lib/audit-engine/claude-research.ts", fn: "researchViaClaudeDetailed", provider: "anthropic + web_search", survives: "client_datasets.payload" },
+  { lane: "audit engine", file: "src/lib/audit-engine/classify.ts", fn: "classifyBusiness", provider: "anthropic", survives: "audit_reports.classification", storedBy: "src/lib/audit-engine/run-audit-pipeline.ts" },
+  { lane: "audit engine", file: "src/lib/audit-engine/extract-recommended.ts", fn: "extractRecommendedBatch", provider: "anthropic", survives: "audit_runs.recommended", storedBy: "src/lib/audit-engine/run-batch.ts" },
+  { lane: "audit engine", file: "src/lib/audit-engine/intel-brief.ts", fn: "getIntelBrief", provider: "anthropic + web_search", survives: "niche_briefs.brief" },
+  { lane: "audit engine", file: "src/lib/audit-engine/site-research.ts", fn: "researchWebsite", provider: "the prospect's own site", survives: "audit_reports.site_crawl", storedBy: "src/lib/audit-engine/run-audit-pipeline.ts" },
+  { lane: "audit engine", file: "src/lib/audit-engine/robots-check.ts", fn: "checkRobots", provider: "the prospect's own robots.txt", survives: "audit_reports.robots_check", storedBy: "src/lib/audit-engine/run-audit-pipeline.ts" },
+  { lane: "shared", file: "src/lib/claude-calls.ts", fn: "callClaudeJSON", provider: "anthropic", survives: null },
+  { lane: "onboarding", file: "src/lib/clients/artifacts/deep-research-run.ts", fn: "runDeepResearch", provider: "anthropic + web_search", survives: "question_bank" },
+  { lane: "onboarding", file: "src/lib/clients/harvest.ts", fn: "runHarvest", provider: "the client's own site", survives: "question_bank" },
+  { lane: "onboarding", file: "src/lib/clients/site-intel.ts", fn: "gatherSiteIntel", provider: "rdap + the client's own site", survives: "clients" },
+  { lane: "onboarding", file: "src/lib/clients/geocode.ts", fn: "geocodeAddress", provider: "us census geocoder", survives: null },
+  { lane: "onboarding", file: "src/lib/clients/voice-notes.ts", fn: "transcribeAudio", provider: "openai whisper", survives: null },
+  { lane: "scraper", file: "src/lib/scraper/dataforseo.ts", fn: "postTasks", provider: "dataforseo", survives: null },
+  { lane: "scraper", file: "src/lib/outscraper.ts", fn: "submitMapsSearch", provider: "outscraper", survives: "raw_leads.raw", storedBy: "src/lib/scraper/pull.ts" },
+  { lane: "scraper", file: "src/lib/scraper/millionverifier.ts", fn: "uploadEmails", provider: "millionverifier", survives: "scraper_rows.mv_result", storedBy: "src/lib/scraper/store.ts" },
+  { lane: "scraper", file: "src/lib/scraper/mx.ts", fn: "hasMx", provider: "cloudflare dns-over-https", survives: null },
+  { lane: "scraper", file: "src/lib/scraper/enrich.ts", fn: "enrichOne", provider: "none wired: PROVIDERS is empty", survives: null },
+  { lane: "media", file: "src/lib/providers/image-gen.ts", fn: "generateImages", provider: "openai images, higgsfield, elevenlabs", survives: null },
+  { lane: "media", file: "src/lib/reel/motion-adapter.ts", fn: "getMotionAdapter", provider: "elevenlabs, fal.ai, higgsfield", survives: null },
+  { lane: "hub", file: "src/lib/hub/vercel-domains.ts", fn: "attachHost", provider: "vercel domains", survives: "client_hosts", storedBy: "src/lib/hub/vercel-domains.ts" },
+];
+
+/**
+ * Credential-shaped env vars that do NOT buy data from a provider, and why.
+ *
+ * ‼️ EVERY ONE IS CLASSIFIED OR --check FAILS BY NAME. This is the anti-rot half: a provider added
+ * next month arrives with a key, and a key nobody has classified stops the build of this doc.
+ */
+const NOT_A_PULL: Record<string, string> = {
+  AUDIT_INTERNAL_SECRET: "our own routes authenticating to each other",
+  CRON_SECRET: "our own cron authenticating to our own routes",
+  CLIENT_LINK_SECRET: "signs the preview tokens we mint",
+  MEDSPA_LINK_SECRET: "signs our own funnel links",
+  FUNNEL_NOTIFY_SECRET: "our own funnel calling our own route",
+  PLAYBOOK_UPDATE_SECRET: "our own route",
+  REEL_RENDER_SECRET: "our own render service",
+  LEAD_THREAD_API_KEY: "our own lead-thread route",
+  SPEED_TO_LEAD_API_KEY: "our own speed-to-lead route",
+  SUPABASE_SERVICE_ROLE_KEY: "our own database",
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: "our own database",
+  SLACK_BOT_TOKEN: "Slack is where we talk, not somewhere we buy data",
+  SLACK_SIGNING_SECRET: "verifies Slack's signature on the way in",
+  TELEGRAM_BOT_TOKEN: "a chat transport",
+  MICROSOFT_CLIENT_SECRET: "our own mailbox and OneDrive",
+  MS_CALENDAR_CLIENT_SECRET: "our own calendar",
+  CALENDLY_API_TOKEN: "our own booking calendar",
+  RC_APP_CLIENT_SECRET: "our own phone system",
+  RC_WEBPHONE_CLIENT_SECRET: "our own phone system",
+  STRIPE_SECRET_KEY: "taking money, not spending it",
+  STRIPE_WEBHOOK_SECRET: "verifies Stripe's signature on the way in",
+  NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: "public by design, and it takes money rather than spending it",
+  META_ADS_TOKEN: "our own ad account",
+  META_CAPI_TOKEN: "sends conversions out, pulls nothing in",
+  FB_APP_SECRET: "verifies Meta's signature on the way in",
+  FB_PAGE_ACCESS_TOKEN: "our own page",
+  FB_WEBHOOK_VERIFY_TOKEN: "verifies Meta's webhook handshake",
+  GITHUB_TOKEN: "our own repository",
+  HUB_VERCEL_TOKEN: "our own hosting, and its pull site is inventoried above",
+  AIRTABLE_API_TOKEN: "our own base",
+  AIRTABLE_WEBHOOK_SECRET: "verifies Airtable's signature on the way in",
+  IMESSAGE_WEBHOOK_SECRET: "verifies our own bridge on the way in",
+  LOOPMESSAGE_AUTH_KEY: "a message transport",
+  LOOPMESSAGE_SECRET_KEY: "a message transport",
+  LOOPMESSAGE_WEBHOOK_SECRET: "verifies LoopMessage on the way in",
+  OUTSCRAPER_WEBHOOK_SECRET: "verifies Outscraper's callback; the pull itself is inventoried above",
+  REACHINBOX_WEBHOOK_SECRET: "verifies ReachInbox on the way in",
+};
+
+/** Credentials that belong to a provider we buy from. Each must appear in PAID_PULLS' providers. */
+const PULL_CREDENTIALS = [
+  "ANTHROPIC_API_KEY",
+  "OPENAI_API_KEY",
+  "DATAFORSEO_PASSWORD",
+  "OUTSCRAPER_API_KEY",
+  "MILLIONVERIFIER_API_KEY",
+  "ELEVENLABS_API_KEY",
+  "FAL_KEY",
+  "HF_CREDENTIALS",
+];
+
+/** Every credential-shaped env var actually referenced in src/. */
+function credentialsInUse(): string[] {
+  const found = new Set<string>();
+  const re = /process\.env\.([A-Z0-9_]*(?:API_KEY|_KEY|_TOKEN|_SECRET|CREDENTIALS|_PASSWORD))/g;
+  for (const f of SRC) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(f.text)) !== null) found.add(m[1]);
+  }
+  return [...found].sort();
+}
+
+function paidPullSection(): string {
+  const problems: string[] = [];
+
+  // ‼️ THE DECLARATION IS VERIFIED, NOT TRUSTED. A rename that leaves this table behind is exactly
+  // how an inventory becomes decoration.
+  for (const p of PAID_PULLS) {
+    if (!fs.existsSync(path.join(root, p.file))) {
+      problems.push(`${p.file} does not exist`);
+      continue;
+    }
+    const text = read(p.file);
+    if (!text.includes(p.fn)) problems.push(`${p.file} does not contain ${p.fn}`);
+    const table = p.survives?.split(".")[0];
+    const keeper = p.storedBy ?? p.file;
+    if (table) {
+      if (!fs.existsSync(path.join(root, keeper))) problems.push(`${keeper} does not exist, but the inventory says it stores ${table}`);
+      else if (!read(keeper).includes(table)) problems.push(`${keeper} never names ${table}, but the inventory says the response survives there`);
+    }
+  }
+
+  const unclassified = credentialsInUse().filter((c) => !(c in NOT_A_PULL) && !PULL_CREDENTIALS.includes(c));
+  for (const c of unclassified) {
+    problems.push(`${c} is a credential nobody has classified: add it to PULL_CREDENTIALS or to NOT_A_PULL with a reason`);
+  }
+
+  if (problems.length) {
+    console.error("The paid-pull inventory is out of date:");
+    for (const p of problems) console.error(`  - ${p}`);
+    process.exit(1);
+  }
+
+  const withDoor = PAID_PULLS.filter((p) => {
+    const body = read(p.file);
+    return /getOrFetch\s*[<(]/.test(body);
+  });
+
+  const rows = PAID_PULLS.map((p) => {
+    const through = /getOrFetch\s*[<(]/.test(read(p.file)) ? "**yes**" : "no";
+    const where = p.survives
+      ? `\`${p.survives}\`${p.storedBy && p.storedBy !== p.file ? `, written by \`${p.storedBy}\`` : ""}`
+      : "**nowhere**";
+    return `| ${p.lane} | \`${p.file}\` | \`${p.fn}()\` | ${p.provider} | ${through} | ${where} |`;
+  });
+
+  return [
+    `**${PAID_PULLS.length} sites, ${withDoor.length} through \`getOrFetch()\`.**`,
+    "",
+    "Every row is declared and then verified: the file has to exist, it has to contain the named",
+    "function, and the file claimed to keep the response has to name that table. The `getOrFetch`",
+    "column is grepped and never written by hand, so a lane routed through the door flips its own",
+    "column in this table the moment the code lands.",
+    "",
+    "‼️ **Buying and keeping are usually different files**, and that gap is where a raw response",
+    "gets dropped. `run-prompts.ts` buys the fanout answer and `run-batch.ts` stores it;",
+    "`classify.ts` buys the classification and `run-audit-pipeline.ts` stores it. The first version",
+    "of this check asserted the fetching file named the table and failed on six rows, correctly.",
+    "",
+    "| lane | file | call | provider | through the door | raw response survives |",
+    "| --- | --- | --- | --- | --- | --- |",
+    ...rows,
+    "",
+    "A pull that survives **nowhere** is bought and thrown away. `select kind, sum(cost_usd) from",
+    "client_datasets group by 1` is only a real number once every row above says yes.",
+    "",
+    "### The census behind this table",
+    "",
+    "A `fetch(\"https://...\")` grep was tried first and it lied: forty files, missing `run-prompts.ts`,",
+    "`dataforseo.ts`, `outscraper.ts` and `site-research.ts`, every one of which builds its URL in a",
+    "variable or goes through a timeout wrapper. A completeness check that omits the four biggest",
+    "spenders is worse than no check.",
+    "",
+    "So the census keys on credentials instead. A provider you pay needs a key, so a new provider is a",
+    "new credential-shaped env var, and one classified neither as a paid provider nor as something",
+    "else fails `--check` **by name**. There is no way to add a paid provider to this repo quietly.",
+  ].join("\n");
+}
+
 const MAP_DOC = `# The onboarding map
 
 **Generated by \`bunx tsx scripts/_step-wiring.ts\`. Do not edit by hand.** Its companion
@@ -368,6 +573,10 @@ either dead or a gap, and both are findings; the Downstream row is where that sh
   file passes \`Infinity\` because it has no card to overflow.
 - Live row counts are NOT here. They are in \`docs/ONBOARDING-MAP-MEASURED.md\`, which carries its
   measurement date on line 1 and is deliberately not checked for drift.
+
+## Every place the system buys something from the web
+
+${paidPullSection()}
 
 ## The steps
 
