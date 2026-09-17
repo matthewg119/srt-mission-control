@@ -315,6 +315,39 @@ async function main() {
     check("the prompt names the avatar sheet prefix", partial.prompt.body.includes("`avatar sheet:`"));
   }
 
+  console.log("\n10. the document read actually runs against the real database");
+  // ‼️ THIS SECTION EXISTS BECAUSE THE FIRST VERSION SHIPPED BROKEN AND EVERY CHECK ABOVE PASSED.
+  // doc-text.ts selected client_docs.created_at, which does not exist: one unknown column fails
+  // the WHOLE PostgREST select, supabase-js RETURNS that error instead of throwing it, and
+  // docTextsFor returned [] for ever. The prompt still built, still read well, and simply never
+  // carried a single uploaded document. Nothing pure can catch that, so this half is live.
+  const { supabaseAdmin } = await import("@/lib/db");
+  const { docTextsFor } = await import("@/lib/clients/doc-text");
+
+  const columns = /\.select\(\s*"([^"]+)"/.exec(
+    readFileSync(path.join(ROOT, "src/lib/clients/doc-text.ts"), "utf8")
+  )?.[1];
+  check("doc-text names its columns in one select", Boolean(columns), columns ?? "none found");
+  if (columns) {
+    const { error } = await supabaseAdmin.from("client_docs").select(columns).limit(1);
+    check("every column it asks for exists", !error, error?.message ?? "");
+  }
+
+  const { data: srt } = await supabaseAdmin
+    .from("clients")
+    .select("id")
+    .eq("slug", "srt-agency-llc")
+    .maybeSingle();
+  if (srt?.id) {
+    const docs = await docTextsFor(srt.id as string);
+    // Not an assertion about HOW MANY: a client may genuinely have none. The assertion is that the
+    // call completed and returned the shape, which is what the broken version could not do.
+    check("docTextsFor runs against a real client", Array.isArray(docs), `${docs.length} readable`);
+    check("every returned document has text", docs.every((d) => d.text.trim().length > 0));
+  } else {
+    console.log("  ..    srt-agency-llc not found, skipping the live read");
+  }
+
   console.log(`\n${failed === 0 ? "ALL GREEN" : `${failed} FAILED`}\n`);
   process.exit(failed === 0 ? 0 : 1);
 }

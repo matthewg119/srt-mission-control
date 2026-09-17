@@ -130,21 +130,32 @@ async function textOfDoc(args: {
 export async function docTextsFor(clientId: string, opts: { limit?: number } = {}): Promise<DocText[]> {
   const limit = Math.min(Math.max(opts.limit ?? 25, 1), 100);
 
+  // ‼️ uploaded_at, NOT created_at, AND THE DIFFERENCE WAS A SILENT NO-OP. client_docs has no
+  // created_at column (docs/2026-08-16-client-onboarding.sql:247), one unknown column fails the
+  // WHOLE PostgREST select, and supabase-js RETURNS that error rather than throwing it, so this
+  // function returned [] and the whole feature did nothing while every test above it passed.
+  // Measured against production 2026-09-18, after the first version shipped.
   const { data, error } = await supabaseAdmin
     .from("client_docs")
-    .select("id, filename, content_type, storage_ref, delivery_step_key, created_at, transcript")
+    .select("id, filename, content_type, storage_ref, delivery_step_key, uploaded_at, transcript")
     .eq("client_id", clientId)
-    .order("created_at", { ascending: true })
+    .order("uploaded_at", { ascending: true })
     .limit(limit);
 
-  if (error || !data) return [];
+  if (error) {
+    // Never silent. A read that failed is not a client with no documents, and the difference is
+    // the whole of what this module is for.
+    console.error(`[doc-text] client_docs read failed: ${error.message}`);
+    return [];
+  }
+  if (!data) return [];
 
   const out: DocText[] = [];
   for (const row of data) {
     const filename = (row.filename as string | null) ?? "";
     const contentType = (row.content_type as string | null) ?? "";
     const storageRef = row.storage_ref as string | null;
-    const uploadedAt = (row.created_at as string | null) ?? "";
+    const uploadedAt = (row.uploaded_at as string | null) ?? "";
     const stepKey = (row.delivery_step_key as string | null) ?? null;
 
     // A voice note already has its words, written at transcription time. Reading the audio bytes
