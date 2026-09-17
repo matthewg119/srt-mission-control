@@ -134,9 +134,22 @@ ${table()}
 `;
 
 const out = path.join(root, "docs/STEP-WIRING.md");
+
+/**
+ * Compare the TEXT, not the line endings.
+ *
+ * ‼️ core.autocrlf=true MAKES THIS CHECK FAIL ON EVERY WINDOWS CHECKOUT OTHERWISE, and it fails
+ * claiming drift that does not exist. Git materialises the file with CRLF, writeFileSync produces LF,
+ * so a byte comparison reports all 77 lines changed on a file nobody has touched. Measured 2026-09-17:
+ * 11,925 bytes on disk against 11,848 generated, a difference of exactly one byte per line. A probe
+ * that cries drift on a clean tree is one people learn to skip, which is worse than not having it.
+ */
+const CR = String.fromCharCode(13);
+const sameText = (a: string, b: string) => a.split(CR).join("") === b.split(CR).join("");
+
 if (process.argv.includes("--check")) {
   const current = fs.existsSync(out) ? fs.readFileSync(out, "utf8") : "";
-  if (current !== DOC) {
+  if (!sameText(current, DOC)) {
     console.error("docs/STEP-WIRING.md is out of date. Run: bunx tsx scripts/_step-wiring.ts");
     process.exit(1);
   }
