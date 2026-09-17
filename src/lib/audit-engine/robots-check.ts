@@ -20,6 +20,8 @@
 // never "the crawlers definitely get in" — which is why `checkRobots` returns findings, and the
 // scripts only ever claim what is literally on screen.
 
+import { getOrFetch, cacheKeyOf } from "@/lib/data/dataset-cache";
+
 const TIMEOUT_MS = 8000;
 const MAX_BYTES = 200_000;
 const USER_AGENT =
@@ -182,6 +184,25 @@ export function analyzeRobotsTxt(txt: string): RobotsFinding[] {
   return findings;
 }
 
+/** Thrown to decline caching an answer we did not get. getOrFetch writes nothing when fetch throws. */
+class RobotsUnreadable extends Error {
+  constructor() {
+    super("robots.txt was not read");
+    this.name = "RobotsUnreadable";
+  }
+}
+
+/**
+ * How long a robots.txt answer stays true.
+ *
+ * ‼️ ONE DAY, AND IT IS SHORT ON PURPOSE. The whole product point of this check is to tell an
+ * owner they are blocking the search bots, so the very next thing that should happen is that they
+ * edit the file and want to see it change. A week-long cache would answer a fixed site with the
+ * verdict that made them fix it. A day still collapses what this is actually wasted on: the audit
+ * watchdog re-kicking a report, which re-reads the same robots.txt minutes later.
+ */
+const ROBOTS_TTL_DAYS = 1;
+
 /**
  * Fetch and read the site's robots.txt.
  *
@@ -191,11 +212,42 @@ export function analyzeRobotsTxt(txt: string): RobotsFinding[] {
  * Returns null (never threw, never guessed) for any failure: a missing robots.txt is a 404, and
  * a 404 means "no restrictions stated", not "we could not check". Both are reported as null so
  * nothing downstream can claim anything about a site we did not successfully read.
+ *
+ * ‼️ null IS NEVER CACHED, AND THAT DISTINCTION IS THE WHOLE REASON THIS USES A THROW. `[]` is a
+ * real answer ("we read it, nothing is disallowed") and is worth keeping. `null` is "we could not
+ * check", and caching it would answer every later audit of this domain with our own timeout, for
+ * free, for a day. Same mechanism search-research.ts uses for an unusable profile: getOrFetch
+ * writes what fetch returns and does not catch what it throws.
+ *
+ * The key is the robots URL rather than the input, so `https://x.com` and `https://x.com/` are one
+ * question. client_id is null because the answer is a fact about the DOMAIN, not about a client:
+ * two clients in the same group, or a prospect who later onboards, are asking the same thing.
  */
 export async function checkRobots(website: string): Promise<RobotsCheck> {
   const url = robotsUrl(website);
   if (!url) return null;
 
+  try {
+    const { payload } = await getOrFetch<RobotsCheck>({
+      clientId: null,
+      kind: "crawl.robots_txt",
+      cacheKey: cacheKeyOf({ url }),
+      ttlDays: ROBOTS_TTL_DAYS,
+      provider: "direct",
+      params: { url },
+      // Free in dollars, so cost_usd stays 0 and that zero is a MEASUREMENT rather than the
+      // known gap search-research.ts documents. What this saves is a re-read, not a bill.
+      fetch: async () => ({ payload: await readRobots(url), costUsd: 0 }),
+    });
+    return payload;
+  } catch (e) {
+    if (e instanceof RobotsUnreadable) return null;
+    return null;
+  }
+}
+
+/** The read itself. Throws RobotsUnreadable rather than returning null, so nothing is cached. */
+async function readRobots(url: string): Promise<RobotsCheck> {
   let txt: string;
   try {
     const ctrl = new AbortController();
@@ -208,10 +260,11 @@ export async function checkRobots(website: string): Promise<RobotsCheck> {
     clearTimeout(timer);
     // A 404 is a real, clean answer: no robots.txt means nothing is disallowed.
     if (res.status === 404) return [];
-    if (!res.ok) return null;
+    if (!res.ok) throw new RobotsUnreadable();
     txt = (await res.text()).slice(0, MAX_BYTES);
-  } catch {
-    return null;
+  } catch (e) {
+    if (e instanceof RobotsUnreadable) throw e;
+    throw new RobotsUnreadable();
   }
 
   return analyzeRobotsTxt(txt);

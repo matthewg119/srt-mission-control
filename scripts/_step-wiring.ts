@@ -364,6 +364,15 @@ interface PaidPull {
    * and keeping is exactly where a raw response gets dropped.
    */
   storedBy?: string;
+  /**
+   * Why this site is deliberately NOT routed through getOrFetch. Absent means it is still owed.
+   *
+   * ‼️ A THIRD STATE, BECAUSE "no" AND "no, AND HERE IS WHY" ARE DIFFERENT FACTS. Without it the
+   * table reads as twenty-two sites owed, and the next session routes a 2MB homepage blob into a
+   * jsonb column that a written decision says must never hold one. An exemption is a decision with
+   * a reason attached; a blank is a to-do.
+   */
+  exempt?: string;
 }
 
 /**
@@ -384,9 +393,9 @@ const PAID_PULLS: readonly PaidPull[] = [
   { lane: "audit engine", file: "src/lib/audit-engine/classify.ts", fn: "classifyBusiness", provider: "anthropic", survives: "audit_reports.classification", storedBy: "src/lib/audit-engine/run-audit-pipeline.ts" },
   { lane: "audit engine", file: "src/lib/audit-engine/extract-recommended.ts", fn: "extractRecommendedBatch", provider: "anthropic", survives: "audit_runs.recommended", storedBy: "src/lib/audit-engine/run-batch.ts" },
   { lane: "audit engine", file: "src/lib/audit-engine/intel-brief.ts", fn: "getIntelBrief", provider: "anthropic + web_search", survives: "niche_briefs.brief" },
-  { lane: "audit engine", file: "src/lib/audit-engine/site-research.ts", fn: "researchWebsite", provider: "the prospect's own site", survives: "audit_reports.site_crawl", storedBy: "src/lib/audit-engine/run-audit-pipeline.ts" },
+  { lane: "audit engine", file: "src/lib/audit-engine/site-research.ts", fn: "researchWebsite", provider: "the prospect's own site", survives: "audit_reports.site_crawl", storedBy: "src/lib/audit-engine/run-audit-pipeline.ts", exempt: "SiteResearch carries homepageHtml, 150KB to 2MB of raw markup. storableCrawl() drops it from audit_reports.site_crawl for that exact reason, and four live readers still need it in memory, so neither the full shape nor the stored shape can be the cached payload" },
   { lane: "audit engine", file: "src/lib/audit-engine/robots-check.ts", fn: "checkRobots", provider: "the prospect's own robots.txt", survives: "audit_reports.robots_check", storedBy: "src/lib/audit-engine/run-audit-pipeline.ts" },
-  { lane: "shared", file: "src/lib/claude-calls.ts", fn: "callClaudeJSON", provider: "anthropic", survives: null },
+  { lane: "shared", file: "src/lib/claude-calls.ts", fn: "callClaudeJSON", provider: "anthropic", survives: null, exempt: "a generic transport for 75 callers, not a question. Caching here would serve one module's generation to another and freeze deliberately varied output; the callers that ARE stable questions cache themselves, which is what claude-research.ts does" },
   { lane: "onboarding", file: "src/lib/clients/artifacts/deep-research-run.ts", fn: "runDeepResearch", provider: "anthropic + web_search", survives: "question_bank" },
   { lane: "onboarding", file: "src/lib/clients/harvest.ts", fn: "runHarvest", provider: "the client's own site", survives: "question_bank" },
   { lane: "onboarding", file: "src/lib/clients/site-intel.ts", fn: "gatherSiteIntel", provider: "rdap + the client's own site", survives: "clients" },
@@ -397,9 +406,9 @@ const PAID_PULLS: readonly PaidPull[] = [
   { lane: "scraper", file: "src/lib/scraper/millionverifier.ts", fn: "uploadEmails", provider: "millionverifier", survives: "scraper_rows.mv_result", storedBy: "src/lib/scraper/store.ts" },
   { lane: "scraper", file: "src/lib/scraper/mx.ts", fn: "hasMx", provider: "cloudflare dns-over-https", survives: null },
   { lane: "scraper", file: "src/lib/scraper/enrich.ts", fn: "enrichOne", provider: "none wired: PROVIDERS is empty", survives: null },
-  { lane: "media", file: "src/lib/providers/image-gen.ts", fn: "generateImages", provider: "openai images, higgsfield, elevenlabs", survives: null },
-  { lane: "media", file: "src/lib/reel/motion-adapter.ts", fn: "getMotionAdapter", provider: "elevenlabs, fal.ai, higgsfield", survives: null },
-  { lane: "hub", file: "src/lib/hub/vercel-domains.ts", fn: "attachHost", provider: "vercel domains", survives: "client_hosts", storedBy: "src/lib/hub/vercel-domains.ts" },
+  { lane: "media", file: "src/lib/providers/image-gen.ts", fn: "generateImages", provider: "openai images, higgsfield, elevenlabs", survives: null, exempt: "returns image bytes and URLs, not a JSON answer, and a second render of the same prompt is wanted rather than deduplicated" },
+  { lane: "media", file: "src/lib/reel/motion-adapter.ts", fn: "getMotionAdapter", provider: "elevenlabs, fal.ai, higgsfield", survives: null, exempt: "returns MP4 bytes. Same reason as image-gen" },
+  { lane: "hub", file: "src/lib/hub/vercel-domains.ts", fn: "attachHost", provider: "vercel domains", survives: "client_hosts", storedBy: "src/lib/hub/vercel-domains.ts", exempt: "a mutation, not a pull: it attaches a domain. Caching a write would skip the write" },
 ];
 
 /**
@@ -507,16 +516,27 @@ function paidPullSection(): string {
     return /getOrFetch\s*[<(]/.test(body);
   });
 
+  const exempt = PAID_PULLS.filter((p) => p.exempt);
+  const owed = PAID_PULLS.filter((p) => !p.exempt && !/getOrFetch\s*[<(]/.test(read(p.file)));
+
   const rows = PAID_PULLS.map((p) => {
-    const through = /getOrFetch\s*[<(]/.test(read(p.file)) ? "**yes**" : "no";
+    const routed = /getOrFetch\s*[<(]/.test(read(p.file));
+    const through = routed ? "**yes**" : p.exempt ? `no, deliberately: ${p.exempt}` : "**owed**";
     const where = p.survives
       ? `\`${p.survives}\`${p.storedBy && p.storedBy !== p.file ? `, written by \`${p.storedBy}\`` : ""}`
       : "**nowhere**";
-    return `| ${p.lane} | \`${p.file}\` | \`${p.fn}()\` | ${p.provider} | ${through} | ${where} |`;
+    return `| ${p.lane} | \`${p.file}\` | \`${p.fn}()\` | ${p.provider} | ${cell(through)} | ${where} |`;
   });
 
   return [
-    `**${PAID_PULLS.length} sites, ${withDoor.length} through \`getOrFetch()\`.**`,
+    `**${PAID_PULLS.length} sites: ${withDoor.length} through \`getOrFetch()\`, ${exempt.length} deliberately exempt, ${owed.length} still owed.**`,
+    "",
+    "‼️ **An exemption is a decision, not a to-do.** `site-research.ts` carries `homepageHtml`, 150KB",
+    "to 2MB of raw markup that `storableCrawl()` already drops from `audit_reports.site_crawl` for",
+    "that exact reason, and four live readers still need it in memory; caching it would put the one",
+    "blob this system has a written decision against into a jsonb column. `claude-calls.ts` is a",
+    "transport for 75 callers rather than a question. Routing either one would be a regression that",
+    "looks like progress, so the reason travels in the table.",
     "",
     "Every row is declared and then verified: the file has to exist, it has to contain the named",
     "function, and the file claimed to keep the response has to name that table. The `getOrFetch`",

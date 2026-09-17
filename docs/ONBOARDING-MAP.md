@@ -26,7 +26,14 @@ either dead or a gap, and both are findings; the Downstream row is where that sh
 
 ## Every place the system buys something from the web
 
-**22 sites, 2 through `getOrFetch()`.**
+**22 sites: 3 through `getOrFetch()`, 5 deliberately exempt, 14 still owed.**
+
+‼️ **An exemption is a decision, not a to-do.** `site-research.ts` carries `homepageHtml`, 150KB
+to 2MB of raw markup that `storableCrawl()` already drops from `audit_reports.site_crawl` for
+that exact reason, and four live readers still need it in memory; caching it would put the one
+blob this system has a written decision against into a jsonb column. `claude-calls.ts` is a
+transport for 75 callers rather than a question. Routing either one would be a regression that
+looks like progress, so the reason travels in the table.
 
 Every row is declared and then verified: the file has to exist, it has to contain the named
 function, and the file claimed to keep the response has to name that table. The `getOrFetch`
@@ -40,28 +47,28 @@ of this check asserted the fetching file named the table and failed on six rows,
 
 | lane | file | call | provider | through the door | raw response survives |
 | --- | --- | --- | --- | --- | --- |
-| audit engine | `src/lib/audit-engine/run-prompts.ts` | `runOpenAI()` | openai responses + web_search | no | `audit_runs.raw_response`, written by `src/lib/audit-engine/run-batch.ts` |
+| audit engine | `src/lib/audit-engine/run-prompts.ts` | `runOpenAI()` | openai responses + web_search | **owed** | `audit_runs.raw_response`, written by `src/lib/audit-engine/run-batch.ts` |
 | audit engine | `src/lib/audit-engine/search-research.ts` | `researchViaSearch()` | openai | **yes** | `client_datasets.payload` |
 | audit engine | `src/lib/audit-engine/claude-research.ts` | `researchViaClaudeDetailed()` | anthropic + web_search | **yes** | `client_datasets.payload` |
-| audit engine | `src/lib/audit-engine/classify.ts` | `classifyBusiness()` | anthropic | no | `audit_reports.classification`, written by `src/lib/audit-engine/run-audit-pipeline.ts` |
-| audit engine | `src/lib/audit-engine/extract-recommended.ts` | `extractRecommendedBatch()` | anthropic | no | `audit_runs.recommended`, written by `src/lib/audit-engine/run-batch.ts` |
-| audit engine | `src/lib/audit-engine/intel-brief.ts` | `getIntelBrief()` | anthropic + web_search | no | `niche_briefs.brief` |
-| audit engine | `src/lib/audit-engine/site-research.ts` | `researchWebsite()` | the prospect's own site | no | `audit_reports.site_crawl`, written by `src/lib/audit-engine/run-audit-pipeline.ts` |
-| audit engine | `src/lib/audit-engine/robots-check.ts` | `checkRobots()` | the prospect's own robots.txt | no | `audit_reports.robots_check`, written by `src/lib/audit-engine/run-audit-pipeline.ts` |
-| shared | `src/lib/claude-calls.ts` | `callClaudeJSON()` | anthropic | no | **nowhere** |
-| onboarding | `src/lib/clients/artifacts/deep-research-run.ts` | `runDeepResearch()` | anthropic + web_search | no | `question_bank` |
-| onboarding | `src/lib/clients/harvest.ts` | `runHarvest()` | the client's own site | no | `question_bank` |
-| onboarding | `src/lib/clients/site-intel.ts` | `gatherSiteIntel()` | rdap + the client's own site | no | `clients` |
-| onboarding | `src/lib/clients/geocode.ts` | `geocodeAddress()` | us census geocoder | no | **nowhere** |
-| onboarding | `src/lib/clients/voice-notes.ts` | `transcribeAudio()` | openai whisper | no | **nowhere** |
-| scraper | `src/lib/scraper/dataforseo.ts` | `postTasks()` | dataforseo | no | **nowhere** |
-| scraper | `src/lib/outscraper.ts` | `submitMapsSearch()` | outscraper | no | `raw_leads.raw`, written by `src/lib/scraper/pull.ts` |
-| scraper | `src/lib/scraper/millionverifier.ts` | `uploadEmails()` | millionverifier | no | `scraper_rows.mv_result`, written by `src/lib/scraper/store.ts` |
-| scraper | `src/lib/scraper/mx.ts` | `hasMx()` | cloudflare dns-over-https | no | **nowhere** |
-| scraper | `src/lib/scraper/enrich.ts` | `enrichOne()` | none wired: PROVIDERS is empty | no | **nowhere** |
-| media | `src/lib/providers/image-gen.ts` | `generateImages()` | openai images, higgsfield, elevenlabs | no | **nowhere** |
-| media | `src/lib/reel/motion-adapter.ts` | `getMotionAdapter()` | elevenlabs, fal.ai, higgsfield | no | **nowhere** |
-| hub | `src/lib/hub/vercel-domains.ts` | `attachHost()` | vercel domains | no | `client_hosts` |
+| audit engine | `src/lib/audit-engine/classify.ts` | `classifyBusiness()` | anthropic | **owed** | `audit_reports.classification`, written by `src/lib/audit-engine/run-audit-pipeline.ts` |
+| audit engine | `src/lib/audit-engine/extract-recommended.ts` | `extractRecommendedBatch()` | anthropic | **owed** | `audit_runs.recommended`, written by `src/lib/audit-engine/run-batch.ts` |
+| audit engine | `src/lib/audit-engine/intel-brief.ts` | `getIntelBrief()` | anthropic + web_search | **owed** | `niche_briefs.brief` |
+| audit engine | `src/lib/audit-engine/site-research.ts` | `researchWebsite()` | the prospect's own site | no, deliberately: SiteResearch carries homepageHtml, 150KB to 2MB of raw markup. storableCrawl() drops it from audit_reports.site_crawl for that exact reason, and four live readers still need it in memory, so neither the full shape nor the stored shape can be the cached payload | `audit_reports.site_crawl`, written by `src/lib/audit-engine/run-audit-pipeline.ts` |
+| audit engine | `src/lib/audit-engine/robots-check.ts` | `checkRobots()` | the prospect's own robots.txt | **yes** | `audit_reports.robots_check`, written by `src/lib/audit-engine/run-audit-pipeline.ts` |
+| shared | `src/lib/claude-calls.ts` | `callClaudeJSON()` | anthropic | no, deliberately: a generic transport for 75 callers, not a question. Caching here would serve one module's generation to another and freeze deliberately varied output; the callers that ARE stable questions cache themselves, which is what claude-research.ts does | **nowhere** |
+| onboarding | `src/lib/clients/artifacts/deep-research-run.ts` | `runDeepResearch()` | anthropic + web_search | **owed** | `question_bank` |
+| onboarding | `src/lib/clients/harvest.ts` | `runHarvest()` | the client's own site | **owed** | `question_bank` |
+| onboarding | `src/lib/clients/site-intel.ts` | `gatherSiteIntel()` | rdap + the client's own site | **owed** | `clients` |
+| onboarding | `src/lib/clients/geocode.ts` | `geocodeAddress()` | us census geocoder | **owed** | **nowhere** |
+| onboarding | `src/lib/clients/voice-notes.ts` | `transcribeAudio()` | openai whisper | **owed** | **nowhere** |
+| scraper | `src/lib/scraper/dataforseo.ts` | `postTasks()` | dataforseo | **owed** | **nowhere** |
+| scraper | `src/lib/outscraper.ts` | `submitMapsSearch()` | outscraper | **owed** | `raw_leads.raw`, written by `src/lib/scraper/pull.ts` |
+| scraper | `src/lib/scraper/millionverifier.ts` | `uploadEmails()` | millionverifier | **owed** | `scraper_rows.mv_result`, written by `src/lib/scraper/store.ts` |
+| scraper | `src/lib/scraper/mx.ts` | `hasMx()` | cloudflare dns-over-https | **owed** | **nowhere** |
+| scraper | `src/lib/scraper/enrich.ts` | `enrichOne()` | none wired: PROVIDERS is empty | **owed** | **nowhere** |
+| media | `src/lib/providers/image-gen.ts` | `generateImages()` | openai images, higgsfield, elevenlabs | no, deliberately: returns image bytes and URLs, not a JSON answer, and a second render of the same prompt is wanted rather than deduplicated | **nowhere** |
+| media | `src/lib/reel/motion-adapter.ts` | `getMotionAdapter()` | elevenlabs, fal.ai, higgsfield | no, deliberately: returns MP4 bytes. Same reason as image-gen | **nowhere** |
+| hub | `src/lib/hub/vercel-domains.ts` | `attachHost()` | vercel domains | no, deliberately: a mutation, not a pull: it attaches a domain. Caching a write would skip the write | `client_hosts` |
 
 A pull that survives **nowhere** is bought and thrown away. `select kind, sum(cost_usd) from
 client_datasets group by 1` is only a real number once every row above says yes.
