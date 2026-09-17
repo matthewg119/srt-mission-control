@@ -22,14 +22,38 @@ const registry = read("src/lib/clients/artifacts/registry.ts");
 const verify = read("src/lib/clients/step-verify.ts");
 const engine = read("src/lib/clients/step-engine.ts");
 
+/**
+ * One entry of a `Record<StepKey, async ...>` table: its own body and nothing else.
+ *
+ * ‼️ IT STOPS AT THE ENTRY'S OWN CLOSING BRACE, NOT AT THE NEXT KEY, AND THE DIFFERENCE IS A
+ * DOC-SIZED LIE. Stopping at the next key swallows the comment block written ABOVE that key, and
+ * those comments name helpers on purpose: step-verify.ts explains at length why `weekly_report`
+ * STOPPED using `artifactOnRecord`, so reading to the next key made step 39 (`time_log_entries`,
+ * a plain count query) report "an artifact on record". Measured 2026-09-17, on the first run of
+ * this refactor.
+ *
+ * This replaced a 1400-character window in the registry and a 700-character one in the verifiers.
+ * Those numbers were not wrong so much as unfalsifiable: 700 happened to stop before that comment,
+ * and nothing said it would keep doing so. An entry at two-space indent closes with `\n  },`; a
+ * nested literal inside it closes deeper, so that marker is the entry boundary. The next key is
+ * still consulted, for an entry with no block body, and whichever comes first wins.
+ */
+function bodyOf(source: string, key: string): string | null {
+  const start = source.indexOf(`\n  ${key}: async`);
+  if (start < 0) return null;
+  const rest = source.slice(start + 1);
+  const close = rest.indexOf(`\n  },`);
+  const next = /\n {2}[A-Za-z0-9_]+: async/.exec(rest);
+  const end = Math.min(close < 0 ? rest.length : close, next ? next.index : rest.length);
+  return rest.slice(0, end);
+}
+
 /** The runner a step has, as the registry names it: the first function its arrow body awaits. */
 function runnerFor(key: string): string | null {
-  const start = registry.indexOf(`
-  ${key}: async (clientId)`);
-  if (start < 0) return null;
+  const body = bodyOf(registry, key);
+  if (body === null) return null;
   // The imports come first in every arrow body, so they are stripped before the first real call is read.
-  const body = registry.slice(start, start + 1400).replace(/await\s+import\([^)]*\)/g, "");
-  const call = /(?:await|return)\s+([A-Za-z0-9_]+)\(/.exec(body);
+  const call = /(?:await|return)\s+([A-Za-z0-9_]+)\(/.exec(body.replace(/await\s+import\([^)]*\)/g, ""));
   return call ? call[1] : "an inline runner";
 }
 
@@ -71,9 +95,8 @@ function cardCase(key: string): boolean {
 }
 
 function verifierKind(key: string): string {
-  const i = verify.indexOf(`\n  ${key}: async`);
-  if (i < 0) return verify.includes(`\n  ${key}:`) ? "yes" : "none";
-  const body = verify.slice(i, i + 700);
+  const body = bodyOf(verify, key);
+  if (body === null) return verify.includes(`\n  ${key}:`) ? "yes" : "none";
   if (/artifactOnRecord/.test(body)) return "an artifact on record";
   if (/threadHas|uploadsFor/.test(body)) return "evidence in its thread";
   return "a system check";
