@@ -119,23 +119,41 @@ async function main() {
         check("variant_no round trips", cap?.variant_no === 3, String(cap?.variant_no));
         check("awareness entry and target round trip", cap?.awareness_entry === 4 && cap?.awareness_target === 2);
 
-        // The check constraints must actually refuse what they claim to.
-        let refused = false;
-        try {
-          await tx`insert into public.page_dataset (client_id, captured_reason) values (${clientId}, 'invented')`;
-        } catch {
-          refused = true;
-        }
-        check("an unknown captured_reason is refused", refused, "the check constraint is not there");
+        // ‼️ A SAVEPOINT PER EXPECTED FAILURE. Postgres aborts a whole transaction on the first
+        // error, so every statement after one throws "current transaction is aborted": a second
+        // try/catch reports a constraint working when what it caught was the PREVIOUS failure.
+        // Measured on 2026-09-17: the awareness check below was passing for exactly that reason.
+        const refuses = async (label: string, fn: () => Promise<unknown>) => {
+          await tx.unsafe("savepoint probe_sp");
+          let refused = false;
+          let why = "";
+          try {
+            await fn();
+          } catch (e) {
+            refused = true;
+            why = (e as Error).message;
+          }
+          await tx.unsafe("rollback to savepoint probe_sp");
+          check(label, refused, "it was accepted");
+          if (refused && /current transaction is aborted/i.test(why)) {
+            check(`${label}: refused for the right reason`, false, why);
+          }
+        };
 
-        let awarenessRefused = false;
-        try {
-          await tx`insert into public.page_angles (client_id, plan_id, idea, awareness_entry)
-                   values (${clientId}, gen_random_uuid(), 'x', 9)`;
-        } catch {
-          awarenessRefused = true;
-        }
-        check("an awareness stage outside 1..5 is refused", awarenessRefused);
+        await refuses(
+          "an unknown captured_reason is refused",
+          () => tx`insert into public.page_dataset (client_id, captured_reason) values (${clientId}, 'invented')`
+        );
+        await refuses(
+          "an awareness stage outside 1..5 is refused",
+          () => tx`insert into public.page_angles (client_id, plan_id, idea, awareness_entry)
+                   values (${clientId}, gen_random_uuid(), 'x', 9)`
+        );
+        await refuses(
+          "an unknown angle status is refused",
+          () => tx`insert into public.page_angles (client_id, plan_id, idea, status)
+                   values (${clientId}, gen_random_uuid(), 'x', 'maybe')`
+        );
 
         // ‼️ THE ROLLBACK. Throwing is how Bun's sql.begin aborts; the catch below swallows it.
         throw new Error("__probe_rollback__");
