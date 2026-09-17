@@ -14,6 +14,7 @@
 // Same doctrine as `dns-records.ts`: an absent answer from a broken resolver is never stored.
 
 import dns from "dns/promises";
+import { getOrFetch, cacheKeyOf } from "@/lib/data/dataset-cache";
 
 /** true = has MX, false = definitively does not, null = could not determine, ask again later. */
 export type MxVerdict = boolean | null;
@@ -96,13 +97,68 @@ async function mxViaDoh(domain: string): Promise<MxVerdict> {
 }
 
 /**
- * One domain, uncached. Prefer `resolveMxBatch`, which memoizes.
+ * Thrown to decline caching a verdict we never reached.
+ *
+ * ‼️ IT IS THIS FILE'S OWN DOCTRINE, MADE ENFORCEABLE. The header says an absent answer from a
+ * broken resolver is never stored, and MxBatchResult says in words that "a null verdict means
+ * undetermined; the caller must not store it as false". A cache that kept the null would be the
+ * Python bug this file was written to replace, with a month-long memory.
+ */
+class MxUndetermined extends Error {
+  constructor() {
+    super("neither resolver answered");
+    this.name = "MxUndetermined";
+  }
+}
+
+/**
+ * How long an MX verdict stays true.
+ *
+ * ‼️ FOURTEEN DAYS, AND THE NUMBER IS CHOSEN AGAINST THE FALSE, NOT THE TRUE. A true is nearly
+ * permanent and could live forever. A false is the expensive direction: a domain that configures
+ * mail tomorrow stays filtered out of every list until the entry expires, and the whole cost of
+ * being wrong lands on a lead nobody ever sees. Two weeks bounds that while still collapsing the
+ * case this exists for, which is the same domains reappearing across overlapping pulls.
+ */
+const MX_TTL_DAYS = 14;
+
+/**
+ * One domain, through the cache. Prefer `resolveMxBatch`, which also memoizes per run.
+ *
+ * The memo above this handles one batch; this handles the next batch, and the one after. An
+ * Apollo export averages several contacts per company and the same companies recur across pulls,
+ * which is why a persistent layer is worth having under a per-run one.
+ *
+ * client_id is null because whether a domain accepts mail is a fact about the domain.
+ */
+export async function hasMx(domain: string): Promise<MxVerdict> {
+  try {
+    const { payload } = await getOrFetch<boolean>({
+      clientId: null,
+      kind: "dns.mx",
+      cacheKey: cacheKeyOf({ domain }),
+      ttlDays: MX_TTL_DAYS,
+      provider: "node dns + cloudflare dns-over-https",
+      params: { domain },
+      // Both roads are free, so this zero is a measurement. What it saves is twenty thousand
+      // lookups on the next overlapping pull.
+      fetch: async () => ({ payload: await readMx(domain), costUsd: 0 }),
+    });
+    return payload;
+  } catch (e) {
+    if (e instanceof MxUndetermined) return null;
+    return null;
+  }
+}
+
+/**
+ * The lookup itself. Throws rather than returning null, so an undetermined verdict is not kept.
  *
  * A resolver that answers "no MX but the domain exists" is deliberately a NO here, matching the
  * Python. Mail can technically fall back to the A record, but a business domain with no MX is not
  * one that reads email, and this list is being paid for per address downstream.
  */
-export async function hasMx(domain: string): Promise<MxVerdict> {
+async function readMx(domain: string): Promise<boolean> {
   try {
     const answers = await withTimeout(dns.resolveMx(domain), DNS_TIMEOUT_MS, "resolveMx");
     if (isNullMx(answers)) return false;
@@ -110,11 +166,14 @@ export async function hasMx(domain: string): Promise<MxVerdict> {
   } catch (e) {
     if (DEFINITIVE_NO.has(errCode(e))) return false;
     // Everything else is "we could not ask". Try the other road before saying no.
+    let viaDoh: MxVerdict;
     try {
-      return await mxViaDoh(domain);
+      viaDoh = await mxViaDoh(domain);
     } catch {
-      return null;
+      throw new MxUndetermined();
     }
+    if (viaDoh === null) throw new MxUndetermined();
+    return viaDoh;
   }
 }
 
