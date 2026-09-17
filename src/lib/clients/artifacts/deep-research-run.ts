@@ -57,6 +57,8 @@
 import { supabaseAdmin } from "@/lib/db";
 import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { callClaudeText, type ClaudeModel } from "@/lib/claude-calls";
+import { getOrFetch, cacheKeyOf } from "@/lib/data/dataset-cache";
+import { tokensOnly } from "@/lib/data/model-costs";
 import * as pdf from "@/lib/pdf/kit";
 import { deliverArtifact } from "./deliver";
 import { AWARENESS_STAGES } from "@/lib/audit-engine/awareness";
@@ -816,36 +818,93 @@ function stub(reason: string): string {
   return `_This section could not be researched: ${reason}. It is missing from this report rather than guessed at._`;
 }
 
+/** Thrown to decline keeping a section that did not finish. getOrFetch writes nothing on a throw. */
+class SectionFailed extends Error {
+  constructor(readonly result: SectionResult) {
+    super("the section did not finish");
+    this.name = "SectionFailed";
+  }
+}
+
+/**
+ * How long one researched section may be served for.
+ *
+ * ‼️ SEVEN DAYS, WHICH IS ONE ONBOARDING RATHER THAN THE LIFE OF THE AVATAR. Inside a week the
+ * saving is the one that matters: a run where two of eight sections timed out re-buys those two
+ * and nothing else, where before it re-bought all eight at full price. Past a week, `run` is a
+ * keyword somebody typed on purpose after reading what is already on file, and it should mean
+ * what it says. The long-term reuse path is avatar_briefs, which offers the whole report back
+ * with a "reuse this research?" button and is not on a clock.
+ */
+const SECTION_TTL_DAYS = 7;
+
+/**
+ * One section of the report, through the cache.
+ *
+ * ‼️ THE SECTION IS THE UNIT, NOT THE RUN, AND THAT IS THE ENTIRE VALUE HERE. runDeepResearch
+ * fans out eight of these in parallel and reports which ones failed; caching the whole run would
+ * keep nothing whenever any one of them failed, which is the case a re-run exists for.
+ *
+ * A failure is never kept, and that includes the two that look like success: max_tokens and
+ * pause_turn come back as ordinary prose that simply stops. The comment below has always said a
+ * truncated section is a failed section; caching one would file half an answer under this avatar
+ * for a week and every page written from it would be written from the half.
+ *
+ * client_id is null because this file already made that decision for the same reason, at
+ * storeAvatarResearch: the research is filed against the AVATAR so the next client in the
+ * vertical aiming at the same buyer is offered it instead of paying again.
+ */
 async function runSection(ctx: ResearchContext, spec: SectionSpec): Promise<SectionResult> {
+  const user = buildSectionPrompt(ctx, spec);
+
   try {
-    const { text, stopReason } = await callClaudeText({
-      model: RESEARCH_MODEL,
-      system: SYSTEM,
-      user: buildSectionPrompt(ctx, spec),
-      maxTokens: SECTION_MAX_TOKENS,
-      // Reporting what sources say, not writing. Same reasoning as claude-research.ts's 0.1.
-      temperature: 0.2,
-      tools: [searchTool(spec.searches ?? DEFAULT_SEARCHES)],
-      timeoutMs: SECTION_TIMEOUT_MS,
+    const { payload } = await getOrFetch<{ text: string }>({
+      clientId: null,
+      kind: "anthropic.deep_research",
+      // The avatar and the vertical are already inside the rendered prompt, so the prompt is the
+      // question. The section key is named separately because it is what a person reading the
+      // ledger wants to see, and the model because a model change is a different answer.
+      cacheKey: cacheKeyOf({ user, model: RESEARCH_MODEL, section: spec.key }),
+      ttlDays: SECTION_TTL_DAYS,
+      provider: "anthropic + web_search",
+      params: { section: spec.key, vertical: ctx.vertical, avatarSlug: ctx.avatarSlug, model: RESEARCH_MODEL },
+      fetch: async () => {
+        const { text, stopReason, usage } = await callClaudeText({
+          model: RESEARCH_MODEL,
+          system: SYSTEM,
+          user,
+          maxTokens: SECTION_MAX_TOKENS,
+          // Reporting what sources say, not writing. Same reasoning as claude-research.ts's 0.1.
+          temperature: 0.2,
+          tools: [searchTool(spec.searches ?? DEFAULT_SEARCHES)],
+          timeoutMs: SECTION_TIMEOUT_MS,
+        });
+
+        if (!text.trim()) {
+          throw new SectionFailed({ spec, text: stub("the model returned nothing"), failure: "empty" });
+        }
+
+        // ‼️ A TRUNCATED SECTION IS A FAILED SECTION AND HAS TO SAY SO. Both of these come back as
+        // ordinary-looking prose that simply stops, which is indistinguishable from a finished
+        // answer once it is in a PDF somebody is building pages from.
+        if (stopReason === "max_tokens" || stopReason === "pause_turn") {
+          const why =
+            stopReason === "max_tokens"
+              ? "it ran out of output budget part-way through"
+              : "the search loop was cut short before it finished";
+          throw new SectionFailed({ spec, text: `${text}\n\n${stub(`incomplete — ${why}`)}`, failure: stopReason });
+        }
+
+        // ‼️ A FLOOR. This section runs up to DEFAULT_SEARCHES server-side searches and no
+        // per-search rate is on file, so the token cost understates by a known amount. The run
+        // as a whole was measured at $0.60 to $1.00; this number will not add up to that.
+        return { payload: { text }, costUsd: tokensOnly(RESEARCH_MODEL, usage) };
+      },
     });
 
-    if (!text.trim()) {
-      return { spec, text: stub("the model returned nothing"), failure: "empty" };
-    }
-
-    // ‼️ A TRUNCATED SECTION IS A FAILED SECTION AND HAS TO SAY SO. Both of these come back as
-    // ordinary-looking prose that simply stops, which is indistinguishable from a finished
-    // answer once it is in a PDF somebody is building pages from.
-    if (stopReason === "max_tokens" || stopReason === "pause_turn") {
-      const why =
-        stopReason === "max_tokens"
-          ? "it ran out of output budget part-way through"
-          : "the search loop was cut short before it finished";
-      return { spec, text: `${text}\n\n${stub(`incomplete — ${why}`)}`, failure: stopReason };
-    }
-
-    return { spec, text };
+    return { spec, text: payload.text };
   } catch (e) {
+    if (e instanceof SectionFailed) return e.result;
     const reason = (e as Error).message;
     console.error(`[deep-research] ${spec.key}: ${reason}`);
     return { spec, text: stub(reason), failure: reason };
