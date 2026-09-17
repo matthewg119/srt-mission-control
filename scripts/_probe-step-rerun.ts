@@ -1,8 +1,10 @@
-// The re-run command's grammar, and that docs/STEP-WIRING.md still describes the board. No network.
+// The re-run command's grammar, and that the two generated board docs still describe the board.
+// No network.
 //
 //   bunx tsx scripts/_probe-step-rerun.ts
 
 import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { parseRerun } from "../src/lib/clients/step-rerun";
 import { DELIVERY_STEPS } from "../src/config/delivery-steps";
@@ -39,12 +41,31 @@ check("a step past the end is refused", parseRerun(`rerun step ${DELIVERY_STEPS.
 check("a backwards range is refused", parseRerun("rerun 21-18") === null);
 check("zero is refused", parseRerun("rerun step 0") === null);
 
-// The generated doc has to match the board as it is now.
+// ── The generated docs have to match the board as it is now ──
+const WIRING = path.resolve(__dirname, "_step-wiring.ts");
+const generator = readFileSync(WIRING, "utf8");
+
+for (const doc of ["docs/STEP-WIRING.md", "docs/ONBOARDING-MAP.md"]) {
+  check(`${doc} exists`, existsSync(path.resolve(__dirname, "..", doc)));
+  check(`${doc} is in CHECKED_DOCS`, generator.includes(`"${doc}"`));
+}
+
+// ‼️ THE MEASURED MAP MUST NEVER JOIN THE CHECK. It carries its measurement date on line 1, so a
+// byte compare against it would fail every time production changed, on a tree nobody has touched.
+const checkedList = /const CHECKED_DOCS = \[([^\]]*)\]/.exec(generator)?.[1] ?? "";
+check("the measured map is not one of the checked docs", checkedList.length > 0 && !checkedList.includes("MEASURED"));
+check("the generator has a --live arm", generator.includes(`"--live"`));
+
+// ‼️ THE STATIC PATH CANNOT READ A DATABASE, AND THIS IS THE PROOF. Both checked docs are built by
+// synchronous functions; the live half lives in its own module, dynamically imported. Put a query
+// in here and a live number can reach a --check'ed doc, which is how this probe starts crying drift.
+check("no database call in the generator itself", !/supabaseAdmin|\.from\(/.test(generator));
+
 try {
-  execFileSync("bunx", ["tsx", path.resolve(__dirname, "_step-wiring.ts"), "--check"], { stdio: "pipe", shell: process.platform === "win32" });
-  check("docs/STEP-WIRING.md is current", true);
+  execFileSync("bunx", ["tsx", WIRING, "--check"], { stdio: "pipe", shell: process.platform === "win32" });
+  check("both generated docs are current", true);
 } catch (e) {
-  check("docs/STEP-WIRING.md is current", false, (e as Error).message.split("\n")[0]);
+  check("both generated docs are current", false, (e as Error).message.split("\n")[0]);
 }
 
 if (failed) {

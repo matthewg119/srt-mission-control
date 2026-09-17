@@ -4,6 +4,8 @@
 `src/config/delivery-steps.ts`, so inserting a step renumbers every step after it. Read this file before
 changing anything about a step: it says what runs it, what its [Done] checks, and what its thread accepts.
 
+What each step NEEDS, and every question it would have to ask, is its companion `docs/ONBOARDING-MAP.md`.
+
 ## Re-running a step
 
 | where | what to type | what happens |
