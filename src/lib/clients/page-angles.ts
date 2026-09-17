@@ -502,3 +502,294 @@ export async function pickAngle(args: {
 
   return { ok: true, angle };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The step 21 half: build the inputs, draft for each planned page, render the card
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Three at a time, the same wave size the drafter uses. Seven sequential calls overrun the step. */
+const CONCURRENCY = 3;
+
+async function inWaves<T, R>(items: T[], fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < items.length; i += CONCURRENCY) {
+    out.push(...(await Promise.all(items.slice(i, i + CONCURRENCY).map(fn))));
+  }
+  return out;
+}
+
+export interface AngleRunResult {
+  ok: boolean;
+  lines: string[];
+  drafted: number;
+  failed: number;
+}
+
+/**
+ * Draft three angles for every planned page that has none, or for one page when `only` is given.
+ *
+ * ‼️ A PAGE WITH AN APPROVED ANGLE IS SKIPPED UNLESS IT IS NAMED. `angles auto` after a pick must
+ * not silently rewrite a decision somebody already made; `angle 3 more` is how you change one on
+ * purpose. Same rule the plan itself follows: a rerun tops up proposals and leaves decisions alone.
+ */
+export async function generateAnglesForPlan(args: {
+  clientId: string;
+  by: string;
+  /** 1-based position on the card, as a person types it. */
+  only?: number;
+}): Promise<AngleRunResult> {
+  const [{ ladderState }, { loadPlan }] = await Promise.all([
+    import("./anchor-ladder"),
+    import("./page-plan"),
+  ]);
+
+  const st = await ladderState(args.clientId);
+  if (!st.inputs) {
+    return {
+      ok: false,
+      drafted: 0,
+      failed: 0,
+      lines: [
+        ":warning: The angles need what the ladder needs, and it is not all here yet:",
+        ...st.missing.map((m) => `  • ${m}`),
+      ],
+    };
+  }
+
+  const plan = await loadPlan(args.clientId);
+  if ("error" in plan) return { ok: false, drafted: 0, failed: 0, lines: [`:warning: ${plan.error}`] };
+
+  const pages = plan.rows.filter((r) => r.role).sort((a, b) => a.rank - b.rank);
+  if (!pages.length) {
+    return {
+      ok: false,
+      drafted: 0,
+      failed: 0,
+      lines: [":warning: No pages are planned yet. Pick the pillar and the supports first, then `angles`."],
+    };
+  }
+
+  const existing = await anglesFor(args.clientId);
+  const approvedBy = new Map(existing.filter((a) => a.status === "approved").map((a) => [a.planId, a]));
+  const draftedBy = new Set(existing.filter((a) => a.status === "draft").map((a) => a.planId));
+
+  let targets = pages;
+  if (args.only !== undefined) {
+    const one = pages[args.only - 1];
+    if (!one) {
+      return { ok: false, drafted: 0, failed: 0, lines: [`:warning: There is no page ${args.only}. \`angles\` lists them.`] };
+    }
+    targets = [one];
+  } else {
+    targets = pages.filter((p) => !approvedBy.has(p.id) && !draftedBy.has(p.id));
+  }
+
+  if (!targets.length) {
+    return {
+      ok: true,
+      drafted: 0,
+      failed: 0,
+      lines: [":information_source: Every planned page already has angles. `angles` lists them, `angle 3 more` rewrites one."],
+    };
+  }
+
+  const rung = st.ladder?.rungs.find((r) => r.stage === st.anchorStage) ?? null;
+  // Ideas already spoken for, so seven pages argue seven things. A page being redrafted is kept out
+  // of its own taken list below, or it would be refused for repeating itself.
+  const takenAll = pages
+    .map((p) => (approvedBy.get(p.id)?.idea ?? (p.angle || "")).trim())
+    .filter(Boolean);
+
+  const results = await inWaves(targets, async (row) => {
+    const own = (approvedBy.get(row.id)?.idea ?? row.angle ?? "").trim();
+    const taken = takenAll.filter((t) => t !== own);
+    const res = await draftAngles({
+      clientName: st.inputs!.clientName,
+      keyword: row.targetKeyword,
+      workingTitle: row.workingTitle,
+      role: (row.role ?? "support") as "pillar" | "support",
+      keywordCategory: row.keywordCategory,
+      rung,
+      anchorStage: st.anchorStage,
+      treatment: st.inputs!.treatment,
+      terms: st.inputs!.terms,
+      outcome: st.inputs!.outcome,
+      guarantee: st.inputs!.guarantee,
+      buyer: st.inputs!.buyer,
+      beliefs: st.inputs!.beliefs.map((b) => b.text),
+      objections: st.inputs!.objections.map((o) => o.text),
+      taken,
+    });
+    if (!res.ok) return { row, error: res.error };
+    const stored = await storeAngles({
+      clientId: args.clientId,
+      planId: row.id,
+      audienceId: st.audienceId,
+      offerId: st.offerId,
+      angles: res.angles,
+    });
+    return stored.ok ? { row, error: null as string | null } : { row, error: stored.error };
+  });
+
+  const failures = results.filter((r) => r.error);
+  const drafted = results.length - failures.length;
+
+  return {
+    ok: drafted > 0,
+    drafted,
+    failed: failures.length,
+    lines: [
+      drafted
+        ? `:bulb: *${drafted} page${drafted === 1 ? "" : "s"} now carry three ideas each.* \`angles\` lists them.`
+        : ":warning: No angles were drafted.",
+      ...failures.map((f) => `  • ${f.row.workingTitle}: ${f.error}`),
+    ],
+  };
+}
+
+/**
+ * The card block: every planned page, its three ideas, and which one is picked.
+ *
+ * The number beside a page is its position in the plan and the number beside an idea is its position
+ * under that page, which is what `angle 3 pick 2` means. Both orders are stable (rank, then
+ * created_at then id) for the reason the headline shortlist already documents: a number that moves
+ * between renders is a number somebody types wrong.
+ */
+export async function angleLines(clientId: string): Promise<string[]> {
+  const { loadPlan } = await import("./page-plan");
+  const plan = await loadPlan(clientId);
+  if ("error" in plan) return [];
+
+  const pages = plan.rows.filter((r) => r.role).sort((a, b) => a.rank - b.rank);
+  if (!pages.length) return [];
+
+  const angles = await anglesFor(clientId);
+  const byPlan = new Map<string, StoredAngle[]>();
+  for (const a of angles) {
+    const list = byPlan.get(a.planId) ?? [];
+    list.push(a);
+    byPlan.set(a.planId, list);
+  }
+
+  const lines = ["*The idea each page argues*"];
+  let anyMissing = false;
+
+  pages.forEach((p, i) => {
+    const n = i + 1;
+    const mine = byPlan.get(p.id) ?? [];
+    const picked = mine.find((a) => a.status === "approved");
+    const label = `${n}. ${p.role === "pillar" ? "Pillar" : "Support"}: ${p.targetKeyword}`;
+
+    if (picked) {
+      lines.push(`${label}  :white_check_mark:`);
+      lines.push(`     ${picked.idea}`);
+      if (picked.awarenessEntry && picked.awarenessTarget) {
+        lines.push(`     _moves her from stage ${picked.awarenessEntry} to ${picked.awarenessTarget}_`);
+      }
+      return;
+    }
+
+    if (!mine.length) {
+      anyMissing = true;
+      lines.push(`${label}  _no ideas yet_`);
+      return;
+    }
+
+    lines.push(label);
+    mine.forEach((a, j) => {
+      lines.push(`     ${j + 1}. ${a.idea}`);
+    });
+  });
+
+  lines.push("");
+  lines.push(
+    anyMissing
+      ? "`angles auto` drafts three for every page that has none. `angle 3 pick 2` keeps one."
+      : "`angle 3 pick 2` keeps one. `angle 3 more` rewrites the three under one page."
+  );
+  return lines;
+}
+
+/** `angles`, `angles auto`, `angle 3 pick 2`, `angle 3 more`, in the step 21 thread. */
+export async function handlePageAngleThreadReply(args: {
+  clientId: string;
+  stepKey: string | null;
+  text: string;
+  by: string;
+}): Promise<{ message: string; after?: () => Promise<void> } | null> {
+  if (args.stepKey !== "pre_call_pages") return null;
+  const cmd = parseAngleCommand(args.text);
+  if (!cmd) return null;
+
+  const refresh = async () => {
+    const { postStep } = await import("./step-engine");
+    await postStep(args.clientId, "pre_call_pages").catch(() => {});
+  };
+  const say = async (text: string) => {
+    const { notifyStep } = await import("./step-board");
+    await notifyStep(args.clientId, "pre_call_pages", text).catch(() => {});
+  };
+
+  if (cmd.kind === "list") {
+    const lines = await angleLines(args.clientId);
+    return {
+      message: lines.length
+        ? lines.join("\n")
+        : ":information_source: No pages are planned yet. Pick the pillar and the supports first.",
+    };
+  }
+
+  // ‼️ THE ACK GOES BACK FIRST AND THE MODEL CALLS HAPPEN IN `after`. `angles auto` is one call per
+  // planned page, seven of them in waves of three, which is well past the three seconds Slack waits
+  // before it decides the app is down and shows the user a failure over work that is running fine.
+  if (cmd.kind === "auto" || cmd.kind === "more") {
+    const scope = cmd.kind === "more" ? `page ${cmd.page}` : "every page that has none";
+    return {
+      message: `:hourglass_flowing_sand: Writing three ideas for ${scope}, from the anchored rung and this page's keyword. About a minute.`,
+      after: async () => {
+        const res = await generateAnglesForPlan({
+          clientId: args.clientId,
+          by: args.by,
+          only: cmd.kind === "more" ? cmd.page : undefined,
+        });
+        const listed = res.ok ? await angleLines(args.clientId) : [];
+        await say([...res.lines, ...(listed.length ? ["", ...listed] : [])].join("\n"));
+        await refresh();
+      },
+    };
+  }
+
+  const { loadPlan } = await import("./page-plan");
+  const plan = await loadPlan(args.clientId);
+  if ("error" in plan) return { message: `:warning: ${plan.error}` };
+
+  const pages = plan.rows.filter((r) => r.role).sort((a, b) => a.rank - b.rank);
+  const row = pages[cmd.page - 1];
+  if (!row) return { message: `:warning: There is no page ${cmd.page}. \`angles\` lists them.` };
+
+  const mine = (await anglesFor(args.clientId)).filter((a) => a.planId === row.id);
+  const choice = mine[cmd.option - 1];
+  if (!choice) {
+    return {
+      message: `:warning: Page ${cmd.page} has ${mine.length} idea${mine.length === 1 ? "" : "s"} on file, so there is no option ${cmd.option}.`,
+    };
+  }
+
+  const res = await pickAngle({ clientId: args.clientId, angleId: choice.id, by: args.by });
+  if (!res.ok) return { message: `:warning: ${res.error}`, after: refresh };
+
+  return {
+    message: [
+      `:white_check_mark: *Page ${cmd.page} argues:* ${res.angle.idea}`,
+      res.angle.indoctrination ? `The belief it installs: ${res.angle.indoctrination}` : "",
+      res.angle.awarenessEntry && res.angle.awarenessTarget
+        ? `It moves her from stage ${res.angle.awarenessEntry} to ${res.angle.awarenessTarget}.`
+        : "",
+      "The other two are kept as rejected, which is what teaches the next set.",
+      "`headlines` now writes from this idea rather than from the keyword alone.",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    after: refresh,
+  };
+}

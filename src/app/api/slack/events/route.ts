@@ -1169,6 +1169,15 @@ export async function POST(request: NextRequest) {
               text: userText,
               by,
             })) ??
+            // ‼️ ABOVE THE HEADLINE HANDLER, BECAUSE THE IDEA COMES BEFORE THE LINE. `angle` and
+            // `angles` are its own words and collide with nothing above, so the ordering here is
+            // about reading rather than about precedence: the chain is the order of the decisions.
+            (await (await import("@/lib/clients/page-angles")).handlePageAngleThreadReply({
+              clientId: client.id,
+              stepKey: client.stepKey,
+              text: userText,
+              by,
+            })) ??
             // ‼️ ABOVE handlePreCallThreadReply, AND IT RETURNS null ONCE A PLAN EXISTS. `headlines` means
             // "write the set I pick the seven pages from" before a plan and "write three options per page"
             // after one, so the earlier meaning gets first refusal and hands the word back when it no

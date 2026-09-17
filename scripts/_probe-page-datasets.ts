@@ -172,8 +172,26 @@ async function main() {
   check("rejected magnets are kept, not only the winner", /THE REJECTS ARE THE POINT/.test(ds));
   check("the capture records the angle it was written from", /angle_id: angle\?\.id/.test(ds));
 
-  // ── 4. Where the corpus actually stands ───────────────────────────────────
-  console.log("\n4. the corpus today");
+  // ── 4. The embed the headline brief depends on ────────────────────────────
+  console.log("\n4. the join that carries the picked idea into the headline brief");
+
+  // ‼️ AN EMBED THAT DOES NOT RESOLVE RETURNS AN ERROR, AND pickedAnglesFor SWALLOWS IT AND RETURNS
+  // []. That degrade is correct (headlines must not die because angles are unreadable) and it is
+  // also exactly how this would fail silently forever: the brief would quietly go back to being
+  // about a phrase. So the relationship is asserted here rather than trusted.
+  const { error: embedErr } = await supabaseAdmin
+    .from("page_angles")
+    .select("idea, indoctrination, plan_id, page_plan!page_angles_plan_id_fkey!inner(target_keyword, rank)")
+    .eq("status", "approved")
+    .limit(1);
+  check(
+    "page_angles embeds page_plan",
+    !embedErr,
+    embedErr ? `${embedErr.message}. The headline brief would silently lose the picked idea.` : ""
+  );
+
+  // ── 5. Where the corpus actually stands ───────────────────────────────────
+  console.log("\n5. the corpus today");
 
   for (const t of ["page_dataset", "page_plan_runs", "page_angles", "page_plan", "client_pages"]) {
     const [{ n }] = await sql.unsafe(`select count(*)::int as n from public.${t}`);

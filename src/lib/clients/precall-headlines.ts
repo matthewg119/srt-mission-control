@@ -219,11 +219,59 @@ interface Generated {
  * calls and eleven chances for a partial failure to leave a half-written card. The keyword is carried as
  * an index into a numbered list instead, which the validator checks is in range.
  */
+/**
+ * The idea each planned page argues, for the pages that have one picked.
+ *
+ * ‼️ DEGRADES TO EMPTY, NEVER THROWS. An unreadable page_angles (the migration not run, say) must
+ * cost the brief a block and never cost somebody their headlines: the generator is useful without
+ * it and was the only thing that existed until 2026-09-17.
+ */
+async function pickedAnglesFor(
+  clientId: string
+): Promise<Array<{ keyword: string; idea: string; indoctrination: string | null }>> {
+  try {
+    const { supabaseAdmin } = await import("@/lib/db");
+    const { data, error } = await supabaseAdmin
+      .from("page_angles")
+      .select("idea, indoctrination, plan_id, page_plan!page_angles_plan_id_fkey!inner(target_keyword, rank)")
+      .eq("client_id", clientId)
+      .eq("status", "approved");
+
+    if (error || !data) return [];
+
+    return data
+      .map((r) => {
+        const plan = (r as unknown as { page_plan: { target_keyword: string; rank: number } | Array<{ target_keyword: string; rank: number }> }).page_plan;
+        const p = Array.isArray(plan) ? plan[0] : plan;
+        return {
+          keyword: p?.target_keyword ?? "",
+          rank: p?.rank ?? 0,
+          idea: String(r.idea),
+          indoctrination: (r.indoctrination as string | null) ?? null,
+        };
+      })
+      .filter((r) => r.keyword)
+      .sort((a, b) => a.rank - b.rank)
+      .map(({ keyword, idea, indoctrination }) => ({ keyword, idea, indoctrination }));
+  } catch {
+    return [];
+  }
+}
+
 export async function generatePreCallHeadlines(args: {
   clientId: string;
   stage: AwarenessStage;
   rung: { readerState: string; angle: string; claim: string };
   count?: number;
+  /**
+   * The idea each planned page argues, once somebody has picked one (page-angles.ts).
+   *
+   * ‼️ OPTIONAL, AND EMPTY IS THE OLD BEHAVIOUR EXACTLY. Angles are picked at step 21 and headlines
+   * can legitimately be asked for before that, so this adds a block to the brief rather than
+   * becoming a precondition. With it, a headline argues one of seven ideas; without it, it can only
+   * be a line about a phrase, which is what "those headlines are not good at all" was describing.
+   */
+  angles?: Array<{ keyword: string; idea: string; indoctrination: string | null }>;
 }): Promise<{ ok: true; candidates: Candidate[]; dropped: number } | { ok: false; error: string }> {
   const count = args.count ?? PRE_CALL_HEADLINES;
   const pool = await headlineKeywordPool(args.clientId, args.stage);
@@ -267,6 +315,21 @@ export async function generatePreCallHeadlines(args: {
     "Each headline carries exactly one of these, by its number, in her phrasing rather than welded in",
     "whole. A search marked as being at another rung is still legal: write it in THIS rung's voice, which",
     "is the door, not the wording of the query. Spread them: no search takes more than three of the set.",
+    ...(args.angles?.length
+      ? [
+          "",
+          "WHAT EACH PAGE ARGUES, WHICH IS WHAT THESE HEADLINES ARE FOR",
+          ...args.angles.map(
+            (a, i) =>
+              `  ${String.fromCharCode(65 + i)}. for "${a.keyword}": ${a.idea}` +
+              (a.indoctrination ? `\n     the belief it installs: ${a.indoctrination}` : "")
+          ),
+          "",
+          "A headline is the door into ONE of those arguments. Write it so the page underneath is the",
+          "only thing that could follow it. A line that could sit above any of them is a line about a",
+          "phrase rather than about an idea, and it is the thing being replaced here.",
+        ]
+      : []),
   ].join("\n");
 
   // ‼️ THE BATCH IS FILTERED, NOT REFUSED, AND THAT IS THE WHOLE DIFFERENCE AT THIRTY THREE.
@@ -639,10 +702,14 @@ export async function handlePreCallHeadlineReply(input: {
         ? "\n:warning: No necessary beliefs are on file for this audience, so the lines are written from the objections and the offer alone. `beliefs:` at the prep call step sharpens the next run."
         : ""),
     after: async () => {
+      // The ideas somebody has already picked for the planned pages. Empty before step 21's angle
+      // pick, which is legitimate and is exactly the old behaviour.
+      const pickedAngles = await pickedAnglesFor(input.clientId);
       const got = await generatePreCallHeadlines({
         clientId: input.clientId,
         stage,
         rung: { readerState: rung.readerState, angle: rung.angle, claim: rung.claim },
+        angles: pickedAngles,
       });
       if (!got.ok) {
         await say(`:warning: No headlines: ${got.error}`);
