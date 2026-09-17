@@ -3,6 +3,8 @@
 // anywhere in this file or its callers. Buyer language, not marketer language.
 
 import { callClaudeJSON, type ClaudeModel } from "@/lib/claude-calls";
+import { getOrFetch, cacheKeyOf } from "@/lib/data/dataset-cache";
+import { tokensOnly } from "@/lib/data/model-costs";
 import { AWARENESS_STAGES, isAwarenessStage, type AwarenessSource, type AwarenessStage } from "./awareness";
 import type { SiteResearch } from "./site-research";
 import type { ResearchSource } from "./types";
@@ -266,21 +268,63 @@ function buildUserPrompt(research: SiteResearch, overrides?: ClassifyOverrides):
   return lines.filter(Boolean).join("\n");
 }
 
+/**
+ * How long a classification may be served for.
+ *
+ * ‼️ THE TTL IS ALMOST DECORATIVE HERE, BECAUSE THE KEY IS CONTENT-ADDRESSED. The cache key is the
+ * rendered user turn, which embeds the crawl this classification was made from. A site that
+ * rebrands produces a different crawl, a different user turn and therefore a different key on its
+ * own, with no expiry involved. Thirty days matches the rebrand window claude-research.ts argues
+ * for and exists only to bound a site whose text did not change but whose business did.
+ */
+const CLASSIFY_TTL_DAYS = 30;
+
 export async function classifyBusiness(
   research: SiteResearch,
   overrides?: ClassifyOverrides
 ): Promise<AuditClassification> {
-  const { data: validated } = await callClaudeJSON<AuditClassification>({
-    model: model(),
-    system: buildSystemPrompt(research.source),
-    user: buildUserPrompt(research, overrides),
-    schemaHint: SCHEMA_HINT,
-    maxTokens: 4000,
-    temperature: 0.4,
-    coerce: coerceAwareness,
-    validate: isAuditClassification,
-    describeInvalid: whyNotClassification,
+  const claudeModel = model();
+  const system = buildSystemPrompt(research.source);
+  const user = buildUserPrompt(research, overrides);
+
+  const { payload: validated } = await getOrFetch<AuditClassification>({
+    // A fact about a BUSINESS, not about whoever is auditing it. The same prospect audited twice,
+    // and a prospect who later onboards, are asking one question. Same argument, same answer as
+    // claude-research.ts makes about its identity call.
+    clientId: null,
+    kind: "anthropic.classify",
+    // ‼️ THE RENDERED TURNS, WHICH IS ALSO HOW THE OVERRIDES GET INTO THE KEY. buildUserPrompt
+    // folds businessName, city and competitors into the prompt, so two calls with different
+    // overrides are already two different keys and no override has to be listed separately. The
+    // day one stops reaching the model is the day it has to be added here by hand.
+    cacheKey: cacheKeyOf({ user, system, model: claudeModel }),
+    ttlDays: CLASSIFY_TTL_DAYS,
+    provider: "anthropic",
+    params: { model: claudeModel, source: research.source },
+    fetch: async () => {
+      const { data, usage } = await callClaudeJSON<AuditClassification>({
+        model: claudeModel,
+        system,
+        user,
+        schemaHint: SCHEMA_HINT,
+        maxTokens: 4000,
+        temperature: 0.4,
+        coerce: coerceAwareness,
+        validate: isAuditClassification,
+        describeInvalid: whyNotClassification,
+      });
+      // ‼️ NOT A FLOOR, UNLIKE EVERY OTHER ANTHROPIC ROW IN THE LEDGER. This call runs no
+      // server-side web_search, so the token cost is the whole cost and this number is exact.
+      // callClaudeJSON throws on a failed or unparseable response, so a failure never reaches
+      // getOrFetch and nothing is kept: there is no unusable-answer state to decline here.
+      return { payload: data, costUsd: tokensOnly(claudeModel, usage) };
+    },
   });
+
+  // ‼️ EVERY DECISION BELOW THIS LINE RUNS OUTSIDE THE CACHE, AND THAT IS THE POINT OF THE SPLIT.
+  // What the model said is cacheable. What the code decides about it is not: these branches read
+  // the overrides, and pinning a confirmed name or a supplied city is a fact about this call. Fold
+  // them into the fetch and a cached answer would replay another caller's override.
 
   // Stamped in code, never asked of the model: which of the two paths made a label is a fact about
   // this call, not something to generate.
