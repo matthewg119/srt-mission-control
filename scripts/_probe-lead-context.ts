@@ -206,6 +206,37 @@ async function main() {
     describe(card.history)
   );
 
+  // ‼️ A PRESENT DOCUMENT WHOSE DERIVED FIELD IS MISSING IS A PARSER MISMATCH, NOT AN ABSENCE.
+  // This is the general form of a bug measured on 2026-09-17: the ladder document was present with
+  // five approved rungs and ctx.ladder reported missing, because the read was `parsed.rungs` and the
+  // writer stores `parsed.ladder.rungs`. Nothing said so. A card built on it would have asked for a
+  // ladder that was already written, which is the one failure this whole tri-state exists to stop.
+  const derived: Array<[string, Held<unknown>, Held<unknown>]> = [
+    ["the ladder", full.documents.awareness_ladder, full.ladder],
+    ["the beliefs", full.documents.necessary_beliefs, full.beliefs],
+  ];
+  for (const [what, doc, field] of derived) {
+    check(
+      `${what} parse out of a document that is on file`,
+      !(isHeld(doc) && field.state === "missing"),
+      `the document is ${doc.state} and the field is ${describe(field)}`
+    );
+  }
+  check(
+    "SRT's approved ladder parses to five rungs anchored at 4",
+    isHeld(full.ladder) && full.ladder.value.rungs.length === 5 && full.ladder.value.anchoredAt === 4,
+    describe(full.ladder)
+  );
+  // A belief is {id, text}. Typed as string[] and cast across, the first card to print one printed
+  // [object Object]; SRT has no beliefs document yet, so only the shape can be asserted here.
+  if (isHeld(full.beliefs)) {
+    check(
+      "every belief carries an id and text",
+      full.beliefs.value.every((b) => typeof b?.id === "string" && typeof b?.text === "string" && b.text.length > 0),
+      JSON.stringify(full.beliefs.value.slice(0, 2))
+    );
+  }
+
   // ‼️ unreadable MUST BE REACHABLE, or the state is decorative. A select against a column that does
   // not exist is the real shape of this failure, and supabase-js RETURNS it rather than throwing.
   const { error: broken } = await supabaseAdmin.from("audience_documents").select("no_such_column").limit(1);

@@ -187,6 +187,20 @@ export interface LeadPage {
   status: string;
 }
 
+/**
+ * One necessary belief, addressed the way every other reader of them already does.
+ *
+ * ‼️ `{id, text}`, NOT A BARE STRING, BECAUSE THAT IS WHAT THE WRITER STORES. framework-thread.ts
+ * stores `parsed.beliefs` as `[{id:"B1", text}]` and page-stories.ts, offer-ladder.ts and
+ * draft-page.ts all render `${b.id}: ${b.text}`. This field used to be typed `readonly string[]`
+ * and cast straight across, so the first card to print a belief would have printed [object Object].
+ * The id is load-bearing: draft-page.ts cites beliefs by it.
+ */
+export interface LeadBelief {
+  id: string;
+  text: string;
+}
+
 export interface LeadContext {
   clientId: string;
   /** Slices actually loaded. A branch not in here is "we did not look", never "it is not there". */
@@ -218,7 +232,7 @@ export interface LeadContext {
   primaryOffer: LeadOffer | null;
   /** The primary audience's documents, the ones every card means when it says "on file". */
   documents: Record<DocumentKind, Held<AudienceDocument>>;
-  beliefs: Held<readonly string[]>;
+  beliefs: Held<readonly LeadBelief[]>;
   ladder: Held<{ rungs: readonly unknown[]; anchoredAt: number | null }>;
 
   keywords: Held<LeadKeywords>;
@@ -308,6 +322,50 @@ function emptyDocuments(unreadable: boolean): Record<DocumentKind, Held<Audience
   const out = {} as Record<DocumentKind, Held<AudienceDocument>>;
   for (const k of ALL_KINDS) out[k] = documentHeld(null, k, null, unreadable);
   return out;
+}
+
+/**
+ * The beliefs out of a stored necessary_beliefs document.
+ *
+ * ‼️ THE SHAPE THE WRITER WROTE, READ BACK EXACTLY. framework-thread.ts stores
+ * `[{id:"B1", text}]`. A bare string array is tolerated because it costs one branch and a document
+ * written by hand or by an older path is still a document somebody produced; it is renumbered
+ * rather than renamed, so an id always exists for draft-page.ts to cite.
+ */
+function readBeliefsParsed(parsed: Record<string, unknown> | null | undefined): LeadBelief[] | null {
+  const raw = (parsed as { beliefs?: unknown } | null | undefined)?.beliefs;
+  if (!Array.isArray(raw)) return null;
+  const out: LeadBelief[] = [];
+  for (const b of raw) {
+    if (typeof b === "string") {
+      const text = b.trim();
+      if (text) out.push({ id: `B${out.length + 1}`, text });
+      continue;
+    }
+    const o = b as { id?: unknown; text?: unknown } | null;
+    const text = typeof o?.text === "string" ? o.text.trim() : "";
+    if (!text) continue;
+    out.push({ id: typeof o?.id === "string" && o.id ? o.id : `B${out.length + 1}`, text });
+  }
+  return out.length ? out : null;
+}
+
+/**
+ * The rungs out of a stored awareness_ladder document.
+ *
+ * ‼️ THE NESTING IS THE WHOLE POINT. writeLadder stores `{ ladder, inputs, model }` and the rungs
+ * are under `ladder`. `parsed.rungs` is read as a fallback and not as the primary, so a document
+ * written in the shallow shape is still understood without pretending it is the one we write.
+ */
+function readLadderParsed(
+  parsed: Record<string, unknown> | null | undefined,
+  anchorStage: number | null
+): { rungs: readonly unknown[]; anchoredAt: number | null } | null {
+  const p = parsed as { ladder?: { rungs?: unknown }; rungs?: unknown } | null | undefined;
+  const nested = p?.ladder?.rungs;
+  const rungs = Array.isArray(nested) ? nested : Array.isArray(p?.rungs) ? (p.rungs as unknown[]) : null;
+  if (!rungs || !rungs.length) return null;
+  return { rungs, anchoredAt: anchorStage };
 }
 
 export interface LeadContextOptions {
@@ -510,8 +568,8 @@ async function assemble(clientId: string, slices: ReadonlySet<LeadSlice>): Promi
 
   // ── Beliefs and the ladder, read out of documents already loaded ─────────────────────────────
   const beliefsDoc = documents.necessary_beliefs;
-  const beliefs: Held<readonly string[]> = isHeld(beliefsDoc)
-    ? held(Array.isArray(beliefsDoc.value.parsed?.beliefs) ? (beliefsDoc.value.parsed.beliefs as string[]) : null, {
+  const beliefs: Held<readonly LeadBelief[]> = isHeld(beliefsDoc)
+    ? held(readBeliefsParsed(beliefsDoc.value.parsed), {
         at: beliefsDoc.value.createdAt,
         source: `audience_documents:${beliefsDoc.value.id.slice(0, 8)}`,
         why: "the beliefs document is on file but no belief could be parsed out of it",
@@ -521,9 +579,12 @@ async function assemble(clientId: string, slices: ReadonlySet<LeadSlice>): Promi
   const ladderDoc = documents.awareness_ladder;
   const ladder: Held<{ rungs: readonly unknown[]; anchoredAt: number | null }> = isHeld(ladderDoc)
     ? held(
-        Array.isArray(ladderDoc.value.parsed?.rungs)
-          ? { rungs: ladderDoc.value.parsed.rungs as unknown[], anchoredAt: primaryOfferStored.anchorStage }
-          : null,
+        // ‼️ parsed.ladder.rungs, NOT parsed.rungs, AND THE ONE LEVEL WAS A SILENT FAILURE.
+        // writeLadder stores `parsed: { ladder, inputs, model }` and ladderState() reads
+        // `parsed.ladder.rungs`. This read was one level too shallow, so the only client with an
+        // approved five-rung ladder reported it as missing and every card built on it would have
+        // asked for a ladder that was already written. Measured on srt-agency-llc, 2026-09-17.
+        readLadderParsed(ladderDoc.value.parsed, primaryOfferStored.anchorStage),
         {
           at: ladderDoc.value.createdAt,
           source: `audience_documents:${ladderDoc.value.id.slice(0, 8)}`,
