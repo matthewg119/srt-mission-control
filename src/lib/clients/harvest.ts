@@ -30,6 +30,7 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
+import { getOrFetch, cacheKeyOf } from "@/lib/data/dataset-cache";
 import { classifyPhrase, type PhraseKind, type PhraseSpeaker } from "./phrase-kind";
 
 const FETCH_TIMEOUT_MS = 8000;
@@ -321,7 +322,76 @@ export function mergePhrases(all: HarvestedPhrase[]): HarvestedPhrase[] {
 // The run
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function fetchPage(url: string): Promise<string | null> {
+/** Thrown to decline caching a page we did not read. getOrFetch writes nothing when fetch throws. */
+class PageUnreadable extends Error {
+  constructor() {
+    super("the page was not read");
+    this.name = "PageUnreadable";
+  }
+}
+
+/**
+ * How long a cited page's text stays true.
+ *
+ * ‼️ THIRTY DAYS, AND THE REASON IS THIS FILE'S OWN PREMISE. These URLs come from
+ * audit_runs.citations, which barely moves between audits, and the header above says the point of
+ * tagging everything with the avatar slug is that "the next client in the vertical aiming at the
+ * same buyer can reuse the work instead of paying for it again". Re-reading forty public forum
+ * threads for the second client in a vertical is paying for it again in wall-clock and in their
+ * bandwidth. A RealSelf thread accretes answers over months, not hours, so a month-old read is
+ * still what the page says. The re-run minutes later, which is what this actually saves, gets it
+ * for free.
+ */
+const PAGE_TEXT_TTL_DAYS = 30;
+
+/**
+ * What we keep per page, after the markup is gone.
+ *
+ * ‼️ THE TEXT, NEVER THE HTML, AND THAT IS THE WHOLE DESIGN OF THIS LANE. site-research.ts is
+ * exempt from the cache precisely because SiteResearch carries homepageHtml at 150KB to 2MB, and
+ * forty pages at PAGE_BUDGET_BYTES would put twelve megabytes of raw markup into a jsonb column
+ * per run. The text is the fact about the page; the markup is transport.
+ */
+const PAGE_TEXT_BUDGET_BYTES = 120_000;
+
+/**
+ * The text of one cited page, through the cache.
+ *
+ * ‼️ THE TEXT IS CACHED, THE EXTRACTION IS NOT. extractPhrases and classifyPhrase are live code
+ * that has changed four times; caching the phrases would freeze a page's answers to whichever
+ * ruleset was current the day it was first read, and a scoring change would silently apply to new
+ * pages only. What the page SAID is a fact and keeps; what we make of it is recomputed every run.
+ *
+ * null is never cached. A timeout, a non-ok status or a PDF at the end of the URL is "we could not
+ * read it", and keeping that would answer every later harvest of this corpus with our own timeout,
+ * for free, for a month. Same mechanism robots-check.ts uses.
+ *
+ * client_id is null because the answer is a fact about a PUBLIC URL, not about a client. That is
+ * the sharing this file's header describes, made literal.
+ */
+async function fetchPageText(url: string): Promise<string | null> {
+  try {
+    const { payload } = await getOrFetch<string>({
+      clientId: null,
+      kind: "crawl.page",
+      cacheKey: cacheKeyOf({ url }),
+      ttlDays: PAGE_TEXT_TTL_DAYS,
+      provider: "direct",
+      params: { url },
+      // Free in dollars, so this zero is a measurement rather than an unpriced call. What it
+      // saves is a re-read and forty seconds of wall clock, not a bill.
+      fetch: async () => ({ payload: await readPageText(url), costUsd: 0 }),
+    });
+    return payload;
+  } catch (e) {
+    if (e instanceof PageUnreadable) return null;
+    return null;
+  }
+}
+
+/** The read itself. Throws PageUnreadable rather than returning null, so nothing is cached. */
+async function readPageText(url: string): Promise<string> {
+  let body: string;
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -331,14 +401,16 @@ async function fetchPage(url: string): Promise<string | null> {
       headers: { "user-agent": "SRT-Harvest/1.0 (+https://srtagency.com)" },
     });
     clearTimeout(timer);
-    if (!res.ok) return null;
+    if (!res.ok) throw new PageUnreadable();
     const type = res.headers.get("content-type") ?? "";
-    if (!type.includes("html") && !type.includes("text")) return null;
-    const body = await res.text();
-    return body.slice(0, PAGE_BUDGET_BYTES);
-  } catch {
-    return null;
+    if (!type.includes("html") && !type.includes("text")) throw new PageUnreadable();
+    body = (await res.text()).slice(0, PAGE_BUDGET_BYTES);
+  } catch (e) {
+    if (e instanceof PageUnreadable) throw e;
+    throw new PageUnreadable();
   }
+
+  return textFromHtml(body).slice(0, PAGE_TEXT_BUDGET_BYTES);
 }
 
 /**
@@ -482,10 +554,10 @@ export async function runHarvest(
   let pagesRead = 0;
 
   for (const url of urls) {
-    const html = await fetchPage(url);
-    if (!html) continue;
+    const text = await fetchPageText(url);
+    if (!text) continue;
     pagesRead += 1;
-    collected.push(...extractPhrases(textFromHtml(html), url));
+    collected.push(...extractPhrases(text, url));
   }
 
   // The owner's own objections go in too, tagged as intake rather than harvest, because they
