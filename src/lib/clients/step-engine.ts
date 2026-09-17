@@ -1996,6 +1996,30 @@ export async function postStep(clientId: string, stepKey: string): Promise<void>
       outputRef: (row?.output_ref as string | null) ?? null,
     })) ?? [];
 
+  // ‼️ WHAT THE PERSON DOES, ADDED IN THE SAME ONE PLACE AND FOR THE SAME REASON.
+  //
+  // Matthew, 2026-09-17: "make sure we send one last and final text with a golden nugget /
+  // bulletpoint version simpler to read on exactly what we need to do to finish that step."
+  //
+  // It goes ABOVE `*Next:*` deliberately. `*Next:*` is what this unblocks on the board, which is
+  // the future; this is what is being waited on from a person, which is now. A card that leads
+  // with the future and buries the ask is the card that gets scrolled past.
+  //
+  // Same defer-to-the-arm guard: a step whose own instructions already spell the ask out does not
+  // get a second, blander copy of it underneath.
+  if (!body.some((line) => line.includes("*Do this now:*"))) {
+    try {
+      const { doThisNowLines, readinessFor } = await import("./do-this-now");
+      const readiness = await readinessFor(clientId, stepKey as StepKey);
+      const todo = doThisNowLines(stepKey as StepKey, { readiness });
+      if (todo.length) body.push("", ...todo);
+    } catch (e) {
+      // A card that renders without this block is a worse card. A card that fails to render at all
+      // because of it is a stalled board, so this can never be the thing that throws.
+      console.error(`[step-engine] do-this-now failed for ${stepKey}:`, (e as Error).message);
+    }
+  }
+
   // ‼️ THE NEXT-STEP FOOTER IS ADDED HERE, ONCE, RATHER THAN IN THIRTY `case` ARMS.
   //
   // Matthew: "every workflow card that completes ends by printing what can be done next. A card
