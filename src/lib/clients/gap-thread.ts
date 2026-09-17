@@ -19,7 +19,7 @@
 
 import { isStepKey, stepNumber, type StepKey } from "@/config/delivery-steps";
 import { withLeadScope } from "./lead-scope";
-import { leadContext, isHeld } from "./lead-context";
+import { leadContext, isHeld, ALL_SLICES } from "./lead-context";
 import { gapsFrom, gapLines } from "./step-gaps";
 import { gapPromptMessage, promptsFromGaps } from "./gap-prompts";
 
@@ -86,7 +86,10 @@ export async function handleGapThreadReply(input: GapThreadInput): Promise<GapTh
     const ctx = await leadContext(
       input.clientId,
       wantsFinal
-        ? { include: ["core", "documents", "gaps", "keywords", "pages", "audits", "research", "history"] }
+        // ‼️ ALL_SLICES, NOT A HAND-WRITTEN COPY OF IT. "All of the context possible" is the
+        // requirement, and a list retyped here silently stops being all of it the day a slice is
+        // added to lead-context.ts.
+        ? { include: [...ALL_SLICES] }
         : wantsSuggestions
           ? { include: ["core", "documents", "gaps", "keywords", "pages"] }
           : {}

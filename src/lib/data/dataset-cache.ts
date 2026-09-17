@@ -4,10 +4,24 @@
 // ChatGPT fanout replays, site crawls. It reads client_datasets first and only calls
 // the provider on a miss or an expiry, then records what the call cost.
 //
-// Two consequences worth the table:
-//   - Nothing is ever bought twice. Re-running a step is free.
-//   - `select kind, sum(cost_usd) from client_datasets group by 1` is a real number,
-//     so the per-client cost of this lane is observed rather than estimated.
+// One consequence worth the table:
+//   - Nothing is bought twice INSIDE ITS TTL. Re-running a step inside the window is free.
+//
+// ‼️ TWO THINGS THIS IS NOT, BOTH OF WHICH THE HEADER USED TO CLAIM. Corrected 2026-09-18 after
+// an audit of the lanes routed through it.
+//
+// IT IS NOT AN ARCHIVE. The write below is an upsert on (client_id, kind, cache_key), and on
+// conflict Postgres REPLACES the row. A re-buy after an expiry overwrites the previous answer,
+// payload and all. Any lane that needs the OLD answer to survive the new one, which is every
+// lane storing a measurement rather than a fact, cannot get that from this table. Routing
+// run-prompts.ts here on exactly that promise was reverted for this reason.
+//
+// `select kind, sum(cost_usd) from client_datasets group by 1` IS NOT THE SPEND. It is the cost
+// of the LAST purchase of each distinct key, so a question bought five times counts once, and a
+// `force` re-buy erases the receipt it was supposed to add to. Making it real needs an
+// append-only purchase row separate from the cache row, which is owed and needs a migration.
+// Until then, do not put that query on a card: an undercount presented as a total is worse than
+// no number, which is the rule this whole system is built on.
 //
 // client_id is nullable throughout. A vertical-wide pull (a market corpus, a keyword
 // expansion for a whole category) belongs to no single client and is shared by all of
@@ -32,10 +46,14 @@ export interface DatasetRequest<T> {
   /**
    * Buy it again even if we hold it, and overwrite what we hold with the answer.
    *
-   * ‼️ IT SKIPS THE READ, NEVER THE WRITE, AND THAT IS THE DIFFERENCE BETWEEN THIS AND NOT USING
-   * THE CACHE AT ALL. A deliberate re-buy is still a purchase that belongs in the ledger and an
-   * answer that belongs in the archive. The alternative a caller reaches for otherwise is varying
-   * the cache key to force a miss, which fills the table with keys nobody can look up again.
+   * ‼️ IT SKIPS THE READ, NEVER THE WRITE. The point is that the NEW answer replaces the old one
+   * under the same key, so the next caller gets the corrected value instead of the stale one. The
+   * alternative a caller reaches for otherwise is varying the cache key to force a miss, which
+   * fills the table with keys nobody can ever look up again.
+   *
+   * ‼️ IT DOES NOT ADD TO THE LEDGER, AND THE HEADER EXPLAINS WHY. The upsert replaces cost_usd
+   * rather than accumulating it, so a forced re-buy erases the receipt for the purchase before
+   * it. That is a real gap, it is owed, and it is not something to work around here.
    *
    * For a person who has read the cached answer and wants a new one anyway: `force` on a niche
    * brief, the re-run button on the research console. Never a default, and never a retry: a failed
@@ -99,8 +117,9 @@ export async function getOrFetch<T>(req: DatasetRequest<T>): Promise<DatasetResu
   // PostgREST needs is-null, not eq-null, for the vertical-wide rows.
   query = clientId === null ? query.is("client_id", null) : query.eq("client_id", clientId);
 
-  // A forced re-buy asks nobody. The write below still runs, so the ledger and the archive get
-  // the purchase either way, and the upsert replaces the row rather than adding a second one.
+  // A forced re-buy asks nobody. The write below still runs, so the corrected answer lands under
+  // the same key and the next caller gets it. What it does NOT do is add a second row: see the
+  // header on why that makes the cost column the last purchase rather than the total.
   const { data: hit, error: readError } = req.force
     ? { data: null, error: null }
     : await query.maybeSingle();
