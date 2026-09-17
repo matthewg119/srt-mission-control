@@ -28,6 +28,7 @@ import {
   type FieldRef,
 } from "@/lib/clients/step-needs";
 import { gapLines, gapsFrom, type StepGaps } from "@/lib/clients/step-gaps";
+import { gapPromptMessage, gapPromptOfferLine, gapPromptsFor } from "@/lib/clients/gap-prompts";
 import { leadContext, ALL_SLICES, held, missing, type LeadContext } from "@/lib/clients/lead-context";
 
 let failed = 0;
@@ -48,6 +49,9 @@ function allSource(dir: string, acc: string[] = []): string[] {
 
 /** Slack's real ceiling is 3000 and bodySections splits under 2900. */
 const SECTION_BUDGET = 2900;
+
+/** A newline, without an escape. Escapes are how three regexes in this file got mangled. */
+const NL = String.fromCharCode(10);
 
 /**
  * A context carrying nothing but what gapsFrom reads.
@@ -265,6 +269,52 @@ async function main() {
   );
   console.log(`\n        step 21 says:\n`);
   for (const l of gapLines(twentyOne)) console.log(`          ${l}`);
+
+  // ── 8. The prompts handed back ────────────────────────────────────────────
+  console.log(`
+8. the prompts it hands back`);
+
+  const built = await gapPromptsFor((srt as { id: string }).id, "avatar_harvest" as StepKey, ctx);
+  if (!built.ok) {
+    check("prompts are offered for step 11", false, built.error);
+  } else {
+    check("prompts are offered for step 11", built.prompts.length > 0, `${built.prompts.length}`);
+    const research = built.prompts.find((p) => p.key === "research");
+    check("one of them is the research prompt", Boolean(research));
+
+    if (research) {
+      // ‼️ THE NUMBERS ARE THE CONTRACT. The paste parser maps section N to RESEARCH_SECTION_KEYS[N-1],
+      // so a partial prompt renumbered from 1 would file section 10's answer as section 1's. SRT has
+      // sections 1 to 9 on file, so the prompt must start at 10 and must NOT contain a "1." ask.
+      // ‼️ THE NUMBERS ARE THE CONTRACT. The paste parser maps section N to RESEARCH_SECTION_KEYS[N-1],
+      // so a partial prompt renumbered from 1 would file section 10's answer under section 1. SRT has
+      // sections 1 to 9 on file, so this prompt must start at 10 and must not carry a "1." ask.
+      // Written with a newline constant rather than a regex literal: the escape is the fragile part.
+      check("it keeps the original section numbers", research.body.includes(NL + "10. "), research.body.slice(-200));
+      check(
+        "it does not ask for a section already on file",
+        !research.body.includes(NL + "1. "),
+        "section 1 is answered and was asked for anyway"
+      );
+      // The whole point of pre-filling: it carries what we already own about this lead.
+      check("it carries the lead's own facts", research.body.includes("SRT Agency"));
+      check("it says the numbers are deliberate", research.body.includes("sequential on purpose"));
+    }
+
+    for (const p of built.prompts) {
+      check(`\`${p.key}\` prompt has a body`, p.body.trim().length > 40, `${p.body.length} chars`);
+      check(`\`${p.key}\` prompt says how to send it back`, /\`/.test(p.pasteBack), p.pasteBack);
+      if (p.body.includes("—")) check(`\`${p.key}\` prompt has no em dash`, false);
+    }
+    check("no prompt carries an em dash", !built.prompts.some((p) => p.body.includes("—")));
+
+    // A prompt is thousands of characters, so it is its own message and never part of a card.
+    const msg = gapPromptMessage(built.prompts[0]);
+    check("the message is fenced so it copies whole", msg.includes("```"));
+    const line = gapPromptOfferLine(built.prompts);
+    check("the card line stays one line", Boolean(line && !line.includes(String.fromCharCode(10))), line ?? "null");
+    check("and fits a Slack section", Boolean(line && line.length < SECTION_BUDGET));
+  }
 
   done();
 }

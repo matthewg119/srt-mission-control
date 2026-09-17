@@ -1291,6 +1291,72 @@ export function formatRunSummary(a: {
   return lines.join("\n");
 }
 
+/** A section by the key dataset-spec files it under, or null. For the gap prompts. */
+export function sectionByKey(key: string): SectionSpec | null {
+  return SECTIONS.find((s) => s.key === key) ?? null;
+}
+
+/**
+ * A prompt for SOME of the sections: the ones a report on file did not answer.
+ *
+ * Matthew, 2026-09-17: "give me the prompts to do the deep research ourselves or complete the missing
+ * fields by giving data that we currently own for context."
+ *
+ * ‼️ THE ORIGINAL NUMBERS ARE KEPT, AND THAT IS NOT COSMETIC. buildCompactPrompt numbers what it
+ * includes from 1 because it includes everything; the paste parser then maps section N back to
+ * RESEARCH_SECTION_KEYS[N - 1]. A partial prompt renumbered from 1 would come back with section 7
+ * labelled 2, and the parser would file the verbatim quotes as "what they like about it", silently and
+ * permanently. So a partial prompt shows each section under the number it holds on the FULL one, and
+ * says so in words.
+ *
+ * ‼️ AND IT CARRIES WHAT WE ALREADY OWN. The header is the one the full prompt uses: the owner's own
+ * words, the domains the engines actually cite, and who they name instead. That is the "giving data
+ * that we currently own for context" half, and it is why this builds off ResearchContext rather than
+ * rendering a generic ask.
+ */
+export function buildGapPrompt(ctx: ResearchContext, sectionKeys: readonly string[]): string | null {
+  const wanted = SECTIONS.map((s, i) => ({ spec: s, number: i + 1 })).filter((x) => sectionKeys.includes(x.spec.key));
+  if (!wanted.length) return null;
+
+  const where = [ctx.city, ctx.state].filter(Boolean).join(", ");
+
+  // Same rule buildCompactPrompt states: a shrug is dropped, never quoted back as a finding.
+  const owner: string[] = [];
+  if (answered(ctx.objections)) owner.push(`objections "${clipFact(ctx.objections)}"`);
+  if (answered(ctx.targetPatient)) owner.push(`wants more "${clipFact(ctx.targetPatient)}"`);
+  if (answered(ctx.triedBefore)) owner.push(`already tried "${clipFact(ctx.triedBefore)}"`);
+
+  const engines: string[] = [];
+  if (ctx.citedDomains.length) engines.push(`cite ${ctx.citedDomains.slice(0, 4).join(", ")}`);
+  if (ctx.namedInstead.length) engines.push(`name ${ctx.namedInstead.slice(0, 3).join(", ")} instead of us`);
+
+  const keywordsAt = wanted.find((x) => x.spec.key === "keywords")?.number ?? null;
+
+  return [
+    `Deep market research on ${ctx.avatarLabel}. ${wanted.length} section(s) only.`,
+    `${ctx.clinicName}${where ? `, ${where}` : ""}. Sells: ${val(spoken(ctx.primaryTreatment))}.`,
+    ...(owner.length ? [`The owner's own words, do not tidy them: ${owner.join("; ")}.`] : []),
+    ...(engines.length ? [`AI engines ${engines.join(" and ")}.`] : []),
+    "",
+    RULES,
+    "",
+    "Answer ONLY the sections below, and keep each one under the number shown. The numbers are not",
+    "sequential on purpose: they are the positions these sections hold in the full report, and",
+    "whoever reads your answer files them by that number.",
+    "",
+    ...wanted.map((x) => `${x.number}. ${x.spec.brief(ctx)}`),
+    ...(keywordsAt
+      ? [
+          "",
+          `Under heading ${keywordsAt}, the search phrases are literal rows, not prose. Four pipes per ` +
+            'row, "unknown" where you have no number:',
+          ...keywordWorkedRows(ctx),
+        ]
+      : []),
+  ].join(String.fromCharCode(10));
+}
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Assembling the client's facts
 // ─────────────────────────────────────────────────────────────────────────────
