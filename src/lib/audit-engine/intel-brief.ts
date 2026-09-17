@@ -33,6 +33,8 @@
 import { callClaudeJSON, camelizeKeys } from "@/lib/claude-calls";
 import { supabaseAdmin } from "@/lib/db";
 import { BRIEF_BLOCKED_DOMAINS, NICHE_BRIEF_MAX_SEARCHES, NICHE_BRIEF_TTL_DAYS } from "@/config/pitch";
+import { getOrFetch } from "@/lib/data/dataset-cache";
+import { tokensOnly } from "@/lib/data/model-costs";
 import { nicheKeyFor } from "./niche-avatars";
 import type { AuditReportRow } from "./types";
 
@@ -156,29 +158,94 @@ function describeInvalid(p: unknown): string {
   return missing.join("; ") || "it did not match the required shape";
 }
 
+/**
+ * How old the brief on file is, for the line the card prints. Display only.
+ *
+ * ‼️ IT IS NOT A CACHE DECISION AND MUST NEVER BECOME ONE. Whether to buy is getOrFetch's call,
+ * made once, on one key. This read only answers "how old is the thing you just got", because
+ * BriefResult.ageDays feeds the "Reused, 40d old" line in formatBriefMarkdown. The moment this
+ * number decides anything, there are two caches again.
+ */
+async function briefAgeDays(nicheKey: string): Promise<number> {
+  const { data } = await supabaseAdmin
+    .from("niche_briefs")
+    .select("brief_created_at")
+    .eq("niche_key", nicheKey)
+    .maybeSingle();
+  const at = data?.brief_created_at as string | undefined;
+  if (!at) return 0;
+  return Math.floor((Date.now() - new Date(at).getTime()) / 86_400_000);
+}
+
+/**
+ * The niche brief, bought at most once per trade per TTL.
+ *
+ * ‼️ THIS FILE USED TO BE THE THIRD CACHE, AND THAT IS WHAT CHANGED HERE. It hand-rolled its own:
+ * a select on niche_briefs, an age computed on read, and a TTL compared in the caller. Two caches
+ * over one purchase disagree the moment either one misses alone, and the disagreement is not
+ * symmetric: a getOrFetch hit written back into niche_briefs would stamp a fresh
+ * brief_created_at on an old brief and make it look new for another TTL.
+ *
+ * So there is one cache now, and it is keyed the way the old one was: on the NICHE KEY itself,
+ * not on a hash of the prompt. That is deliberate and it is the reason folding this in was not
+ * just deleting code. cacheKeyOf exists for inputs with no natural identity; a niche key is
+ * already a short stable string, and hashing the prompt instead would split one trade's brief
+ * across every rewording of the system prompt. A brief belongs to a TRADE.
+ *
+ * niche_briefs is still written. It is no longer the cache: it is the index other code reads,
+ * and it carries the `avatars` column family, which is a different question about the same row.
+ */
 export async function getIntelBrief(
   report: AuditReportRow,
   opts: { force?: boolean } = {}
 ): Promise<BriefResult> {
   const nicheKey = nicheKeyFor(report);
 
-  if (nicheKey && !opts.force) {
-    const { data } = await supabaseAdmin
-      .from("niche_briefs")
-      .select("brief, brief_created_at")
-      .eq("niche_key", nicheKey)
-      .maybeSingle();
-    if (data?.brief && validate(data.brief) && data.brief_created_at) {
-      const ageDays = Math.floor((Date.now() - new Date(data.brief_created_at as string).getTime()) / 86_400_000);
-      if (ageDays < NICHE_BRIEF_TTL_DAYS) {
-        return { brief: data.brief as IntelBrief, cached: true, nicheKey, ageDays };
-      }
-    }
+  // No niche key means nothing to file it under, and a brief filed under nothing is a brief
+  // nobody can reuse. Buy it, hand it back, keep nothing, exactly as before.
+  if (!nicheKey) return generateBrief(report, null, false);
+
+  const { payload, cached } = await getOrFetch<IntelBrief>({
+    // A fact about a TRADE. That is the whole product claim on the card: "niche-level: reuse it
+    // for every prospect in this vertical."
+    clientId: null,
+    kind: "anthropic.niche_brief",
+    cacheKey: nicheKey,
+    ttlDays: NICHE_BRIEF_TTL_DAYS,
+    provider: "anthropic + web_search",
+    params: { nicheKey, businessType: report.business_type },
+    force: opts.force,
+    fetch: async () => {
+      const { brief, costUsd } = await buyBrief(report, nicheKey);
+      return { payload: brief, costUsd };
+    },
+  });
+
+  // ‼️ validate() STILL RUNS ON WHAT CAME BACK. A row written before the shape changed is a row
+  // that parses as JSON and fails the contract, and the old hand-rolled cache checked this on
+  // every read for that reason. Treat a failing cached brief as an absence and buy a new one.
+  if (cached && !validate(payload)) {
+    const { brief } = await buyBrief(report, nicheKey);
+    return { brief, cached: false, nicheKey, ageDays: 0 };
   }
 
+  return { brief: payload, cached, nicheKey, ageDays: cached ? await briefAgeDays(nicheKey) : 0 };
+}
+
+/** Buy one brief and file it in the index. Returns the token floor for the ledger. */
+async function buyBrief(report: AuditReportRow, nicheKey: string): Promise<{ brief: IntelBrief; costUsd: number }> {
+  const result = await generateBrief(report, nicheKey, true);
+  return { brief: result.brief, costUsd: result.costUsd };
+}
+
+async function generateBrief(
+  report: AuditReportRow,
+  nicheKey: string | null,
+  store: boolean
+): Promise<BriefResult & { costUsd: number }> {
   const trade = report.business_type ?? "local service business";
 
-  const { data: generated } = await callClaudeJSON<IntelBrief>({
+  const { data: generated, usage } = await callClaudeJSON<IntelBrief>({
     model: "claude-sonnet-4-6",
     // Anthropic runs this server-side. Restricting the domain is what keeps the research on
     // what owners say to each other rather than what agencies publish at them.
@@ -241,7 +308,7 @@ export async function getIntelBrief(
     validate,
   });
 
-  if (nicheKey) {
+  if (nicheKey && store) {
     try {
       const { data: existing } = await supabaseAdmin
         .from("niche_briefs")
@@ -262,12 +329,22 @@ export async function getIntelBrief(
 
       await supabaseAdmin.from("niche_briefs").upsert(row, { onConflict: "niche_key" });
     } catch (e) {
-      // A cache miss is cheap; losing the brief we just paid for is not worth throwing over.
-      console.error("[intel-brief] cache write failed:", (e as Error)?.message);
+      // Losing the index row is cheap; losing the brief we just paid for is not worth throwing
+      // over, and getOrFetch has the answer either way now.
+      console.error("[intel-brief] index write failed:", (e as Error)?.message);
     }
   }
 
-  return { brief: generated, cached: false, nicheKey: nicheKey ?? "(uncached)", ageDays: 0 };
+  return {
+    brief: generated,
+    cached: false,
+    nicheKey: nicheKey ?? "(uncached)",
+    ageDays: 0,
+    // ‼️ A FLOOR, NOT THE TOTAL. tokensOnly cannot see the per-search charge for the up to
+    // NICHE_BRIEF_MAX_SEARCHES server-side searches this call makes, and no per-search rate is on
+    // file. Same known understatement claude-research.ts records against its own identity call.
+    costUsd: tokensOnly("claude-sonnet-4-6", usage),
+  };
 }
 
 /** The brief as a markdown file, which is how it gets into the thread without flooding it. */
