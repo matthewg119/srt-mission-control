@@ -341,6 +341,36 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
         })().catch((e) => console.error("[slack/actions] concierge addon failed:", e))
       );
       return NextResponse.json({ ok: true });
+    // ── Step 36: the switch that puts the widget on their live pages, and takes it off ──
+    //
+    // ‼️ NEITHER BUTTON TICKS THE STEP. `concierge_live`'s verifier reads the audience, the booking
+    // destination and the consent copy as well, and a switch is only one of the four. Ticking here
+    // would be a green tick over unchecked work, which is the worst bug this board can have.
+    case "concierge_enable":
+    case "concierge_disable":
+      waitUntil(
+        (async () => {
+          const clientId = (action.value ?? "").trim();
+          const actor = payload.user?.username ? `@${payload.user.username}` : userId;
+          const { setConciergeEnabled } = await import("@/lib/clients/concierge-enabled");
+          const res = await setConciergeEnabled({
+            clientId,
+            enabled: action.action_id === "concierge_enable",
+            by: actor,
+            source: "slack",
+          });
+          await slack.postThreadReply(
+            channel,
+            slackTs,
+            res.ok ? res.lines.join("\n") : `:warning: ${res.error}`
+          );
+          // Rebuilt in place rather than reposted: Slack orders a channel by post time, so a
+          // delete-and-repost would move step 36 to the bottom every time somebody flipped it.
+          const { postStep } = await import("@/lib/clients/step-engine");
+          await postStep(clientId, "concierge_live");
+        })().catch((e) => console.error("[slack/actions] concierge switch failed:", e))
+      );
+      return NextResponse.json({ ok: true });
     // ── Step 18: which character sits in the corner ──
     //
     // ‼️ NEITHER BUTTON TICKS THE STEP, unlike the add-on pair above. [Done] for step 18 verifies the

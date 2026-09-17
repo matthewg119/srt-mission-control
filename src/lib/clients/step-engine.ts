@@ -1867,6 +1867,35 @@ async function extraActionsFor(step: DeliveryStep, c: ClientFacts): Promise<Step
     ];
   }
 
+  // ‼️ THE SWITCH THAT PUTS THE WIDGET ON A REAL PAGE. Until 2026-09-17 nothing in the repo wrote
+  // `enabled` at all, so this step said "AI Concierge enabled" while the only way to enable one was
+  // a hand-typed UPDATE in Supabase. These two do that, and nothing else: the step is still ticked
+  // by [Done], which verifies the audience and the booking destination as well.
+  //
+  // Both are offered in both states, for the reason the audience pair gives: a correction is a
+  // legitimate later act, and hiding the other one means the only way back is SQL.
+  if (step.key === "concierge_live") {
+    const { conciergeSwitchState } = await import("./concierge-enabled");
+    const state = await conciergeSwitchState(c.id).catch(() => null);
+
+    // No row means step 18 has not provisioned one. A button that refuses on every press reads as
+    // broken rather than as not-yet, so offer none.
+    if (!state) return [];
+
+    return [
+      {
+        label: state.live ? "Concierge is ON" : "Turn the concierge ON",
+        actionId: "concierge_enable",
+        value: c.id,
+      },
+      {
+        label: state.enabled ? "Turn it OFF" : "Concierge is OFF",
+        actionId: "concierge_disable",
+        value: c.id,
+      },
+    ];
+  }
+
   // Step 21's decisions as buttons: a rung to anchor at, then a pillar keyword. See anchor-ladder.ts.
   if (step.key === "pre_call_pages") {
     const { step21Actions } = await import("./anchor-ladder");

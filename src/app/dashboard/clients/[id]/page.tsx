@@ -28,6 +28,8 @@ import {
   type AuditPromptView,
   type MagnetChoiceView,
 } from "./hub-form";
+import { conciergeSwitchState } from "@/lib/clients/concierge-enabled";
+import { embedSnippet } from "@/lib/clients/concierge-addon";
 import { magnetsForClient } from "@/lib/concierge/for-client";
 import { draftsByPageFor } from "@/lib/concierge/magnet-drafts";
 import { ThemeForm, type ThemeView } from "./theme-form";
@@ -39,6 +41,7 @@ import { PresenceSweepForm } from "./presence-sweep-form";
 import { AvatarForm } from "./avatar-form";
 import { avatarCandidatesFor, confirmedAvatarFor } from "@/lib/clients/avatars";
 import { PaymentForm, type PaymentView } from "./payment-form";
+import { ConciergeForm, type ConciergeSwitchView } from "./concierge-form";
 import { AgreementForm, type AgreementView } from "@/components/clients/agreement-form";
 import { isOfferKey } from "@/config/pitch";
 import { loadCandidates, REQUIRED_SELECTIONS } from "@/lib/clients/competitors";
@@ -258,6 +261,24 @@ export default async function ClientDetailPage({
     note: (client.payment_note as string | null) ?? null,
     accessOutstanding:
       (delivery ?? []).find((d) => d.step_key === "access_granted")?.status !== "complete",
+  };
+
+  // The concierge switch. A service-role read here rather than in the component, because the
+  // component is a client one. `present: false` means step 18 has not provisioned the row, which
+  // the panel says rather than rendering a switch that would refuse on every press.
+  const switchState = await conciergeSwitchState(id);
+  const conciergeView: ConciergeSwitchView = {
+    present: Boolean(switchState),
+    enabled: switchState?.enabled ?? false,
+    live: switchState?.live ?? false,
+    addonStatus: switchState?.addonStatus ?? "undecided",
+    audienceConfirmed: Boolean(switchState?.audienceConfirmedAt),
+    hasBookingDestination:
+      switchState?.bookingMode === "calendly" ||
+      Boolean(switchState?.bookingUrl) ||
+      Boolean(switchState?.bookingPhone),
+    originCount: switchState?.allowedOrigins.length ?? 0,
+    embedSnippet: switchState?.slug ? embedSnippet(switchState.slug) : null,
   };
 
   // ‼️ THE MOST RECENT SIGNATURE, IF THERE IS ONE, AND IT DECIDES WHETHER THE PANEL OFFERS TO
@@ -709,6 +730,26 @@ export default async function ClientDetailPage({
           </span>
         </div>
         <PaymentForm clientId={id} view={paymentView} />
+      </div>
+
+      {/* ── The AI Concierge switch. id="concierge" so the step card can link straight here. ── */}
+      <div
+        id="concierge"
+        className="mb-8 rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-5"
+      >
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-sm font-medium text-white">AI Concierge</h2>
+          <span className="text-xs text-[rgba(255,255,255,0.4)]">
+            {!conciergeView.present
+              ? `step ${stepNumber("concierge_preview")} has not run`
+              : conciergeView.live
+                ? "live on their pages"
+                : conciergeView.addonStatus === "declined"
+                  ? "add-on declined"
+                  : "off"}
+          </span>
+        </div>
+        <ConciergeForm clientId={id} view={conciergeView} />
       </div>
 
       {/* ── The agreement. id="agreement" so the step card can link straight here. ── */}
