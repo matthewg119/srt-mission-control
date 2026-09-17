@@ -372,7 +372,12 @@ const AVATAR_DOCUMENT_KINDS = [
  * they already did. An absent line is honest; a wrong count is not.
  */
 export async function readinessFor(clientId: string, stepKey: StepKey): Promise<Readiness | null> {
-  if (stepKey !== "avatar_harvest") return null;
+  // ‼️ STEP 11 KEEPS ITS OWN COUNT, AND IT IS NOT A PARALLEL GAP ENGINE. step-gaps.ts reports 46
+  // missing FIELDS here, which is true and useless on a card: twenty of them are headings of one
+  // document. "Documents: 2 of 4" is the same fact at the altitude a person acts on, and the four
+  // kinds below are what the step actually collects. Every other step is answered generically by
+  // gapsFor at the end of this function, so nothing returns a flat null any more.
+  if (stepKey !== "avatar_harvest") return await genericReadiness(clientId, stepKey);
 
   const { supabaseAdmin } = await import("@/lib/db");
   const { data, error } = await supabaseAdmin
@@ -397,6 +402,37 @@ export async function readinessFor(clientId: string, stepKey: StepKey): Promise<
     need: AVATAR_DOCUMENT_KINDS.length,
     missing: AVATAR_DOCUMENT_KINDS.filter(([k]) => !have.has(k)).map(([, label]) => label),
   };
+}
+
+/**
+ * The same line for every other step, derived from what that step declares it needs.
+ *
+ * ‼️ NULL FOR A STEP THAT ASKS FOR NOTHING, AND NULL ON ANY FAILURE. Thirty-one of the forty-one
+ * steps declare `{ kind: "nothing" }` in step-needs.ts, and "0 of 0" on their cards would be noise.
+ * A thrown read is null for the reason the block above gives: an absent line is honest, a wrong
+ * count is not, and a card must never fail because a count could not be taken.
+ */
+async function genericReadiness(clientId: string, stepKey: StepKey): Promise<Readiness | null> {
+  try {
+    const { STEP_NEEDS } = await import("./step-needs");
+    const declared = STEP_NEEDS[stepKey];
+    if (declared.kind === "nothing") return null;
+    if (!declared.needs.length) return null;
+
+    const { gapsFor } = await import("./step-gaps");
+    const g = await gapsFor(clientId, stepKey);
+    // The datasets could not be read, so what is missing is unknown rather than empty.
+    if (g.unreadable.length) return null;
+    return {
+      label: "Fields",
+      have: g.have,
+      need: g.need,
+      missing: g.gaps.filter((x) => x.blocking).map((x) => x.field.label),
+    };
+  } catch (e) {
+    console.error(`[do-this-now] readiness read failed: ${(e as Error).message}`);
+    return null;
+  }
 }
 
 /**
