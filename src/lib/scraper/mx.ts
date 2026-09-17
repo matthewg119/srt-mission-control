@@ -146,7 +146,13 @@ export async function hasMx(domain: string): Promise<MxVerdict> {
     });
     return payload;
   } catch (e) {
+    // Neither resolver answered. Undetermined, which is this file's whole point.
     if (e instanceof MxUndetermined) return null;
+    // ‼️ ANYTHING ELSE IS THE CACHE FAILING, NOT DNS. The verdict is null either way so nothing is
+    // mis-stored, but the header of this file says "could not look" and "nothing is there" must
+    // never be confused, and a database outage counted silently into `undetermined` makes a sweep
+    // look like a DNS problem for as long as it lasts.
+    console.error(`[mx] verdict failed below the door: ${(e as Error).message}`);
     return null;
   }
 }

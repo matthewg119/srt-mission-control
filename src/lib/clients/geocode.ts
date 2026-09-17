@@ -62,7 +62,15 @@ async function call(url: string): Promise<GeoPoint | null> {
     result?: { addressMatches?: Array<{ coordinates?: { x: number; y: number }; matchedAddress?: string }> };
   };
 
-  const match = json.result?.addressMatches?.[0];
+  // ‼️ NO `result` KEY IS AN OUTAGE, NOT A NO-MATCH, AND THE SPLIT ABOVE IS USELESS WITHOUT THIS.
+  // The Census service answers 200 with an error envelope for some malformed and edge inputs. A
+  // real no-match returns `result.addressMatches: []`. Without this line the error envelope falls
+  // through as `null` and gets FILED as "the national address file does not contain this address"
+  // for ninety days, which then pins the client's market centre to a ZIP centroid for the life of
+  // the tenant. That centre is what an exclusivity promise is measured against.
+  if (!json.result) throw new GeocodeUnavailable();
+
+  const match = json.result.addressMatches?.[0];
   const x = match?.coordinates?.x;
   const y = match?.coordinates?.y;
 

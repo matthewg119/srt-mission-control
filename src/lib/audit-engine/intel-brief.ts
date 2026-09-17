@@ -225,8 +225,12 @@ export async function getIntelBrief(
   // that parses as JSON and fails the contract, and the old hand-rolled cache checked this on
   // every read for that reason. Treat a failing cached brief as an absence and buy a new one.
   if (cached && !validate(payload)) {
-    const { brief } = await buyBrief(report, nicheKey);
-    return { brief, cached: false, nicheKey, ageDays: 0 };
+    // ‼️ IT GOES BACK THROUGH THE DOOR WITH force, IT DOES NOT JUST BUY. Calling buyBrief directly
+    // here writes niche_briefs and leaves the FAILING client_datasets row exactly where it is, so
+    // the next call hits it, fails validate again, and buys again: a full Sonnet call plus up to
+    // NICHE_BRIEF_MAX_SEARCHES server-side searches, on every single invocation, for ever. A cache
+    // that cannot be corrected is worse than no cache, because it spends money to stay wrong.
+    return getIntelBrief(report, { force: true });
   }
 
   return { brief: payload, cached, nicheKey, ageDays: cached ? await briefAgeDays(nicheKey) : 0 };

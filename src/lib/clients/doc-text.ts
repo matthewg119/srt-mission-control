@@ -111,9 +111,16 @@ async function textOfDoc(args: {
       },
     });
     return payload;
-  } catch {
+  } catch (e) {
     // A document that cannot be read is left out entirely rather than represented by an empty
     // string, so a caller counting what it holds is not counting a blank.
+    //
+    // ‼️ BUT IT IS SAID OUT LOUD, because dropping it silently is the exact complaint this module
+    // answers, reached through its own error path: a client who uploaded six documents is
+    // presented as one who uploaded four, and the prompt then asks them for what is in the other
+    // two. A scanned PDF, a storage outage and a getOrFetch throw are all legitimate reasons to
+    // skip one, and none of them is a reason to say nothing.
+    console.error(`[doc-text] ${args.filename} was skipped: ${(e as Error).message}`);
     return null;
   }
 }

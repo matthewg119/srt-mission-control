@@ -384,7 +384,12 @@ async function fetchPageText(url: string): Promise<string | null> {
     });
     return payload;
   } catch (e) {
+    // The page itself did not read. Expected, common, and not worth a line in the log.
     if (e instanceof PageUnreadable) return null;
+    // ‼️ ANYTHING ELSE CAME FROM THE CACHE, NOT FROM THE WEB. Both branches returned null and
+    // looked identical, so a database outage inside getOrFetch was indistinguishable from "the
+    // page 404'd" and the harvest simply came back thin with no explanation anywhere.
+    console.error(`[harvest] page read failed below the door: ${(e as Error).message}`);
     return null;
   }
 }
