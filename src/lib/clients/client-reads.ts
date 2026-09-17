@@ -170,6 +170,59 @@ export interface ClientProfile {
   planUrl: string;
 }
 
+/** The `clients` columns a lead context needs, and nothing that costs a second read. */
+export interface ClientIdentity {
+  ref: ClientRef;
+  website: string | null;
+  city: string | null;
+  state: string | null;
+  vertical: string | null;
+  businessType: string | null;
+  intakeCompletedAt: string | null;
+  day0ArchivedAt: string | null;
+  /** The CRM contact, for resolving this lead's audits by contact as well as by link. */
+  contactId: string | null;
+}
+
+/**
+ * One narrow read of the `clients` row.
+ *
+ * ‼️ IT EXISTS SO lead-context.ts DOES NOT SELECT FROM `clients` ITSELF. That file's rule is that the
+ * only table it queries is client_datasets; a reader that lacks a column is extended here, where the
+ * rows are owned, rather than worked around there.
+ *
+ * ‼️ AND IT IS NOT clientProfile(). That one also loads the offer, the avatar and every step row to
+ * build its summary, all of which a lead context has already loaded for its own purposes, so calling
+ * it would be three duplicate reads to get eight scalars.
+ */
+export async function clientIdentity(clientId: string): Promise<ClientIdentity | { error: string }> {
+  const { data, error } = await supabaseAdmin
+    .from("clients")
+    .select(
+      "id, legal_name, dba_name, slug, domain, website, city, state, " +
+        "vertical_slug, business_type, intake_completed_at, day_0_archived_at, contact_id"
+    )
+    .eq("id", clientId)
+    .maybeSingle();
+
+  if (error) return { error: `clients could not be read: ${error.message}` };
+  if (!data) return { error: "client not found" };
+
+  // Read as a plain record, for the GenericStringError reason clientProfile states below.
+  const row = data as unknown as Record<string, unknown>;
+  return {
+    ref: toRef(row),
+    website: (row.website as string | null) ?? null,
+    city: (row.city as string | null) ?? null,
+    state: (row.state as string | null) ?? null,
+    vertical: (row.vertical_slug as string | null) ?? null,
+    businessType: (row.business_type as string | null) ?? null,
+    intakeCompletedAt: (row.intake_completed_at as string | null) ?? null,
+    day0ArchivedAt: (row.day_0_archived_at as string | null) ?? null,
+    contactId: (row.contact_id as string | null) ?? null,
+  };
+}
+
 export async function clientProfile(clientId: string): Promise<ClientProfile | { error: string }> {
   const { data, error } = await supabaseAdmin
     .from("clients")
