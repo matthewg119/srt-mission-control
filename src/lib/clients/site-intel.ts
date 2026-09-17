@@ -20,6 +20,7 @@
 
 import dns from "node:dns/promises";
 import { supabaseAdmin } from "@/lib/db";
+import { getOrFetch, cacheKeyOf } from "@/lib/data/dataset-cache";
 import { resolveDnsProvider, clickPathFor } from "./dns-records";
 
 const LOOKUP_TIMEOUT_MS = 8000;
@@ -424,9 +425,78 @@ async function fetchHomepage(
   }
 }
 
+/**
+ * Thrown to decline caching an intel read whose resolver never answered.
+ *
+ * ‼️ IT CARRIES THE INTEL, because the caller still needs it. runSiteIntel reports the failure in
+ * words and formatSiteIntel prints "the resolver did not answer" in four places, so the answer is
+ * wanted; what is refused is KEEPING it. Same shape as UnusableIdentity and UnusableProfile.
+ */
+class SiteIntelUnusable extends Error {
+  constructor(readonly intel: SiteIntel) {
+    super("the DNS resolver did not answer");
+    this.name = "SiteIntelUnusable";
+  }
+}
+
+/**
+ * How long a site's infrastructure picture stays true.
+ *
+ * ‼️ SEVEN DAYS, WHICH IS ONE ONBOARDING. Registration, hosting, the network org and the CMS do
+ * not move inside a week, and this read happens once at step 3 to prepare the call. The one thing
+ * that DOES move is the client's own DNS, and that happens after the call at step 26 and is read
+ * by checkHubResolving, a different function with no cache in front of it. So the window that
+ * would be dangerous is not the window this serves.
+ */
+const SITE_INTEL_TTL_DAYS = 7;
+
+/** The apex domain, however the client wrote it. Lifted out so the cache key is the same question. */
+function cleanDomain(domain: string): string {
+  return domain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+}
+
+/**
+ * Everything we can learn about a domain without asking its owner, through the cache.
+ *
+ * ‼️ AN UNHEALTHY RESOLVER IS NEVER CACHED, AND THIS FILE ALREADY SAID SO IN PROSE. The SiteIntel
+ * doc comment states that when resolverHealthy is false "EVERY DNS field below is unreliable and
+ * nothing may be concluded from an absence", and the errors array tells the reader to re-run the
+ * step. Caching that verdict would make the re-run return the same silence, for free, for a week,
+ * and the subdomain decision taken from it would be taken from our own outage.
+ *
+ * The key is the cleaned apex, so "https://x.com/", "X.com" and "x.com" are one question.
+ * client_id is null because this is a fact about a DOMAIN: a prospect who later onboards, and two
+ * clients who share a parent group, are asking the same thing.
+ */
 export async function gatherSiteIntel(domain: string): Promise<SiteIntel> {
+  const clean = cleanDomain(domain);
+
+  try {
+    const { payload } = await getOrFetch<SiteIntel>({
+      clientId: null,
+      kind: "intel.site",
+      cacheKey: cacheKeyOf({ domain: clean }),
+      ttlDays: SITE_INTEL_TTL_DAYS,
+      provider: "rdap + dns + the client's own site",
+      params: { domain: clean },
+      // RDAP, DNS and the homepage are all free, so this zero is a measurement. What it saves is
+      // a re-read of eight parallel lookups, not a bill.
+      fetch: async () => {
+        const intel = await readSiteIntel(clean);
+        if (!intel.resolverHealthy) throw new SiteIntelUnusable(intel);
+        return { payload: intel, costUsd: 0 };
+      },
+    });
+    return payload;
+  } catch (e) {
+    if (e instanceof SiteIntelUnusable) return e.intel;
+    throw e;
+  }
+}
+
+/** The read itself. Takes an already-cleaned apex so the cache key and the lookup cannot disagree. */
+async function readSiteIntel(clean: string): Promise<SiteIntel> {
   const errors: string[] = [];
-  const clean = domain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
 
   const resolver: ResolveState = { failed: false };
 
