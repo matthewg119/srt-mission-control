@@ -14,7 +14,7 @@
 // specific keyword." Nothing is planned until an anchor and a pillar are picked by a person.
 
 import { supabaseAdmin } from "@/lib/db";
-import type { AwarenessStage } from "@/lib/audit-engine/awareness";
+import { AWARENESS_STAGES, type AwarenessStage } from "@/lib/audit-engine/awareness";
 import { draftLadder, ladderLines, recommendStage, type Ladder, type LadderInputs } from "./offer-ladder";
 import { recordKeywordDecisions } from "./keyword-dataset";
 import type { StoredKeyword } from "./keyword-expansion";
@@ -183,10 +183,34 @@ export async function pickRung(clientId: string, stage: number, by: string): Pro
       `:white_check_mark: *Anchored at stage ${rung.stage}.* Every page's magnet is a framing of *${entry.title}*, and the pages speak to: _${rung.readerState}_`,
       `Claim: *${rung.claim}*${rung.riskReversal ? `\nRisk reversal: ${rung.riskReversal}` : ""}`,
       "",
-      "*Next: pick the keywords the pages are built around.*",
-      ...(await keywordPickLines(clientId)),
+      ...(await nextAfterAnchor(clientId)),
     ].join("\n"),
   };
+}
+
+/**
+ * What to do once a rung is anchored.
+ *
+ * ‼️ HEADLINES FIRST, KEYWORDS ONLY AS THE FALLBACK (2026-09-16). Matthew: "the workflow I want is to
+ * generate pages after we select the actual headlines... thats the most important thing." Picking a search
+ * phrase and seeing the sentence a reader reads two stages later is backwards. So the anchor now leads to
+ * thirty three headlines written to this rung, seven of which become the pages, and each one carries the
+ * keyword it was written for so nothing downstream changed.
+ *
+ * The keyword pick is still here and still works. A client whose vertical has no emotional layer yet, or
+ * whose headline run failed, must not be stuck with no way to plan seven pages.
+ */
+async function nextAfterAnchor(clientId: string): Promise<string[]> {
+  const { shortlist, PRE_CALL_HEADLINES, PRE_CALL_PAGES } = await import("./precall-headlines");
+  const rows = await shortlist(clientId).catch(() => []);
+  if (rows.length === 0) {
+    return [
+      `*Next: ${PRE_CALL_HEADLINES} headlines at this rung.* Writing them now, about a minute.`,
+      `Keep ${PRE_CALL_PAGES} with \`headlines pick 4, 9, 12, ...\` and the seven pages are planned around them.`,
+      "_Or skip them: `pillar: <number>` still picks the pages by keyword._",
+    ];
+  }
+  return [`*Next: keep ${PRE_CALL_PAGES} of the ${rows.length} headlines.* \`headlines\` shows them again.`];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -277,6 +301,41 @@ async function setRole(clientId: string, ids: string[], role: "pillar" | "suppor
   return null;
 }
 
+/**
+ * The pillar, named by keyword id rather than by its number in the CSV.
+ *
+ * ‼️ THE SAME setRole() PATH AS THE BUTTONS, AND THAT IS THE POINT OF HAVING IT. precall-headlines.ts
+ * picks seven headlines and each one already knows which keyword it was written for, so it holds ids and
+ * not ranks. Giving it its own UPDATE would skip the support-clearing, the keyword_decisions row and the
+ * "was it approved" check that this path does; going through a rank it would have to look up would be a
+ * round trip to convert an id into a number this file immediately converts back.
+ */
+export async function pickPillarById(clientId: string, keywordId: string, by: string): Promise<{ ok: boolean; message: string }> {
+  const st = await pickState(clientId);
+  if ("error" in st) return { ok: false, message: `:warning: ${st.error}` };
+  const row = st.approved.find((r) => r.id === keywordId);
+  if (!row) return { ok: false, message: ":warning: That search is not in the approved set any more." };
+  if (row.role === "support") {
+    await setRole(clientId, st.supports.filter((sup) => sup.id !== row.id).map((sup) => sup.id), "support", by, st.approved);
+  }
+  const err = await setRole(clientId, [row.id], "pillar", by, st.approved);
+  if (err) return { ok: false, message: `:warning: Not picked: ${err}` };
+  return { ok: true, message: `:white_check_mark: *Pillar:* ${row.phrase}` };
+}
+
+/** The six supports, named by keyword id. Same reasoning as pickPillarById. */
+export async function pickSupportsByIds(clientId: string, keywordIds: string[], by: string): Promise<{ ok: boolean; message: string }> {
+  const st = await pickState(clientId);
+  if ("error" in st) return { ok: false, message: `:warning: ${st.error}` };
+  const rows = keywordIds.map((id) => st.approved.find((r) => r.id === id)).filter((r): r is StoredKeyword => Boolean(r));
+  if (rows.length !== keywordIds.length) {
+    return { ok: false, message: ":warning: One of those searches is not in the approved set any more." };
+  }
+  const err = await setRole(clientId, rows.map((r) => r.id), "support", by, st.approved);
+  if (err) return { ok: false, message: `:warning: Not picked: ${err}` };
+  return { ok: true, message: `:white_check_mark: *${rows.length} supports picked.*` };
+}
+
 export async function pickPillar(clientId: string, arg: string, by: string): Promise<{ ok: boolean; message: string }> {
   const st = await pickState(clientId);
   if ("error" in st) return { ok: false, message: `:warning: ${st.error}` };
@@ -360,22 +419,59 @@ export async function step21SetupLines(clientId: string): Promise<string[]> {
     );
   }
   lines.push("");
-  lines.push("*3. The keywords the pages are built around*");
+  lines.push("*3. The headlines the pages are written from*");
   if (!st.approved || !st.anchorStage) {
     lines.push("  After the anchor is picked.");
+  } else {
+    lines.push(...(await headlineCardLines(clientId, st.anchorStage)).map((l) => `  ${l}`));
+  }
+  lines.push("");
+  // ‼️ THE KEYWORD PICK STAYS ON THE CARD, SMALLER. It is no longer the way the pages are chosen, but
+  // it is still the only way to plan seven when the headline run cannot happen: a vertical with no
+  // emotional layer on file, or a model call that failed twice. Removing it would turn a bad afternoon
+  // into a blocked step with no door out of it.
+  lines.push("*4. The pages themselves*");
+  if (!st.approved || !st.anchorStage) {
+    lines.push("  After the headlines are kept.");
   } else {
     lines.push(...(await keywordPickLines(clientId)).map((l) => `  ${l}`));
   }
   return lines;
 }
 
+/** Where the headline half has got to, for the card. */
+async function headlineCardLines(clientId: string, stage: AwarenessStage): Promise<string[]> {
+  const { shortlist, PRE_CALL_HEADLINES, PRE_CALL_PAGES, emotionalLayer, emotionalAskLines } = await import(
+    "./precall-headlines"
+  );
+  const rows = await shortlist(clientId).catch(() => []);
+  const kept = rows.filter((r) => r.approved);
+  if (kept.length >= PRE_CALL_PAGES) {
+    return [
+      `:white_check_mark: ${kept.length} kept, at stage ${stage}.`,
+      ...kept.map((r, i) => `  ${i === 0 ? "Pillar" : `${i}.`} ${r.headline}`),
+    ];
+  }
+  if (rows.length) {
+    return [
+      `${rows.length} written at stage ${stage}, none kept yet.`,
+      `\`headlines\` shows them. \`headlines pick 4, 9, 12, ...\` keeps ${PRE_CALL_PAGES}.`,
+    ];
+  }
+  const layer = await emotionalLayer(clientId).catch(() => null);
+  if (layer && !layer.ok) return emotionalAskLines(layer);
+  return [`Not written yet. \`headlines\` writes ${PRE_CALL_HEADLINES} at stage ${stage}.`];
+}
+
 /** Buttons for step 21's card: one per rung until anchored, then one per pillar candidate. */
 export async function step21Actions(clientId: string): Promise<Array<{ label: string; actionId: string; value: string }>> {
   const st = await ladderState(clientId);
   if (st.ladder && !(st.approved && st.anchorStage)) {
-    return st.ladder.rungs.map((r) => ({
+    // The "#n" suffix keeps every action_id in the message unique, which Slack requires; the
+    // dispatcher strips it. Without it Slack refuses the whole card and renders no buttons at all.
+    return st.ladder.rungs.map((r, i) => ({
       label: `Anchor at ${r.stage}${st.ladder!.recommendedStage === r.stage ? " (recommended)" : ""}`,
-      actionId: "ladder_pick",
+      actionId: `ladder_pick#${i}`,
       value: `${clientId}:${r.stage}`,
     }));
   }
@@ -385,10 +481,14 @@ export async function step21Actions(clientId: string): Promise<Array<{ label: st
     if ("error" in ps) return [];
     const out: Array<{ label: string; actionId: string; value: string }> = [];
     if (!ps.pillar) {
-      for (const r of ps.pillarCandidates) {
+      ps.pillarCandidates.forEach((r, i) => {
         const label = `Pillar ${r.rank}: ${r.phrase}`;
-        out.push({ label: label.length > 70 ? `${label.slice(0, 67)}...` : label, actionId: "kw_pillar", value: `${clientId}:${r.id}` });
-      }
+        out.push({
+          label: label.length > 70 ? `${label.slice(0, 67)}...` : label,
+          actionId: `kw_pillar#${i}`,
+          value: `${clientId}:${r.id}`,
+        });
+      });
     }
     if (!ps.supports.length) out.push({ label: "Supports: pick for me", actionId: "kw_supports_auto", value: clientId });
     return out;
@@ -408,14 +508,42 @@ export async function proposeWhenPicked(clientId: string): Promise<string | null
   return res.ok ? (res.note ?? null) : `:warning: ${res.error}`;
 }
 
-const LADDER = /^ladder(?:\s+pick\s+([1-5]))?$/i;
+const LADDER = /^ladder$/i;
 const PILLAR = /^pillar\s*:\s*(auto|#?\d{1,4})$/i;
 const SUPPORTS = /^supports\s*:\s*(auto|[#\d,\s]+)$/i;
+
+/**
+ * Every way a person has actually tried to anchor a rung.
+ *
+ * ‼️ THIS EXISTS BECAUSE `anchor at 4` WENT TO THE CHAT ASSISTANT (2026-09-16). The card said "Press
+ * [Anchor at N] on the card, or `ladder pick N`", Matthew typed the words off the button instead of the
+ * words off the backtick, nothing in the chain matched, and the generic assistant answered him with an
+ * invented seven rung ladder and an offer to snooze a lead until 4pm. Nothing was saved and nothing said
+ * so. The card's own button text is now a command, which it should always have been.
+ *
+ * ‼️ AND A RUNG CAN BE NAMED. `ladder problem aware` is what somebody types when they are reading the
+ * rendered ladder rather than counting it, and the names are the ones AWARENESS_STAGES already prints.
+ * Matching on a name keeps one vocabulary between what the card shows and what the thread accepts.
+ */
+const RUNG_NUMBER = /^(?:ladder\s+pick|anchor\s+at|anchor|ladder|rung)\s+#?([1-5])$/i;
+const RUNG_NAME = /^(?:ladder\s+pick|anchor\s+at|anchor|ladder|rung)\s+([a-z][a-z\s-]{2,24})$/i;
+
+/** The stage a message anchors at, or null. Pure, so the probe can walk every phrasing. */
+export function readRung(text: string): number | null {
+  const t = text.trim().replace(/^[`*_]+|[`*_]+$/g, "").trim();
+  const n = RUNG_NUMBER.exec(t);
+  if (n) return Number(n[1]);
+  const named = RUNG_NAME.exec(t);
+  if (!named) return null;
+  const wanted = named[1].toLowerCase().replace(/[\s-]+/g, " ").trim();
+  const hit = AWARENESS_STAGES.find((s) => s.name === wanted);
+  return hit ? hit.stage : null;
+}
 
 /** True when the text is one of this file's commands, for step-commands.ts's wrong-thread pointer. */
 export function isLadderCommand(text: string): boolean {
   const t = text.trim().replace(/^[`*_]+|[`*_]+$/g, "").trim();
-  return LADDER.test(t) || PILLAR.test(t) || SUPPORTS.test(t);
+  return LADDER.test(t) || PILLAR.test(t) || SUPPORTS.test(t) || readRung(t) !== null;
 }
 
 export async function handleLadderThreadReply(input: {
@@ -435,8 +563,37 @@ export async function handleLadderThreadReply(input: {
     await notifyStep(input.clientId, "pre_call_pages", text).catch(() => {});
   };
 
+  // ‼️ THE RUNG IS TESTED BEFORE THE BARE WORD, because `ladder` is a prefix of `ladder pick 4` and of
+  // `ladder problem aware`. A bare-word-first order would rewrite the ladder from scratch, throwing away
+  // a minute and a model call, for somebody who was trying to anchor one.
+  const stage = readRung(t);
+  if (stage !== null) {
+    const res = await pickRung(input.clientId, stage, input.by);
+    if (!res.ok) return { message: `:warning: ${res.error}`, after: refresh };
+    return {
+      message: res.message,
+      // The anchor is the moment the headlines can be written, so it writes them rather than waiting for
+      // somebody to type the word the message just told them about. Model call after the ack, as ever.
+      after: async () => {
+        const { handlePreCallHeadlineReply } = await import("./precall-headlines");
+        const run = await handlePreCallHeadlineReply({
+          clientId: input.clientId,
+          stepKey: "pre_call_pages",
+          text: "headlines",
+          by: input.by,
+        });
+        if (run?.after) {
+          await run.after().catch((e) => console.error("[anchor-ladder] headlines failed:", (e as Error).message));
+        } else if (run?.message) {
+          await say(run.message);
+        }
+        await refresh();
+      },
+    };
+  }
+
   const l = LADDER.exec(t);
-  if (l && !l[1]) {
+  if (l) {
     return {
       message: ":hourglass_flowing_sand: Writing the awareness ladder from the offer, the avatar, the beliefs, the objections and the approved keywords. About a minute.",
       after: async () => {
@@ -445,10 +602,6 @@ export async function handleLadderThreadReply(input: {
         await refresh();
       },
     };
-  }
-  if (l && l[1]) {
-    const res = await pickRung(input.clientId, Number(l[1]), input.by);
-    return { message: res.ok ? res.message : `:warning: ${res.error}`, after: refresh };
   }
   const afterPick = async () => {
     const note = await proposeWhenPicked(input.clientId);

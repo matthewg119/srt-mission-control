@@ -10,6 +10,7 @@
 // the column says this in as many words; this file is where getting it wrong would actually happen.
 
 import { supabaseAdmin } from "@/lib/db";
+import { isLauncherCorner, type LauncherCorner } from "@/lib/clients/mascot-grammar";
 import { isAudience, type Audience } from "./magnets";
 import { audienceById, type AudienceVocabulary } from "@/lib/clients/audiences";
 
@@ -72,11 +73,27 @@ export interface ConciergeConfig {
   quickActions: QuickAction[] | null;
   /** Which mascot sits in the corner, or null for the plain pill. */
   mascot: string | null;
+  /**
+   * Up to three mascots shortlisted for this client, in the order they were picked.
+   *
+   * ‼️ A SHORTLIST IS NOT A CHOICE. These are what step 18 posts preview links for so the client can
+   * be shown three and pick one on the call. `mascot` is the one that actually renders, and nothing
+   * here reaches a live page.
+   */
+  mascotCandidates: string[];
+  /** Which corner the launcher rests in. One of four; anything else reads as the default. */
+  launcherCorner: LauncherCorner;
 }
+
+// ‼️ DECLARED IN mascot-grammar.ts AND RE-EXPORTED HERE. That file is pure, so the probe can check the
+// four corners without pulling in a Supabase client; this is where every caller already looks.
+export { isLauncherCorner };
+export type { LauncherCorner };
 
 const CONFIG_COLUMNS =
   "client_id, enabled, audience, audience_id, vertical, greeting, allowed_origins, booking_mode, booking_url, " +
   "booking_phone, analysis_provider, daily_scan_cap, consent_version, addon_status, quick_actions, mascot, " +
+  "mascot_candidates, launcher_corner, " +
   "clients!inner(slug, legal_name, dba_name, domain, website, city, state)";
 
 function bookingMode(v: unknown): BookingMode {
@@ -148,6 +165,12 @@ export async function loadConciergeConfig(slug: string): Promise<ConciergeConfig
     addonStatus,
     quickActions: readQuickActions(row.quick_actions),
     mascot: row.mascot === null ? null : str(row.mascot) ?? "wizard-cat",
+    mascotCandidates: Array.isArray(row.mascot_candidates)
+      ? (row.mascot_candidates as unknown[])
+          .filter((k): k is string => typeof k === "string" && !!k.trim())
+          .slice(0, 3)
+      : [],
+    launcherCorner: isLauncherCorner(row.launcher_corner) ? row.launcher_corner : "bottom-right",
     audience: row.audience,
     vertical: aud.researchVertical,
     vocabulary: aud.vocabulary,

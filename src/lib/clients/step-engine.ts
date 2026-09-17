@@ -1039,6 +1039,13 @@ async function instructionsFor(
           "Which ONE service do you want more of?",
           "What do your customers call it? The words they would say or type, not the menu name.",
           "How do you want to be known for it?",
+          // ‼️ THE REVIEW PAIR, ASKED HERE AND NOT AT STEP 20 (2026-09-16). Matthew: "I need to remember
+          // the review link that they want make sure We ask for that in the call where i confirm they're
+          // ideal offer ... so we can have all the work ready in the back end". Asked this late nobody was
+          // asked at all: the card PDF was already generated with a QR pointing at a page whose Post
+          // button went nowhere, and the step could not tick. Two questions on a call already happening.
+          "Where do you want new reviews to go? Google, Trustpilot, Yelp?",
+          "Can you send me the link to that page while we are on the phone?",
         ].join("\n")
       ).split("\n");
 
@@ -1067,6 +1074,8 @@ async function instructionsFor(
         `    keyword at step ${stepNumber("keyword_set")} is tested against.`,
         "  • `outcome: <what they get, e.g. more appointments>` is the promise headlines and CTAs make.",
         "  • `price: <as they state it, e.g. $399 per session>`.",
+        `  • \`review platform: <Google, Trustpilot, Yelp>\` and \`review link: <url>\` are the two answers ` +
+          `step ${stepNumber("review_card_pdf")} needs before a card can be printed with a working QR.`,
         "Each is its own message. A message with two of them is refused, never merged.",
         "",
         "*The sales letter* (step 11's framework script opens with it, so it is needed before step 11 hands over):",
@@ -1338,6 +1347,21 @@ async function instructionsFor(
       const url = cfg ? await conciergeDemoUrlFor(c.id) : null;
       const addon = cfg ? await addonStatusFor(c.id) : null;
 
+      const { mascotCatalogue, SHORTLIST, CONCEPT_COUNT } = await import("./mascot-studio");
+      const { data: look } = await supabaseAdmin
+        .from("concierge_configs")
+        .select("mascot, mascot_candidates")
+        .eq("client_id", c.id)
+        .maybeSingle();
+      const chosen = typeof look?.mascot === "string" ? look.mascot : null;
+      const shortlist = Array.isArray(look?.mascot_candidates) ? (look.mascot_candidates as string[]) : [];
+      const named = chosen ? (await mascotCatalogue(c.id)).find((o) => o.key === chosen)?.name ?? chosen : null;
+      const mascotLine = !cfg
+        ? "*The character in the corner is not set up yet.* Hit Retry on the board."
+        : shortlist.length
+          ? `:art: *Character: ${named ?? "not chosen"}*, shortlisted ${shortlist.length} for the call (\`mascot\` reposts the links). \`mascot <key>\` keeps the one they pick.`
+          : `:art: *Character: ${named ?? "the default"}.* \`mascot\` lists them, \`mascot concepts\` writes ${CONCEPT_COUNT} new ones for this client, \`mascot pick a, b, c\` shortlists ${SHORTLIST} to show on the call. \`mascot skip\` keeps the default and blocks nothing.`;
+
       return [
         `*${lane}.*`,
         // ‼️ AN ADD-ON, DECIDED ON THE CALL (2026-09-16). Matthew charges for it separately and may skip it.
@@ -1364,6 +1388,12 @@ async function instructionsFor(
             `us. It decides which lead magnets exist, whether competitor evidence is offered at ` +
             `all, and where booking hands off. Press [Patient lane] or [Owner lane] below. ` +
             `concierge_live refuses until you do.`,
+        "",
+        // ‼️ THE CHARACTER IS A DECISION AND THE CARD HAS TO SAY SO, because the default is silent.
+        // Every widget wears whatever mascot the row was created with unless somebody chooses, and a
+        // client meeting a mascot for the first time on their own live site is the failure this line
+        // prevents. See src/lib/clients/mascot-studio.ts.
+        mascotLine,
         "",
         audience === "owner"
           ? "*Walk it on the call. The answer is the demo, not a slide.* Open it on your screen, ask"
@@ -1831,6 +1861,9 @@ async function extraActionsFor(step: DeliveryStep, c: ClientFacts): Promise<Step
         actionId: "concierge_addon_decline",
         value: c.id,
       },
+      // The character menu, and the door out of it. Both do exactly what the thread commands do.
+      { label: "Character menu", actionId: "mascot_menu", value: c.id },
+      { label: "Skip, keep the default", actionId: "mascot_skip", value: c.id },
     ];
   }
 
@@ -1858,9 +1891,11 @@ async function extraActionsFor(step: DeliveryStep, c: ClientFacts): Promise<Step
   // A label over 75 characters is rejected by Slack, and these come from a niche brief that
   // routinely writes "The New-Build Neighborhood HOA Property Manager". Truncated for the BUTTON
   // only; the card body prints every one of them in full.
-  return found.candidates.map((cand) => ({
+  return found.candidates.map((cand, i) => ({
     label: cand.label.length > 70 ? `${cand.label.slice(0, 67)}...` : cand.label,
-    actionId: "avatar_pick",
+    // Unique per message, because Slack refuses a card whose buttons share an action_id. The
+    // dispatcher strips the suffix. See src/app/api/slack/actions/route.ts.
+    actionId: `avatar_pick#${i}`,
     value: `${c.id}:${cand.slot}:${cand.label}`.slice(0, 2000),
   }));
 }

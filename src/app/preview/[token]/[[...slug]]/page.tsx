@@ -68,7 +68,7 @@ export const metadata: Metadata = {
 
 interface Props {
   params: { token: string; slug?: string[] };
-  searchParams: { kind?: string };
+  searchParams: { kind?: string; mascot?: string };
 }
 
 export default async function TokenPreview({ params, searchParams }: Props) {
@@ -137,7 +137,7 @@ export default async function TokenPreview({ params, searchParams }: Props) {
           )}
         </div>
         <UniverseBand universe={client.skin?.universe} name={client.displayName} where={null} pages={-1} />
-        <ConciergeEmbed clientId={verified.clientId} magnetKey={null} preview={params.token} />
+        <ConciergeEmbed clientId={verified.clientId} magnetKey={null} preview={params.token} mascot={searchParams.mascot ?? null} />
       </div>
     );
   }
@@ -194,7 +194,7 @@ export default async function TokenPreview({ params, searchParams }: Props) {
           `enabled` is still false answer at all. It turns nothing on: see
           src/lib/concierge/preview-grant.ts.
         */}
-        <ConciergeEmbed clientId={verified.clientId} magnetKey={magnetKey} preview={params.token} />
+        <ConciergeEmbed clientId={verified.clientId} magnetKey={magnetKey} preview={params.token} mascot={searchParams.mascot ?? null} />
       </div>
     );
   }

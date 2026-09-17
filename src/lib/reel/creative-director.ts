@@ -391,14 +391,14 @@ export async function generateHeadlineOptions(args: {
  * `close` script: throwing away twenty good headlines because three of them start the same
  * way costs more than printing a note above them. Pure, so the probe covers it.
  */
-export function repeatedOpenings(headlines: string[], take = 3): string[] {
+export function repeatedOpenings(headlines: string[], take = 3, max = 2): string[] {
   const counts = new Map<string, number>();
   for (const h of headlines) {
     const key = h.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/ +/).filter(Boolean).slice(0, take).join(" ");
     if (!key) continue;
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
-  return [...counts.entries()].filter(([, n]) => n > 2).map(([k]) => k);
+  return [...counts.entries()].filter(([, n]) => n > max).map(([k]) => k);
 }
 
 /**

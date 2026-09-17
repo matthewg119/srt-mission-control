@@ -153,10 +153,20 @@ export function headlineFaults(
    * to allow NO figure at all, which is what an avatar with an empty approved list means.
    * Omit it only in a test that is asserting some other rule.
    */
-  numberHaystack = ""
+  numberHaystack = "",
+  /**
+   * How many headlines may open with the same three words.
+   *
+   * ‼️ IT SCALES WITH THE BATCH, AND TWO WAS CALIBRATED FOR TWENTY. The pre-call lane asks for
+   * thirty three query-shaped H1s about one offer, where "how do I", "what is" and "why does" are the
+   * natural openings of a question somebody types. At a flat two the model cannot satisfy it and the
+   * whole batch is refused: measured on SRT, where four openings tripped it twice in a row and no
+   * headline was written at all.
+   */
+  maxPerOpening = 2
 ): HeadlineFault[] {
   const out: HeadlineFault[] = [];
-  if (headlines.length !== count) {
+  if (count > 0 && headlines.length !== count) {
     out.push({ headline: "", why: `expected ${count} headlines and got ${headlines.length}` });
   }
   for (const h of headlines) {
@@ -180,8 +190,11 @@ export function headlineFaults(
       }
     }
   }
-  for (const opening of repeatedOpenings([...headlines])) {
-    out.push({ headline: "", why: `"${opening}" opens more than two headlines, which rule 5 forbids` });
+  for (const opening of repeatedOpenings([...headlines], 3, maxPerOpening)) {
+    out.push({
+      headline: "",
+      why: `"${opening}" opens more than ${maxPerOpening} headlines, which rule 5 forbids`,
+    });
   }
   return out;
 }
@@ -242,7 +255,7 @@ export async function clientVocQuotes(clientId: string): Promise<VocQuote[]> {
   return [...own, ...shared].slice(0, MAX_QUOTES);
 }
 
-interface HeadlineContext {
+export interface HeadlineContext {
   clientName: string;
   city: string | null;
   businessType: string | null;
@@ -291,7 +304,11 @@ async function loadClientRow(clientId: string): Promise<Record<string, unknown> 
   return (base.data as Record<string, unknown> | null) ?? null;
 }
 
-async function headlineContext(
+// ‼️ EXPORTED FOR THE PRE-CALL LANE (2026-09-16). precall-headlines.ts writes to one rung of the
+// awareness ladder and needs the same business, avatar, quotes and approved numbers this assembles. It
+// adds to the prompt this returns rather than gathering its own, so there is one answer to "what does the
+// model know about this client" and one place to change it.
+export async function headlineContext(
   clientId: string
 ): Promise<{ ok: true; ctx: HeadlineContext } | { ok: false; error: string }> {
   const { loadOffer } = await import("./offers");

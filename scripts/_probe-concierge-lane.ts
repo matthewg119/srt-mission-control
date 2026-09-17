@@ -629,6 +629,7 @@ async function booking(): Promise<void> {
     analysisProvider: "mock", dailyScanCap: 200, consentVersion: "v1",
     clientName: "SRT Agency LLC", clientCity: null, clientState: null, clientWebsite: null,
     addonStatus: "included", quickActions: null, mascot: "wizard-cat",
+    mascotCandidates: [], launcherCorner: "bottom-right",
     // The audience row SRT backfilled to. business is "agency" and NOT "clinic": SRT sells to
     // clinics and is not one, which is the whole reason the noun lives on a row.
     vocabulary: {
