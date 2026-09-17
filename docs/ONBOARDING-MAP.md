@@ -26,7 +26,7 @@ either dead or a gap, and both are findings; the Downstream row is where that sh
 
 ## Every place the system buys something from the web
 
-**22 sites: 3 through `getOrFetch()`, 5 deliberately exempt, 14 still owed.**
+**23 sites: 14 through `getOrFetch()`, 5 deliberately exempt, 4 still owed.**
 
 ‼️ **An exemption is a decision, not a to-do.** `site-research.ts` carries `homepageHtml`, 150KB
 to 2MB of raw markup that `storableCrawl()` already drops from `audit_reports.site_crawl` for
@@ -34,6 +34,14 @@ that exact reason, and four live readers still need it in memory; caching it wou
 blob this system has a written decision against into a jsonb column. `claude-calls.ts` is a
 transport for 75 callers rather than a question. Routing either one would be a regression that
 looks like progress, so the reason travels in the table.
+
+‼️ **An owed row that says WHY is a row somebody has looked at.** The three scraper providers
+below are all two-phase: the money goes at a `task_post` or a `submit`, and the answer arrives
+at a later collect or a webhook. `getOrFetch`'s `fetch()` has to RETURN the payload, so it
+cannot wrap either half on its own, and wrapping the collect half keyed on the task id would
+flip the grepped column to yes while saving nothing, because a task id is minted fresh on every
+post. Routing them needs a read half and a write half against the same table and the same key
+discipline, which is a door this repo does not have yet.
 
 Every row is declared and then verified: the file has to exist, it has to contain the named
 function, and the file claimed to keep the response has to name that table. The `getOrFetch`
@@ -47,25 +55,26 @@ of this check asserted the fetching file named the table and failed on six rows,
 
 | lane | file | call | provider | through the door | raw response survives |
 | --- | --- | --- | --- | --- | --- |
-| audit engine | `src/lib/audit-engine/run-prompts.ts` | `runOpenAI()` | openai responses + web_search | **owed** | `audit_runs.raw_response`, written by `src/lib/audit-engine/run-batch.ts` |
+| audit engine | `src/lib/audit-engine/run-prompts.ts` | `runOpenAI()` | openai responses + web_search | **yes** | `audit_runs.raw_response`, written by `src/lib/audit-engine/run-batch.ts` |
 | audit engine | `src/lib/audit-engine/search-research.ts` | `researchViaSearch()` | openai | **yes** | `client_datasets.payload` |
 | audit engine | `src/lib/audit-engine/claude-research.ts` | `researchViaClaudeDetailed()` | anthropic + web_search | **yes** | `client_datasets.payload` |
-| audit engine | `src/lib/audit-engine/classify.ts` | `classifyBusiness()` | anthropic | **owed** | `audit_reports.classification`, written by `src/lib/audit-engine/run-audit-pipeline.ts` |
-| audit engine | `src/lib/audit-engine/extract-recommended.ts` | `extractRecommendedBatch()` | anthropic | **owed** | `audit_runs.recommended`, written by `src/lib/audit-engine/run-batch.ts` |
-| audit engine | `src/lib/audit-engine/intel-brief.ts` | `getIntelBrief()` | anthropic + web_search | **owed** | `niche_briefs.brief` |
+| audit engine | `src/lib/audit-engine/classify.ts` | `classifyBusiness()` | anthropic | **yes** | `audit_reports.classification`, written by `src/lib/audit-engine/run-audit-pipeline.ts` |
+| audit engine | `src/lib/audit-engine/extract-recommended.ts` | `extractRecommendedBatch()` | anthropic | **yes** | `audit_runs.recommended`, written by `src/lib/audit-engine/run-batch.ts` |
+| audit engine | `src/lib/audit-engine/intel-brief.ts` | `getIntelBrief()` | anthropic + web_search | **yes** | `niche_briefs.brief` |
 | audit engine | `src/lib/audit-engine/site-research.ts` | `researchWebsite()` | the prospect's own site | no, deliberately: SiteResearch carries homepageHtml, 150KB to 2MB of raw markup. storableCrawl() drops it from audit_reports.site_crawl for that exact reason, and four live readers still need it in memory, so neither the full shape nor the stored shape can be the cached payload | `audit_reports.site_crawl`, written by `src/lib/audit-engine/run-audit-pipeline.ts` |
 | audit engine | `src/lib/audit-engine/robots-check.ts` | `checkRobots()` | the prospect's own robots.txt | **yes** | `audit_reports.robots_check`, written by `src/lib/audit-engine/run-audit-pipeline.ts` |
 | shared | `src/lib/claude-calls.ts` | `callClaudeJSON()` | anthropic | no, deliberately: a generic transport for 75 callers, not a question. Caching here would serve one module's generation to another and freeze deliberately varied output; the callers that ARE stable questions cache themselves, which is what claude-research.ts does | **nowhere** |
-| onboarding | `src/lib/clients/artifacts/deep-research-run.ts` | `runDeepResearch()` | anthropic + web_search | **owed** | `question_bank` |
-| onboarding | `src/lib/clients/harvest.ts` | `runHarvest()` | the client's own site | **owed** | `question_bank` |
-| onboarding | `src/lib/clients/site-intel.ts` | `gatherSiteIntel()` | rdap + the client's own site | **owed** | `clients` |
-| onboarding | `src/lib/clients/geocode.ts` | `geocodeAddress()` | us census geocoder | **owed** | **nowhere** |
-| onboarding | `src/lib/clients/voice-notes.ts` | `transcribeAudio()` | openai whisper | **owed** | **nowhere** |
-| scraper | `src/lib/scraper/dataforseo.ts` | `postTasks()` | dataforseo | **owed** | **nowhere** |
-| scraper | `src/lib/outscraper.ts` | `submitMapsSearch()` | outscraper | **owed** | `raw_leads.raw`, written by `src/lib/scraper/pull.ts` |
-| scraper | `src/lib/scraper/millionverifier.ts` | `uploadEmails()` | millionverifier | **owed** | `scraper_rows.mv_result`, written by `src/lib/scraper/store.ts` |
-| scraper | `src/lib/scraper/mx.ts` | `hasMx()` | cloudflare dns-over-https | **owed** | **nowhere** |
-| scraper | `src/lib/scraper/enrich.ts` | `enrichOne()` | none wired: PROVIDERS is empty | **owed** | **nowhere** |
+| onboarding | `src/lib/clients/artifacts/deep-research-run.ts` | `runDeepResearch()` | anthropic + web_search | **yes** | `question_bank` |
+| onboarding | `src/lib/clients/harvest.ts` | `runHarvest()` | the client's own site | **yes** | `question_bank` |
+| onboarding | `src/lib/clients/doc-text.ts` | `docTextsFor()` | our own storage bucket | **yes** | `client_datasets.payload`, written by `src/lib/data/dataset-cache.ts` |
+| onboarding | `src/lib/clients/site-intel.ts` | `gatherSiteIntel()` | rdap + the client's own site | **yes** | `clients` |
+| onboarding | `src/lib/clients/geocode.ts` | `geocodeAddress()` | us census geocoder | **yes** | `clients.market_center_lat`, written by `src/lib/clients/provision.ts` |
+| onboarding | `src/lib/clients/voice-notes.ts` | `transcribeAudio()` | openai whisper | **yes** | `client_docs.transcript` |
+| scraper | `src/lib/scraper/dataforseo.ts` | `postTasks()` | dataforseo | **owed**: ‼️ TWO-PHASE, AND THAT IS WHY IT IS STILL OWED AFTER THE OTHERS LANDED. The money goes at task_post and the answer arrives at a later task_get, so getOrFetch, whose fetch() must return the payload, cannot wrap either half alone. Wrapping task_get keyed on the task id would flip this column to yes and save nothing, because a task id is minted fresh on every post. The real unit is the SERP for {keyword, location, language, depth}, consulted BEFORE posting, which needs a read half and a write half rather than one read-through door | **nowhere** |
+| scraper | `src/lib/outscraper.ts` | `submitMapsSearch()` | outscraper | **owed**: ‼️ TWO-PHASE VIA WEBHOOK. submitMapsSearch returns only a requestId; the results arrive at the webhook handler minutes later, so the function that spends the money never sees the answer. Same missing shape as dataforseo: the payload has to be filed at the handler under the question the submit asked | `raw_leads.raw`, written by `src/lib/scraper/pull.ts` |
+| scraper | `src/lib/scraper/millionverifier.ts` | `uploadEmails()` | millionverifier | **owed**: ‼️ TWO-PHASE, AND A DIFFERENT UNIT AGAIN. Upload, poll, download: billed per row, so the cacheable question is one EMAIL ADDRESS, while the API's unit is a file. Routing it means splitting a file result back into per-address answers as it lands | `scraper_rows.mv_result`, written by `src/lib/scraper/store.ts` |
+| scraper | `src/lib/scraper/mx.ts` | `hasMx()` | cloudflare dns-over-https | **yes** | **nowhere** |
+| scraper | `src/lib/scraper/enrich.ts` | `enrichOne()` | none wired: PROVIDERS is empty | **owed**: nothing to route yet. PROVIDERS is an empty array on purpose, so this function makes no outbound call at all today. It stays owed rather than exempt so that whoever signs a vendor routes it on the way in | **nowhere** |
 | media | `src/lib/providers/image-gen.ts` | `generateImages()` | openai images, higgsfield, elevenlabs | no, deliberately: returns image bytes and URLs, not a JSON answer, and a second render of the same prompt is wanted rather than deduplicated | **nowhere** |
 | media | `src/lib/reel/motion-adapter.ts` | `getMotionAdapter()` | elevenlabs, fal.ai, higgsfield | no, deliberately: returns MP4 bytes. Same reason as image-gen | **nowhere** |
 | hub | `src/lib/hub/vercel-domains.ts` | `attachHost()` | vercel domains | no, deliberately: a mutation, not a pull: it attaches a domain. Caching a write would skip the write | `client_hosts` |

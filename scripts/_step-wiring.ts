@@ -373,6 +373,20 @@ interface PaidPull {
    * a reason attached; a blank is a to-do.
    */
   exempt?: string;
+  /**
+   * Still owed, and what stopped it, when somebody has actually looked.
+   *
+   * ‼️ A FOURTH STATE, AND IT EXISTS BECAUSE THE THIRD ONE WAS BEING MISUSED. An exemption says "we
+   * decided not to"; this says "we tried, and here is the shape of the problem". The three rows
+   * carrying it are all two-phase providers: the money goes at a post or a submit and the answer
+   * arrives at a later collect or a webhook, so getOrFetch, whose fetch() must RETURN the payload,
+   * cannot wrap either half on its own.
+   *
+   * Writing it down is the point. Wrapping the collect half keyed on the task id would flip the
+   * grepped column to "yes" and save nothing at all, and the next reader would see a routed lane
+   * and move on. A blank row invites that; this row refuses it.
+   */
+  owedWhy?: string;
 }
 
 /**
@@ -398,14 +412,15 @@ const PAID_PULLS: readonly PaidPull[] = [
   { lane: "shared", file: "src/lib/claude-calls.ts", fn: "callClaudeJSON", provider: "anthropic", survives: null, exempt: "a generic transport for 75 callers, not a question. Caching here would serve one module's generation to another and freeze deliberately varied output; the callers that ARE stable questions cache themselves, which is what claude-research.ts does" },
   { lane: "onboarding", file: "src/lib/clients/artifacts/deep-research-run.ts", fn: "runDeepResearch", provider: "anthropic + web_search", survives: "question_bank" },
   { lane: "onboarding", file: "src/lib/clients/harvest.ts", fn: "runHarvest", provider: "the client's own site", survives: "question_bank" },
+  { lane: "onboarding", file: "src/lib/clients/doc-text.ts", fn: "docTextsFor", provider: "our own storage bucket", survives: "client_datasets.payload", storedBy: "src/lib/data/dataset-cache.ts" },
   { lane: "onboarding", file: "src/lib/clients/site-intel.ts", fn: "gatherSiteIntel", provider: "rdap + the client's own site", survives: "clients" },
-  { lane: "onboarding", file: "src/lib/clients/geocode.ts", fn: "geocodeAddress", provider: "us census geocoder", survives: null },
-  { lane: "onboarding", file: "src/lib/clients/voice-notes.ts", fn: "transcribeAudio", provider: "openai whisper", survives: null },
-  { lane: "scraper", file: "src/lib/scraper/dataforseo.ts", fn: "postTasks", provider: "dataforseo", survives: null },
-  { lane: "scraper", file: "src/lib/outscraper.ts", fn: "submitMapsSearch", provider: "outscraper", survives: "raw_leads.raw", storedBy: "src/lib/scraper/pull.ts" },
-  { lane: "scraper", file: "src/lib/scraper/millionverifier.ts", fn: "uploadEmails", provider: "millionverifier", survives: "scraper_rows.mv_result", storedBy: "src/lib/scraper/store.ts" },
+  { lane: "onboarding", file: "src/lib/clients/geocode.ts", fn: "geocodeAddress", provider: "us census geocoder", survives: "clients.market_center_lat", storedBy: "src/lib/clients/provision.ts" },
+  { lane: "onboarding", file: "src/lib/clients/voice-notes.ts", fn: "transcribeAudio", provider: "openai whisper", survives: "client_docs.transcript" },
+  { lane: "scraper", file: "src/lib/scraper/dataforseo.ts", fn: "postTasks", provider: "dataforseo", survives: null , owedWhy: "‼️ TWO-PHASE, AND THAT IS WHY IT IS STILL OWED AFTER THE OTHERS LANDED. The money goes at task_post and the answer arrives at a later task_get, so getOrFetch, whose fetch() must return the payload, cannot wrap either half alone. Wrapping task_get keyed on the task id would flip this column to yes and save nothing, because a task id is minted fresh on every post. The real unit is the SERP for {keyword, location, language, depth}, consulted BEFORE posting, which needs a read half and a write half rather than one read-through door" },
+  { lane: "scraper", file: "src/lib/outscraper.ts", fn: "submitMapsSearch", provider: "outscraper", survives: "raw_leads.raw", storedBy: "src/lib/scraper/pull.ts" , owedWhy: "‼️ TWO-PHASE VIA WEBHOOK. submitMapsSearch returns only a requestId; the results arrive at the webhook handler minutes later, so the function that spends the money never sees the answer. Same missing shape as dataforseo: the payload has to be filed at the handler under the question the submit asked" },
+  { lane: "scraper", file: "src/lib/scraper/millionverifier.ts", fn: "uploadEmails", provider: "millionverifier", survives: "scraper_rows.mv_result", storedBy: "src/lib/scraper/store.ts" , owedWhy: "‼️ TWO-PHASE, AND A DIFFERENT UNIT AGAIN. Upload, poll, download: billed per row, so the cacheable question is one EMAIL ADDRESS, while the API's unit is a file. Routing it means splitting a file result back into per-address answers as it lands" },
   { lane: "scraper", file: "src/lib/scraper/mx.ts", fn: "hasMx", provider: "cloudflare dns-over-https", survives: null },
-  { lane: "scraper", file: "src/lib/scraper/enrich.ts", fn: "enrichOne", provider: "none wired: PROVIDERS is empty", survives: null },
+  { lane: "scraper", file: "src/lib/scraper/enrich.ts", fn: "enrichOne", provider: "none wired: PROVIDERS is empty", survives: null, owedWhy: "nothing to route yet. PROVIDERS is an empty array on purpose, so this function makes no outbound call at all today. It stays owed rather than exempt so that whoever signs a vendor routes it on the way in" },
   { lane: "media", file: "src/lib/providers/image-gen.ts", fn: "generateImages", provider: "openai images, higgsfield, elevenlabs", survives: null, exempt: "returns image bytes and URLs, not a JSON answer, and a second render of the same prompt is wanted rather than deduplicated" },
   { lane: "media", file: "src/lib/reel/motion-adapter.ts", fn: "getMotionAdapter", provider: "elevenlabs, fal.ai, higgsfield", survives: null, exempt: "returns MP4 bytes. Same reason as image-gen" },
   { lane: "hub", file: "src/lib/hub/vercel-domains.ts", fn: "attachHost", provider: "vercel domains", survives: "client_hosts", storedBy: "src/lib/hub/vercel-domains.ts", exempt: "a mutation, not a pull: it attaches a domain. Caching a write would skip the write" },
@@ -521,7 +536,13 @@ function paidPullSection(): string {
 
   const rows = PAID_PULLS.map((p) => {
     const routed = /getOrFetch\s*[<(]/.test(read(p.file));
-    const through = routed ? "**yes**" : p.exempt ? `no, deliberately: ${p.exempt}` : "**owed**";
+    const through = routed
+      ? "**yes**"
+      : p.exempt
+        ? `no, deliberately: ${p.exempt}`
+        : p.owedWhy
+          ? `**owed**: ${p.owedWhy}`
+          : "**owed**";
     const where = p.survives
       ? `\`${p.survives}\`${p.storedBy && p.storedBy !== p.file ? `, written by \`${p.storedBy}\`` : ""}`
       : "**nowhere**";
@@ -537,6 +558,14 @@ function paidPullSection(): string {
     "blob this system has a written decision against into a jsonb column. `claude-calls.ts` is a",
     "transport for 75 callers rather than a question. Routing either one would be a regression that",
     "looks like progress, so the reason travels in the table.",
+    "",
+    "‼️ **An owed row that says WHY is a row somebody has looked at.** The three scraper providers",
+    "below are all two-phase: the money goes at a `task_post` or a `submit`, and the answer arrives",
+    "at a later collect or a webhook. `getOrFetch`'s `fetch()` has to RETURN the payload, so it",
+    "cannot wrap either half on its own, and wrapping the collect half keyed on the task id would",
+    "flip the grepped column to yes while saving nothing, because a task id is minted fresh on every",
+    "post. Routing them needs a read half and a write half against the same table and the same key",
+    "discipline, which is a door this repo does not have yet.",
     "",
     "Every row is declared and then verified: the file has to exist, it has to contain the named",
     "function, and the file claimed to keep the response has to name that table. The `getOrFetch`",

@@ -28,7 +28,16 @@ export interface PriorReport {
   loomSent: boolean;
   /** The pitch email went out. Weaker: it means a thread exists to reply on. */
   pitchSent: boolean;
-  /** Businesses the engines named instead of them, for the chat to quote back. */
+  /**
+   * The classifier's guesses at who this business competes with, for the chat to quote back.
+   *
+   * ‼️ NOT "BUSINESSES THE ENGINES NAMED INSTEAD OF THEM", WHICH IS WHAT THIS SAID UNTIL
+   * 2026-09-18 AND IS A DIFFERENT FIELD. That one is `identity.competitors`, observed: it is read
+   * off what the engines actually answered. This is `audit_reports.competitors`, written by
+   * run-audit-pipeline from the classifier as [{name, domain, hypothesis}], and a hypothesis is
+   * exactly what the word says. Quoting a guess to a prospect as something the engines said is the
+   * kind of wrong that ends a call, so the two must never be merged or used interchangeably.
+   */
   competitors: string[];
 }
 
