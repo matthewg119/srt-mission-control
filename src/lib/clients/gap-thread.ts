@@ -44,6 +44,20 @@ const PROMPTS = /^\s*[`*_]*prompts[`*_]*\s*\??\s*$/i;
  */
 const SUGGEST = /^\s*[`*_]*(suggest|suggestions|what next|whats next|what now)[`*_]*\s*\??\s*$/i;
 
+/**
+ * `final prompt`: one prompt for the whole lead, not one step's slice.
+ *
+ * ‼️ TWO WORDS, WHICH IS WHAT KEEPS IT OUT OF THE OTHER TWO DOORS. Bare `prompt` belongs to
+ * framework-thread.ts on step 11 and bare `prompts` to this file, and both stay exactly as they
+ * were. Anchoring on the whole line means neither can be shadowed by this one.
+ *
+ * ‼️ AND IT IS A DIFFERENT QUESTION FROM `prompts`. That one asks what THIS STEP is missing, which
+ * is STEP_NEEDS filtered through one step key. This asks what the LEAD is missing, across every
+ * declared field and every audience, and hands back everything already on file so none of it is
+ * asked for twice.
+ */
+const FINAL = /^\s*[`*_]*(final|full|whole|everything)\s+prompt[`*_]*\s*\??\s*$/i;
+
 export interface GapThreadInput {
   clientId: string;
   /** The step whose thread this is, or null in the pinned header thread. */
@@ -61,15 +75,36 @@ export async function handleGapThreadReply(input: GapThreadInput): Promise<GapTh
   const wantsGaps = GAPS.test(text);
   const wantsPrompts = PROMPTS.test(text);
   const wantsSuggestions = SUGGEST.test(text);
-  if (!wantsGaps && !wantsPrompts && !wantsSuggestions) return null;
+  const wantsFinal = FINAL.test(text);
+  if (!wantsGaps && !wantsPrompts && !wantsSuggestions && !wantsFinal) return null;
 
   return withLeadScope(async () => {
     // `suggest` argues from the keywords and the pages as well as the documents, so it needs more
-    // than CARD_SLICES. One read either way: the scope memoizes on the slice list.
+    // than CARD_SLICES. The final prompt wants everything there is, because "all of the context
+    // possible" is the requirement it exists to meet. One read either way: the scope memoizes on
+    // the slice list.
     const ctx = await leadContext(
       input.clientId,
-      wantsSuggestions ? { include: ["core", "documents", "gaps", "keywords", "pages"] } : {}
+      wantsFinal
+        ? { include: ["core", "documents", "gaps", "keywords", "pages", "audits", "research", "history"] }
+        : wantsSuggestions
+          ? { include: ["core", "documents", "gaps", "keywords", "pages"] }
+          : {}
     );
+
+    // ‼️ THE FINAL PROMPT NEEDS NO STEP EITHER, and for a stronger reason than `suggest` does. It
+    // is about the lead rather than about a step, so resolving a step key first and then ignoring
+    // it would only invite somebody to filter by it later, which is the exact narrowing this
+    // command exists to undo.
+    if (wantsFinal) {
+      const { postFinalPrompt } = await import("./final-prompt-thread");
+      return postFinalPrompt({
+        ctx,
+        clientId: input.clientId,
+        channel: input.channel,
+        threadTs: input.threadTs,
+      });
+    }
 
     // The step this is about: the thread's own, else whatever the board is waiting on. A bare `gaps`
     // in the pinned thread should answer the question a person is actually asking.

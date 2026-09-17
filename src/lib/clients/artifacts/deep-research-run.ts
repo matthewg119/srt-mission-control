@@ -513,6 +513,27 @@ export function keywordWorkedRows(ctx: ResearchContext): string[] {
  */
 export const RESEARCH_SECTION_KEYS: readonly string[] = SECTIONS.map((s) => s.key);
 
+/**
+ * The same list with its numbers and English headings attached, for a caller building an ask.
+ *
+ * ‼️ THE NUMBER IS THE POSITION IN THE FULL LIST, NOT IN A FILTERED ONE. Anything handing back a
+ * subset must carry these numbers through unchanged: the paste parser reads a numbered heading and
+ * files the answer under that number, so renumbering a subset from 1 files section 12's answer
+ * under section 1, silently and permanently. buildGapPrompt maps over SECTIONS before filtering for
+ * exactly this reason, and final-prompt.ts takes this list rather than re-deriving it.
+ */
+export const RESEARCH_SECTIONS: ReadonlyArray<{
+  number: number;
+  key: string;
+  heading: string;
+  scriptOnly: boolean;
+}> = SECTIONS.map((s, i) => ({
+  number: i + 1,
+  key: s.key,
+  heading: s.heading,
+  scriptOnly: Boolean(s.scriptOnly),
+}));
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Prompts
 // ─────────────────────────────────────────────────────────────────────────────
