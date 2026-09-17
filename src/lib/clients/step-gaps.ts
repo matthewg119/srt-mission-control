@@ -209,8 +209,13 @@ const MAX_BULLETS = 5;
  * nobody reads. dataset-spec's card already groups by reason for the same reason.
  *
  * PURE, so the probe can assert the copy without touching a database.
+ *
+ * `max` exists for the onboarding map, which has to print EVERY question a step would ask and has
+ * no card to overflow. ‼️ IT IS DEFAULTED, AND THE CARD MUST NEVER PASS IT: a card that prints
+ * twenty bullets is the wall this function was written to stop being. The tail line is still
+ * emitted, so a truncated list always says how much it truncated.
  */
-export function gapLines(g: StepGaps): string[] {
+export function gapLines(g: StepGaps, max: number = MAX_BULLETS): string[] {
   if (g.nothingWhy) {
     return [`*Step ${g.number}* asks for nothing from the datasets: ${g.nothingWhy}.`];
   }
@@ -252,7 +257,7 @@ export function gapLines(g: StepGaps): string[] {
       : `Step ${g.number} can complete. ${ordered.length} thing${ordered.length === 1 ? "" : "s"} would make it better.`
   );
 
-  for (const [text, list] of ordered.slice(0, MAX_BULLETS)) {
+  for (const [text, list] of ordered.slice(0, max)) {
     const blocking = list.some((x) => x.blocking);
     const names = list.map((x) => x.field.label);
     const what = names.length === 1 ? names[0] : `${names.length} fields: ${names.slice(0, 3).join(", ")}${names.length > 3 ? ", and more" : ""}`;
@@ -265,8 +270,8 @@ export function gapLines(g: StepGaps): string[] {
     lines.push(fill.commands.length ? `    → ${text}` : `    ${text}`);
   }
 
-  if (ordered.length > MAX_BULLETS) {
-    lines.push(`_and ${ordered.length - MAX_BULLETS} more._`);
+  if (ordered.length > max) {
+    lines.push(`_and ${ordered.length - max} more._`);
   }
 
   return lines;

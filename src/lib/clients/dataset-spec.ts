@@ -371,6 +371,27 @@ function reasonFor(field: FieldSpec, snap: DatasetSnapshot): string {
   }
 }
 
+/**
+ * An audience who has answered nothing, for anything that has to render what WOULD be asked.
+ *
+ * ‼️ THE VALUES ARE NOT ARBITRARY AND TWO OF THEM ARE DELIBERATELY NON-EMPTY. `audience` is a real
+ * object and `audit.linked` is true so that derived and audit-backed fields render the sentence
+ * that FILLS them rather than "there is no audience yet" or "no audit is linked", which are
+ * upstream refusals and say nothing about the field. Everything a person answers is empty.
+ *
+ * ‼️ IT LIVES HERE, BESIDE THE FIELDS, BECAUSE TWO COPIES WOULD DRIFT. _probe-gaps.ts declared
+ * this privately and the onboarding-map generator needs the identical one; a second copy is the
+ * same "third declaration to keep in step" that the generator exists to avoid.
+ */
+export const NOTHING_ON_FILE: DatasetSnapshot = {
+  audience: { label: "this audience", isPrimary: true, stance: "patient", hasVocabulary: false, buyerMarket: null, hardLines: 0, confirmedAt: null },
+  avatar: { researchText: null, vocQuotes: 0, approvedNumbers: 0, keywordRows: 0, keywordRowsWithUrl: 0 },
+  offer: { applies: true, treatment: null, terms: 0, positioning: null, magnetKey: null, lockedAt: null, outcomePromise: null, price: null },
+  documents: { avatarSheet: null, shortOffer: null, beliefs: 0, letterApproved: false },
+  audit: { linked: true, pickedAvatar: false, buyerMap: false },
+  reviews: 0,
+};
+
 /** Evaluate every declared field against one audience's snapshot. */
 export function evaluateDatasets(snap: DatasetSnapshot, sectionKeys: readonly string[]): DatasetReport[] {
   const parsed = parseResearchSections(snap.avatar.researchText ?? "");

@@ -15,7 +15,7 @@ import { readFileSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import { supabaseAdmin } from "@/lib/db";
 import { DELIVERY_STEPS, stepNumber, type StepKey } from "@/config/delivery-steps";
-import { DATASET_FIELDS, evaluateDatasets, type DatasetReport, type DatasetSnapshot, type FieldSpec } from "@/lib/clients/dataset-spec";
+import { DATASET_FIELDS, NOTHING_ON_FILE, evaluateDatasets, type DatasetReport, type FieldSpec } from "@/lib/clients/dataset-spec";
 import { RESEARCH_SECTION_KEYS } from "@/lib/clients/artifacts/deep-research-run";
 import { commandOwner } from "@/lib/clients/step-commands";
 import {
@@ -76,18 +76,12 @@ function contextWith(reports: DatasetReport[], readable = true): LeadContext {
  * ‼️ REAL REASONS, NOT INVENTED ONES. The command check below is only worth running against the
  * sentences dataset-spec actually writes; a synthetic reason would assert that the probe's own
  * placeholder exists in src/, which is true and meaningless.
+ *
+ * The fixture itself moved into dataset-spec.ts as NOTHING_ON_FILE, because the onboarding-map
+ * generator renders every question from the identical snapshot and two copies would drift.
  */
-const NOTHING_ANSWERED: DatasetSnapshot = {
-  audience: { label: "probe", isPrimary: true, stance: "patient", hasVocabulary: false, buyerMarket: null, hardLines: 0, confirmedAt: null },
-  avatar: { researchText: null, vocQuotes: 0, approvedNumbers: 0, keywordRows: 0, keywordRowsWithUrl: 0 },
-  offer: { applies: true, treatment: null, terms: 0, positioning: null, magnetKey: null, lockedAt: null, outcomePromise: null, price: null },
-  documents: { avatarSheet: null, shortOffer: null, beliefs: 0, letterApproved: false },
-  audit: { linked: true, pickedAvatar: false, buyerMap: false },
-  reviews: 0,
-};
-
 function emptyReports(): DatasetReport[] {
-  return evaluateDatasets(NOTHING_ANSWERED, RESEARCH_SECTION_KEYS);
+  return evaluateDatasets(NOTHING_ON_FILE, RESEARCH_SECTION_KEYS);
 }
 
 /** One report whose gaps are exactly the named fields. Everything else counts as on file. */
