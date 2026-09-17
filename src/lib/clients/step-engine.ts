@@ -2009,10 +2009,30 @@ export async function postStep(clientId: string, stepKey: string): Promise<void>
   // get a second, blander copy of it underneath.
   if (!body.some((line) => line.includes("*Do this now:*"))) {
     try {
-      const { doThisNowLines, readinessFor } = await import("./do-this-now");
-      const readiness = await readinessFor(clientId, stepKey as StepKey);
-      const todo = doThisNowLines(stepKey as StepKey, { readiness });
-      if (todo.length) body.push("", ...todo);
+      // ‼️ ONE LEAD SCOPE AROUND BOTH READS. readinessFor now answers for every step rather than
+      // only avatar_harvest, and it does that through gapsFor, which assembles the lead context. The
+      // gap lines below assemble it too. Without this scope one card render would build the same
+      // picture of the same client twice, about fourteen selects each time. lead-scope.ts holds it
+      // for the duration of this callback and nothing longer, so it can never serve a stale answer
+      // across a paste.
+      const { withLeadScope } = await import("./lead-scope");
+      await withLeadScope(async () => {
+        const { doThisNowLines, readinessFor } = await import("./do-this-now");
+        const readiness = await readinessFor(clientId, stepKey as StepKey);
+        const todo = doThisNowLines(stepKey as StepKey, { readiness });
+        if (todo.length) body.push("", ...todo);
+
+        // W2: the card says the count above; these two lines are the doors to the detail and to the
+        // prompts that close it. The full gap list is deliberately NOT inlined: five bullets under
+        // every card would double the length of every card on the board.
+        const { leadContext } = await import("./lead-context");
+        const { gapsFrom } = await import("./step-gaps");
+        const { gapCardLines, gapPromptsAvailable } = await import("./gap-prompts");
+        const ctx = await leadContext(clientId);
+        const gaps = gapsFrom(ctx, stepKey as StepKey);
+        const doors = gapCardLines(gaps, gapPromptsAvailable(gaps));
+        if (doors.length) body.push(...doors);
+      });
     } catch (e) {
       // A card that renders without this block is a worse card. A card that fails to render at all
       // because of it is a stalled board, so this can never be the thing that throws.

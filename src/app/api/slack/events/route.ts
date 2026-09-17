@@ -1210,6 +1210,20 @@ export async function POST(request: NextRequest) {
               stepKey: client.stepKey,
               text: userText,
               by,
+            })) ??
+            // `gaps` and `prompts`, in ANY of this client's threads: what the step is still missing,
+            // and the prompts that close it, carrying what we already know about this client.
+            //
+            // ‼️ LAST IN THE CHAIN, AND PLURAL ONLY. Both words are their own and collide with
+            // nothing above, so nothing here depends on the position; what does matter is that
+            // framework-thread.ts owns an exact-match `prompt` on step 11 and keeps it.
+            (await (await import("@/lib/clients/gap-thread")).handleGapThreadReply({
+              clientId: client.id,
+              stepKey: client.stepKey,
+              text: userText,
+              by,
+              channel,
+              threadTs: parentThreadTs,
             }));
           if (said) {
             const { markEventKind, postClientReply } = await import("@/lib/clients/client-events");

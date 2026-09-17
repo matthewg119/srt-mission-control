@@ -172,6 +172,55 @@ export function gapPromptMessage(p: GapPrompt): string {
   ].join("\n");
 }
 
+/**
+ * Which prompts a step COULD hand back, derived from the gap list alone.
+ *
+ * ‼️ PURE, AND THAT IS THE POINT. Building the prompts calls buildContext, which reads the client,
+ * the avatar, the vertical, the offer and the measured runs. A card rendered on every step post must
+ * not pay for that just to print one line saying the prompts exist. The card uses this; `prompts` in
+ * the thread builds them for real.
+ */
+export function gapPromptsAvailable(g: StepGaps): GapPromptKey[] {
+  if (g.unreadable.length || !g.gaps.length) return [];
+  const out: GapPromptKey[] = [];
+  const has = (fn: (x: (typeof g.gaps)[number]) => boolean) => g.gaps.some(fn);
+
+  if (has((x) => x.field.filledBy.kind === "research" && x.field.filledBy.asked && Boolean(x.field.filledBy.sectionKey))) {
+    out.push("research");
+  }
+  if (has((x) => x.field.filledBy.kind === "document" && x.field.filledBy.doc === "avatar_sheet")) out.push("avatar_sheet");
+  if (has((x) => x.field.filledBy.kind === "document" && x.field.filledBy.doc === "short_offer")) out.push("short_offer");
+  if (has((x) => x.ref === "offer.necessary_beliefs")) out.push("necessary_beliefs");
+  return out;
+}
+
+/**
+ * The lines a step card adds: what is missing in one line, and the two doors to more.
+ *
+ * ‼️ TWO LINES, NOT THE WHOLE GAP LIST. The readiness line above already carries the count and the
+ * names; repeating five bullets under it on every card doubles the length of every card on the board.
+ * The detail is one word away, and `gaps` prints it in full.
+ */
+export function gapCardLines(g: StepGaps, available: readonly GapPromptKey[]): string[] {
+  if (g.nothingWhy || g.unreadable.length || !g.gaps.length) return [];
+
+  // ‼️ COUNT THE ASKS, NOT THE FIELDS, BECAUSE THAT IS WHAT `gaps` THEN PRINTS. Step 11 is missing
+  // 35 blocking FIELDS and they are three documents: a card promising 35 things next to a list of
+  // three reads as a broken count, and the reader trusts the smaller number less for it.
+  const asks = new Set(g.gaps.filter((x) => x.blocking).map((x) => x.fill.text)).size;
+  const lines = [
+    asks
+      ? `:mag: \`gaps\` lists the ${asks === 1 ? "one thing" : `${asks} things`} still needed here, and what ${asks === 1 ? "it blocks" : "each one blocks"}.`
+      : ":mag: `gaps` lists what would make this step better.",
+  ];
+  if (available.length) {
+    lines.push(
+      `:page_facing_up: \`prompts\` hands you ${available.length} ready to run, already carrying what we know about this client.`
+    );
+  }
+  return lines;
+}
+
 /** The one line a card shows to say these exist, without carrying them. */
 export function gapPromptOfferLine(prompts: readonly GapPrompt[]): string | null {
   if (!prompts.length) return null;

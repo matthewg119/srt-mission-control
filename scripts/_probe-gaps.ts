@@ -28,7 +28,8 @@ import {
   type FieldRef,
 } from "@/lib/clients/step-needs";
 import { gapLines, gapsFrom, type StepGaps } from "@/lib/clients/step-gaps";
-import { gapPromptMessage, gapPromptOfferLine, gapPromptsFor } from "@/lib/clients/gap-prompts";
+import { gapCardLines, gapPromptMessage, gapPromptOfferLine, gapPromptsAvailable, gapPromptsFor } from "@/lib/clients/gap-prompts";
+import { handleGapThreadReply } from "@/lib/clients/gap-thread";
 import { leadContext, ALL_SLICES, held, missing, type LeadContext } from "@/lib/clients/lead-context";
 
 let failed = 0;
@@ -315,6 +316,67 @@ async function main() {
     check("the card line stays one line", Boolean(line && !line.includes(String.fromCharCode(10))), line ?? "null");
     check("and fits a Slack section", Boolean(line && line.length < SECTION_BUDGET));
   }
+
+  // ── 9. The wiring ──────────────────────────────────────────────────────
+  console.log(`
+9. where it is wired in`);
+
+  const route = readFileSync("src/app/api/slack/events/route.ts", "utf8");
+  check("the Slack route calls the gap handler", route.includes("handleGapThreadReply"));
+  check(
+    "and it is a call, not an implementation",
+    !route.includes("gapsFrom(") && !route.includes("gapPromptMessage("),
+    "real logic belongs in a module, per docs/lanes/CONTRACT.md"
+  );
+
+  const engine = readFileSync("src/lib/clients/step-engine.ts", "utf8");
+  check("postStep adds the gap doors", engine.includes("gapCardLines"));
+  check(
+    "and opens one lead scope around them",
+    engine.includes("withLeadScope"),
+    "without it a card assembles the same lead twice"
+  );
+  check(
+    "it can still never fail the card",
+    engine.includes("do-this-now failed for"),
+    "a stalled board is worse than a card with no block"
+  );
+
+  // The two words, and one that is not.
+  const ask = (text: string) =>
+    handleGapThreadReply({
+      clientId: (srt as { id: string }).id,
+      stepKey: "avatar_harvest",
+      text,
+      by: "U_PROBE",
+      channel: "C_PROBE",
+      threadTs: "1.1",
+    });
+
+  const gapsReply = await ask("gaps");
+  check("`gaps` is answered", Boolean(gapsReply?.message));
+  check("and posts nothing afterwards", !gapsReply?.after, "a list needs no follow-up");
+
+  const promptsReply = await ask("prompts");
+  check("`prompts` is answered", Boolean(promptsReply?.message));
+  check("and carries one follow-up per prompt", Boolean(promptsReply?.after));
+
+  check("an ordinary message falls through", (await ask("what do you think")) === null);
+  // ‼️ SINGULAR `prompt` BELONGS TO framework-thread.ts ON THIS STEP. Shadowing it here would
+  // break the one command step 11's own card tells people to type.
+  check("singular `prompt` is left alone", (await ask("prompt")) === null);
+
+  // The card's count must match what `gaps` then prints, or the smaller number looks wrong.
+  const doors = gapCardLines(eleven, gapPromptsAvailable(eleven));
+  check("the card offers the gap list", doors.some((l) => l.includes("`gaps`")), doors.join(" | "));
+  const asksOnCard = doors[0]?.match(/lists the (one|\d+)/)?.[1] ?? "";
+  const asksInList = gapLines(eleven)[0]?.match(/needs (\d+) more/)?.[1] ?? "";
+  check(
+    "and its count matches the list it points at",
+    asksOnCard === asksInList || (asksOnCard === "one" && asksInList === "1"),
+    `card says ${asksOnCard}, list says ${asksInList}`
+  );
+  for (const l of doors) check(`the door line fits a Slack section`, l.length < SECTION_BUDGET);
 
   done();
 }
