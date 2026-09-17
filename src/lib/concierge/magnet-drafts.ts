@@ -351,7 +351,8 @@ export async function anchorFor(clientId: string, audience: Audience): Promise<L
 async function gather(
   clientId: string,
   pageId: string | null,
-  sections: readonly string[] = []
+  sections: readonly string[] = [],
+  planId: string | null = null
 ): Promise<{ ok: true; ground: Ground } | { ok: false; error: string }> {
   // ‼️ NO CONFIG ROW MEANS NO WIDGET, AND THE HONEST ANSWER IS A REFUSAL THAT NAMES THE STEP.
   // Defaulting an audience here would open exactly the hole for-client.ts's header refuses to open
@@ -388,6 +389,50 @@ async function gather(
       return { ok: false, error: "That page has no question, so there is nothing to write an offer for." };
     }
     slug = (page.slug as string | null) ?? "";
+  } else if (planId) {
+    // ‼️ THE PLAN SCOPE: A PAGE THAT IS DECIDED BUT NOT YET WRITTEN. Matthew, 2026-09-17: "after
+    // this we should pre generate 3 ideas for lead magnets for each page we are drafting so the AI
+    // concierge can actually recommend that offer as part of the things that the little pet says."
+    //
+    // The offers have to exist BEFORE the body, or the widget on a freshly drafted page has nothing
+    // page-specific to hand over and falls back to whatever the ladder ranks, which is the same
+    // thing on every page. The page row does not exist yet at step 21, so the grounding is the
+    // planned page's keyword and the ANGLE somebody picked for it, which is a better brief than the
+    // body would have been: it says what the page will argue rather than what it happened to say.
+    const { data: planRow } = await supabaseAdmin
+      .from("page_plan")
+      .select("target_keyword, working_title, question, angle")
+      .eq("id", planId)
+      .eq("client_id", clientId)
+      .maybeSingle();
+
+    if (!planRow) return { ok: false, error: "That planned page is not on file." };
+
+    // Its own select: page_angles is newer than everything around it, and one unknown column fails
+    // the WHOLE select rather than costing a field.
+    const { data: angleRow } = await supabaseAdmin
+      .from("page_angles")
+      .select("idea, promise, indoctrination")
+      .eq("client_id", clientId)
+      .eq("plan_id", planId)
+      .eq("status", "approved")
+      .maybeSingle();
+
+    const keyword = ((planRow.target_keyword as string | null) ?? "").trim();
+    const idea = ((angleRow?.idea as string | null) ?? (planRow.angle as string | null) ?? "").trim();
+
+    question = [
+      ((planRow.question as string | null) ?? (planRow.working_title as string | null) ?? keyword).trim(),
+      idea ? `What this page argues: ${idea}` : "",
+      angleRow?.promise ? `What the reader walks away with: ${String(angleRow.promise)}` : "",
+      angleRow?.indoctrination ? `The belief it installs: ${String(angleRow.indoctrination)}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    if (!question.trim()) {
+      return { ok: false, error: "That planned page has no keyword or angle, so there is nothing to write an offer for." };
+    }
   } else {
     // The sections are their OWN navigation, read off their site by buildSiteReplica. Naming them
     // is what stops these five reading like five offers for a category rather than for a business.
@@ -544,6 +589,29 @@ export async function draftMagnetsForClient(
 }
 
 /**
+ * Write candidate offers for a PLANNED page, before that page has been drafted.
+ *
+ * ‼️ BEFORE THE BODY, WHICH IS A REVERSAL. stageFrameCandidate has always minted a magnet AFTER
+ * savePage, framed from the finished text. That order was deliberate and commented ("so the draft
+ * knows where to stop"), and it is wrong for what the widget needs: the offer has to exist when the
+ * page first renders, or the pill falls back to whatever the ladder ranks, which is the same thing
+ * on every page. Matthew named that exact failure on /invisible.
+ *
+ * The brief is the picked ANGLE rather than the body, which is a better one: it says what the page
+ * will argue instead of what it happened to say, and it is decided before the words are.
+ *
+ * Everything else is draftInto, unchanged, so the orphan-number check, the pill length, the dash
+ * ban and the evidence-ref check are the same ones the other two entry points get.
+ */
+export async function draftMagnetsForPlan(
+  clientId: string,
+  planId: string,
+  opts: { replace?: boolean } = {}
+): Promise<DraftResult> {
+  return draftInto(clientId, null, [], { ...opts, planId });
+}
+
+/**
  * The drafting both entry points share.
  *
  * ‼️ ONE BODY, NOT TWO, SO THE VALIDATORS CANNOT DRIFT APART. The orphan-number check, the pill
@@ -555,9 +623,10 @@ async function draftInto(
   clientId: string,
   pageId: string | null,
   sections: readonly string[],
-  opts: { replace?: boolean } = {}
+  opts: { replace?: boolean; planId?: string | null } = {}
 ): Promise<DraftResult> {
-  const ground = await gather(clientId, pageId, sections);
+  const planId = opts.planId ?? null;
+  const ground = await gather(clientId, pageId, sections, planId);
   if (!ground.ok) return { ok: false, error: ground.error, candidates: [] };
   const g = ground.ground;
 
@@ -629,7 +698,13 @@ There is no page yet. These sit on a rebuild of ` +
     const del = supabaseAdmin.from("page_magnet_candidates").delete().eq("status", "draft");
     await (pageId
       ? del.eq("page_id", pageId)
-      : del.eq("client_id", clientId).is("page_id", null));
+      : planId
+        // Scoped to the PLAN row, not to the client, or a re-roll on one planned page would clear
+        // the drafts of the other six. `.is("page_id", null)` stays for the same PostgREST reason
+        // the client branch documents: `.eq(..., null)` renders as `page_id=eq.null` and matches
+        // nothing, which would leave the old ones in place and print double.
+        ? del.eq("client_id", clientId).eq("plan_id", planId).is("page_id", null)
+        : del.eq("client_id", clientId).is("page_id", null).is("plan_id", null));
   }
 
   const rows = batch.candidates.map((c) => ({
@@ -648,6 +723,9 @@ There is no page yet. These sit on a rebuild of ` +
     // docs/2026-09-11-page-plan.sql adds. That keeps every other client's drafting working in the
     // window between a deploy and the migration.
     ...(g.anchor?.magnetKey ? { frames_key: g.anchor.magnetKey } : {}),
+    // Same reasoning one line up, for docs/2026-09-17-page-datasets-and-angles.sql: named only on
+    // the plan path, so the page and client paths keep inserting exactly what they always did.
+    ...(planId ? { plan_id: planId } : {}),
   }));
 
   const { data, error } = await supabaseAdmin

@@ -204,6 +204,7 @@ export const STEP_ACTIONS: Record<StepKey, StepAction> = {
       "`ladder` writes a rung per awareness stage, `ladder pick 4` anchors the offer at one.",
       "`pillar: 7` sets the offer page by its keyword number, `supports auto` takes the top six.",
       "`angles auto` gives each page three ideas, `angle 3 pick 2` keeps one. The idea comes before the line.",
+      "`magnets` lists the offer each page hands over, `magnet 3 pick 2` keeps one.",
       "`headlines` lists the candidates, `headlines pick 4, 9, 12` keeps seven.",
       "Then press Done. Nothing here publishes.",
     ],

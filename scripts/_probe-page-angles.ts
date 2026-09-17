@@ -190,6 +190,27 @@ check("leading and trailing space is fine", parseAngleCommand("  angles auto  ")
 check("something else is not a command", parseAngleCommand("angles are hard") === null);
 check("a bare number is not a command", parseAngleCommand("3") === null);
 check("isAngleCommand agrees", isAngleCommand("angles auto") && !isAngleCommand("hello"));
+check("an angle command is about the angle", parseAngleCommand("angle 3 pick 2")?.what === "angle");
+
+console.log("\n8. the offer commands, and the one they must not steal");
+check("`magnets` lists", parseAngleCommand("magnets")?.kind === "list");
+check("it is about the magnet", parseAngleCommand("magnets")?.what === "magnet");
+check("`magnets auto` is auto", parseAngleCommand("magnets auto")?.kind === "auto");
+const mpick = parseAngleCommand("magnet 3 pick 2");
+check("`magnet 3 pick 2` picks", mpick?.kind === "pick" && mpick.what === "magnet" && mpick.page === 3 && mpick.option === 2);
+check("`magnet 3 more` rewrites one", parseAngleCommand("magnet 3 more")?.kind === "more");
+check("`offers` is a synonym", parseAngleCommand("offers")?.what === "magnet");
+check("`offer 2 pick 1` is a synonym", parseAngleCommand("offer 2 pick 1")?.what === "magnet");
+
+// ‼️ THE COLLISION THAT WOULD COST A LOCKED OFFER. `offer: laser hair removal` is step 10's command
+// and is handled by offers.ts, which stores what the client SELLS. If the synonym above swallowed
+// it, somebody locking an offer in the step 21 thread would get "there is no page" and nothing
+// would be saved. Every colon form must fall straight through.
+check("`offer:` is NOT this command", parseAngleCommand("offer: laser hair removal") === null);
+check("`offer:` with no space is NOT this command", parseAngleCommand("offer:laser") === null);
+check("`offers:` is NOT this command", parseAngleCommand("offers: one, two") === null);
+check("`terms:` is untouched", parseAngleCommand("terms: lip flip, lip filler") === null);
+check("`magnet` alone with a colon is not a pick", parseAngleCommand("magnet: something") === null);
 
 console.log(failed === 0 ? "\nAll checks passed.\n" : `\n${failed} FAILED\n`);
 if (failed) process.exit(1);

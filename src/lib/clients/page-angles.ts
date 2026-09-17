@@ -314,28 +314,39 @@ export async function draftAngles(
 // Commands
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** `what` says whether the command is about the idea or about the offer that rides on it. */
 export type AngleCommand =
-  | { kind: "list" }
-  | { kind: "auto" }
-  | { kind: "pick"; page: number; option: number }
-  | { kind: "more"; page: number };
+  | { kind: "list"; what: "angle" | "magnet" }
+  | { kind: "auto"; what: "angle" | "magnet" }
+  | { kind: "pick"; what: "angle" | "magnet"; page: number; option: number }
+  | { kind: "more"; what: "angle" | "magnet"; page: number };
 
-const LIST = /^\s*[`*_]*angles?[`*_]*\s*$/i;
-const AUTO = /^\s*[`*_]*angles?\s+auto[`*_]*\s*$/i;
-const PICK = /^\s*[`*_]*angle\s+(\d+)\s+pick\s+(\d+)[`*_]*\s*$/i;
-const MORE = /^\s*[`*_]*angle\s+(\d+)\s+more[`*_]*\s*$/i;
+const LIST = /^\s*[`*_]*(angles?|magnets?|offers?)[`*_]*\s*$/i;
+const AUTO = /^\s*[`*_]*(angles?|magnets?|offers?)\s+auto[`*_]*\s*$/i;
+const PICK = /^\s*[`*_]*(angle|magnet|offer)\s+(\d+)\s+pick\s+(\d+)[`*_]*\s*$/i;
+const MORE = /^\s*[`*_]*(angle|magnet|offer)\s+(\d+)\s+more[`*_]*\s*$/i;
+
+function whatOf(word: string): "angle" | "magnet" {
+  return /^angle/i.test(word) ? "angle" : "magnet";
+}
 
 /**
- * ‼️ AUTO IS TESTED BEFORE LIST, because `angles auto` also matches nothing in LIST but the two
- * regexes are close enough that reordering them later would silently turn every auto into a list.
+ * ‼️ AUTO IS TESTED BEFORE LIST, because the two regexes are close enough that reordering them
+ * later would silently turn every auto into a list.
+ *
+ * `offer` is accepted as a synonym for `magnet` because that is what the thing IS in front of a
+ * client, and somebody reading the card will type the word the card used. It does NOT collide with
+ * `offer:` at step 10: that one ends in a colon and is matched by a different handler entirely.
  */
 export function parseAngleCommand(text: string): AngleCommand | null {
-  if (AUTO.test(text)) return { kind: "auto" };
-  if (LIST.test(text)) return { kind: "list" };
+  const a = AUTO.exec(text);
+  if (a) return { kind: "auto", what: whatOf(a[1]) };
+  const l = LIST.exec(text);
+  if (l) return { kind: "list", what: whatOf(l[1]) };
   const p = PICK.exec(text);
-  if (p) return { kind: "pick", page: Number(p[1]), option: Number(p[2]) };
+  if (p) return { kind: "pick", what: whatOf(p[1]), page: Number(p[2]), option: Number(p[3]) };
   const m = MORE.exec(text);
-  if (m) return { kind: "more", page: Number(m[1]) };
+  if (m) return { kind: "more", what: whatOf(m[1]), page: Number(m[2]) };
   return null;
 }
 
@@ -710,7 +721,107 @@ export async function angleLines(clientId: string): Promise<string[]> {
   return lines;
 }
 
-/** `angles`, `angles auto`, `angle 3 pick 2`, `angle 3 more`, in the step 21 thread. */
+// ─────────────────────────────────────────────────────────────────────────────
+// The offer that rides on the idea
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface PlanMagnet {
+  id: string;
+  planId: string;
+  title: string;
+  promise: string;
+  ctaLabel: string;
+  conciergeEntry: string;
+  status: string;
+}
+
+async function magnetsByPlan(clientId: string): Promise<Map<string, PlanMagnet[]>> {
+  const { data, error } = await supabaseAdmin
+    .from("page_magnet_candidates")
+    .select("id, plan_id, title, promise, cta_label, concierge_entry, status")
+    .eq("client_id", clientId)
+    .not("plan_id", "is", null)
+    .neq("status", "rejected")
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true });
+
+  const out = new Map<string, PlanMagnet[]>();
+  if (error || !data) {
+    if (error) console.error(`[page-angles] magnet read failed: ${error.message}`);
+    return out;
+  }
+  for (const r of data) {
+    const m: PlanMagnet = {
+      id: String(r.id),
+      planId: String(r.plan_id),
+      title: String(r.title),
+      promise: String(r.promise),
+      ctaLabel: String(r.cta_label),
+      conciergeEntry: String(r.concierge_entry),
+      status: String(r.status),
+    };
+    const list = out.get(m.planId) ?? [];
+    list.push(m);
+    out.set(m.planId, list);
+  }
+  return out;
+}
+
+/** Draft the offers for one planned page. Wrapped so a failure never costs the angle pick. */
+async function draftMagnetsFor(clientId: string, planId: string): Promise<string> {
+  try {
+    const { draftMagnetsForPlan } = await import("@/lib/concierge/magnet-drafts");
+    const res = await draftMagnetsForPlan(clientId, planId, { replace: true });
+    return res.ok
+      ? `:gift: ${res.candidates.length} offers drafted for it. \`magnets\` lists them.`
+      : `:warning: No offers drafted: ${res.error ?? "unknown"}`;
+  } catch (e) {
+    return `:warning: No offers drafted: ${(e as Error).message}`;
+  }
+}
+
+/** The card block for the offers, page by page, mirroring angleLines. */
+export async function magnetLines(clientId: string): Promise<string[]> {
+  const { loadPlan } = await import("./page-plan");
+  const plan = await loadPlan(clientId);
+  if ("error" in plan) return [];
+
+  const pages = plan.rows.filter((r) => r.role).sort((a, b) => a.rank - b.rank);
+  if (!pages.length) return [];
+
+  const byPlan = await magnetsByPlan(clientId);
+  const lines = ["*The offer the assistant hands over on each page*"];
+  let anyMissing = false;
+
+  pages.forEach((p, i) => {
+    const mine = byPlan.get(p.id) ?? [];
+    const label = `${i + 1}. ${p.role === "pillar" ? "Pillar" : "Support"}: ${p.targetKeyword}`;
+    const chosen = p.frame?.title ? String(p.frame.title) : null;
+
+    if (chosen) {
+      lines.push(`${label}  :white_check_mark:`);
+      lines.push(`     ${chosen}`);
+      return;
+    }
+    if (!mine.length) {
+      anyMissing = true;
+      lines.push(`${label}  _no offers yet_`);
+      return;
+    }
+    lines.push(label);
+    mine.forEach((m, j) => lines.push(`     ${j + 1}. ${m.title}  _${m.ctaLabel}_`));
+  });
+
+  lines.push("");
+  lines.push(
+    anyMissing
+      ? "`magnets auto` drafts offers for every page that has none. `magnet 3 pick 2` keeps one."
+      : "`magnet 3 pick 2` keeps one. `magnet 3 more` rewrites the offers under one page."
+  );
+  return lines;
+}
+
+/** `angles`, `angles auto`, `angle 3 pick 2`, `angle 3 more`, and the same four for `magnet`. */
 export async function handlePageAngleThreadReply(args: {
   clientId: string;
   stepKey: string | null;
@@ -731,11 +842,81 @@ export async function handlePageAngleThreadReply(args: {
   };
 
   if (cmd.kind === "list") {
-    const lines = await angleLines(args.clientId);
+    const lines = cmd.what === "angle" ? await angleLines(args.clientId) : await magnetLines(args.clientId);
     return {
       message: lines.length
         ? lines.join("\n")
         : ":information_source: No pages are planned yet. Pick the pillar and the supports first.",
+    };
+  }
+
+  // ── The offers ────────────────────────────────────────────────────────────
+  if (cmd.what === "magnet") {
+    const { loadPlan } = await import("./page-plan");
+    const plan = await loadPlan(args.clientId);
+    if ("error" in plan) return { message: `:warning: ${plan.error}` };
+    const pages = plan.rows.filter((r) => r.role).sort((a, b) => a.rank - b.rank);
+
+    if (cmd.kind === "auto" || cmd.kind === "more") {
+      const targets =
+        cmd.kind === "more"
+          ? pages.slice(cmd.page - 1, cmd.page)
+          : pages.filter((p) => !p.frame?.title);
+      if (!targets.length) {
+        return {
+          message:
+            cmd.kind === "more"
+              ? `:warning: There is no page ${cmd.page}. \`magnets\` lists them.`
+              : ":information_source: Every planned page already has an offer picked. `magnet 3 more` rewrites one.",
+        };
+      }
+      return {
+        message: `:hourglass_flowing_sand: Writing offers for ${targets.length} page${targets.length === 1 ? "" : "s"}, from the idea each one argues. About a minute.`,
+        after: async () => {
+          const notes: string[] = [];
+          for (const t of targets) notes.push(`${t.targetKeyword}: ${await draftMagnetsFor(args.clientId, t.id)}`);
+          const listed = await magnetLines(args.clientId);
+          await say([...notes, ...(listed.length ? ["", ...listed] : [])].join("\n"));
+          await refresh();
+        },
+      };
+    }
+
+    // magnet N pick K: the chosen framing becomes page_plan.magnet_frame, which is what the drafter
+    // already mints from after the body. Nothing new mints here, deliberately: approveMagnetCandidate
+    // stays the one and only route into lead_magnets.
+    const row = pages[cmd.page - 1];
+    if (!row) return { message: `:warning: There is no page ${cmd.page}. \`magnets\` lists them.` };
+
+    const mine = (await magnetsByPlan(args.clientId)).get(row.id) ?? [];
+    const choice = mine[cmd.option - 1];
+    if (!choice) {
+      return {
+        message: `:warning: Page ${cmd.page} has ${mine.length} offer${mine.length === 1 ? "" : "s"} on file, so there is no option ${cmd.option}.`,
+      };
+    }
+
+    const { error } = await supabaseAdmin
+      .from("page_plan")
+      .update({
+        magnet_frame: {
+          title: choice.title,
+          ctaLabel: choice.ctaLabel,
+          conciergeEntry: choice.conciergeEntry,
+        },
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", row.id)
+      .eq("client_id", args.clientId);
+    if (error) return { message: `:warning: The offer was not saved: ${error.message}` };
+
+    return {
+      message: [
+        `:gift: *Page ${cmd.page} hands over:* ${choice.title}`,
+        `The pill reads: ${choice.ctaLabel}`,
+        "It is minted into the catalogue when the page is drafted, and the assistant offers it on that page rather than whatever the ladder ranks.",
+      ].join("\n"),
+      after: refresh,
     };
   }
 
@@ -787,9 +968,18 @@ export async function handlePageAngleThreadReply(args: {
         : "",
       "The other two are kept as rejected, which is what teaches the next set.",
       "`headlines` now writes from this idea rather than from the keyword alone.",
+      ":hourglass_flowing_sand: Drafting the offers this page hands over, from the idea.",
     ]
       .filter(Boolean)
       .join("\n"),
-    after: refresh,
+    // ‼️ THE OFFERS ARE DRAFTED ON THE PICK RATHER THAN WAITING TO BE ASKED FOR. The idea is the
+    // brief for them, so the moment it exists is the moment they can be written, and a person who
+    // has just decided what a page argues should not have to know a second command to get the thing
+    // the assistant will hand over on it. Non-fatal: a failure here costs offers, never the pick.
+    after: async () => {
+      const note = await draftMagnetsFor(args.clientId, row.id);
+      await say(`Page ${cmd.page}: ${note}`);
+      await refresh();
+    },
   };
 }
