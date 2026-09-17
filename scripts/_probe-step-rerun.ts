@@ -41,6 +41,40 @@ check("a step past the end is refused", parseRerun(`rerun step ${DELIVERY_STEPS.
 check("a backwards range is refused", parseRerun("rerun 21-18") === null);
 check("zero is refused", parseRerun("rerun step 0") === null);
 
+// ── A re-run carries the board on, and cannot post a wall of cards doing it ──
+const rerunSrc = readFileSync(path.resolve(__dirname, "../src/lib/clients/step-rerun.ts"), "utf8");
+
+/**
+ * The same source with comments blanked out.
+ *
+ * ‼️ THE GREPS BELOW MUST NOT READ THE DOC COMMENTS. step-rerun.ts documents its rules by naming the
+ * very thing it defers to, so "it does not re-implement reachability" failed on a file that is
+ * correct BECAUSE it says `reachableCursor` is what bounds it. Same preamble _probe-lead-context.ts
+ * carries, for the same reason. Newlines are preserved so line numbers still point at real lines.
+ */
+const RERUN_CODE = rerunSrc
+  .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
+  .replace(/\/\/[^\n]*/g, "");
+
+check("a re-run walks the board on when it is done", /if \(args\.advance !== false\) await continueBoard/.test(RERUN_CODE));
+
+// ‼️ THE SAME CASCADE A TRANSITION RUNS, IN THE SAME ORDER. Anchors before runners before cards:
+// postReadySteps skips a step that already has a message, so running it first loses the auto step.
+const cascade = ["ensureReachableAnchors", "runReadyAutoSteps", "postReadySteps"];
+const at = cascade.map((fn) => RERUN_CODE.indexOf(`await ${fn}(`));
+check("it runs the whole cascade", at.every((i) => i > 0), cascade.filter((_, i) => at[i] < 0).join(", "));
+check("in anchors, runners, cards order", at[0] < at[1] && at[1] < at[2]);
+
+// ‼️ reachableCursor IS WHAT STOPS IT AT ONE. The cascade is deferred to rather than re-implemented,
+// so there is no second opinion about what is reachable. A guard for "the step is still pending"
+// would be exactly that second opinion.
+check("it does not re-implement reachability", !/reachableCursor\s*\(/.test(RERUN_CODE));
+
+// ‼️ ONLY THE LAST HOP OF A RANGE KICKS. Otherwise rerun 18-21 posts step 19's card, then re-runs
+// 19, then posts it again.
+check("a range does not kick after every hop", /advance: false/.test(RERUN_CODE));
+check("a range kicks once at the end", /^\s*await continueBoard\(args\.clientId\);\s*$/m.test(RERUN_CODE));
+
 // ── The generated docs have to match the board as it is now ──
 const WIRING = path.resolve(__dirname, "_step-wiring.ts");
 const generator = readFileSync(WIRING, "utf8");
