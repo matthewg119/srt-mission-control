@@ -18,6 +18,7 @@
 // caller falls back to a hand-entered centre, which is what the board already supports.
 
 import { supabaseAdmin } from "@/lib/db";
+import { getOrFetch, cacheKeyOf } from "@/lib/data/dataset-cache";
 
 const BASE = "https://geocoding.geo.census.gov/geocoder/locations";
 
@@ -31,6 +32,23 @@ export interface GeoPoint {
   matchedAddress: string;
 }
 
+/**
+ * Thrown when the geocoder could not be ASKED, as opposed to answering "no match".
+ *
+ * ‼️ THIS DISTINCTION DID NOT EXIST UNTIL 2026-09-18 AND ITS ABSENCE IS WHY THIS FILE COULD NOT BE
+ * CACHED. Every failure here collapsed into the same null: a timeout, a 503 and "the national
+ * address file does not contain this address" were one value. The first two must never be kept;
+ * the third is a real answer and keeping it is the entire point. geocodeZip's own doc comment
+ * already states the general rule, in capitals, about its own null: the caller must treat it as
+ * "could not check" and never as "no conflict".
+ */
+class GeocodeUnavailable extends Error {
+  constructor() {
+    super("the geocoder did not answer");
+    this.name = "GeocodeUnavailable";
+  }
+}
+
 async function call(url: string): Promise<GeoPoint | null> {
   const res = await fetch(url, {
     headers: { accept: "application/json" },
@@ -38,7 +56,7 @@ async function call(url: string): Promise<GeoPoint | null> {
     signal: AbortSignal.timeout(8000),
   });
 
-  if (!res.ok) return null;
+  if (!res.ok) throw new GeocodeUnavailable();
 
   const json = (await res.json()) as {
     result?: { addressMatches?: Array<{ coordinates?: { x: number; y: number }; matchedAddress?: string }> };
@@ -55,7 +73,30 @@ async function call(url: string): Promise<GeoPoint | null> {
   return { lat: y, lng: x, matchedAddress: match?.matchedAddress ?? "" };
 }
 
-/** A full street address to a point. Returns null on any miss, never throws. */
+/**
+ * How long a geocode stays true.
+ *
+ * ‼️ NINETY DAYS, AND THE CADENCE IS THEIRS RATHER THAN OURS. A matched street address does not
+ * move, so the number could live forever; a NO MATCH is the half that has to expire, because the
+ * header above says why one happens: "a brand-new building or a suite in a plaza can miss", and
+ * that stops being true when the Census publishes its next address file. One constant covers both
+ * because a free re-read of a permanent coordinate costs nothing, and pinning the window to their
+ * release schedule is the only honest number available.
+ */
+const GEOCODE_TTL_DAYS = 90;
+
+/**
+ * A full street address to a point, through the cache.
+ *
+ * ‼️ null IS CACHED HERE AND THAT IS DELIBERATE, WHICH MAKES THIS THE ONE LANE THAT INVERTS THE
+ * HOUSE RULE. Everywhere else null means "we could not check" and must never be kept. Here the
+ * unreachable case throws GeocodeUnavailable and the surviving null means something else
+ * entirely: the national address file does not contain this address. That is an answer, it is the
+ * answer the caller acts on by falling back to a hand-entered centre, and re-asking gets the same
+ * no until the next Census release.
+ *
+ * client_id is null because a street address resolves to the same point for whoever asks.
+ */
 export async function geocodeAddress(parts: {
   addressLine1?: string | null;
   city?: string | null;
@@ -70,10 +111,26 @@ export async function geocodeAddress(parts: {
   if (!line) return null;
 
   try {
-    return await call(
-      `${BASE}/onelineaddress?address=${encodeURIComponent(line)}&benchmark=${BENCHMARK}&format=json`
-    );
+    const { payload } = await getOrFetch<GeoPoint | null>({
+      clientId: null,
+      kind: "census.geocode",
+      cacheKey: cacheKeyOf({ line, benchmark: BENCHMARK }),
+      ttlDays: GEOCODE_TTL_DAYS,
+      provider: "us census geocoder",
+      params: { line, benchmark: BENCHMARK },
+      // A US government service, free and public domain, so this zero is a measurement. The
+      // benchmark is in the key because a new benchmark is a different question.
+      fetch: async () => ({
+        payload: await call(
+          `${BASE}/onelineaddress?address=${encodeURIComponent(line)}&benchmark=${BENCHMARK}&format=json`
+        ),
+        costUsd: 0,
+      }),
+    });
+    return payload;
   } catch {
+    // Unreachable, malformed, or timed out. Nothing was cached, and the caller falls back the
+    // same way it always did.
     return null;
   }
 }
