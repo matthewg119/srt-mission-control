@@ -20,8 +20,10 @@
 // partial or invented transcript, and it never fails silently: an empty thread would read
 // as "the voice note was not worth anything".
 
+import { createHash } from "node:crypto";
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
+import { getOrFetch, cacheKeyOf } from "@/lib/data/dataset-cache";
 
 /** Slack's own marker for a voice note, plus the mimetypes the phone apps actually send. */
 export function isVoiceNote(file: {
@@ -48,6 +50,37 @@ export interface TranscriptResult {
   error?: string;
 }
 
+/** Thrown to decline keeping a transcript we did not get. getOrFetch writes nothing on a throw. */
+class TranscriptFailed extends Error {
+  constructor(readonly result: TranscriptResult) {
+    super(result.error ?? "the transcription failed");
+    this.name = "TranscriptFailed";
+  }
+}
+
+/**
+ * How long a transcript stays true: for ever.
+ *
+ * ‼️ THE AUDIO IS THE KEY, SO THERE IS NOTHING TO EXPIRE. The same bytes say the same words on
+ * any day, and different bytes are a different key. An expiry here could only ever cause a second
+ * payment for an answer that cannot have changed.
+ */
+const TRANSCRIPT_TTL_DAYS = null;
+
+/**
+ * Speech to text, through the cache, keyed on the AUDIO rather than on the file.
+ *
+ * ‼️ THE BYTES, NOT THE FILENAME OR THE SLACK FILE ID. The same note re-uploaded, forwarded into
+ * a second thread, or re-read after a step re-run is the same question and must not be paid for
+ * twice. A filename is not identity: two clients both send "audio_message.m4a".
+ *
+ * client_id is null for the same reason. The transcript is a fact about a recording, and keying
+ * it to whoever happened to drop it would re-buy the identical file in the next thread.
+ *
+ * A failure is never kept: an empty transcript, a 429 with no credits and a timeout are all
+ * states this file already takes care to report verbatim, and caching any of them would answer
+ * every later upload of that recording with our own outage, permanently, since nothing expires.
+ */
 export async function transcribeAudio(
   buf: Buffer,
   filename: string,
@@ -59,9 +92,42 @@ export async function transcribeAudio(
     return { ok: false, error: `the file is ${(buf.byteLength / 1e6).toFixed(1)} MB, over the 25 MB limit` };
   }
 
+  const model = process.env.OPENAI_TRANSCRIBE_MODEL ?? "whisper-1";
+  const audioHash = createHash("sha256").update(buf).digest("hex");
+
+  try {
+    const { payload } = await getOrFetch<TranscriptResult>({
+      clientId: null,
+      kind: "openai.whisper",
+      cacheKey: cacheKeyOf({ audio: audioHash, model }),
+      ttlDays: TRANSCRIPT_TTL_DAYS,
+      provider: "openai whisper",
+      params: { model, bytes: buf.byteLength, mimetype },
+      fetch: async () => {
+        const fresh = await askWhisper(buf, filename, mimetype, model, key);
+        if (!fresh.ok) throw new TranscriptFailed(fresh);
+        // Billed per minute of audio, and no per-minute rate is on file here, so this zero is
+        // UNPRICED rather than free. Same known gap the OpenAI rows in this ledger carry.
+        return { payload: fresh, costUsd: 0 };
+      },
+    });
+    return payload;
+  } catch (e) {
+    if (e instanceof TranscriptFailed) return e.result;
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+async function askWhisper(
+  buf: Buffer,
+  filename: string,
+  mimetype: string,
+  model: string,
+  key: string
+): Promise<TranscriptResult> {
   const form = new FormData();
   form.append("file", new Blob([new Uint8Array(buf)], { type: mimetype || "audio/mpeg" }), filename);
-  form.append("model", process.env.OPENAI_TRANSCRIBE_MODEL ?? "whisper-1");
+  form.append("model", model);
   // No language hint. Matthew's clients answer in English and in Spanish and a forced
   // language turns the other one into confident nonsense rather than into an error.
 
