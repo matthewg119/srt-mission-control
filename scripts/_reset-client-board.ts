@@ -58,7 +58,18 @@
  *     bunx tsx --env-file=.env.local scripts/_reset-client-board.ts <slug> --yes \
  *       --channel=srt-agency-onboarding --invite=U074ZQ1K0UE
  *
- * SLACK_CLIENT_ONBOARDING_CHANNEL is where the OLD cards are deleted from. --channel is the NEW
+ * ‼️ SLACK_CLIENT_ONBOARDING_CHANNEL IS ONLY A FALLBACK NOW. The old cards are deleted from the
+ * client's own `ops_channel_id` when it has one, which every client provisioned since 2026-09-12
+ * does. Pass the env var anyway for an older client; it is ignored when the client has its own
+ * channel, and the script prints which one it used.
+ *
+ * ‼️ --channel IS A NO-OP ONCE ops_channel_id IS SET. createOpsChannel returns null rather than
+ * moving a board that already has a home (provision.ts), so a re-run of an existing client reopens
+ * in the channel it is already in. That is the intended behaviour; the flag is for a client with
+ * no channel yet. To genuinely move one, null ops_channel_id by hand first and know that the old
+ * channel keeps its cards.
+ *
+ * --channel is the NEW
  * private channel the rehearsed board is posted into; without it the board reopens where it was.
  */
 import fs from "fs";
@@ -180,14 +191,6 @@ const KEEP = [
 ];
 
 async function main() {
-  const oldChannel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
-  if (!oldChannel) {
-    throw new Error(
-      "SLACK_CLIENT_ONBOARDING_CHANNEL is not set. It is where the OLD cards are deleted from, it " +
-        "lives only in Vercel, so pass it inline. Production is C0BLK797PNU."
-    );
-  }
-
   // ── 1. The client, by slug ────────────────────────────────────────────────
   const { data: client, error: clientErr } = await supabaseAdmin
     .from("clients")
@@ -208,6 +211,38 @@ async function main() {
   console.log(`  ops_channel_id      ${String(c.ops_channel_id ?? "null")}`);
   console.log(`  day_0_archived_at   ${String(c.day_0_archived_at ?? "null")}`);
   console.log(`  offer locked        ${(c.offer as { lockedAt?: string } | null)?.lockedAt ?? "no"}`);
+
+  /**
+   * Where the old cards actually are.
+   *
+   * ‼️ THE CLIENT'S OWN CHANNEL WINS OVER THE ENV VAR, AND GETTING THIS BACKWARDS DELETES NOTHING.
+   * This script was written when every client's board lived in one shared onboarding channel, so
+   * SLACK_CLIENT_ONBOARDING_CHANNEL was the only answer. Clients have had their own ops channel
+   * since 2026-09-12, `channelFor()` prefers `ops_channel_id` everywhere else in the system, and
+   * the cards are posted wherever that says. Deleting from the shared channel by stored ts then
+   * matches nothing at all: chat.delete answers message_not_found, the script reports its
+   * failures, and thirty-three live cards stay in the client's channel pointing at a board that
+   * has been reset underneath them. Measured on SRT, 2026-09-18: ops_channel_id C0C1WTPH0AZ
+   * against an env var holding C0BLK797PNU.
+   *
+   * The env var stays as the fallback, for a client provisioned before ops_channel_id existed.
+   */
+  const envChannel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL ?? null;
+  const ownChannel = (c.ops_channel_id as string | null) ?? null;
+  const oldChannel = ownChannel ?? envChannel;
+  if (!oldChannel) {
+    throw new Error(
+      "This client has no ops_channel_id and SLACK_CLIENT_ONBOARDING_CHANNEL is not set, so there " +
+        "is nowhere to delete the old cards from. The env var lives only in Vercel; pass it " +
+        "inline. Production is C0BLK797PNU."
+    );
+  }
+  console.log(
+    `  cards live in       ${oldChannel}  (${ownChannel ? "the client's own ops channel" : "SLACK_CLIENT_ONBOARDING_CHANNEL, no ops_channel_id set"})`
+  );
+  if (ownChannel && envChannel && ownChannel !== envChannel) {
+    console.log(`  (SLACK_CLIENT_ONBOARDING_CHANNEL=${envChannel} ignored: the client has its own channel)`);
+  }
   console.log("");
   console.log(`re-walking from: *${PREP_CALL_STEP}* (step ${PRE_LOCK_STEPS.length + 1} of ${DELIVERY_STEPS.length})`);
   console.log(`kept and re-confirmed: ${PRE_LOCK_STEPS.join(", ")}`);
