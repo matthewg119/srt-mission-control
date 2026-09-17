@@ -29,6 +29,19 @@ export interface DatasetRequest<T> {
   ttlDays?: number | null;
   provider?: string;
   params?: Record<string, unknown>;
+  /**
+   * Buy it again even if we hold it, and overwrite what we hold with the answer.
+   *
+   * ‼️ IT SKIPS THE READ, NEVER THE WRITE, AND THAT IS THE DIFFERENCE BETWEEN THIS AND NOT USING
+   * THE CACHE AT ALL. A deliberate re-buy is still a purchase that belongs in the ledger and an
+   * answer that belongs in the archive. The alternative a caller reaches for otherwise is varying
+   * the cache key to force a miss, which fills the table with keys nobody can look up again.
+   *
+   * For a person who has read the cached answer and wants a new one anyway: `force` on a niche
+   * brief, the re-run button on the research console. Never a default, and never a retry: a failed
+   * fetch throws and writes nothing, so a retry is already a miss.
+   */
+  force?: boolean;
   /** Called ONLY on a miss. Returns the payload and what the call actually cost. */
   fetch: () => Promise<{ payload: T; costUsd?: number }>;
 }
@@ -86,7 +99,11 @@ export async function getOrFetch<T>(req: DatasetRequest<T>): Promise<DatasetResu
   // PostgREST needs is-null, not eq-null, for the vertical-wide rows.
   query = clientId === null ? query.is("client_id", null) : query.eq("client_id", clientId);
 
-  const { data: hit, error: readError } = await query.maybeSingle();
+  // A forced re-buy asks nobody. The write below still runs, so the ledger and the archive get
+  // the purchase either way, and the upsert replaces the row rather than adding a second one.
+  const { data: hit, error: readError } = req.force
+    ? { data: null, error: null }
+    : await query.maybeSingle();
 
   if (readError) {
     await note(kind, `read failed, falling through to a PAID call: ${readError.message}`, {
