@@ -35,6 +35,15 @@ const GAPS = /^\s*[`*_]*(gaps|missing|what is missing|whats missing)[`*_]*\s*\??
  */
 const PROMPTS = /^\s*[`*_]*prompts[`*_]*\s*\??\s*$/i;
 
+/**
+ * `suggest`, and the ways a person actually asks the question.
+ *
+ * ‼️ NOT THE SAME QUESTION AS `gaps`. gaps answers "what does this step still need", which is about
+ * one step's declared inputs. This answers "what is worth doing next", whose answers can be things
+ * no step asks for: a different rung, a second audience, more keywords where the build is pointed.
+ */
+const SUGGEST = /^\s*[`*_]*(suggest|suggestions|what next|whats next|what now)[`*_]*\s*\??\s*$/i;
+
 export interface GapThreadInput {
   clientId: string;
   /** The step whose thread this is, or null in the pinned header thread. */
@@ -51,16 +60,30 @@ export async function handleGapThreadReply(input: GapThreadInput): Promise<GapTh
   const text = input.text.trim();
   const wantsGaps = GAPS.test(text);
   const wantsPrompts = PROMPTS.test(text);
-  if (!wantsGaps && !wantsPrompts) return null;
+  const wantsSuggestions = SUGGEST.test(text);
+  if (!wantsGaps && !wantsPrompts && !wantsSuggestions) return null;
 
   return withLeadScope(async () => {
-    const ctx = await leadContext(input.clientId);
+    // `suggest` argues from the keywords and the pages as well as the documents, so it needs more
+    // than CARD_SLICES. One read either way: the scope memoizes on the slice list.
+    const ctx = await leadContext(
+      input.clientId,
+      wantsSuggestions ? { include: ["core", "documents", "gaps", "keywords", "pages"] } : {}
+    );
 
     // The step this is about: the thread's own, else whatever the board is waiting on. A bare `gaps`
     // in the pinned thread should answer the question a person is actually asking.
     const fromThread = input.stepKey && isStepKey(input.stepKey) ? (input.stepKey as StepKey) : null;
     const cursor = isHeld(ctx.board.cursor) ? ctx.board.cursor.value : null;
     const stepKey = fromThread ?? cursor;
+
+    // ‼️ SUGGESTIONS DO NOT NEED A STEP. A board with everything done or blocked is exactly when
+    // "what next" is worth asking, and answering it with "there is nothing this is waiting on" is
+    // the wall the suggestion lane exists to replace.
+    if (wantsSuggestions) {
+      const { suggestionsFor, suggestionLines } = await import("./suggestions");
+      return { message: suggestionLines(suggestionsFor(ctx, stepKey)).join("\n") };
+    }
 
     if (!stepKey) {
       return {
