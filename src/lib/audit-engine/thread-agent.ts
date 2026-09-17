@@ -56,7 +56,7 @@ interface SlackThreadMessage {
  * alternating roles, so consecutive same-role messages are merged rather than dropped: dropping
  * them would silently lose exactly the run of drafts he is reacting to.
  */
-async function loadHistory(
+export async function loadHistory(
   channel: string,
   threadTs: string,
   currentTs: string | null

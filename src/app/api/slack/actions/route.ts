@@ -247,6 +247,17 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
         slackTs,
         prospectId: action.value ?? "",
       });
+    case "ri_draft":
+    case "ri_loom":
+    case "ri_paste":
+      return reachinboxCardAction({
+        actionId,
+        channel,
+        slackTs,
+        userId,
+        prospectId: action.value ?? "",
+        triggerId: payload.trigger_id ?? "",
+      });
     // The "Open in WhatsApp" button is a plain url button. Slack still posts an
     // interaction for it, and acknowledging without doing anything is correct: the tap
     // has already opened WhatsApp. Falling through to default would work, but naming it
@@ -803,6 +814,9 @@ async function handleViewSubmission(payload: SlackInteractivePayload): Promise<N
   }
   if (payload.view?.callback_id === "review_link_submit") {
     return reviewLinkSubmit(payload);
+  }
+  if (payload.view?.callback_id === "ri_paste_submit") {
+    return reachinboxPasteSubmit(payload);
   }
   if (payload.view?.callback_id !== "ai_edit_submit") {
     return NextResponse.json({ ok: true });
@@ -2690,4 +2704,194 @@ async function avatarResearchAction(args: {
   );
 
   return NextResponse.json({ ok: true });
+}
+
+
+// ── ReachInbox campaign reply card ────────────────────────────────────────────────────────────
+//
+// Three buttons hang under each reply in #vektor-email-director. Draft and Loom both cost real
+// money, so both take an in-flight claim before they start; Paste is free and opens a modal, which
+// must happen inside Slack's 3 second trigger_id window and therefore cannot be deferred.
+
+async function reachinboxCardAction(args: {
+  actionId: string;
+  channel: string;
+  slackTs: string;
+  userId: string;
+  prospectId: string;
+  triggerId: string;
+}): Promise<NextResponse> {
+  if (!args.prospectId) return NextResponse.json({ ok: true });
+
+  const { getProspectById } = await import("@/lib/followup-operator/prospects");
+  const p = await getProspectById(args.prospectId);
+  if (!p) {
+    await slack.postThreadReply(
+      args.channel,
+      args.slackTs,
+      ":warning: That prospect is no longer in the pipeline."
+    );
+    return NextResponse.json({ ok: true });
+  }
+
+  if (args.actionId === "ri_paste") {
+    return reachinboxOpenPasteModal({
+      channel: args.channel,
+      slackTs: args.slackTs,
+      triggerId: args.triggerId,
+      prospectId: p.id,
+    });
+  }
+
+  const action: "draft" | "loom" = args.actionId === "ri_draft" ? "draft" : "loom";
+  const { claimThreadAction, finishThreadAction } = await import("@/lib/reachinbox/claims");
+
+  const claimed = await claimThreadAction({
+    prospectId: p.id,
+    action,
+    channel: args.channel,
+    slackTs: args.slackTs,
+    userId: args.userId,
+  });
+  if (!claimed) {
+    await slack.postEphemeral(
+      args.channel,
+      args.userId,
+      action === "draft"
+        ? ":hourglass: A draft for them is already being written. Give it a moment."
+        : ":hourglass: A Loom run for them is already going. An audit takes four to six minutes.",
+      p.slack_thread_ts ?? undefined
+    );
+    return NextResponse.json({ ok: true });
+  }
+
+  // The slow half. A Loom run can outlive this lambda; the claim is released either way, and a
+  // second press after a finished run picks up the existing report for free.
+  waitUntil(
+    (async () => {
+      try {
+        const { runDraftForProspect, runLoomForProspect } = await import("@/lib/reachinbox/actions");
+        const outcome =
+          action === "draft" ? await runDraftForProspect(p) : await runLoomForProspect(p);
+        await finishThreadAction({ slackTs: args.slackTs, action, outcome });
+      } catch (err) {
+        console.error(`[reachinbox] ${action} failed:`, err);
+        await finishThreadAction({ slackTs: args.slackTs, action, outcome: "error" });
+        if (p.slack_channel_id && p.slack_thread_ts) {
+          await slack.postThreadReply(
+            p.slack_channel_id,
+            p.slack_thread_ts,
+            `:warning: That failed: ${(err as Error).message}`
+          );
+        }
+      }
+    })()
+  );
+
+  return NextResponse.json({ ok: true });
+}
+
+async function reachinboxOpenPasteModal(args: {
+  channel: string;
+  slackTs: string;
+  triggerId: string;
+  prospectId: string;
+}): Promise<NextResponse> {
+  const token = process.env.SLACK_BOT_TOKEN;
+  if (!token || !args.triggerId) return NextResponse.json({ ok: true });
+
+  const view = {
+    type: "modal",
+    callback_id: "ri_paste_submit",
+    // noteTs is the message the button sits on, so the submit can rewrite that exact card. The
+    // thread ts is deliberately NOT carried here: it is read fresh off the prospect row at submit
+    // time, so a stale metadata field cannot point the answer at the wrong thread.
+    private_metadata: JSON.stringify({
+      prospectId: args.prospectId,
+      channel: args.channel,
+      noteTs: args.slackTs,
+    }),
+    title: { type: "plain_text", text: "Their reply" },
+    submit: { type: "plain_text", text: "Save" },
+    close: { type: "plain_text", text: "Cancel" },
+    blocks: [
+      {
+        type: "input",
+        block_id: "reply_block",
+        label: { type: "plain_text", text: "What they said" },
+        element: {
+          type: "plain_text_input",
+          action_id: "reply_input",
+          multiline: true,
+          placeholder: { type: "plain_text", text: "Paste it exactly as they wrote it." },
+        },
+      },
+    ],
+  };
+
+  const res = await fetch(`${SLACK_API}/views.open`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ trigger_id: args.triggerId, view }),
+  });
+  const json = (await res.json()) as { ok: boolean; error?: string };
+  if (!json.ok) {
+    await slack.postThreadReply(
+      args.channel,
+      args.slackTs,
+      `:warning: Could not open the paste box: ${json.error}`
+    );
+  }
+  return NextResponse.json({ ok: true });
+}
+
+async function reachinboxPasteSubmit(payload: SlackInteractivePayload): Promise<NextResponse> {
+  const meta = JSON.parse(payload.view?.private_metadata ?? "{}") as {
+    prospectId?: string;
+    channel?: string;
+    noteTs?: string;
+  };
+  const pasted = (payload.view?.state.values.reply_block?.reply_input?.value ?? "").trim();
+  if (!meta.prospectId || !meta.channel || !meta.noteTs || !pasted) {
+    return NextResponse.json({ ok: true });
+  }
+
+  const { getProspectById, updateProspect, logTouch } = await import(
+    "@/lib/followup-operator/prospects"
+  );
+  const p = await getProspectById(meta.prospectId);
+  if (!p) return NextResponse.json({ ok: true });
+
+  const now = new Date().toISOString();
+
+  // Their words land in the same log the webhook and the Outlook sweep write to, so everything
+  // downstream asks one question of one place.
+  await logTouch({
+    prospect_id: p.id,
+    direction: "inbound",
+    channel: "email",
+    body: pasted,
+    outcome: "replied",
+    occurred_at: now,
+    metadata: { source: "slack_paste", by: payload.user.id, note_ts: meta.noteTs },
+  });
+  await updateProspect(p.id, { last_reply_at: now });
+
+  // Rewrite the note in place: the quote replaces the "no reply text" apology, and the Paste
+  // button disappears because the thing it was announcing is no longer true.
+  const { buildReplyNote } = await import("@/lib/reachinbox/announce");
+  const { buildReplyActions } = await import("@/lib/reachinbox/card");
+  const { campaignReplyMailbox } = await import("@/lib/followup-operator/campaign-replies");
+
+  const note = buildReplyNote({
+    email: p.email,
+    campaignName: p.campaign,
+    replyText: pasted,
+    occurredAt: now,
+    mailboxLaneOff: !campaignReplyMailbox(),
+  });
+  const actions = buildReplyActions({ prospectId: p.id, hasReplyText: true });
+  await slack.updateMessage(meta.channel, meta.noteTs, note.text, [...note.blocks, actions]);
+
+  return NextResponse.json({ response_action: "clear" });
 }

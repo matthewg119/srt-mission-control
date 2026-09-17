@@ -25,8 +25,11 @@ import {
   campaignChannel,
   campaignReplyMailbox,
   createCampaignProspect,
+  ensureProspectContact,
 } from "@/lib/followup-operator/campaign-replies";
-import { ensureProspectThread, displayName } from "@/lib/followup-operator/digest";
+import { logTouch } from "@/lib/followup-operator/prospects";
+import { ensureProspectThread } from "@/lib/followup-operator/digest";
+import { buildProspectCardLines, buildReplyActions, refreshProspectCard } from "./card";
 import type { ParsedReachInboxEvent } from "./parse";
 
 /**
@@ -178,35 +181,78 @@ export async function announceWebhookReply(input: {
       return "no_prospect";
     }
 
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
-    const header = [
-      `*${displayName(prospect)}* replied to the campaign`,
-      `:e-mail: ${prospect.email}${prospect.website ? ` · ${prospect.website}` : ""}`,
-      prospect.campaign ? `Campaign: *${prospect.campaign}*` : null,
-      prospect.contact_id
-        ? `<${appUrl}/dashboard/leads/${prospect.contact_id}|Open in CRM>`
-        : "_Not in the CRM yet -- the forwarding mailbox is what creates the lead._",
-    ].filter(Boolean) as string[];
+    // ‼️ THE LEAD IS MINTED HERE, BEFORE THE CARD IS WRITTEN, AND THAT ORDER IS THE FEATURE.
+    // ensureProspectThread early-returns once a thread exists, so the card's text is composed
+    // exactly once, at the first reply. Minting after it would leave "Not in the CRM yet" on the
+    // card forever, which is what this lane did until now: it never called ingestLead at all.
+    //
+    // speedToLead is false and must stay false. This lane has no classification -- the webhook
+    // often carries no body at all -- so it cannot tell "what does it cost?" from "take me off
+    // your list", and an instant callback fired at the second is worse than none.
+    const withContact = await ensureProspectContact({
+      prospect,
+      headline: `Replied to the ReachInbox campaign${prospect.campaign ? ` (${prospect.campaign})` : ""}`,
+      noteTitle: "ReachInbox campaign reply",
+      detailLines: [
+        `Campaign: ${prospect.campaign ?? parsed.campaignName ?? "(not on the event)"}`,
+        parsed.replyText
+          ? `Reply: ${parsed.replyText}`
+          : "Reply: ReachInbox sent no reply text with this event. The full payload is stored.",
+        `Received: ${parsed.occurredAt}`,
+      ],
+      speedToLead: false,
+    });
 
-    const threaded = await ensureProspectThread(prospect, channel, header);
+    const threaded = await ensureProspectThread(
+      withContact,
+      channel,
+      buildProspectCardLines(withContact)
+    );
     if (!threaded.slack_thread_ts || !threaded.slack_channel_id) {
       console.error(`[reachinbox] no thread for ${email}; reply not announced`);
       await releaseAnnouncement(eventId);
       return "no_thread";
     }
 
+    // The card was written on an EARLIER reply, before this person had a contact. Rewrite it so
+    // the link works now. A no-op when the card was just created with the id already in it.
+    if (withContact.contact_id && threaded.slack_thread_ts) {
+      await refreshProspectCard({ ...withContact, ...threaded });
+    }
+
+    // Their own words go in the touch log, which is the one place anything asks "what did they
+    // say" -- the draft button, the thread agent, and the Outlook sweep all read the same row.
+    // Skipped when the webhook carried nothing, because a touch with a null body answers nothing.
+    if (parsed.replyText) {
+      await logTouch({
+        prospect_id: withContact.id,
+        direction: "inbound",
+        channel: "email",
+        body: parsed.replyText,
+        outcome: "replied",
+        occurred_at: parsed.occurredAt,
+        metadata: { source: "reachinbox_webhook", event_id: eventId },
+      });
+    }
+
     const note = buildReplyNote({
       email,
-      campaignName: prospect.campaign ?? parsed.campaignName,
+      campaignName: withContact.campaign ?? parsed.campaignName,
       replyText: parsed.replyText,
       occurredAt: parsed.occurredAt,
       mailboxLaneOff: !campaignReplyMailbox(),
+    });
+    // The buttons are a SEPARATE block appended by the caller. See card.ts: keeping them out of
+    // buildReplyNote is what lets the probe keep asserting that a missing body renders no quote.
+    const actions = buildReplyActions({
+      prospectId: withContact.id,
+      hasReplyText: Boolean(parsed.replyText),
     });
     await slack.postThreadReply(
       threaded.slack_channel_id,
       threaded.slack_thread_ts,
       note.text,
-      note.blocks
+      [...note.blocks, actions]
     );
 
     return "announced";

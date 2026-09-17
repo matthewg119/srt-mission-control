@@ -31,7 +31,8 @@ import { supabaseAdmin } from "@/lib/db";
 import { VEKTOR_CHANNELS } from "@/config/vektor";
 import { ingestLead } from "@/lib/lead-intake";
 import { upsertProspect, updateProspect } from "./prospects";
-import { ensureProspectThread, displayName } from "./digest";
+import { ensureProspectThread } from "./digest";
+import { buildProspectCardLines } from "@/lib/reachinbox/card";
 import type { ReplyClassification } from "./cadence";
 import type { OutreachProspectRow } from "./types";
 
@@ -171,6 +172,66 @@ export interface AnnounceInput {
   receivedAt: Date;
 }
 
+export interface EnsureContactInput {
+  prospect: OutreachProspectRow;
+  /** The one-line summary that opens the CRM lead card. */
+  headline: string;
+  noteTitle: string;
+  detailLines: string[];
+  /**
+   * Whether to fire the instant callback.
+   *
+   * ‼️ ONLY EVER TRUE WHEN SOMETHING CLASSIFIED THE REPLY. The webhook lane has no body to
+   * read, so it cannot tell "what does it cost?" from "take me off your list", and a RingOut at
+   * the second is worse than no RingOut at all.
+   */
+  speedToLead: boolean;
+}
+
+/**
+ * Put this prospect in the CRM once, and remember the id on their row.
+ *
+ * ‼️ prospect.contact_id IS THE IDEMPOTENCY KEY, and it is why this is one function rather than
+ * one per lane. A second reply from the same person must not mint a second lead, and the webhook
+ * and the mailbox must not mint one each under two different sets of rules. ingestLead dedupes by
+ * email underneath this as well, so even a lost race converges on a single contact row.
+ *
+ * Returns the prospect with contact_id filled in, or the row unchanged when the lead could not be
+ * created. Never throws: the reply still deserves a thread even if the CRM write failed.
+ */
+export async function ensureProspectContact(
+  input: EnsureContactInput
+): Promise<OutreachProspectRow> {
+  const { prospect } = input;
+  if (prospect.contact_id) return prospect;
+
+  const { first, last } = splitName(prospect.name);
+  const res = await ingestLead({
+    firstName: first,
+    lastName: last,
+    email: prospect.email,
+    website: prospect.website ?? undefined,
+    source: "reachinbox",
+    headline: input.headline,
+    noteTitle: input.noteTitle,
+    detailLines: input.detailLines,
+    speedToLead: input.speedToLead,
+    utmSource: "reachinbox",
+    utmMedium: "email",
+    // Until 2026-09-07 this was omitted, so contacts.utm_campaign was null on every ReachInbox
+    // lead and every campaign ever run produced byte-identical attribution in the CRM.
+    utmCampaign: prospect.campaign ?? undefined,
+  });
+
+  if (!res.contactId) {
+    console.error(`[reachinbox] ingestLead created no contact for ${prospect.email}`);
+    return prospect;
+  }
+
+  const updated = await updateProspect(prospect.id, { contact_id: res.contactId });
+  return updated ?? { ...prospect, contact_id: res.contactId };
+}
+
 /**
  * Post the reply into the prospect's own thread, and put them in the CRM the first time.
  *
@@ -188,46 +249,26 @@ export async function announceCampaignReply(
     return { threaded: false, contactId: prospect.contact_id ?? null };
   }
 
-  // CRM first, so the thread can link a contact that already exists. contact_id is the idempotency
-  // key: a second reply from the same person must not create a second lead or re-fire a RingOut.
-  let contactId = prospect.contact_id ?? null;
-  if (!contactId) {
-    const { first, last } = splitName(prospect.name);
-    const res = await ingestLead({
-      firstName: first,
-      lastName: last,
-      email: prospect.email,
-      website: prospect.website ?? undefined,
-      source: "reachinbox",
-      headline: `Replied to the ReachInbox campaign — ${verdictLabel(classification)}`,
-      noteTitle: "ReachInbox campaign reply",
-      detailLines: [
-        `Subject: ${subject || "(none)"}`,
-        `Reply: ${classification.summary || bodyPreview || "(empty)"}`,
-        `Received: ${receivedAt.toISOString()}`,
-      ],
-      // A RingOut on "take me off your list" is worse than no RingOut at all.
-      speedToLead: isHot(classification),
-      utmSource: "reachinbox",
-      utmMedium: "email",
-      // Until 2026-09-07 this was omitted, so contacts.utm_campaign was null on every ReachInbox
-      // lead and every campaign ever run produced byte-identical attribution in the CRM.
-      utmCampaign: prospect.campaign ?? undefined,
-    });
-    contactId = res.contactId;
-    if (contactId) await updateProspect(prospect.id, { contact_id: contactId });
-  }
+  // CRM first, so the thread can link a contact that already exists. This lane DOES have a
+  // classification, which is the one thing that makes a RingOut safe to arm.
+  const withContact = await ensureProspectContact({
+    prospect,
+    headline: `Replied to the ReachInbox campaign: ${verdictLabel(classification)}`,
+    noteTitle: "ReachInbox campaign reply",
+    detailLines: [
+      `Subject: ${subject || "(none)"}`,
+      `Reply: ${classification.summary || bodyPreview || "(empty)"}`,
+      `Received: ${receivedAt.toISOString()}`,
+    ],
+    speedToLead: isHot(classification),
+  });
+  const contactId = withContact.contact_id ?? null;
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
-  const header = [
-    `*${displayName(prospect)}* replied to the campaign`,
-    `:e-mail: ${prospect.email}${prospect.website ? ` · ${prospect.website}` : ""}`,
-    contactId
-      ? `<${appUrl}/dashboard/leads/${contactId}|Open in CRM>`
-      : "_Not in the CRM — ingest failed, see logs._",
-  ];
-
-  const threaded = await ensureProspectThread(prospect, channel, header);
+  const threaded = await ensureProspectThread(
+    withContact,
+    channel,
+    buildProspectCardLines(withContact)
+  );
   if (!threaded.slack_thread_ts || !threaded.slack_channel_id) {
     console.error(`[reachinbox] no thread for ${prospect.email}; reply not posted`);
     return { threaded: false, contactId };

@@ -434,6 +434,30 @@ export async function POST(request: NextRequest) {
         if (handled) return NextResponse.json({ ok: true });
       }
 
+      // A reply inside a ReachInbox prospect's thread in #vektor-email-director. Channel-gated
+      // first (free), then routed by outreach_prospects.slack_thread_ts, which is UNIQUE-indexed.
+      // A thread under anything else in this channel (the daily campaign digest card, say)
+      // resolves no prospect, the handler returns false, and the message falls through to the
+      // generic assistant exactly as it did before.
+      const emailDirectorChannel = VEKTOR_CHANNELS.emailDirector;
+      if (
+        emailDirectorChannel &&
+        channel === emailDirectorChannel &&
+        parentThreadTs &&
+        parentThreadTs !== event.ts &&
+        userText.trim().length > 0
+      ) {
+        const { handleCampaignThreadReply } = await import("@/lib/reachinbox/thread-reply");
+        const handled = await handleCampaignThreadReply({
+          channel,
+          threadTs: parentThreadTs,
+          text: userText,
+          messageTs: (event.ts as string | undefined) ?? null,
+          userId: event.user as string,
+        });
+        if (handled) return NextResponse.json({ ok: true });
+      }
+
       // ---- Dedicated lanes: these two channels ALWAYS return here, never falling
       // through to the legacy content / AI-manager handlers. ----
 
@@ -1764,8 +1788,15 @@ export async function POST(request: NextRequest) {
         files: attachedFiles,
       });
 
-      // Send reply directly in channel
-      await slack.postMessage(channel, reply);
+      // ‼️ ANSWER WHERE THE QUESTION WAS ASKED. This tail used to always postMessage, so a
+      // reply typed INSIDE a thread was answered at the top of the channel, detached from the
+      // thing it was about. In #vektor-email-director, where every prospect owns a thread, that
+      // put the answer about one person under everybody else's card.
+      if (parentThreadTs && parentThreadTs !== event.ts) {
+        await slack.postThreadReply(channel, parentThreadTs, reply);
+      } else {
+        await slack.postMessage(channel, reply);
+      }
 
       await saveTurn({ conversationId, userText, assistantText: response });
     }

@@ -901,7 +901,7 @@ export interface EmailDraft {
 }
 
 /** Splits "Subject: X\n\nbody..." into {subject, body}. Falls back gracefully if the model didn't follow the format. */
-function parseSubjectAndBody(text: string): EmailDraft {
+export function parseSubjectAndBody(text: string): EmailDraft {
   const match = text.match(/^Subject:\s*(.+?)\r?\n\r?\n([\s\S]*)$/i);
   if (match) return { subject: match[1].trim(), body: match[2].trim() };
   return { subject: "", body: text.trim() };

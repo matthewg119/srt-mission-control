@@ -231,6 +231,33 @@ export async function listTouches(prospectId: string, limit = 40): Promise<Outre
   return (data as OutreachTouchRow[] | null) ?? [];
 }
 
+/**
+ * The most recent thing this prospect actually said, whatever lane it arrived on.
+ *
+ * ‼️ THE TOUCH LOG IS THE ONE ANSWER TO "WHAT DID THEY SAY", ON PURPOSE. A column on
+ * outreach_prospects would hold one reply and be clobbered by the next, and the day the forwarding
+ * mailbox turns on there would be two places to look that disagree. This reads whichever inbound
+ * body landed last: the ReachInbox webhook's own text, Matthew's paste, or the swept Outlook mail.
+ */
+export async function latestInboundBody(prospectId: string): Promise<string | null> {
+  const { data, error } = await supabaseAdmin
+    .from("outreach_touches")
+    .select("body")
+    .eq("prospect_id", prospectId)
+    .eq("direction", "inbound")
+    .not("body", "is", null)
+    .order("occurred_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error("[followup] latestInboundBody:", error.message);
+    return null;
+  }
+  const body = (data as { body?: string | null } | null)?.body;
+  return body?.trim() || null;
+}
+
 /** Everything due on or before `at`, oldest first. Unconfirmed and paused rows
  *  are excluded by the query, never by the caller. */
 export async function listDueProspects(at = new Date()): Promise<OutreachProspectRow[]> {

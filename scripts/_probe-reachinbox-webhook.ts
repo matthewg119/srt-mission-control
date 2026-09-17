@@ -15,6 +15,15 @@
 import { parseReachInboxEvent, normalizeEventType, cleanReplyText } from "../src/lib/reachinbox/parse";
 import { shouldAnnounceReply, buildReplyNote } from "../src/lib/reachinbox/announce";
 import {
+  buildProspectCardLines,
+  buildReplyActions,
+  RI_DRAFT,
+  RI_LOOM,
+  RI_PASTE,
+} from "../src/lib/reachinbox/card";
+import { campaignReplySubject, CAMPAIGN_REPLY_RULES } from "../src/lib/reachinbox/draft-reply";
+import type { OutreachProspectRow } from "../src/lib/followup-operator/types";
+import {
   rate,
   formatPct,
   countOf,
@@ -306,6 +315,79 @@ const base: CampaignFunnel = {
   check("name: campaign name is not the lead", parse({ event: "replied", campaign: { name: "7D 3E 6M", id: "9" }, email: "j@a.com" }).leadName, null);
   check("name: campaign still parses", parse({ event: "replied", campaign: { name: "7D 3E 6M", id: "9" }, email: "j@a.com" }).campaignName, "7D 3E 6M");
   check("name: an address is not a name", parse({ event: "replied", fromName: "j@a.com", email: "j@a.com" }).leadName, null);
+}
+
+// -- The card, the buttons, and the subject ---------------------------------
+//
+// These are why buildReplyNote is still allowed to assert that it renders no ">" anywhere. The
+// lead LINK and the BUTTONS live out here, in blocks of their own, so that assertion keeps
+// guarding exactly what it was written to guard: that a missing body is never dressed up as an
+// empty quote. A Slack <url|label> link contains ">"; a button does not.
+
+function riProspect(over: Partial<OutreachProspectRow> = {}): OutreachProspectRow {
+  return {
+    id: "11111111-1111-1111-1111-111111111111",
+    email: "jane@acme.com",
+    name: "Jane Doe",
+    company: null,
+    website: "https://acme.com",
+    campaign: "7D 3E 6M",
+    contact_id: "22222222-2222-2222-2222-222222222222",
+    state: "REPLIED_INTERESTED",
+    ...over,
+  } as unknown as OutreachProspectRow;
+}
+
+{
+  const withContact = buildProspectCardLines(riProspect()).join("|");
+  check("card: links the lead", withContact.includes("/dashboard/leads/22222222-2222-2222-2222-222222222222|Open in CRM"), true);
+  check("card: names the campaign", withContact.includes("Campaign: *7D 3E 6M*"), true);
+  check("card: carries the website", withContact.includes("https://acme.com"), true);
+
+  const noContact = buildProspectCardLines(riProspect({ contact_id: null })).join("|");
+  check("card: says so when there is no lead", noContact.includes("Not in the CRM yet"), true);
+  check("card: offers no dead link", noContact.includes("|Open in CRM"), false);
+
+  // A freemail replier has no website. The line must not render a dangling separator.
+  const freemail = buildProspectCardLines(riProspect({ website: null })).join("|");
+  check("card: no stray separator without a website", freemail.includes("·"), false);
+  check("card: never prints undefined", freemail.includes("undefined"), false);
+}
+
+{
+  const withText = buildReplyActions({ prospectId: "p1", hasReplyText: true });
+  const ids = (withText.elements ?? []).map((e) => (e as { action_id: string }).action_id);
+  check("buttons: two when we have their words", ids, [RI_DRAFT, RI_LOOM]);
+  check(
+    "buttons: every one carries the prospect id",
+    (withText.elements ?? []).every((e) => (e as { value: string }).value === "p1"),
+    true
+  );
+
+  const noText = buildReplyActions({ prospectId: "p1", hasReplyText: false });
+  const noTextIds = (noText.elements ?? []).map((e) => (e as { action_id: string }).action_id);
+  check("buttons: paste comes first when we do not", noTextIds, [RI_PASTE, RI_DRAFT, RI_LOOM]);
+
+  // The em-dash ban covers what Matthew reads too, and a button label is the easiest place to
+  // reintroduce one by accident.
+  const json = JSON.stringify(noText);
+  check("buttons: no em dash", json.includes("—"), false);
+  check("buttons: no en dash", json.includes("–"), false);
+}
+
+{
+  check("subject: threads onto the existing one", campaignReplySubject("Quick question", "x"), "re: Quick question");
+  // Three exchanges must not produce "re: re: re:".
+  check("subject: never stacks re:", campaignReplySubject("re: re: Quick question", "x"), "re: Quick question");
+  check("subject: falls back to the model when there is no thread", campaignReplySubject(null, "Following up"), "Following up");
+  check("subject: has a fallback even then", campaignReplySubject(null, ""), "Following up");
+
+  check("rules: the em-dash ban is stated", CAMPAIGN_REPLY_RULES.includes("em dash"), true);
+  // The rule that bans em dashes must not itself contain one. CAMPAIGN_REPLY_RULES is guarded at
+  // module load, so this check failing means the guard was removed.
+  check("rules: and obeys itself", /[—–]/.test(CAMPAIGN_REPLY_RULES), false);
+  check("rules: names the onboarding call as the ask", CAMPAIGN_REPLY_RULES.includes("ONBOARDING CALL"), true);
+  check("rules: forbids inventing numbers", CAMPAIGN_REPLY_RULES.includes("no measured data"), true);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
