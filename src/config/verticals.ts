@@ -171,7 +171,7 @@ const PEST_CONTROL: Vertical = {
     "upsell that was never requested); chemicals/safety (\"sprayed the inside and left a residue all",
     "over my stained wood floor and baseboard\"); failed closing (lender requires a clean WDIR).",
     "",
-    "The hinge / north-star belief (#3): the entire market enters the decision convinced they will be",
+    "The hinge belief (#3): the entire market enters the decision convinced they will be",
     "scammed or over-sold (all exterminators upsell, scare to sell more, churn techs every year, and",
     "lock you into a contract you can't cancel). If the message does not resolve that first, nothing",
     "else matters. Proof point: Orkin's own internal audit (obtained by CBS News) showed a 45% failure",

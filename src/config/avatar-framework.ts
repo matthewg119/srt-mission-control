@@ -248,7 +248,7 @@ In internet marketing, everything revolved around choosing magnificent words: po
 
 At Agora, everything rests on the magnificence of the argument. It is not about impactful words. It is about building an argument that is logically and emotionally irresistible. I do not try to convince people with words like "incredible" or "fantastic". My goal is to present an argument that cannot be refuted, one that leads them to a single conclusion.
 
-Every marketing campaign takes the prospect on a journey toward one specific belief: the belief they must hold before the offer is presented. That belief is the north star that guides the whole message.
+Every marketing campaign takes the prospect on a journey toward one specific belief: the belief they must hold before the offer is presented. That belief is the hinge belief that guides the whole message.
 
 When you write without structure, with only pretty words, you lose your way. But when you build a solid argumentative structure, a logical and emotional sequence, you can guide the prospect step by step to that key belief.
 
