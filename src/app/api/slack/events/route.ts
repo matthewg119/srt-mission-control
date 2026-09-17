@@ -1478,11 +1478,33 @@ export async function POST(request: NextRequest) {
             title: `${client.legalName ?? "Client"}${client.stepKey ? ` · ${client.stepKey}` : ""}`,
           });
 
+          // ‼️ ONE SCOPE, leadContext INSIDE IT. Same shape gap-thread.ts uses. The scope is the
+          // unit of work, not the request: everything this reply needs reads once, and nothing is
+          // held across a write. A failure here must not cost the reply, so the brief is optional
+          // and the assistant falls back to what it had before.
+          const { withLeadScope } = await import("@/lib/clients/lead-scope");
+          const brief = await withLeadScope(async () => {
+            try {
+              const { leadContext } = await import("@/lib/clients/lead-context");
+              const { leadBrief } = await import("@/lib/clients/lead-brief");
+              const { isStepKey } = await import("@/config/delivery-steps");
+              const ctx = await leadContext(client.id, {
+                include: ["core", "documents", "gaps", "keywords", "pages", "research"],
+              });
+              const key = client.stepKey && isStepKey(client.stepKey) ? client.stepKey : null;
+              return leadBrief(ctx, key);
+            } catch (e) {
+              console.error(`[slack/events] lead brief failed for ${client.id}: ${(e as Error).message}`);
+              return null;
+            }
+          });
+
           const { reply, response } = await askAssistant({
             conversationId,
             agentType: getAgentType(channel),
             userText,
             files: attachedFiles,
+            leadBrief: brief,
           });
 
           // Both halves, saved. Neither side of this exchange was stored before.
@@ -2535,6 +2557,15 @@ async function askAssistant(args: {
   agentType: string;
   userText: string;
   files: SlackEventFile[];
+  /**
+   * What we hold about the client whose channel this is, from leadBrief().
+   *
+   * ‼️ WITHOUT IT THIS FUNCTION ANSWERS A DIFFERENT QUESTION FROM THE ONE ASKED. On 2026-09-16
+   * `generate pages`, typed in SRT's own step 21 thread, reached here and came back "No med spa
+   * client in the system yet": a true statement about the model's own lookup tools and a useless
+   * one to somebody standing in that client's channel.
+   */
+  leadBrief?: string | null;
 }): Promise<{ reply: string; response: string }> {
   const { conversationId, agentType, userText, files } = args;
 
@@ -2546,7 +2577,11 @@ async function askAssistant(args: {
   // Build system prompt with agent personality
   const basePrompt = await buildSystemPrompt();
   const agentPrompt = AGENT_PROMPTS[agentType] || AGENT_PROMPTS.brainheart;
-  const systemPrompt = `${agentPrompt}\n\n${basePrompt}`;
+  // The lead goes LAST, after the general prompt, because the last thing read is the thing
+  // followed and this is the half that is specifically true.
+  const systemPrompt = args.leadBrief
+    ? `${agentPrompt}\n\n${basePrompt}\n\n# The lead in front of you\n\n${args.leadBrief}`
+    : `${agentPrompt}\n\n${basePrompt}`;
 
   // Download any image files attached to the message so Claude can see them
   const imageFiles = files.filter((f) => (f.mimetype ?? "").startsWith("image/"));
