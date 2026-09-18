@@ -92,11 +92,20 @@ export interface PageOffer {
  * that hands over nothing. isDeliverable() in magnets.ts refuses that one magnet at a time; this
  * is the same doctrine asked about a whole page before it goes live.
  *
- * ‼️ category IS null HERE ON PURPOSE, AND IT IS THE HONEST READING. The live page passes no
- * category either (nothing writes one onto client_pages), so a lattice answer computed with one
- * would describe a page that does not exist. When that changes, it changes in both places.
+ * ‼️ category IS NOW PASSED, AND THE NOTE THAT SAID IT SHOULD NOT BE HAS BEEN HONOURED RATHER THAN
+ * DELETED. It read: "category IS null HERE ON PURPOSE ... the live page passes no category either
+ * (nothing writes one onto client_pages), so a lattice answer computed with one would describe a
+ * page that does not exist. When that changes, it changes in both places." It has changed, and it
+ * changed in both places: hub/[host]/[slug]/page.tsx now passes pageCategoryFor() to the widget, so
+ * this gate computes the same answer the visitor is actually served.
+ *
+ * Defaulted to null so every other caller is untouched and still gets today's behaviour.
  */
-export async function offerForPage(clientId: string, magnetKey: string | null): Promise<PageOffer> {
+export async function offerForPage(
+  clientId: string,
+  magnetKey: string | null,
+  category: string | null = null
+): Promise<PageOffer> {
   const tenant = await conciergeTenant(clientId);
   if (!tenant) return { magnet: null, chosen: false };
 
@@ -115,7 +124,7 @@ export async function offerForPage(clientId: string, magnetKey: string | null): 
       clientId,
       vertical: tenant.vertical,
       treatment: null,
-      category: null,
+      category,
     }),
     chosen: false,
   };

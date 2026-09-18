@@ -3841,7 +3841,18 @@ import * as visionT from "../src/lib/hub/skin-vision";
   ok("any other buyer is told the examples are shape only", /YOUR BUYER IS: women 35 to 55/.test(loadAeoHeadlineEngine({ avatarLabel: "women 35 to 55" })));
 
   const draftSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "hub", "draft-page.ts"), "utf8");
-  ok("the skeleton is validated against both outline and story faults", /outlineFaults\(v, numberHaystack\), \.\.\.storyFaults\(v, storyArgs\)/.test(draftSrc));
+  // The call is multi-line since the format axis landed, and it now passes the RESOLVED limits and
+  // the shape so the prompt and the validator read one object. Matched loosely across whitespace on
+  // purpose: pinning the exact argument text is what made this assertion break on a change that was
+  // correct, and the proposition is "both fault sets still run", not "the line reads exactly so".
+  ok(
+    "the skeleton is validated against both outline and story faults",
+    /outlineFaults\(\s*v,\s*numberHaystack[\s\S]{0,40}?\),\s*\.\.\.storyFaults\(v, storyArgs\)/.test(draftSrc)
+  );
+  ok(
+    "the outline prompt and the outline validator read ONE resolved limits object",
+    /const L = limitsFor\(/.test(draftSrc) && /outlineSystem\(L, fmt\)/.test(draftSrc) && /outlineFaults\(v, numberHaystack, L, fmt\)/.test(draftSrc)
+  );
   ok("the skeleton is handed the page's headline", /outlineStoryLines\(story, ctx\?\.headline/.test(draftSrc));
   const gateSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "hub", "page-gate.ts"), "utf8");
   ok("story placement is a gate warning, never a block", /key: "story_placed", tier: "warn"/.test(gateSrc));

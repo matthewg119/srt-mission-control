@@ -29,7 +29,8 @@ export const CLIENT_TABLES = [
   "client_onboarding_steps", "client_pages", "client_query_state", "client_question_sets", "client_replica_pages",
   "client_url_inventory", "client_weekly_reports", "client_workflow_runs", "colonies", "competitor_candidates",
   "concierge_configs", "concierge_scan_ledger", "concierge_sessions", "harvest_runs", "hub_hits", "lead_magnets",
-  "nap_discrepancies", "page_candidates", "page_dataset", "page_gate_runs", "page_magnet_candidates", "page_plan",
+  "nap_discrepancies", "page_angles", "page_candidates", "page_dataset", "page_gate_runs",
+  "page_magnet_candidates", "page_plan", "page_plan_runs",
   "page_sources", "page_studio_sessions", "review_audit_rows", "review_tool_submissions", "time_log",
   // SET NULL on delete: these rows survive the delete and are relinked on import.
   "audit_reports", "chat_conversations", "fanout_citations", "fanout_queries", "fanout_runs",

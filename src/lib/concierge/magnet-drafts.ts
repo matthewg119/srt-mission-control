@@ -321,6 +321,24 @@ interface Ground {
   anchor: LeadMagnet | null;
   /** This page's planned framing of the anchor, from page_plan, when there is one. */
   plannedFrame: PlannedFrame | null;
+  /**
+   * The approved angle these offers are being written FROM, on the plan path.
+   *
+   * ‼️ THE PROVENANCE OF A MAGNET IS THE ANGLE, AND THE COLUMN FOR IT HAD NO WRITER.
+   * `page_magnet_candidates.angle_id` was added by docs/2026-09-17-page-datasets-and-angles.sql and
+   * nothing ever filled it, so "which idea produced this offer" was recoverable only by going back
+   * through page_plan and hoping the approved angle had not since been re-picked. It is carried here
+   * rather than re-queried because gather already reads the row.
+   */
+  angleId: string | null;
+  /**
+   * The written-post SHAPE the picked angle carries, on the plan path.
+   *
+   * Recorded on the candidate so the corpus can answer "which shapes produce offers people
+   * approve". It is deliberately NOT written onto the minted lead_magnets row: see the note at the
+   * insert in approveMagnetCandidate.
+   */
+  postFormat: string | null;
 }
 
 /** A stored frame, validated. Drop, never repair, same as readOffer. */
@@ -373,6 +391,10 @@ async function gather(
   // below is identical, which is the reason this is a branch here and not a second function.
   let question: string;
   let slug = "";
+  // Set only on the plan branch. A page-scoped or client-scoped draft has no single angle behind it.
+  let angleId: string | null = null;
+  // Same branch, same reason: only a planned page has a picked shape behind it.
+  let postFormat: string | null = null;
 
   if (pageId) {
     const { data: page } = await supabaseAdmin
@@ -412,11 +434,14 @@ async function gather(
     // the WHOLE select rather than costing a field.
     const { data: angleRow } = await supabaseAdmin
       .from("page_angles")
-      .select("idea, promise, indoctrination")
+      .select("id, idea, promise, indoctrination, post_format")
       .eq("client_id", clientId)
       .eq("plan_id", planId)
       .eq("status", "approved")
       .maybeSingle();
+
+    angleId = typeof angleRow?.id === "string" ? angleRow.id : null;
+    postFormat = typeof angleRow?.post_format === "string" ? angleRow.post_format : null;
 
     const keyword = ((planRow.target_keyword as string | null) ?? "").trim();
     const idea = ((angleRow?.idea as string | null) ?? (planRow.angle as string | null) ?? "").trim();
@@ -528,6 +553,8 @@ async function gather(
       clientName,
       anchor,
       plannedFrame,
+      angleId,
+      postFormat,
     },
   };
 }
@@ -726,6 +753,11 @@ There is no page yet. These sit on a rebuild of ` +
     // Same reasoning one line up, for docs/2026-09-17-page-datasets-and-angles.sql: named only on
     // the plan path, so the page and client paths keep inserting exactly what they always did.
     ...(planId ? { plan_id: planId } : {}),
+    // The angle these five were written FROM. Same conditional-spread rule: named only when there
+    // is one, so no other path's insert gains a column it never had.
+    ...(g.angleId ? { angle_id: g.angleId } : {}),
+    // And the SHAPE that angle carries, for docs/2026-09-18-post-formats.sql. Same rule again.
+    ...(g.postFormat ? { post_format: g.postFormat } : {}),
   }));
 
   const { data, error } = await supabaseAdmin
@@ -868,11 +900,21 @@ function toCandidate(row: Record<string, unknown>): MagnetCandidate {
  * exists to prevent in the catalogue.
  */
 export async function draftsForClient(clientId: string): Promise<MagnetCandidate[]> {
+  // ‼️ `plan_id IS NULL` IS NOT OPTIONAL, AND ITS ABSENCE WAS A REAL BUG. This table holds THREE
+  // scopes and draftInto's own delete already tells them apart: page-scoped (`page_id` set),
+  // plan-scoped (`page_id` null, `plan_id` set, one set per planned page) and client-scoped (both
+  // null). Reading on `page_id IS NULL` alone returns step 21's plan drafts as though they were
+  // this client's own, so once `magnets auto` had run, step 19's card announced seven pages' worth
+  // of page framings as "offers written for this business" with an approve button on them.
+  //
+  // `.is()` and never `.eq(..., null)`, for the reason the delete documents: PostgREST renders
+  // `.eq("plan_id", null)` as `plan_id=eq.null`, which matches nothing at all.
   const { data, error } = await supabaseAdmin
     .from("page_magnet_candidates")
     .select(CANDIDATE_COLUMNS)
     .eq("client_id", clientId)
     .is("page_id", null)
+    .is("plan_id", null)
     .eq("status", "draft")
     .order("created_at", { ascending: true })
     .order("id", { ascending: true });
@@ -1017,7 +1059,12 @@ export async function approveMagnetCandidate(args: {
     .select(CANDIDATE_COLUMNS)
     .eq("id", args.candidateId)
     .eq("client_id", args.clientId);
-  read = args.pageId ? read.eq("page_id", args.pageId) : read.is("page_id", null);
+  // ‼️ AND `plan_id IS NULL` ON THE CLIENT BRANCH. `pageId: null` reaches here from exactly one
+  // caller, the `client_magnet_approve` button on step 19's card, which is a CLIENT-scoped
+  // decision. Without this a stale button whose id now names one of step 21's plan drafts would
+  // mint that page's framing as the client-rung magnet and consume the one approved slot
+  // `page_magnet_candidates_one_client_approved` allows.
+  read = args.pageId ? read.eq("page_id", args.pageId) : read.is("page_id", null).is("plan_id", null);
 
   const { data: row, error: readError } = await read.maybeSingle();
 
@@ -1120,6 +1167,16 @@ export async function approveMagnetCandidate(args: {
       // All three null on purpose: this is a CLIENT rung magnet (weight 8 in rungOf), named
       // directly by the page rather than reached by the ladder, and inventing a placement for it
       // would put it in front of pages nobody wrote it for.
+      //
+      // ‼️ AND category STAYS NULL NOW THAT PAGES SEND ONE, WHICH IS THE OPPOSITE OF WHAT IT LOOKS
+      // LIKE IT SHOULD DO. The 2026-09-18 build prompt asked for the minted magnet to take the
+      // format's category so it would be "reachable by a categorised query". That is backwards, and
+      // rungOf is where you can read why: a row with category null is a WILDCARD that matches every
+      // query, while a row carrying "Comparison" matches ONLY a query carrying exactly that. Writing
+      // the category here would therefore not widen this magnet, it would HIDE it from every page of
+      // the client's own site that is not that one shape, including the hub index, the replica and
+      // the preview lane. It also buys nothing: a client magnet already scores 8, above every
+      // library rung, so a category match would take it from 8 to 9 in a contest it already wins.
       vertical: null,
       treatment: null,
       category: null,
@@ -1184,13 +1241,18 @@ export async function approveMagnetCandidate(args: {
 
   // The siblings are set aside rather than deleted: a page offers one thing, and what was on the
   // table when somebody chose is worth being able to read back.
+  //
+  // ‼️ THE CLIENT BRANCH MUST NOT REACH THE PLAN DRAFTS, AND IT USED TO. Scoped on
+  // `page_id IS NULL` alone, approving one client-scoped offer rejected every plan-scoped draft
+  // this client had, which is three options on each of seven planned pages. `magnets` then listed
+  // nothing and `magnet 3 pick 2` had nothing to pick, on a plan nobody had touched.
   const siblings = supabaseAdmin
     .from("page_magnet_candidates")
     .update({ status: "rejected", decided_at: now, decided_by: args.by })
     .eq("status", "draft");
   await (args.pageId
     ? siblings.eq("page_id", args.pageId)
-    : siblings.eq("client_id", args.clientId).is("page_id", null));
+    : siblings.eq("client_id", args.clientId).is("page_id", null).is("plan_id", null));
 
   return { ok: true, magnetKey, title: cand.title, ctaLabel: cand.ctaLabel, framesKey };
 }

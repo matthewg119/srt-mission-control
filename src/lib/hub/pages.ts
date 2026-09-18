@@ -633,6 +633,14 @@ export interface OutlineGap {
   prompt: string;
   /** "client" files the answer in the client library, for every later page. */
   scope: "page" | "client";
+  /**
+   * The post-format dataset key this gap answers, when it answers one (src/config/post-formats.ts).
+   *
+   * Optional, and absent on every outline written before the format axis existed. It is what lets a
+   * gap answered out loud land in the right slot of page_dataset.format_dataset instead of only in
+   * the prose. An invented key is refused by outlineFaults.
+   */
+  field?: string;
 }
 
 /**

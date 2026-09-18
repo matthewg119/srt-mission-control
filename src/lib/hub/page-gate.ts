@@ -43,6 +43,7 @@ import { readPageOutline } from "@/lib/hub/pages";
 import { storyPlacement } from "@/lib/hub/page-stories";
 import { schemaForPage } from "@/lib/hub/jsonld";
 import { offerForPage } from "@/lib/concierge/for-client";
+import { pageCategoryFor } from "@/lib/hub/page-category";
 
 /**
  * Every path that consults this gate. Documentation, not enforcement: enforcement is the call
@@ -325,8 +326,15 @@ function checkNoEvidence(evidence: EvidenceRef[]): GateCheck {
  *          but blocking on it would refuse every page written before the column existed and a
  *          rail everybody steps over is worse than no rail.
  */
-async function checkMagnet(clientId: string, magnetKey: string | null): Promise<GateCheck> {
-  const { magnet, chosen } = await offerForPage(clientId, magnetKey);
+async function checkMagnet(
+  clientId: string,
+  magnetKey: string | null,
+  category: string | null
+): Promise<GateCheck> {
+  // ‼️ THE CATEGORY IS PASSED SO THE GATE JUDGES THE OFFER THE VISITOR ACTUALLY GETS. Without it
+  // this asks the ladder a different question from the one the live page asks, and a page could
+  // pass a gate about an offer nobody is ever shown.
+  const { magnet, chosen } = await offerForPage(clientId, magnetKey, category);
 
   if (!magnet) {
     return {
@@ -834,7 +842,7 @@ export async function runGate(
 
   const checks: GateCheck[] = [
     checkNoEvidence(evidence),
-    await checkMagnet(clientId, page.lead_magnet_key),
+    await checkMagnet(clientId, page.lead_magnet_key, await pageCategoryFor(clientId, pageId)),
     checkUnbackedClaims(evidenceMap),
     checkOrphanNumbers(body, evidence),
     await checkDuplicate(clientId, pageId, body),

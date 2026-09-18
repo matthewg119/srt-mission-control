@@ -7,6 +7,7 @@ import { getPublished, listPublished, planLinkRows } from "@/lib/hub/pages";
 import { NO_PLAN_LINKS, planLinksFor, type PlanLinks } from "@/lib/hub/plan-links";
 import { HubAnswerBody, plainText, truncate } from "@/components/hub/hub-bodies";
 import { ConciergeEmbed } from "@/lib/concierge/embed";
+import { pageCategoryFor } from "@/lib/hub/page-category";
 
 export const revalidate = 300;
 
@@ -72,7 +73,11 @@ export default async function HubPage({ params }: Props) {
         A page with no key falls back to the ladder, which is every page written before the
         column existed.
       */}
-      <ConciergeEmbed clientId={client.id} magnetKey={page.leadMagnetKey} />
+      <ConciergeEmbed
+        clientId={client.id}
+        magnetKey={page.leadMagnetKey}
+        category={await pageCategoryFor(client.id, page.id)}
+      />
     </>
   );
 }

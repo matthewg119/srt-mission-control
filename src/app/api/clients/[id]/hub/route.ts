@@ -340,8 +340,21 @@ export async function POST(
       // whatever editing happened in between. Fire and forget, and deliberately unawaited-in-
       // effect: capturePage swallows its own failures, because losing a research row must never
       // fail a publish that has already passed the Day 0 wall and the gate.
+      //
+      // ‼️ planRowId IS RESOLVED FIRST, AND WITHOUT IT THE MOST VALUABLE ROW IN THE CORPUS IS THE
+      // ONE THAT KNOWS LEAST. capturePage reads the angle, narrative, indoctrination, audience,
+      // offer, magnet candidates and every keyword field through the plan row; with none it records
+      // the published body and nulls what the page was arguing. The drafted row carried all of it
+      // and the published row did not, so the very diff this table exists for was unreadable.
       if (publish) {
-        void capturePage({ clientId, pageId, reason: "published" });
+        const { planRowForPage } = await import("@/lib/clients/page-plan");
+        const publishedPlanRow = await planRowForPage(clientId, pageId);
+        void capturePage({
+          clientId,
+          pageId,
+          planRowId: publishedPlanRow?.id ?? null,
+          reason: "published",
+        });
       }
 
       let pageUrl: string | null = null;

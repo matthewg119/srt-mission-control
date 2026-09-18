@@ -28,6 +28,7 @@ import {
 import { magnetByKey, type LeadMagnet } from "@/lib/concierge/magnets";
 import { audienceForClient } from "@/lib/concierge/for-client";
 import type { PageOutline, OutlineGap, OutlineSection } from "@/lib/hub/pages";
+import { getPostFormat, type PostFormat } from "@/config/post-formats";
 import {
   DRAFT_STORY_RULES,
   OUTLINE_STORY_RULE,
@@ -807,6 +808,16 @@ export interface OutlineContext {
    * outlined before its headline was picked still gets stories, built from the question.
    */
   headline?: string | null;
+  /**
+   * The written-post SHAPE, from page_plan.post_format. Optional and null-safe: a page outlined
+   * before the axis existed, or one written in the studio with no plan row, resolves to the
+   * answer_first baseline, which is byte-identical to what shipped before.
+   */
+  postFormat?: string | null;
+  /** The story spine this page runs on, from the picked angle. */
+  narrative?: string | null;
+  /** The one belief this page has to install, from the picked angle. */
+  indoctrination?: string | null;
 }
 
 /**
@@ -822,7 +833,35 @@ export interface OutlineContext {
  * at 7 pages a batch this is already up to 56 questions in the ONE research prompt W1d sends. The
  * [Pn] page tag is what separates them, not a wider gap numbering.
  */
-export const OUTLINE_LIMITS = {
+export interface OutlineLimits {
+  minSections: number;
+  maxSections: number;
+  minBullets: number;
+  maxBullets: number;
+  minGaps: number;
+  maxGaps: number;
+  maxBulletChars: number;
+  maxHeadingChars: number;
+  /** How many headings must be about something other than price, fear, comparison or process. */
+  minDivergent: number;
+  /** The convergent subjects this shape IS about, which stop counting against minDivergent. */
+  exemptSubjects: readonly string[];
+  /** The question words at least one heading must START with. */
+  mandatoryShapes: readonly string[];
+  /** Rule one, specialised per shape. Answer first is never dropped, only specialised. */
+  openingRule: string;
+}
+
+/**
+ * ‼️ THIS IS THE answer_first BASELINE, NOT "THE" LIMITS. limitsFor() merges a shape's overrides
+ * onto it, and limitsFor(null) and limitsFor("answer_first") both return exactly this. Nothing that
+ * was already working changes shape: the three keys added below are the CURRENT behaviour written
+ * down, an empty exempt list, the what/why/how trio and rule one verbatim.
+ *
+ * ‼️ `as const` IS GONE DELIBERATELY. It has to be assignable to OutlineLimits so a resolved object
+ * is the same type. The numbers are unchanged and every reader reads them numerically.
+ */
+export const OUTLINE_LIMITS: OutlineLimits = {
   minSections: SECTION_COUNT.min,
   maxSections: SECTION_COUNT.max,
   minBullets: 2,
@@ -831,9 +870,28 @@ export const OUTLINE_LIMITS = {
   maxGaps: 8,
   maxBulletChars: 180,
   maxHeadingChars: 80,
-  /** How many headings must be about something other than price, fear, comparison or process. */
   minDivergent: 5,
-} as const;
+  exemptSubjects: [],
+  mandatoryShapes: ["what", "why", "how"],
+  openingRule:
+    "ANSWER FIRST. The first section answers the question directly. Its heading names the answer's " +
+    'subject. Never "Introduction", never "Overview".',
+};
+
+/**
+ * The limits for one written-post shape, resolved once and read by BOTH the prompt and the validator.
+ *
+ * ‼️ THIS FUNCTION EXISTS BECAUSE THE NUMBERS USED TO LIVE IN TWO PLACES. OUTLINE_LIMITS was
+ * interpolated into the OUTLINE_SYSTEM string AND read again by outlineFaults, so a per-shape
+ * override landing in only one of them would have the prompt asking for six sections while the
+ * validator refused anything under eight. The correction retry would then loop on a contradiction it
+ * was never shown, and the failure would read as the model being stupid.
+ */
+export function limitsFor(format: string | null | undefined): OutlineLimits {
+  const row = getPostFormat(format ?? null);
+  if (!row) return OUTLINE_LIMITS;
+  return { ...OUTLINE_LIMITS, ...row.outline };
+}
 
 /**
  * The four subjects a page drifts to when nobody stops it, and the words that give each away.
@@ -853,7 +911,9 @@ const CONVERGENT_VOCABULARY: Readonly<Record<string, readonly string[]>> = {
   process: ["process", "step", "steps", "procedure", "expect", "during", "appointment", "session", "consultation", "book", "booking", "prepare", "preparation", "aftercare", "recovery", "downtime"],
 };
 
-const MANDATORY_SHAPES = ["what", "why", "how"] as const;
+// The what/why/how trio moved onto OUTLINE_LIMITS.mandatoryShapes so a shape can carry its own.
+// A list post's headings ARE its items and start with no question word at all; a comparison page
+// wants "which" and does not want "why".
 
 /** Whole words of a heading, lowercased. Punctuation and markdown are not words. */
 function headingWords(heading: string): string[] {
@@ -881,16 +941,89 @@ export function convergentSubject(heading: string): string | null {
  * satisfy all three and turn rule 8 into nothing. A long-tail question heading starts with its
  * question word, so the first word is the honest place to read it.
  */
-export function shapesCovered(headings: readonly string[]): Set<string> {
+export function shapesCovered(
+  headings: readonly string[],
+  shapes: readonly string[] = OUTLINE_LIMITS.mandatoryShapes
+): Set<string> {
   const found = new Set<string>();
   for (const heading of headings) {
     const first = headingWords(heading)[0];
-    if (first && (MANDATORY_SHAPES as readonly string[]).includes(first)) found.add(first);
+    if (first && shapes.includes(first)) found.add(first);
   }
   return found;
 }
 
-const OUTLINE_SYSTEM = `You plan one answer page for a local business's own website. You do NOT write the page.
+/**
+ * The convergent subjects this shape may not be mostly about, named by their KEYS.
+ *
+ * ‼️ THE VALIDATOR SAYS KEYS AND THE PROMPT SAYS PROSE, AND THAT IS HOW IT ALWAYS WAS. The fault
+ * message is read next to its own tally ("Covered now: price (3), comparison (2)"), so naming the
+ * same tokens the tally uses is what makes the two lines one thought. The PROMPT is read by a model
+ * writing headings, which needs the prose. Both are derived from the one exempt list, so a shape can
+ * never be told one thing and judged by another.
+ */
+function otherThanKeys(limits: OutlineLimits): string {
+  const exempt = new Set(limits.exemptSubjects);
+  const kept = ["price", "fear", "comparison", "process"].filter((k) => !exempt.has(k));
+  if (kept.length === 0) return "the subjects every competing page already covers";
+  if (kept.length === 1) return kept[0];
+  return `${kept.slice(0, -1).join(", ")} or ${kept[kept.length - 1]}`;
+}
+
+/** The same subjects, worded for the model that has to write headings past them. */
+function otherThan(limits: OutlineLimits): string {
+  const exempt = new Set(limits.exemptSubjects);
+  const phrases: Array<[string, string]> = [
+    ["price", "what it costs"],
+    ["fear", "whether it is safe or painful"],
+    ["comparison", "how it compares to something else"],
+    ["process", "what the appointment is like"],
+  ];
+  const kept = phrases.filter(([k]) => !exempt.has(k)).map(([, v]) => v);
+  if (kept.length === 0) return "the things every competing page already covers";
+  if (kept.length === 1) return kept[0];
+  return `${kept.slice(0, -1).join(", ")} or ${kept[kept.length - 1]}`;
+}
+
+/** Rule 2d, rendered from whichever shape words this format demands. */
+function shapeRule(limits: OutlineLimits): string {
+  const s = limits.mandatoryShapes;
+  if (s.length === 0) return "";
+  const caps = s.map((w) => `"${w[0].toUpperCase()}${w.slice(1)}"`);
+  const list = caps.length === 1 ? caps[0] : `${caps.slice(0, -1).join(", ")} and ${caps[caps.length - 1]}`;
+  return (
+    `2d. ${list.toUpperCase()} ARE ALL PRESENT. At least one heading begins with each of ` +
+    `${list}. A page that only explains what a thing is has not told the reader why it matters ` +
+    "to them or how it actually works."
+  );
+}
+
+/** The shape block: what this format is, what it must name, and what it must not be. */
+function formatBlock(format: PostFormat): string {
+  const fields = format.dataset
+    .map((f) => `  - ${f.key} (${f.required ? "required" : "optional"}): ${f.prompt}`)
+    .join("\n");
+  return [
+    "",
+    `THIS PAGE IS A ${format.label.toUpperCase()}. ${format.askedAs.shape}`,
+    `It must name: ${format.askedAs.requires.join("; ")}.`,
+    `It must not be: ${format.askedAs.refuse.join("; ")}.`,
+    "",
+    "WHAT THIS SHAPE HAS TO EXTRACT. Every one of these either has an answer in the evidence already,",
+    "or it is a gap. Where a gap answers one of them, set \"field\" on that gap to the key:",
+    fields,
+  ].join("\n");
+}
+
+/**
+ * The outline prompt, built from the RESOLVED limits.
+ *
+ * ‼️ IT TAKES THE LIMITS RATHER THAN READING OUTLINE_LIMITS, and that is the entire point of the
+ * refactor. outlineFaults reads the same object, so the prompt and the validator cannot disagree
+ * about how many sections a shape may have or which subjects count against its divergence floor.
+ */
+function outlineSystem(L: OutlineLimits, format: PostFormat | null): string {
+  return `You plan one answer page for a local business's own website. You do NOT write the page.
 
 You write its SKELETON: the headings it will have, a few short bullet points under each saying what
 that part covers, and the GAPS, which are the specific things only the business can supply. A person
@@ -901,10 +1034,9 @@ need a fact about this business that the evidence does not already carry is a ga
 
 THE RULES:
 
-1. ANSWER FIRST. The first section answers the question directly. Its heading names the answer's
-   subject. Never "Introduction", never "Overview".
-2. ${OUTLINE_LIMITS.minSections} to ${OUTLINE_LIMITS.maxSections} sections, AND THE SUBJECT DECIDES HOW MANY. Do not pad to reach a number and
-   do not split one idea into two sections to get there. ${OUTLINE_LIMITS.minBullets} to ${OUTLINE_LIMITS.maxBullets} bullets each, each one short.
+1. ${L.openingRule}
+2. ${L.minSections} to ${L.maxSections} sections, AND THE SUBJECT DECIDES HOW MANY. Do not pad to reach a number and
+   do not split one idea into two sections to get there. ${L.minBullets} to ${L.maxBullets} bullets each, each one short.
 2a. EVERY HEADING IS A LONG-TAIL QUESTION IN HER OWN WORDS. Write the heading the way the person
    who typed the question would say it out loud, not the way a brochure would label a section.
    "How long does it take before I see anything?" and not "Timeline". No heading is one noun.
@@ -912,14 +1044,11 @@ THE RULES:
    Return it as "keyword" on the section. It is the search this heading wins, so it is a phrase a
    person would actually type, three words or more, and it is NOT the page's own phrase repeated.
    Two sections may not carry the same keyword.
-2c. AT LEAST ${OUTLINE_LIMITS.minDivergent} HEADINGS ARE ABOUT SOMETHING OTHER than what it costs, whether it is safe or
-   painful, how it compares to something else, or what the appointment is like. Those four are
+2c. AT LEAST ${L.minDivergent} HEADINGS ARE ABOUT SOMETHING OTHER than ${otherThan(L)}. Those are
    what every competing page already covers, so a page made only of them gives an engine no
    reason to pick it. Cover them where they belong, then go past them.
-2d. WHAT, WHY AND HOW ARE ALL PRESENT. At least one heading begins with "What", at least one with
-   "Why", and at least one with "How". A page that only explains what a thing is has not told the
-   reader why it matters to them or how it actually works.
-3. ${OUTLINE_LIMITS.minGaps} to ${OUTLINE_LIMITS.maxGaps} GAPS. Each has an id (G1, G2, ...), a prompt asked in the second person
+${shapeRule(L)}
+3. ${L.minGaps} to ${L.maxGaps} GAPS. Each has an id (G1, G2, ...), a prompt asked in the second person
    ("What do you charge for ...?"), and a scope: "client" when the answer is about the business as
    a whole (pricing, where they serve, their credentials, their policies), "page" when it is about
    this one question. Write [G1] inside the bullet that needs that answer. Every gap is referenced
@@ -930,7 +1059,8 @@ THE RULES:
    is covered; write the bullet and cite nothing, do not ask again.
 6. No competitor named. No outcome promises. No links. No markdown inside headings or bullets.
 7. NO EM DASHES, EN DASHES OR DOUBLE HYPHENS, anywhere. This is checked in code.
-${OUTLINE_STORY_RULE}`;
+${OUTLINE_STORY_RULE}${format ? formatBlock(format) : ""}`;
+}
 
 interface DraftedOutline {
   sections: OutlineSection[];
@@ -954,10 +1084,15 @@ function outlineOrphans(text: string, haystack: string): string[] {
  *
  * Exported for scripts/_probe-page-plan.ts, which proves the limits without a model call.
  */
-export function outlineFaults(v: unknown, numberHaystack: string): string[] {
+export function outlineFaults(
+  v: unknown,
+  numberHaystack: string,
+  limits: OutlineLimits = OUTLINE_LIMITS,
+  format: PostFormat | null = null
+): string[] {
   const out: string[] = [];
   const d = v as Partial<DraftedOutline>;
-  const L = OUTLINE_LIMITS;
+  const L = limits;
 
   if (!Array.isArray(d?.sections)) return ['Return { "sections": [...], "gaps": [...] }.'];
   if (!Array.isArray(d?.gaps)) return ['"gaps" is missing. Return it as an array, even though it has to have entries.'];
@@ -1051,28 +1186,53 @@ export function outlineFaults(v: unknown, numberHaystack: string): string[] {
   // heading can supply what, why and how. Only counted when the section count is already legal,
   // so a 3-section outline gets one clear fault about its size rather than three about its shape.
   if (headings.length >= L.minSections) {
-    const divergent = headings.filter((h) => convergentSubject(h) === null);
+    // ‼️ THE EXEMPTION IS APPLIED HERE, BY THE CALLER, AND NEVER INSIDE convergentSubject(). A
+    // comparison heading is still ABOUT comparison; what a shape changes is whether that counts
+    // against it. Teaching the classifier about formats would make one function answer two
+    // questions and the other readers of it would silently inherit the wrong answer.
+    const exempt = new Set(L.exemptSubjects);
+    const divergent = headings.filter((h) => {
+      const s = convergentSubject(h);
+      return s === null || exempt.has(s);
+    });
     if (divergent.length < L.minDivergent) {
       const converged = headings
         .map((h) => ({ h, subject: convergentSubject(h) }))
-        .filter((x): x is { h: string; subject: string } => x.subject !== null);
+        .filter((x): x is { h: string; subject: string } => x.subject !== null && !exempt.has(x.subject));
       const tally = [...new Set(converged.map((c) => c.subject))]
         .map((subject) => `${subject} (${converged.filter((c) => c.subject === subject).length})`)
         .join(", ");
       out.push(
-        `Only ${divergent.length} of ${headings.length} headings are about something other than price, ` +
-          `fear, comparison or process. At least ${L.minDivergent} must be. Covered now: ${tally}. ` +
+        `Only ${divergent.length} of ${headings.length} headings are about something other than ` +
+          `${otherThanKeys(L)}. At least ${L.minDivergent} must be. Covered now: ${tally || "none"}. ` +
           `Keep those and replace the surplus with what this subject specifically involves.`
       );
     }
 
-    const covered = shapesCovered(headings);
-    const missing = MANDATORY_SHAPES.filter((shape) => !covered.has(shape));
+    const covered = shapesCovered(headings, L.mandatoryShapes);
+    const missing = L.mandatoryShapes.filter((shape) => !covered.has(shape));
     if (missing.length) {
       out.push(
         `No heading begins with ${missing.map((m) => `"${m[0].toUpperCase()}${m.slice(1)}"`).join(" or ")}. ` +
-          `Every page needs a what, a why and a how.`
+          `This page needs ${L.mandatoryShapes.map((m) => `a ${m}`).join(", ")}.`
       );
+    }
+  }
+
+  // ‼️ A GAP NAMING A FIELD THIS SHAPE DOES NOT DECLARE IS A FAULT, on the same rule a dangling
+  // evidence ref already follows. An absent field is a field nobody answered; an invented one is an
+  // answer filed under a key that means something else, and format-dataset.ts would then record it
+  // as the wrong thing entirely.
+  if (format) {
+    const declared = new Set(format.dataset.map((f) => f.key));
+    for (const g of d.gaps as unknown as Array<Record<string, unknown>>) {
+      const field = typeof g?.field === "string" ? g.field.trim() : "";
+      if (field && !declared.has(field)) {
+        out.push(
+          `Gap ${String(g?.id ?? "?")} names field "${field}", which a ${format.label} does not ` +
+            `declare. The fields are: ${[...declared].join(", ")}.`
+        );
+      }
     }
   }
 
@@ -1118,6 +1278,12 @@ export async function draftOutline(
   if (ctx?.workingTitle) lines.push(`Working title: ${ctx.workingTitle}`);
   if (ctx?.targetKeyword) lines.push(`The phrase this page is aimed at: ${ctx.targetKeyword}`);
   if (ctx?.angle) lines.push(`What this page gives the reader: ${ctx.angle}`);
+  // ‼️ THE NARRATIVE AND THE BELIEF REACH THE DRAFTER, AND UNTIL NOW THEY NEVER DID. page_angles
+  // stored both, page_dataset copied both, and the word "narrative" appeared nowhere in this file:
+  // the angle arrived as one sentence and the story spine and the belief the page exists to install
+  // were decided, stored, snapshotted and thrown away at the moment the page was written.
+  if (ctx?.narrative) lines.push(`The story this page runs on: ${ctx.narrative}`);
+  if (ctx?.indoctrination) lines.push(`The one belief this page has to install: ${ctx.indoctrination}`);
   lines.push("");
 
   if (g.evidence.length) {
@@ -1135,12 +1301,19 @@ export async function draftOutline(
   const refs = new Map(g.evidence.map((e) => [e.ref, e.sourceId] as const));
   const beliefIds = story.beliefs.map((b) => b.id);
   const storyArgs = { refs, beliefIds, numberHaystack };
-  const faultsOf = (v: unknown) => [...outlineFaults(v, numberHaystack), ...storyFaults(v, storyArgs)];
+
+  // Resolved ONCE, then handed to both the prompt and the validator. See limitsFor().
+  const fmt = getPostFormat(ctx?.postFormat ?? null);
+  const L = limitsFor(ctx?.postFormat ?? null);
+  const faultsOf = (v: unknown) => [
+    ...outlineFaults(v, numberHaystack, L, fmt),
+    ...storyFaults(v, storyArgs),
+  ];
 
   try {
     const res = await callClaudeJSON<DraftedOutline>({
       model: "claude-sonnet-4-6",
-      system: OUTLINE_SYSTEM,
+      system: outlineSystem(L, fmt),
       user: lines.join("\n"),
       // 14 sections with a keyword each is roughly triple the old ceiling of 5, so the old 2000
       // would truncate the JSON on a long outline and fail validation for a reason the correction
@@ -1148,7 +1321,7 @@ export async function draftOutline(
       maxTokens: 8000,
       temperature: 0.3,
       schemaHint:
-        '{ "sections": [{ "heading": string, "keyword": string, "bullets": string[] }], "gaps": [{ "id": "G1", "prompt": string, "scope": "page" | "client" }], ' +
+        '{ "sections": [{ "heading": string, "keyword": string, "bullets": string[] }], "gaps": [{ "id": "G1", "prompt": string, "scope": "page" | "client", "field": string | undefined }], ' +
         '"stories": [{ "id": "T1", "title": string, "beats": [string, string, string, string], "installs": string[], "heading": string | null, "source": { "kind": "evidence", "ref": "S1" } | { "kind": "gap", "gapId": "G1" } | { "kind": "illustrative" } }] }',
       validate: (v): v is DraftedOutline => faultsOf(v).length === 0,
       describeInvalid: (v) =>
@@ -1165,11 +1338,20 @@ export async function draftOutline(
           keyword: (s.keyword ?? "").trim(),
           bullets: s.bullets.map((b) => b.trim()),
         })),
-        gaps: res.data.gaps.map((gap) => ({
-          id: gap.id.trim(),
-          prompt: gap.prompt.trim(),
-          scope: gap.scope === "client" ? "client" : "page",
-        })),
+        gaps: res.data.gaps.map((gap) => {
+          // Only kept when this shape declares it. outlineFaults has already refused an invented
+          // key by here, so this is belt and braces against a shape-less run carrying one through.
+          const field = typeof (gap as { field?: unknown }).field === "string"
+            ? String((gap as { field?: unknown }).field).trim()
+            : "";
+          const declared = fmt ? new Set(fmt.dataset.map((f) => f.key)) : null;
+          return {
+            id: gap.id.trim(),
+            prompt: gap.prompt.trim(),
+            scope: gap.scope === "client" ? ("client" as const) : ("page" as const),
+            ...(field && declared?.has(field) ? { field } : {}),
+          };
+        }),
         stories: resolveStories(res.data, refs, beliefIds),
         writtenAt: new Date().toISOString(),
       },

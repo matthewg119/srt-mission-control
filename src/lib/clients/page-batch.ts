@@ -448,6 +448,11 @@ export async function writeSkeletonsFor(
         .eq("client_id", clientId);
     }
 
+    // The picked angle carries the story spine and the belief this page has to install. Both are
+    // read here rather than off the plan row, which only ever held the one-line idea.
+    const { approvedAngleForPlan } = await import("./page-angles");
+    const picked = await approvedAngleForPlan(clientId, row.id);
+
     const outline = await draftOutline(clientId, row.question, {
       pageId,
       context: {
@@ -455,6 +460,9 @@ export async function writeSkeletonsFor(
         targetKeyword: row.targetKeyword,
         angle: row.angle,
         headline: row.headline,
+        postFormat: row.postFormat ?? picked?.postFormat ?? null,
+        narrative: picked?.narrative ?? null,
+        indoctrination: picked?.indoctrination ?? null,
       },
     });
     if (!outline.ok) {

@@ -304,7 +304,15 @@ async function liveRows(): Promise<void> {
   // ‼️ THE INVARIANT approveMagnetCandidate MAINTAINS, CHECKED FROM THE OTHER SIDE. An approved
   // candidate whose page points somewhere else means the mint succeeded and setPageMagnet did not,
   // which the approve path reports but cannot itself repair.
-  const approved = rows.filter((r) => r.status === "approved");
+  //
+  // ‼️ PAGE-SCOPED ROWS ONLY, AND WITHOUT THAT FILTER THIS CHECK CAN NEVER PASS. page_id has been
+  // nullable since 2026-09-04 so a client-scoped offer can exist before the client's first page
+  // does, and setPageMagnet has no page to write to for one. This check was reading those rows too:
+  // `byId.get(null)` is undefined, undefined never equals a real minted key, so the single approved
+  // client-scoped offer on file failed an invariant that does not apply to it, and the failure
+  // printed as a bare "null". A check nobody can pass is worse than no check, because it is the one
+  // that hides the next real failure behind it.
+  const approved = rows.filter((r) => r.status === "approved" && r.page_id);
   if (approved.length) {
     const { data: pages } = await supabaseAdmin
       .from("client_pages")

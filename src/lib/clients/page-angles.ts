@@ -32,6 +32,7 @@ import { callClaudeJSON } from "@/lib/claude-calls";
 import { hasBannedDash } from "@/lib/copy-guard";
 import { supabaseAdmin } from "@/lib/db";
 import { isAwarenessStage, type AwarenessStage } from "@/lib/audit-engine/awareness";
+import { getPostFormat, isPostFormatId, type PostFormat, type PostFormatId } from "@/config/post-formats";
 import type { LadderRung } from "./offer-ladder";
 
 const MODEL = "claude-sonnet-4-6" as const;
@@ -52,6 +53,11 @@ export interface DraftedAngle {
   awarenessTarget: AwarenessStage;
   proofNeeded: string[];
   rationale: string | null;
+  /**
+   * The written-post SHAPE this angle is written as. Null on every angle drafted before the axis
+   * existed, and on any run that did not ask for a spread.
+   */
+  postFormat: PostFormatId | null;
 }
 
 export interface AngleInputs {
@@ -73,6 +79,20 @@ export interface AngleInputs {
   objections: string[];
   /** Ideas already taken by this client's other planned pages, so seven pages are seven ideas. */
   taken: string[];
+  /**
+   * The SHAPE asked of each option, in order. Option N must come back as formatSpread[N].
+   *
+   * ‼️ OPTIONAL, AND THE FORMAT CHECK IS GATED ON IT BEING PRESENT. Every fixture in
+   * _probe-page-angles.ts predates this axis and carries no spread; making the check unconditional
+   * turns about forty-five of them red at once. Gated, every existing check stays green with no
+   * edit, which is what proves this change was additive. Same discipline as buildScoredCsv's third
+   * argument and the undefined-versus-null split on ScoredRow.presence.
+   */
+  formatSpread?: readonly PostFormatId[];
+  /** Those shapes rendered for the prompt, stored so the orphan-number haystack covers them. */
+  formatNotes?: readonly string[];
+  /** True when the theme fitted fewer shapes than there are options. The card says so. */
+  formatPadded?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -176,6 +196,23 @@ export function angleFaults(raw: unknown, inputs: AngleInputs): string[] {
       faults.push(`${n}: promises a guarantee, and this client has none on file. Say nothing about risk.`);
     }
 
+    // ‼️ CHECKED ONLY WHEN A SPREAD WAS ASKED FOR. See AngleInputs.formatSpread: every fixture
+    // written before this axis carries none, and an unconditional check fails all of them.
+    if (inputs.formatSpread?.length) {
+      const want = inputs.formatSpread[i];
+      const got = typeof a.post_format === "string" ? a.post_format.trim() : "";
+      if (!got) {
+        faults.push(`${n}: post_format is required, and option ${i + 1} was asked for "${want}".`);
+      } else if (!isPostFormatId(got)) {
+        faults.push(`${n}: "${got}" is not a shape this system knows. Option ${i + 1} was asked for "${want}".`);
+      } else if (want && got !== want) {
+        faults.push(
+          `${n}: was asked for "${want}" and came back "${got}". The options are three SHAPES as well ` +
+            "as three arguments, and the shape of each one is not yours to choose."
+        );
+      }
+    }
+
     if (idea) ideas.push(idea);
   });
 
@@ -184,9 +221,16 @@ export function angleFaults(raw: unknown, inputs: AngleInputs): string[] {
     for (let j = i + 1; j < ideas.length; j++) {
       const o = overlap(ideas[i], ideas[j]);
       if (o > MAX_OVERLAP) {
+        // ‼️ THE MESSAGE NAMES THE SHAPES WHEN THERE ARE SHAPES, because the retry otherwise reaches
+        // for the wrong lever. Two angles can be a list and a comparison and STILL be one idea
+        // reworded; what has to change is what each one ARGUES, not the shape it is written in.
+        const shapes = inputs.formatSpread?.length
+          ? `, even though one is a "${inputs.formatSpread[i]}" and the other a "${inputs.formatSpread[j]}"`
+          : "";
         faults.push(
-          `angles ${i + 1} and ${j + 1} are the same idea reworded (${Math.round(o * 100)}% overlap). ` +
-            "Three options only help if they are three different arguments."
+          `angles ${i + 1} and ${j + 1} are the same idea reworded (${Math.round(o * 100)}% overlap)${shapes}. ` +
+            "Three options only help if they are three different arguments. Change what each one " +
+            "ARGUES, not just how it is shaped."
         );
       }
     }
@@ -212,6 +256,9 @@ export function toAngles(raw: unknown): DraftedAngle[] {
     awarenessTarget: Number(a.awareness_target) as AwarenessStage,
     proofNeeded: Array.isArray(a.proof_needed) ? a.proof_needed.map(String).filter(Boolean) : [],
     rationale: typeof a.rationale === "string" ? a.rationale.trim() || null : null,
+    // Null rather than a guess when the run asked for no spread. angleFaults has already refused an
+    // invented shape by this point, so anything here that is not an id is genuinely absent.
+    postFormat: isPostFormatId(a.post_format) ? a.post_format : null,
   }));
 }
 
@@ -225,7 +272,8 @@ const SCHEMA_HINT = `{
       "awareness_entry": 4,
       "awareness_target": 3,
       "proof_needed": ["what this angle obliges us to prove"],
-      "rationale": "why this angle rather than the other two"
+      "rationale": "why this angle rather than the other two",
+      "post_format": "the shape this option was asked for, copied exactly"
     }
   ]
 }`;
@@ -250,7 +298,20 @@ const SYSTEM = [
   "   5 is problem unaware and 1 is most aware, so the target is the same as or lower than the entry.",
   "6. The indoctrination is ONE belief, stated as a sentence she would have to accept. It is the thing",
   "   that moves her between those two stages, and it is the reason the page exists.",
+  "7. When you are given THE THREE SHAPES, each option must be written as the shape it was asked for,",
+  "   and post_format must be that shape's name copied exactly. The shape is not yours to choose, and",
+  "   an option written in the wrong one is refused. The shapes are a spread on purpose: three",
+  "   arguments in three forms beats three arguments in one.",
 ].join("\n");
+
+/** One shape, rendered for the prompt. Pure, and its output is stored on the inputs. */
+export function renderAskedAs(option: number, format: PostFormat): string {
+  return [
+    `  ${option}. ${format.label} (post_format: "${format.id}"). ${format.askedAs.shape}`,
+    `     it must name: ${format.askedAs.requires.join("; ")}.`,
+    `     it must not be: ${format.askedAs.refuse.join("; ")}.`,
+  ].join("\n");
+}
 
 function userBlock(inputs: AngleInputs): string {
   return [
@@ -279,6 +340,22 @@ function userBlock(inputs: AngleInputs): string {
           .join("\n")
       : "NO LADDER RUNG IS ANCHORED YET. Work from the offer alone and stay close to it.",
     "",
+    // ‼️ THE SHAPES ARE PRINTED FROM inputs.formatNotes, WHICH IS STORED ON THE INPUTS. angleFaults
+    // builds its orphan-number haystack out of JSON.stringify(inputs), so anything printed to the
+    // model that is NOT on inputs is a number the model may legitimately echo and then be refused
+    // for echoing. Rendering here and storing there is what makes the haystack cover the prompt by
+    // construction rather than by somebody remembering.
+    inputs.formatNotes?.length
+      ? [
+          "THE THREE SHAPES, AND OPTION N MUST BE WRITTEN AS SHAPE N:",
+          inputs.formatNotes.join("\n"),
+          inputs.formatPadded
+            ? "This keyword fits fewer shapes than there are options, so a shape repeats. Make the repeated ones argue different things."
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : "",
     inputs.beliefs.length ? `BELIEFS ON FILE:\n${inputs.beliefs.map((b) => `  - ${b}`).join("\n")}` : "",
     inputs.objections.length ? `OBJECTIONS HEARD:\n${inputs.objections.map((o) => `  - ${o}`).join("\n")}` : "",
     inputs.taken.length
@@ -319,10 +396,21 @@ export type AngleCommand =
   | { kind: "list"; what: "angle" | "magnet" }
   | { kind: "auto"; what: "angle" | "magnet" }
   | { kind: "pick"; what: "angle" | "magnet"; page: number; option: number }
-  | { kind: "more"; what: "angle" | "magnet"; page: number };
+  | { kind: "more"; what: "angle" | "magnet"; page: number }
+  | { kind: "shape"; what: "angle"; format: PostFormatId };
 
 const LIST = /^\s*[`*_]*(angles?|magnets?|offers?)[`*_]*\s*$/i;
 const AUTO = /^\s*[`*_]*(angles?|magnets?|offers?)\s+auto[`*_]*\s*$/i;
+/**
+ * `angles all comparison`, asking ONE shape of every planned page instead of a spread.
+ *
+ * ‼️ `all` IS REQUIRED AND THAT IS NOT DECORATION. `angles list` would read as the LIST verb with a
+ * stray word, and the two are one character of regex apart: somebody typing `angles list` meaning
+ * "list the angles" would silently redraft all seven pages as list posts. Requiring `all` makes the
+ * rewrite-everything verb impossible to type by accident.
+ */
+const SHAPE =
+  /^\s*[`*_]*(angles?)\s+all\s+(answer[_ ]first|list|comparison|decision[_ ]guide|teardown)[`*_]*\s*$/i;
 const PICK = /^\s*[`*_]*(angle|magnet|offer)\s+(\d+)\s+pick\s+(\d+)[`*_]*\s*$/i;
 const MORE = /^\s*[`*_]*(angle|magnet|offer)\s+(\d+)\s+more[`*_]*\s*$/i;
 
@@ -341,6 +429,14 @@ function whatOf(word: string): "angle" | "magnet" {
 export function parseAngleCommand(text: string): AngleCommand | null {
   const a = AUTO.exec(text);
   if (a) return { kind: "auto", what: whatOf(a[1]) };
+  // ‼️ SHAPE SITS BETWEEN AUTO AND LIST, which is the rule above applied one rung down. It must be
+  // after AUTO for the same reason AUTO is before LIST, and before LIST so a trailing shape word is
+  // never eaten as a bare listing.
+  const s = SHAPE.exec(text);
+  if (s) {
+    const id = s[2].toLowerCase().replace(/ /g, "_");
+    if (isPostFormatId(id)) return { kind: "shape", what: "angle", format: id };
+  }
   const l = LIST.exec(text);
   if (l) return { kind: "list", what: whatOf(l[1]) };
   const p = PICK.exec(text);
@@ -370,10 +466,40 @@ export interface StoredAngle {
   proofNeeded: string[];
   rationale: string | null;
   status: "draft" | "approved" | "rejected";
+  postFormat: PostFormatId | null;
 }
 
+// ‼️ post_format IS NOT IN THIS STRING, AND THAT IS DELIBERATE. This select feeds anglesFor(), which
+// step twenty one's card renders from, and one unknown column fails the WHOLE PostgREST select. The
+// error is then logged and an EMPTY LIST is returned, so on a deploy that reached production before
+// docs/2026-09-18-post-formats.sql the card would read "no ideas yet" under every page: a missing
+// column presenting as work that was never done. The shape is merged on afterwards by
+// withPostFormats, exactly the way page-plan.ts merges its four later column sets, so a database
+// without the column costs the shape and nothing else.
 const ANGLE_COLUMNS =
   "id, plan_id, idea, promise, narrative, indoctrination, awareness_entry, awareness_target, proof_needed, rationale, status";
+
+/**
+ * Fill in each angle's shape, tolerantly. A missing column leaves every postFormat null.
+ *
+ * One round trip for the whole set, the same shape as withRoles / withHeadlines / withAwareness in
+ * page-plan.ts, and for the identical reason.
+ */
+async function withPostFormats(rows: StoredAngle[]): Promise<StoredAngle[]> {
+  if (rows.length === 0) return rows;
+  const { data, error } = await supabaseAdmin
+    .from("page_angles")
+    .select("id, post_format")
+    .in("id", rows.map((r) => r.id));
+  if (error) return rows;
+  const byId = new Map(((data ?? []) as Array<Record<string, unknown>>).map((r) => [String(r.id), r]));
+  for (const row of rows) {
+    const extra = byId.get(row.id);
+    if (!extra) continue;
+    row.postFormat = isPostFormatId(extra.post_format) ? extra.post_format : null;
+  }
+  return rows;
+}
 
 function toStored(r: Record<string, unknown>): StoredAngle {
   return {
@@ -388,7 +514,33 @@ function toStored(r: Record<string, unknown>): StoredAngle {
     proofNeeded: Array.isArray(r.proof_needed) ? (r.proof_needed as string[]) : [],
     rationale: (r.rationale as string | null) ?? null,
     status: r.status as StoredAngle["status"],
+    postFormat: isPostFormatId(r.post_format) ? r.post_format : null,
   };
+}
+
+/**
+ * The angle somebody picked for one planned page, or null.
+ *
+ * Exists so the DRAFTER can reach the narrative and the belief. page_plan carries only the one-line
+ * idea, so before this the story spine and the indoctrination were stored, snapshotted and then
+ * thrown away at the moment the page was written. Its own select, so an unknown column costs the
+ * story and never the draft.
+ */
+export async function approvedAngleForPlan(clientId: string, planId: string): Promise<StoredAngle | null> {
+  const { data, error } = await supabaseAdmin
+    .from("page_angles")
+    .select(ANGLE_COLUMNS)
+    .eq("client_id", clientId)
+    .eq("plan_id", planId)
+    .eq("status", "approved")
+    .maybeSingle();
+
+  if (error) {
+    console.error(`[page-angles] approved angle read failed: ${error.message}`);
+    return null;
+  }
+  if (!data) return null;
+  return (await withPostFormats([toStored(data as Record<string, unknown>)]))[0] ?? null;
 }
 
 /** Every angle for this client, oldest first, so the number beside one on the card is stable. */
@@ -405,7 +557,7 @@ export async function anglesFor(clientId: string): Promise<StoredAngle[]> {
     console.error(`[page-angles] read failed: ${error.message}`);
     return [];
   }
-  return (data ?? []).map((r) => toStored(r as Record<string, unknown>));
+  return withPostFormats((data ?? []).map((r) => toStored(r as Record<string, unknown>)));
 }
 
 /**
@@ -444,6 +596,10 @@ export async function storeAngles(args: {
     rationale: a.rationale,
     status: "draft",
     model: MODEL,
+    // ‼️ CONDITIONAL SPREAD, the pattern magnet-drafts.ts uses for frames_key / plan_id / angle_id.
+    // An INSERT naming a column the database lacks fails the whole statement, so an angle run on a
+    // deploy that landed before the migration would lose every angle rather than just its shape.
+    ...(a.postFormat ? { post_format: a.postFormat } : {}),
   }));
 
   const { error } = await supabaseAdmin.from("page_angles").insert(rows);
@@ -479,7 +635,7 @@ export async function pickAngle(args: {
     .maybeSingle();
 
   if (error || !data) return { ok: false, error: `that angle is not on file (${error?.message ?? "no row"}).` };
-  const angle = toStored(data as Record<string, unknown>);
+  const angle = (await withPostFormats([toStored(data as Record<string, unknown>)]))[0];
 
   // ‼️ THE SIBLINGS GO TO `rejected`, NOT DELETED. page_angles_one_approved is a partial unique
   // index on plan_id, so a second approve would be refused at the database rather than silently
@@ -510,6 +666,22 @@ export async function pickAngle(args: {
     .eq("id", angle.planId)
     .eq("client_id", args.clientId);
   if (planErr) return { ok: false, error: `the angle was approved but the plan row was not updated: ${planErr.message}` };
+
+  // ‼️ A SECOND UPDATE, NOT A FIELD ON THE ONE ABOVE, AND THE SPLIT IS THE WHOLE POINT. An UPDATE
+  // naming a column the database does not have fails the WHOLE statement, so folding post_format
+  // into the update above would lose the angle pick ITSELF on any deploy that reached production
+  // before docs/2026-09-18-post-formats.sql was run. Isolated, a missing column costs the shape and
+  // nothing else, and the pick the person just made still lands.
+  if (angle.postFormat) {
+    const { error: fmtErr } = await supabaseAdmin
+      .from("page_plan")
+      .update({ post_format: angle.postFormat })
+      .eq("id", angle.planId)
+      .eq("client_id", args.clientId);
+    if (fmtErr) {
+      console.error(`[page-angles] the shape was not copied to the plan row: ${fmtErr.message}`);
+    }
+  }
 
   return { ok: true, angle };
 }
@@ -548,6 +720,14 @@ export async function generateAnglesForPlan(args: {
   by: string;
   /** 1-based position on the card, as a person types it. */
   only?: number;
+  /**
+   * Ask ONE shape of every page instead of a spread (`angles all comparison`).
+   *
+   * ‼️ WHEN THIS IS SET THE PAGE IS REDRAFTED EVEN IF IT ALREADY HAS DRAFTS, because asking for a
+   * shape is asking for a change. It still leaves an APPROVED angle alone: a pick is a decision and
+   * `angle N more` is how you undo one on purpose.
+   */
+  format?: PostFormatId;
 }): Promise<AngleRunResult> {
   const [{ ladderState }, { loadPlan }] = await Promise.all([
     import("./anchor-ladder"),
@@ -591,6 +771,10 @@ export async function generateAnglesForPlan(args: {
       return { ok: false, drafted: 0, failed: 0, lines: [`:warning: There is no page ${args.only}. \`angles\` lists them.`] };
     }
     targets = [one];
+  } else if (args.format) {
+    // Asking for a shape is asking for a change, so a page that only has DRAFTS is redrafted. An
+    // approved angle is still a decision and is left alone.
+    targets = pages.filter((p) => !approvedBy.has(p.id));
   } else {
     targets = pages.filter((p) => !approvedBy.has(p.id) && !draftedBy.has(p.id));
   }
@@ -611,9 +795,26 @@ export async function generateAnglesForPlan(args: {
     .map((p) => (approvedBy.get(p.id)?.idea ?? (p.angle || "")).trim())
     .filter(Boolean);
 
+  const { spreadFor } = await import("@/config/post-formats");
+
   const results = await inWaves(targets, async (row) => {
     const own = (approvedBy.get(row.id)?.idea ?? row.angle ?? "").trim();
     const taken = takenAll.filter((t) => t !== own);
+
+    // ‼️ THE SHAPES ARE DECIDED HERE, IN CODE, AND ONE CALL ASKS FOR ALL THREE. Not three calls per
+    // format: ANGLES_PER_PAGE options across seven pages at CONCURRENCY three is already seven
+    // model calls inside one step, and one call per shape would be twenty one and the step dies.
+    // A forced shape asks for that one shape in all three slots. The options then differ by
+    // ARGUMENT alone, which the Jaccard rule already polices and which is exactly what somebody
+    // typing `angles all comparison` is asking for.
+    const spread = args.format
+      ? { formats: Array(ANGLES_PER_PAGE).fill(args.format) as PostFormatId[], padded: false }
+      : spreadFor({ rank: row.rank, role: row.role, theme: row.theme });
+    const formatNotes = spread.formats.map((id, i) => {
+      const f = getPostFormat(id);
+      return f ? renderAskedAs(i + 1, f) : "";
+    }).filter(Boolean);
+
     const res = await draftAngles({
       clientName: st.inputs!.clientName,
       keyword: row.targetKeyword,
@@ -630,6 +831,9 @@ export async function generateAnglesForPlan(args: {
       beliefs: st.inputs!.beliefs.map((b) => b.text),
       objections: st.inputs!.objections.map((o) => o.text),
       taken,
+      formatSpread: spread.formats,
+      formatNotes,
+      formatPadded: spread.padded,
     });
     if (!res.ok) return { row, error: res.error };
     const stored = await storeAngles({
@@ -692,7 +896,8 @@ export async function angleLines(clientId: string): Promise<string[]> {
     const label = `${n}. ${p.role === "pillar" ? "Pillar" : "Support"}: ${p.targetKeyword}`;
 
     if (picked) {
-      lines.push(`${label}  :white_check_mark:`);
+      const shape = getPostFormat(picked.postFormat);
+      lines.push(`${label}  :white_check_mark:${shape ? `  _${shape.label}_` : ""}`);
       lines.push(`     ${picked.idea}`);
       if (picked.awarenessEntry && picked.awarenessTarget) {
         lines.push(`     _moves her from stage ${picked.awarenessEntry} to ${picked.awarenessTarget}_`);
@@ -707,8 +912,17 @@ export async function angleLines(clientId: string): Promise<string[]> {
     }
 
     lines.push(label);
+    // ‼️ WHEN EVERY OPTION IS THE SAME SHAPE, SAY SO. That happens when the keyword fitted fewer
+    // shapes than there are options and answer_first padded the rest. A silent pad reads as the
+    // generator having ignored the spread, which is the bug it looks most like.
+    const shapes = mine.map((a) => a.postFormat).filter(Boolean);
+    if (shapes.length === mine.length && new Set(shapes).size === 1) {
+      const only = getPostFormat(shapes[0]);
+      if (only) lines.push(`     _this keyword only fits one shape, so all three are ${only.label} and differ by argument._`);
+    }
     mine.forEach((a, j) => {
-      lines.push(`     ${j + 1}. ${a.idea}`);
+      const shape = getPostFormat(a.postFormat);
+      lines.push(`     ${j + 1}. ${shape ? `*${shape.label}.* ` : ""}${a.idea}`);
     });
   });
 
@@ -923,8 +1137,14 @@ export async function handlePageAngleThreadReply(args: {
   // ‼️ THE ACK GOES BACK FIRST AND THE MODEL CALLS HAPPEN IN `after`. `angles auto` is one call per
   // planned page, seven of them in waves of three, which is well past the three seconds Slack waits
   // before it decides the app is down and shows the user a failure over work that is running fine.
-  if (cmd.kind === "auto" || cmd.kind === "more") {
-    const scope = cmd.kind === "more" ? `page ${cmd.page}` : "every page that has none";
+  if (cmd.kind === "auto" || cmd.kind === "more" || cmd.kind === "shape") {
+    const shaped = cmd.kind === "shape" ? getPostFormat(cmd.format) : null;
+    const scope =
+      cmd.kind === "more"
+        ? `page ${cmd.page}`
+        : cmd.kind === "shape"
+          ? `every page that has no pick, all as ${shaped?.label ?? cmd.format}`
+          : "every page that has none";
     return {
       message: `:hourglass_flowing_sand: Writing three ideas for ${scope}, from the anchored rung and this page's keyword. About a minute.`,
       after: async () => {
@@ -932,6 +1152,7 @@ export async function handlePageAngleThreadReply(args: {
           clientId: args.clientId,
           by: args.by,
           only: cmd.kind === "more" ? cmd.page : undefined,
+          format: cmd.kind === "shape" ? cmd.format : undefined,
         });
         const listed = res.ok ? await angleLines(args.clientId) : [];
         await say([...res.lines, ...(listed.length ? ["", ...listed] : [])].join("\n"));

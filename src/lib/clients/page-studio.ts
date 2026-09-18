@@ -960,10 +960,23 @@ async function outlineCommand(session: Session, fresh: boolean): Promise<void> {
     await say(session.threadTs, "Writing the skeleton. The page body is not touched.");
 
     const { draftOutline } = await import("@/lib/hub/draft-page");
+    // Same read page-batch.ts makes: the shape, the story spine and the belief all come off the
+    // picked angle, and a studio page with no plan row behind it simply has none of them.
+    const { approvedAngleForPlan } = await import("./page-angles");
+    const picked = row ? await approvedAngleForPlan(session.clientId, row.id) : null;
+
     const res = await draftOutline(session.clientId, (page?.question as string) ?? "", {
       pageId: session.pageId,
       context: row
-        ? { workingTitle: row.workingTitle, targetKeyword: row.targetKeyword, angle: row.angle, headline: row.headline }
+        ? {
+            workingTitle: row.workingTitle,
+            targetKeyword: row.targetKeyword,
+            angle: row.angle,
+            headline: row.headline,
+            postFormat: row.postFormat ?? picked?.postFormat ?? null,
+            narrative: picked?.narrative ?? null,
+            indoctrination: picked?.indoctrination ?? null,
+          }
         : null,
     });
 
@@ -1366,8 +1379,19 @@ async function replaceCommand(session: Session, body: string, messageTs: string)
   // ‼️ THE EDIT, CAPTURED AS ITS OWN SNAPSHOT. This is the row that says what a person changed
   // about a model's draft, which is the whole reason the dataset keeps more than the final
   // version. Fire and forget: capturePage swallows its own failures.
+  // ‼️ planRowId IS PASSED, AND WITHOUT IT THIS ROW RECORDS THE EDIT AND FORGETS WHAT THE PAGE WAS
+  // ARGUING. capturePage reads the angle, the narrative, the indoctrination, the audience, the offer,
+  // the magnet candidates and every keyword field THROUGH the plan row, so a capture with no plan id
+  // nulls all of them. That is the half of the corpus that says what the page was written FROM.
   const { capturePage } = await import("@/lib/clients/page-dataset");
-  void capturePage({ clientId: session.clientId, pageId: session.pageId, reason: "edited" });
+  const { planRowForPage: planRowForEdited } = await import("./page-plan");
+  const editedPlanRow = await planRowForEdited(session.clientId, session.pageId);
+  void capturePage({
+    clientId: session.clientId,
+    pageId: session.pageId,
+    planRowId: editedPlanRow?.id ?? null,
+    reason: "edited",
+  });
 
   await say(
     session.threadTs,

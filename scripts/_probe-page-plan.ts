@@ -359,6 +359,7 @@ const row: PlanRow = {
   status: "proposed",
   pageId: null,
   pageStatus: null,
+  postFormat: null,
   role: null,
   pillarId: null,
   keywordCategory: null,

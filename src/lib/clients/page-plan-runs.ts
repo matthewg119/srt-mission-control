@@ -56,11 +56,15 @@ export async function snapshotPlan(args: {
   const empty: SnapshotResult = { rowCount: 0, keptCount: 0, replacedCount: 0, runId: null };
 
   try {
+    // ‼️ `*`, NOT A COLUMN LIST, AND THAT IS A FIX RATHER THAN LAZINESS. A snapshot exists to record
+    // the plan AS IT STOOD, so a hand-written column list makes every new column silently absent
+    // from the record: the read does not fail, it just quietly stops capturing the thing that was
+    // added. Worse, an unknown name fails the WHOLE select and this function returns an empty
+    // snapshot while reporting success, so a rerun would erase the plan and record nothing of it.
+    // archive.ts takes `*` for the same job for the same reason.
     const { data: rows, error } = await supabaseAdmin
       .from("page_plan")
-      .select(
-        "id, rank, role, status, question, target_keyword, target_keyword_id, working_title, headline, angle, angle_id, theme, keyword_category, awareness_entry, awareness_target, magnet_frame, pillar_id, page_id, created_at"
-      )
+      .select("*")
       .eq("client_id", args.clientId)
       .order("rank", { ascending: true });
 
@@ -119,11 +123,11 @@ export async function snapshotPlan(args: {
 async function anglesFor(planIds: string[]): Promise<unknown[]> {
   if (!planIds.length) return [];
 
+  // `*` for the same reason the plan snapshot above takes it: this is the only record that survives
+  // a rerun deleting the angles, so a column it forgets to name is a decision nobody can read back.
   const { data, error } = await supabaseAdmin
     .from("page_angles")
-    .select(
-      "id, plan_id, idea, promise, narrative, indoctrination, awareness_entry, awareness_target, status, decided_at, decided_by, model, created_at"
-    )
+    .select("*")
     .in("plan_id", planIds)
     .order("created_at", { ascending: true });
 

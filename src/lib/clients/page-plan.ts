@@ -37,6 +37,7 @@ import {
 import { blockFor } from "@/lib/audit-engine/supplied-run";
 import { hasBannedDash } from "@/lib/copy-guard";
 import { CTA_MAX, readFrame, type PlannedFrame } from "@/lib/concierge/magnet-drafts";
+import { isPostFormatId, type PostFormatId } from "@/config/post-formats";
 import { normalizePhrase, phraseFaults, type PhraseFault } from "./phrase-quality";
 import { themeOf } from "./artifacts/page-candidates";
 
@@ -106,6 +107,11 @@ export interface PlanRow {
   pageId: string | null;
   /** Read through page_id from client_pages. Never stored on the plan row. */
   pageStatus: "draft" | "published" | "archived" | null;
+  /**
+   * The written-post shape this page takes, copied from the picked angle. Null until one is picked,
+   * and on every row before docs/2026-09-18-post-formats.sql. Merged by withPostFormat.
+   */
+  postFormat: PostFormatId | null;
   /** Null on a studio row, and on every row before docs/2026-09-11-one-strategy.sql. */
   role: PlanRole | null;
   /** Which pillar a support belongs to. A client may one day have more than one offer. */
@@ -591,6 +597,8 @@ function toPlanRow(r: Record<string, unknown>): PlanRow {
     status,
     pageId: (r.page_id as string | null) ?? null,
     pageStatus: null,
+    // Merged on afterwards by withPostFormat.
+    postFormat: null,
     role: null,
     pillarId: null,
     keywordCategory: null,
@@ -682,6 +690,28 @@ async function withAwareness(rows: PlanRow[]): Promise<PlanRow[]> {
 }
 
 /**
+ * The written-post shape, merged a FIFTH tolerant way, for exactly the reason the four above give.
+ * docs/2026-09-18-post-formats.sql lands after all of them, and a plan read must keep working on a
+ * database that has the earlier columns but not this one. A missing column reads as a plan whose
+ * pages have no shape yet, which is what it is.
+ */
+async function withPostFormat(rows: PlanRow[]): Promise<PlanRow[]> {
+  if (rows.length === 0) return rows;
+  const { data, error } = await supabaseAdmin
+    .from("page_plan")
+    .select("id, post_format")
+    .in("id", rows.map((r) => r.id));
+  if (error) return rows;
+  const byId = new Map(((data ?? []) as Array<Record<string, unknown>>).map((r) => [String(r.id), r]));
+  for (const row of rows) {
+    const extra = byId.get(row.id);
+    if (!extra) continue;
+    row.postFormat = isPostFormatId(extra.post_format) ? extra.post_format : null;
+  }
+  return rows;
+}
+
+/**
  * The plan, in rank order, with each page's live status read through page_id.
  *
  * ‼️ A READ FAILURE IS RETURNED, NOT SWALLOWED INTO AN EMPTY PLAN. "No plan" and "the table is not
@@ -703,8 +733,10 @@ export async function loadPlan(clientId: string): Promise<{ rows: PlanRow[] } | 
     };
   }
 
-  const rows = await withAwareness(
-    await withHeadlines(await withRoles(((data ?? []) as Array<Record<string, unknown>>).map(toPlanRow)))
+  const rows = await withPostFormat(
+    await withAwareness(
+      await withHeadlines(await withRoles(((data ?? []) as Array<Record<string, unknown>>).map(toPlanRow)))
+    )
   );
   const pageIds = rows.map((r) => r.pageId).filter((id): id is string => Boolean(id));
 

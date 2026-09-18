@@ -86,13 +86,44 @@ export async function capturePage(input: CaptureInput): Promise<void> {
     const { planRunCount } = await import("./page-plan-runs");
     const variantNo = await planRunCount(input.clientId).catch(() => 0);
 
+    // ‼️ THE BATCH ID IS DERIVED HERE, NOT AT THE CALL SITES, AND THAT IS WHAT MAKES research_prompt
+    // FILLABLE AT ALL. `batchId` was declared on CaptureInput and passed by NO caller, so every row
+    // ever written carried null, so attachResearchPrompt's `.eq("batch_id", ...)` matched zero rows
+    // every time and page_dataset.research_prompt could never be filled by anybody.
+    //
+    // batchIdFor(state) in page-batch.ts is `state.pillar.id`, and a support's pillar_id IS that id,
+    // so the pillar's own row id is the batch key for the whole wave. Deriving it from the plan row
+    // covers all three captures; passing it at one call site would have fixed `drafted` and left
+    // `edited` and `published` exactly as broken as they are today.
+    const batchId = input.batchId ?? (plan ? (plan.role === "pillar" ? input.planRowId : plan.pillarId) : null);
+
+    // Same story: declared, never passed, null on every row. Read tolerantly and NOT through
+    // verticalFor(), which REFUSES on a null vertical by design (CLAUDE.md, "The four fallbacks
+    // REFUSE now"). That refusal is right for a question set built off a shared corpus and wrong
+    // here: a research artifact must record what it found, including nothing.
+    const verticalSlug =
+      input.verticalSlug ?? ((await readClientColumn(input.clientId, "vertical_slug")) as string | null) ?? null;
+
+    // The shape this page was written as, and what that shape extracted. The shape is read off the
+    // plan row rather than the angle so an edited page keeps it after the angle rows are gone.
+    const postFormat = (plan?.postFormat ?? angle?.postFormat ?? null) as string | null;
+    const { formatDatasetFor, EMPTY_FORMAT_DATASET } = await import("./format-dataset");
+    const formatDataset = postFormat
+      ? await formatDatasetFor({
+          clientId: input.clientId,
+          pageId: input.pageId,
+          postFormat,
+          outline: (outline as import("@/lib/hub/pages").PageOutline | null) ?? null,
+        }).catch(() => EMPTY_FORMAT_DATASET)
+      : EMPTY_FORMAT_DATASET;
+
     const { error } = await supabaseAdmin.from("page_dataset").insert({
       client_id: input.clientId,
       page_id: input.pageId,
       plan_id: input.planRowId ?? null,
-      batch_id: input.batchId ?? null,
+      batch_id: batchId,
       role: input.role ?? plan?.role ?? null,
-      vertical_slug: input.verticalSlug ?? null,
+      vertical_slug: verticalSlug,
 
       slug: (page.slug as string | null) ?? null,
       title: (page.title as string | null) ?? null,
@@ -130,6 +161,11 @@ export async function capturePage(input: CaptureInput): Promise<void> {
       lead_magnet_key: (magnetKey as string | null) ?? null,
       magnet_candidates: magnetCandidates,
       variant_no: variantNo,
+      // Conditional, so a capture on a deploy that landed before
+      // docs/2026-09-18-post-formats.sql still writes the row it always wrote. An INSERT naming a
+      // column the database lacks fails the WHOLE statement, and losing the corpus row costs more
+      // than losing the shape on it.
+      ...(postFormat ? { post_format: postFormat, format_dataset: formatDataset } : {}),
     });
 
     if (error) {
@@ -141,6 +177,25 @@ export async function capturePage(input: CaptureInput): Promise<void> {
   } catch (e) {
     console.error("[page-dataset] capture threw:", (e as Error).message);
   }
+}
+
+/**
+ * One column off the client row, on its own, same blast-radius rule as readOne.
+ *
+ * `clients` is keyed by `id` with no `client_id`, so readOne's two-predicate shape does not fit it.
+ */
+async function readClientColumn(clientId: string, column: string): Promise<unknown | null> {
+  const { data, error } = await supabaseAdmin
+    .from("clients")
+    .select(column)
+    .eq("id", clientId)
+    .maybeSingle();
+
+  if (error) {
+    console.error(`[page-dataset] clients.${column} read failed: ${error.message}`);
+    return null;
+  }
+  return (data as Record<string, unknown> | null)?.[column] ?? null;
 }
 
 /** One column, on its own, so an unknown one costs a field instead of the row. */
@@ -170,6 +225,10 @@ interface PlanAim {
   targetKeywordId: string | null;
   secondaryKeywords: string[] | null;
   role: "pillar" | "support" | null;
+  /** The pillar this page hangs off. Null on a pillar row, which IS its own batch. */
+  pillarId: string | null;
+  /** The written-post shape, copied onto the plan when the angle was picked. */
+  postFormat: string | null;
   audienceId: string | null;
   offerId: string | null;
   angle: string | null;
@@ -181,7 +240,7 @@ async function readPlan(clientId: string, planRowId: string): Promise<PlanAim | 
   const { data, error } = await supabaseAdmin
     .from("page_plan")
     .select(
-      "headline, target_keyword, target_keyword_id, secondary_keywords, role, audience_id, offer_id, angle, awareness_entry, awareness_target"
+      "headline, target_keyword, target_keyword_id, secondary_keywords, role, pillar_id, post_format, audience_id, offer_id, angle, awareness_entry, awareness_target"
     )
     .eq("id", planRowId)
     .eq("client_id", clientId)
@@ -199,6 +258,8 @@ async function readPlan(clientId: string, planRowId: string): Promise<PlanAim | 
     targetKeywordId: (data.target_keyword_id as string | null) ?? null,
     secondaryKeywords: Array.isArray(data.secondary_keywords) ? (data.secondary_keywords as string[]) : null,
     role: (data.role as "pillar" | "support" | null) ?? null,
+    pillarId: (data.pillar_id as string | null) ?? null,
+    postFormat: (data.post_format as string | null) ?? null,
     audienceId: (data.audience_id as string | null) ?? null,
     offerId: (data.offer_id as string | null) ?? null,
     angle: (data.angle as string | null) ?? null,
@@ -214,13 +275,14 @@ interface CapturedAngle {
   indoctrination: string | null;
   awarenessEntry: number | null;
   awarenessTarget: number | null;
+  postFormat: string | null;
 }
 
 /** The angle the page was actually written from: the approved one for this plan row. */
 async function readAngle(clientId: string, planRowId: string): Promise<CapturedAngle | null> {
   const { data, error } = await supabaseAdmin
     .from("page_angles")
-    .select("id, idea, narrative, indoctrination, awareness_entry, awareness_target")
+    .select("id, idea, narrative, indoctrination, awareness_entry, awareness_target, post_format")
     .eq("client_id", clientId)
     .eq("plan_id", planRowId)
     .eq("status", "approved")
@@ -234,6 +296,7 @@ async function readAngle(clientId: string, planRowId: string): Promise<CapturedA
 
   return {
     id: String(data.id),
+    postFormat: (data.post_format as string | null) ?? null,
     idea: (data.idea as string | null) ?? null,
     narrative: (data.narrative as string | null) ?? null,
     indoctrination: (data.indoctrination as string | null) ?? null,
