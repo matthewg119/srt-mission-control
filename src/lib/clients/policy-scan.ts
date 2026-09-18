@@ -157,7 +157,7 @@ export async function runPolicyScan(opts?: {
         : []),
     ].join("\n");
 
-    const posted = await post(body);
+    const posted = await postToStudio(body);
     return { checked: GUIDELINE_SOURCES.length, changed, failed, posted, skipped: null };
   } catch (e) {
     console.error("[policy-scan] failed:", (e as Error).message);
@@ -191,13 +191,17 @@ function clip(line: string): string {
 /**
  * Post into the drafting channel, split on line boundaries.
  *
+ * Exported so the Thursday corpus scan posts through the same splitter rather than repeating it a
+ * fourth time. rerun-gaps.ts and presence-sweep.ts both repeat step-engine's private bodySections
+ * and say why; a fourth copy of the same eight lines is how one of them eventually drifts.
+ *
  * ‼️ A BODY OVER 3,000 CHARACTERS FAILS THE WHOLE MESSAGE, silently. step-engine.ts's bodySections
  * is private, so this repeats the split rather than reaching into it, exactly as rerun-gaps.ts and
  * presence-sweep.ts both do. Never mid-line: a diff broken across two blocks reads as two changes.
  *
  * slackFetch returns {ok:false} and never throws, so the body is checked rather than the promise.
  */
-async function post(body: string): Promise<boolean> {
+export async function postToStudio(body: string): Promise<boolean> {
   const { pageStudioChannel } = await import("./page-studio");
   const channel = pageStudioChannel();
   let ok = false;

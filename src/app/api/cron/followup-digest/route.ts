@@ -20,6 +20,7 @@ import { runWeeklyHeadlines } from "@/lib/clients/weekly-headlines";
 import { runTimeLogNudges } from "@/lib/clients/time-log-nudge";
 import { runFunnelReport } from "@/lib/experiments/funnel-report";
 import { runPolicyScan } from "@/lib/clients/policy-scan";
+import { runWeeklyCorpusScan } from "@/lib/clients/dataset-suggestions";
 import { stepDigest } from "@/lib/clients/step-engine";
 import { slack } from "@/lib/slack-bot";
 
@@ -137,6 +138,19 @@ ${text}`);
           return { checked: 0, changed: [], failed: [], posted: false, skipped: null };
         });
 
+    // Ninth passenger. Reads page_dataset, the corpus that had no readers at all until
+    // 2026-09-22, and proposes dataset fields that pages of one shape keep leaving unanswered.
+    // Thursday, the same day as the three above, and silent when it has nothing new to propose.
+    //
+    // It proposes. It never declares: dataset-spec.ts stays the only authority on which fields
+    // exist, and accepting a proposal means writing its FieldSpec by hand.
+    const corpusScan = dry
+      ? { verticals: 0, filed: 0, already: 0, posted: false, skipped: null }
+      : await runWeeklyCorpusScan().catch((e) => {
+          console.error("[followup-digest] corpus scan failed:", (e as Error).message);
+          return { verticals: 0, filed: 0, already: 0, posted: false, skipped: null };
+        });
+
     return NextResponse.json({
       ok: true,
       dry,
@@ -148,6 +162,7 @@ ${text}`);
       timeLogNudges: timeLog,
       funnelReport,
       policyScan,
+      corpusScan,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

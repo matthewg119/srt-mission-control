@@ -137,7 +137,14 @@ async function main() {
     // on the cursor suggestion, correctly: "client_delivery_steps, walked in order with the
     // blockedBy declarations" is a complete answer to "where did you read that" and there is no
     // number in it. Requiring a digit would have pushed somebody to invent one.
-    const SOURCE = /client_[a-z_]+|page_[a-z_]+|STEP_NEEDS/;
+    // ‼️ WIDENED 2026-09-22 TO ADMIT THE SHARED TABLES, AND THE LIST IS THE POINT.
+    // A cross-client suggestion must name the SHARED table it read (avatar_briefs, question_bank),
+    // never the other client's row. Those tables deliberately carry no client_id, and the absence
+    // of that column is the enforcement: a fact about a vertical, an avatar, a domain or a public
+    // URL may be shared, and a measurement about one client may not.
+    // ‼️ AND THE SAME REGEX LIVES IN _probe-step-rerun.ts. Widening one and not the other leaves
+    // that probe failing on a basis this one accepts.
+    const SOURCE = /client_[a-z_]+|page_[a-z_]+|avatar_briefs|question_bank|audience_documents|dataset_suggestions|policy_documents|STEP_NEEDS/;
     check("every real suggestion names its source", real.every((s) => SOURCE.test(s.basis)), real.find((s) => !SOURCE.test(s.basis))?.basis ?? "");
     if (isHeld(ctx.keywords)) {
       check("the keyword counts are the measured ones", real.some((s) => s.basis.includes(String(ctx.keywords.state === "present" ? ctx.keywords.value.approved : ""))));

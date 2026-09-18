@@ -114,7 +114,9 @@ try {
 // documentation.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SOURCE = /client_[a-z_]+|page_[a-z_]+|STEP_NEEDS/;
+// ‼️ THE SECOND COPY. _probe-suggestions.ts carries the same pattern and the reasoning for it;
+// widened together 2026-09-22 so a cross-client basis naming a shared table passes both.
+const SOURCE = /client_[a-z_]+|page_[a-z_]+|avatar_briefs|question_bank|audience_documents|dataset_suggestions|policy_documents|STEP_NEEDS/;
 
 function gapFor(ref: string, blocking = true): Gap {
   const field = fieldFor(ref as FieldRef);
