@@ -15,6 +15,7 @@ import { deliverPendingDraft } from "@/lib/imessage-send";
 import { scheduleFollowup } from "@/lib/imessage-followups";
 import { enqueueBridgeCommand, getBridgeStatus, formatBridgeStatusLine, type BridgeCommandType } from "@/lib/imessage-control";
 import { markDraftSent } from "@/lib/clients/client-drafts";
+import { RERUN_UPSTREAM_ACTION } from "@/lib/clients/rerun-gaps";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -288,6 +289,18 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
         channel,
         messageTs: payload.container?.message_ts ?? "",
         userId,
+        value: action.value ?? "",
+      });
+
+    // ── Re-run the earlier step that writes what this one is missing (2026-09-18) ──
+    // Appended rather than folded into the step_done arm above: same value shape, a different
+    // verb. D7 lives in the fact that this is only ever reached by somebody pressing it.
+    case RERUN_UPSTREAM_ACTION:
+      return rerunUpstreamAction({
+        channel,
+        messageTs: payload.container?.message_ts ?? "",
+        userId,
+        userName: payload.user?.username ?? null,
         value: action.value ?? "",
       });
 
@@ -1878,6 +1891,57 @@ async function tellActor(
   await notifyThread(clientId, text).catch(() =>
     console.error("[slack/actions] could not reach the actor or the ops thread:", text)
   );
+}
+
+/**
+ * Re-run the earlier step that writes what the step being looked at is missing.
+ *
+ * The block a re-run posts names that step and prints `rerun N`; this is the same move as a button,
+ * for the reason every other button on this board exists: the command is one line away and the
+ * button is the line nobody has to retype.
+ *
+ * ‼️ D7 IS NOT WEAKENED BY IT. Nothing here fires on its own. The gap block PROPOSES, this runs only
+ * on a press, and `fresh: true` is deliberate: the press comes from a DIFFERENT step's thread, so the
+ * upstream step gets a new card at the bottom of the channel, which is exactly `rerun step N`'s own
+ * semantics. Re-using its anchor would re-run a step twenty messages up where nobody is looking.
+ *
+ * ‼️ staleCardSuccessor FIRST, LIKE EVERY OTHER STEP BUTTON. A button freezes `${clientId}:${stepKey}`
+ * at post time and a re-onboard mints a new id under the same slug, so an old block would otherwise
+ * re-run a step on a dead tenant and report something true and useless about a missing row.
+ */
+async function rerunUpstreamAction(args: {
+  channel: string;
+  messageTs: string;
+  userId: string;
+  userName: string | null;
+  value: string;
+}): Promise<NextResponse> {
+  const [clientId, stepKey] = args.value.split(":");
+  if (!clientId || !stepKey) return NextResponse.json({ ok: true });
+
+  const by = args.userName ? `@${args.userName}` : args.userId;
+
+  waitUntil(
+    (async () => {
+      const { isStepKey } = await import("@/config/delivery-steps");
+      if (!isStepKey(stepKey)) return;
+
+      const stale = await staleCardSuccessor(clientId, args);
+      if (stale) {
+        await tellActorEphemeral(args, stale.message);
+        return;
+      }
+
+      const { rerunStep } = await import("@/lib/clients/step-rerun");
+      const res = await rerunStep({ clientId, stepKey, fresh: true, by }).catch((e) => ({
+        ok: false,
+        line: `${stepKey}: threw (${(e as Error).message}).`,
+      }));
+      await tellActorEphemeral(args, `:repeat: ${res.line}`);
+    })()
+  );
+
+  return NextResponse.json({ ok: true });
 }
 
 /**

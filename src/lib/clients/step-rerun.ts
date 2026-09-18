@@ -93,6 +93,48 @@ async function continueBoard(clientId: string): Promise<void> {
   }
 }
 
+/**
+ * Say what the step is still missing, and which earlier step writes it.
+ *
+ * Matthew, 2026-09-18: "our onboarding brain can read the data it has and if we are missing anything post
+ * it directly in the rerun or even suggest to rerun a previous step."
+ *
+ * ‼️ HERE AND NOT IN postStep's BODY, FOR THREE MEASURED REASONS.
+ *   1. A re-run has TWO card paths. A step with a runner goes through runOneStep, which posts a card only
+ *      when mode is `auto_then_manual`; a pure `auto` step posts no card at all. A body.push would be
+ *      silently absent on every auto step, which is most of the board.
+ *   2. postStep's body is EVERY card, not just a re-run's. gap-prompts.ts carries a written decision that
+ *      the card gets two door lines and deliberately not the gap list, because five bullets under every
+ *      card doubles every card on the board.
+ *   3. A bare `rerun` in a thread is the only form whose returned line reaches Slack. `rerun 12` parses as
+ *      a RANGE, and that path logs the line to the console, so appending to the return value would be
+ *      invisible on the form actually typed.
+ *
+ * ‼️ IT CAN NEVER FAIL THE RE-RUN. Same rule postStep's own gap block follows: the step has already been
+ * reset and run by the time this is reached, so a throw here would report a successful re-run as a failure
+ * and leave somebody re-running it again.
+ */
+async function sayWhatIsMissing(clientId: string, stepKey: StepKey): Promise<void> {
+  try {
+    const { withLeadScope } = await import("./lead-scope");
+    await withLeadScope(async () => {
+      const { leadContext } = await import("./lead-context");
+      const { gapsFrom } = await import("./step-gaps");
+      const { rerunGapBlocks, rerunGapLines, upstreamFills } = await import("./rerun-gaps");
+      const { notifyStep } = await import("./step-board");
+
+      const ctx = await leadContext(clientId);
+      const g = gapsFrom(ctx, stepKey);
+      const ups = upstreamFills(g);
+      const text = rerunGapLines(g, ups).join("\n");
+      const res = await notifyStep(clientId, stepKey, text, rerunGapBlocks(clientId, g, ups));
+      if (!res.ok) console.error(`[clients/step-rerun] the gap block did not post on ${stepKey}:`, res.error);
+    });
+  } catch (e) {
+    console.error(`[clients/step-rerun] could not say what ${stepKey} is missing:`, (e as Error).message);
+  }
+}
+
 export async function rerunStep(args: {
   clientId: string;
   stepKey: StepKey;
@@ -181,6 +223,8 @@ export async function rerunStep(args: {
         .catch(() => {});
     }
   }
+
+  await sayWhatIsMissing(args.clientId, args.stepKey);
 
   if (args.advance !== false) await continueBoard(args.clientId);
 

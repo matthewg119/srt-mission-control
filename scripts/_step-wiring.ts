@@ -654,8 +654,13 @@ The old thread is kept and gets one line linking to the new card. A re-run clear
 any error, then runs the step's runner; it never deletes a decision a person made (approved keywords, a picked
 anchor, a frozen \`custom_v1\`). Steps with no runner just get their card again.
 
-Behind it: \`src/lib/clients/step-rerun.ts\` and \`/api/internal/rerun-steps\` (one step per request, because a
-range is minutes of work).
+Every re-run then says what that step is still missing, in the step's own thread: \`gapLines\`' own bullets, and
+under them any EARLIER step that is declared to write one of the missing fields, with \`rerun N\` and a button for
+it. It proposes and never re-runs anything itself. A step with everything on file says so, because silence would
+mean either that or a block that failed to render.
+
+Behind it: \`src/lib/clients/step-rerun.ts\`, \`src/lib/clients/rerun-gaps.ts\` (pure) and
+\`/api/internal/rerun-steps\` (one step per request, because a range is minutes of work).
 
 ## Every step
 
