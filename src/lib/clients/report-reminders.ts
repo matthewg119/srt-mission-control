@@ -7,9 +7,10 @@
 //
 // ─── WHY THERE IS NO NEW CRON ────────────────────────────────────────────────────────
 //
-// vercel.json already carries 14 entries against a Hobby plan that documents 2, daily
-// only. Whether the extras run or are silently ignored, adding a 15th is not the way to
-// find out. This hangs off /api/cron/followup-digest, which already runs daily at 13:00
+// vercel.json already carries 17 entries against a Hobby plan that documents 2, daily
+// only. Whether the extras run or are silently ignored, adding an 18th is not the way to
+// find out. (That count said 14 until 2026-09-22. A stale number in a warning is how a
+// warning stops working, which followup-digest/route.ts states about this same count.) This hangs off /api/cron/followup-digest, which already runs daily at 13:00
 // UTC and is already the "what is due today" job.
 //
 // ─── DAY 0 IS THE ARCHIVE, NOT THE SIGNUP ────────────────────────────────────────────

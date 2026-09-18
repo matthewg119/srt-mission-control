@@ -7,8 +7,8 @@
 //
 // ─── WHY THERE IS NO NEW CRON ────────────────────────────────────────────────────────
 //
-// vercel.json already carries 14 entries against a Hobby plan that documents 2.
-// report-reminders.ts refused to add a 15th and this refuses for the same reason: it
+// vercel.json already carries 17 entries against a Hobby plan that documents 2.
+// report-reminders.ts refused to add an 18th and this refuses for the same reason: it
 // hangs off /api/cron/followup-digest, which already runs daily at 13:00 UTC and is
 // already the "what is due today" job.
 //

@@ -160,11 +160,21 @@ export const STEP_NEEDS: Record<StepKey, StepNeed> = {
   },
   presence_sweep_manual: {
     kind: "nothing",
-    why: "screenshots in the thread, filed as evidence against client_docs rather than as dataset fields",
+    // Checked 2026-09-22 and it genuinely owes nothing. The output is an IMAGE of a profile that
+    // already exists, filed against client_docs as evidence. There is no sentence in it that any
+    // later step reads, and a dataset field whose value is "a screenshot was taken" would be a
+    // record of our own activity rather than a fact about the client.
+    why: "screenshots of profiles that already exist, filed as evidence against client_docs. Nothing in them is a value a later step reads, and a field saying a screenshot was taken would record our activity rather than the client",
   },
   competitor_shortlist: {
-    kind: "nothing",
-    why: "the shortlist comes from who the engines named in the audit, not from anything we ask for",
+    kind: "fields",
+    // ‼️ IT USED TO DECLARE NOTHING, AND THAT WAS TRUE UNTIL A SHAPE DEPENDED ON IT (2026-09-22).
+    // The shortlist itself is still read from who the engines named in the audit, so nothing is
+    // NEEDED here. But post-formats.ts's `comparison` shape requires subjectA and subjectB, and
+    // format-dataset.ts refuses to infer either, so a comparison page whose two subjects nobody
+    // named records them as missing for ever. This is the step that would know them.
+    needs: [],
+    wants: ["audience.comparison_subjects"],
   },
   avatar_confirmed: {
     kind: "fields",
@@ -173,12 +183,25 @@ export const STEP_NEEDS: Record<StepKey, StepNeed> = {
     wants: ["audience.market", "audience.compliance"],
   },
   review_audit: {
-    kind: "nothing",
-    why: "their reviews and three competitors' are read from live listings; no dataset field is owed first",
+    kind: "fields",
+    // ‼️ THE READ IS AUTOMATED AND THE TEXT IS NOT CAPTURED, WHICH ARE DIFFERENT FACTS.
+    // Their reviews and three competitors' are read from live listings, so nothing is NEEDED
+    // before this step runs. But emotionalLayer()'s tier one counts page_sources CUSTOMER_REVIEW
+    // rows for this client, and measured on srt-agency-llc that count is ZERO while the vertical
+    // carries 47 objections belonging to nobody in particular. This step is where a client's own
+    // review TEXT would come from, so it wants the field rather than silently not filling it.
+    needs: [],
+    wants: ["audience.own_reviews"],
   },
   offer_proposed: {
     kind: "nothing",
-    why: "the proposal is written from what intake already said, so nothing has to be collected for it",
+    // ‼️ CHECKED 2026-09-22, AND WHAT IT LOSES IS REAL BUT IS NOT A DATASET FIELD.
+    // The proposal carries its own reasoning, and offer_locked then overwrites the treatment with
+    // no record of what was proposed or why it was changed on the call. That is a genuine loss and
+    // it belongs in an append-only record of the offer's history, NOT in a dataset field: a field
+    // holds what is true of the client now, and "what we proposed before the call" is a past
+    // state. Declaring it here would put a permanent unfillable gap on every board.
+    why: "the proposal is written from what intake already said, so nothing has to be collected for it. What it LOSES, the proposal's own reasoning before offer_locked overwrites it, is a missing history row rather than a missing field",
   },
   offer_locked: {
     kind: "fields",

@@ -35,7 +35,7 @@ specific. **Do not build a second headline engine, a second gap system or a seco
 | "if we dont have emotional language ... ask for this" | **BUILT, and it asks the wrong question** | `emotionalLayer()` / `emotionalAskLines()` / `EMOTIONAL_FLOOR = 20`. See W2 |
 | "a deep research prompt that I can run online" | **BUILT** | `buildGapPrompt()`, delivered by `prompts` in any thread, answered with `research:` |
 | "generated based on missing fields" | **BUILT** | `DATASET_FIELDS` is 71 declared fields; `gapsFrom()` says which are absent; `promptsFromGaps()` turns them into prompts |
-| "map out all of these fields and interconnect them" | **BUILT, with holes** | `dataset-spec.ts` + `step-needs.ts`. **24 of 41 steps declare `{kind: "nothing"}`.** See W3 |
+| "map out all of these fields and interconnect them" | **BUILT, with holes** | `dataset-spec.ts` + `step-needs.ts`. **34 of 41 steps declare `{kind: "nothing"}`** (the prompt said 24; measured 2026-09-22). See W3 |
 
 ---
 
@@ -213,12 +213,12 @@ a key every future client in that vertical reads, which is the exact poisoned-co
 what fills it, and an optional `blocks`. `STEP_NEEDS` (`step-needs.ts:142`) is
 `Record<StepKey, StepNeed>` so a 42nd step fails the build.
 
-**The hole is that 24 of 41 steps declare `{ kind: "nothing" }`.** That constant requires a sentence
+**The hole is that 34 of 41 steps declare `{ kind: "nothing" }`** (this prompt said 24; the measured number on 2026-09-22 was 34, and it is 32 after the census below). That constant requires a sentence
 saying why, and the probe prints them, so the backlog is visible rather than hidden. But it means the
 gap lane, the rerun-gaps block and the final prompt all have nothing to say about more than half the
 board.
 
-**The work here is a census, not a rewrite.** For each of the 24, decide one of:
+**The work here is a census, not a rewrite.** For each of them, decide one of:
 
 - it genuinely owes no dataset field (presence screenshots, DNS records, the Day 0 archive), keep
   `{kind:"nothing"}` and sharpen the sentence; or

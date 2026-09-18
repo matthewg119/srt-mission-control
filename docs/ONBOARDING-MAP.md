@@ -210,7 +210,7 @@ Presence sweep: manual tier, screenshots in the thread
 | Writes | nothing |
 | Reads | nothing |
 | [Done] reads | no table |
-| Dataset fields | none: screenshots in the thread, filed as evidence against client_docs rather than as dataset fields |
+| Dataset fields | none: screenshots of profiles that already exist, filed as evidence against client_docs. Nothing in them is a value a later step reads, and a field saying a screenshot was taken would record our activity rather than the client |
 | Downstream | steps 15 `citation_cleanup_list`, 22 `call_sheet` declare they wait on this |
 
 **[Done] refuses on:**
@@ -220,7 +220,7 @@ Presence sweep: manual tier, screenshots in the thread
 **What it would have to ask, with nothing on file:**
 
 ```
-*Step 5* asks for nothing from the datasets: screenshots in the thread, filed as evidence against client_docs rather than as dataset fields.
+*Step 5* asks for nothing from the datasets: screenshots of profiles that already exist, filed as evidence against client_docs. Nothing in them is a value a later step reads, and a field saying a screenshot was taken would record our activity rather than the client.
 ```
 
 ### 6. `competitor_shortlist`
@@ -235,7 +235,7 @@ Competitor shortlist of 10, top 3 pre-picked, I confirm
 | Writes | nothing |
 | Reads | nothing |
 | [Done] reads | no table |
-| Dataset fields | none: the shortlist comes from who the engines named in the audit, not from anything we ask for |
+| Dataset fields | 0 needed, 1 wanted |
 | Downstream | step 8 `review_audit` declares it waits on this |
 
 **[Done] refuses on:**
@@ -246,7 +246,9 @@ Competitor shortlist of 10, top 3 pre-picked, I confirm
 **What it would have to ask, with nothing on file:**
 
 ```
-*Step 6* asks for nothing from the datasets: the shortlist comes from who the engines named in the audit, not from anything we ask for.
+Step 6 can complete. 1 thing would make it better.
+:warning: the two things a comparison page may weigh against each other
+    nothing asks for this yet
 ```
 
 ### 7. `avatar_confirmed`
@@ -291,7 +293,7 @@ Review audit: them plus the three I picked
 | Writes | `review_audit_rows` |
 | Reads | `client_docs`, `clients`, `onboarding` |
 | [Done] reads | `review_audit_rows` |
-| Dataset fields | none: their reviews and three competitors' are read from live listings; no dataset field is owed first |
+| Dataset fields | 0 needed, 1 wanted |
 | Downstream | step 22 `call_sheet` declares it waits on this; `review_audit_rows` is selected in 2 other file(s), e.g. `src/app/api/clients/[id]/review-audit/route.ts`, `src/lib/clients/step-verify.ts` |
 
 **[Done] refuses on:**
@@ -302,7 +304,9 @@ Review audit: them plus the three I picked
 **What it would have to ask, with nothing on file:**
 
 ```
-*Step 8* asks for nothing from the datasets: their reviews and three competitors' are read from live listings; no dataset field is owed first.
+Step 8 can complete. 1 thing would make it better.
+:warning: the client's own customer reviews
+    reviews filed as CUSTOMER_REVIEW evidence, on intake_received
 ```
 
 ### 9. `offer_proposed`
@@ -317,7 +321,7 @@ One offer proposed from what they told us at intake
 | Writes | `client_offers`, `clients` |
 | Reads | `client_audiences`, `client_delivery_steps` |
 | [Done] reads | no table |
-| Dataset fields | none: the proposal is written from what intake already said, so nothing has to be collected for it |
+| Dataset fields | none: the proposal is written from what intake already said, so nothing has to be collected for it. What it LOSES, the proposal's own reasoning before offer_locked overwrites it, is a missing history row rather than a missing field |
 | Downstream | `client_offers` is selected in 1 other file(s), e.g. `src/lib/clients/archive.ts`; `clients` is selected in 95 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
 
 **[Done] refuses on:**
@@ -327,7 +331,7 @@ One offer proposed from what they told us at intake
 **What it would have to ask, with nothing on file:**
 
 ```
-*Step 9* asks for nothing from the datasets: the proposal is written from what intake already said, so nothing has to be collected for it.
+*Step 9* asks for nothing from the datasets: the proposal is written from what intake already said, so nothing has to be collected for it. What it LOSES, the proposal's own reasoning before offer_locked overwrites it, is a missing history row rather than a missing field.
 ```
 
 ### 10. `offer_locked`

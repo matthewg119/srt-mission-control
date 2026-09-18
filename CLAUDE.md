@@ -4447,3 +4447,83 @@ The seed batch is `status: "done"` and `slack_thread_ts: null`, both load-bearin
 `awaiting_workflow` is in the cron's `ACTIVE_STATUSES` and the next tick would post a workflow
 picker for a file nobody dropped; a null thread is what makes purge skip its Slack step rather than
 calling `conversationsReplies` on a thread that never existed.
+
+## Compliance, the context database, and a corpus that is read (2026-09-22)
+`src/config/guideline-rules.ts`, `src/lib/clients/policy-documents.ts`, `policy-scan.ts`,
+`page-corpus.ts`, `dataset-suggestions.ts`, `src/lib/hub/publish-page.ts`. Migrations:
+`docs/2026-09-22-policy-documents.sql`, `-gate-meta-hash.sql`, `-dataset-suggestions.sql`.
+
+**The context database is `policy_documents`, and three obvious homes were wrong.** NOT
+`knowledge_entries`: `buildSystemPrompt()` selects EVERY row of it, unfiltered and unbounded, into
+the Office Manager's system prompt on every message, so a guidelines corpus there is billed to
+every CRM chat for ever. NOT `audience_documents`: right discipline, but `client_id` and
+`audience_id` are both NOT NULL and guidelines belong to no client. NOT `client_datasets`: it is a
+cache and REPLACES on conflict, so it structurally cannot answer "what changed since last week".
+
+- **The document is the reference; `GUIDELINE_RULES` is what binds.** `callClaudeJSON` takes a
+  plain `system: string`, has no content-block array and sends no `anthropic-beta` header, so there
+  is **no `cache_control`** on that path: a corpus in the gate's prompt is paid in full on every
+  Check press, on a command designed to be pressed repeatedly while writing. The store holds the
+  text, a bounded constant reaches the model, and the probe holds it under 2,000 characters.
+  Editing the constant is a code change somebody makes on purpose.
+- **No new cron.** The scan is the eighth passenger on `/api/cron/followup-digest` and the corpus
+  scan is the ninth, both Thursday, the day the two existing weekly jobs already share.
+- **No week stamp, and that is deliberate.** `weekly-headlines` needs the ISO week because a second
+  run writes a second set of twenty. These cannot: a re-run re-reads the same bytes, the hash
+  matches what is live, nothing is stored and nothing is posted. **The content hash is a stronger
+  idempotency key than the week**, and needs no state table either.
+- **Nothing changed means nothing posted.** The exception is the typed `scan for latest`, which
+  always answers, because an unanswered command reads as a broken one. A failed fetch stores no
+  version and is named on the card rather than reported as "no change".
+- `SCAN_COMMAND` and the `waive:` verb are **anchored at both ends**, exported from their own
+  module, with dictation fixtures in `_probe-page-studio.ts`. In that channel anything unmatched is
+  appended to the page verbatim.
+
+**The compliance checks are in the SAME run, and one model call, extended.** `assertGatePassed`
+reads exactly one row, so a separate compliance run would BECOME the latest and silently replace
+the quality verdict. `ModelVerdict` gained six fields rather than a second call: `runGate` has three
+callers, `model` is one nullable column already overloaded with `"waiver"`, and the catch collapses
+every model check into one `model_review` skip.
+
+- **One of the four blocks.** `experience_claims` is the same shape as `unsupported`. `people_first`,
+  `authority` and `spam_signals` are taste by this file's own definition and warn beside `generic`.
+  E-E-A-T is split rather than averaged: Experience is a claim about the world, Authoritativeness is
+  an impression. `APPROVED / NEEDS FIXES / REJECT` maps onto `pass / warn / block`, so the existing
+  vocabulary is kept and no SQL CHECK changes.
+- ‼️ **`meta_hash` rather than a wider `hashBody`.** The hole was already LIVE: `checkHouseStyle`
+  reads `title` and `meta_description` against a hash covering neither. Widening `body_hash` would
+  invalidate every stored verdict at once and report a page whose title never moved as "changed",
+  which is false; backfilling would claim old verdicts read text they never read. So `body_hash`
+  keeps its meaning, `meta_hash` records what else was read, and **NULL means the run predates the
+  metadata half and is NOT refused**. An absence and a failure are different facts.
+
+**Approve publishes, through one shared function.** `publishPage()` owns the ordering: Day 0, then
+`assertGatePassed`, then `setPublished`. Both hole-check greps still return **exactly one caller
+each**, now inside that module, and `page_publish_request` is untouched and still never publishes.
+
+- ‼️ **Do not write either call out in full in a comment.** The checks grep the source as TEXT, so a
+  comment quoting the call verbatim counts as a second call site. That happened while
+  `publish-page.ts` was being written.
+- **No fourth `client_pages.status` value.** Approval is a recorded verdict plus a press.
+- **No waive button beside Approve**, which is the Day 0 wall's own rule. The waiver is mentioned
+  only in the refusal and is typed as `waive: <reason>`, because it needs a written reason a button
+  cannot carry. One press waives every block-tier check, including the compliance one: chosen
+  deliberately, because a compliance block is the same shape as `unsupported`.
+
+**`page_dataset` has a reader for the first time.** It cannot learn from outcomes and nothing in it
+implies otherwise: there is no ranking, traffic or citation signal, refused in three places already.
+It learns from the draft-to-publish diff and from `format_dataset.missing` per shape. Per-client and
+per-vertical answers never merge. `dataset_suggestions` proposes a field and never declares one:
+`dataset-spec.ts` stays the only authority, and its `client_id` is nullable because a NULL means the
+observation is about a vertical or a shape, never a measurement about one client.
+
+### Env
+```
+SLACK_PAGE_STUDIO_CHANNEL=   # C09QPHZGPUY, #aeo-seo-page-drafting. Env-first with a documented
+                             # code fallback, because this lane has exactly one channel.
+                             # ‼️ THE BOT MUST BE A MEMBER. Posting into a public channel works
+                             # without it; RECEIVING message events does not, which is how this
+                             # channel sat dead for weeks. The Thursday cards will post; the typed
+                             # `scan for latest`, `waive:` and the Approve button will not arrive
+                             # until the bot is invited.
+```

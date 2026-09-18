@@ -12,8 +12,8 @@
 // raises about day_0_source = 'manual_step'. So the first successful post ticks the step, via
 // ROUTE_COMPLETED, and after that this just runs every week like the rhythm it is.
 //
-// ‼️ NO NEW CRON. vercel.json already carries 14 entries against a Hobby plan that documents 2.
-// report-reminders.ts and content-digest.ts both refuse a 15th in writing, and this refuses for
+// ‼️ NO NEW CRON. vercel.json already carries 17 entries against a Hobby plan that documents 2.
+// report-reminders.ts and content-digest.ts both refuse an 18th in writing, and this refuses for
 // the same reason: it is a weekday-gated passenger on /api/cron/followup-digest.
 //
 // ‼️ WHAT IT WILL NOT SAY.

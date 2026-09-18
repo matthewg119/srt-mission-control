@@ -273,6 +273,18 @@ export const DATASET_FIELDS: readonly FieldSpec[] = [
   notAsked("avatar", "proof_they_need", "the proof they need before buying", "which evidence sits beside a story"),
   notAsked("avatar", "price_sensitivity", "how price-sensitive they are", "how the price is framed"),
   notAsked("avatar", "booking_behaviour", "how they book (call, form, walk in, when)", "the call to action inside a story"),
+  // ‼️ DECLARED BECAUSE A SHAPE NOW DEPENDS ON IT AND NOTHING COLLECTS IT (2026-09-22).
+  // post-formats.ts's `comparison` shape requires subjectA and subjectB, and format-dataset.ts
+  // refuses to infer either: "nothing here may default or infer a field". So a comparison page
+  // whose two subjects nobody named records them as MISSING for ever, and the step that would
+  // know them, competitor_shortlist, declared {kind:"nothing"}. This is the notAsked mechanism
+  // doing its job: the card shows the gap instead of the field not existing.
+  notAsked(
+    "audience",
+    "comparison_subjects",
+    "the two things a comparison page may weigh against each other",
+    "a comparison page's subjectA and subjectB, which the shape refuses to invent"
+  ),
 
   // ── AUDIENCE: this client aiming at that avatar ───────────────────────────
   { dataset: "audience", key: "avatar", label: "the avatar it targets",
