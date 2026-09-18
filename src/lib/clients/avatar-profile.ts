@@ -79,6 +79,10 @@ export const SECTION_NAMES: ReadonlyArray<{ key: string; name: RegExp }> = [
   { key: "curiosity", name: /\bcuriosity|lost solutions|old solutions/i },
   { key: "corruption", name: /\bcorruption|ruined/i },
   { key: "awareness", name: /\bawareness\b/i },
+  // ‼️ ANCHORED ON "emotional language", NOT ON "objections". The bare word appears in section 4's
+  // complaints, in the offer dataset's own objections field and in half the framework headings, and
+  // a loose pattern here would file one section's answer under another's key permanently.
+  { key: "emotional_language", name: /\bemotional language|lenguaje emocional/i },
 ];
 
 /**

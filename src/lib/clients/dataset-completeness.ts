@@ -70,9 +70,9 @@ async function auditState(clientId: string): Promise<DatasetSnapshot["audit"]> {
 
 async function avatarState(audience: ResolvedAudience | null): Promise<DatasetSnapshot["avatar"]> {
   if (!audience?.researchAvatarSlug) {
-    return { researchText: null, vocQuotes: 0, approvedNumbers: 0, keywordRows: 0, keywordRowsWithUrl: 0 };
+    return { researchText: null, vocQuotes: 0, approvedNumbers: 0, keywordRows: 0, keywordRowsWithUrl: 0, objectionRows: 0 };
   }
-  const [brief, bank, keywordRows, keywordRowsWithUrl] = await Promise.all([
+  const [brief, bank, keywordRows, keywordRowsWithUrl, objectionRows] = await Promise.all([
     avatarBriefFor(audience.researchVertical, audience.researchAvatarSlug),
     sharedBankFor(audience),
     count(
@@ -92,6 +92,16 @@ async function avatarState(audience: ResolvedAudience | null): Promise<DatasetSn
         .eq("source", "keywords")
         .not("source_url", "is", null)
     ),
+    // Scoped by vertical AND avatar, the same way the keyword counts above are. An avatar-blind
+    // count is what let one buyer's objections satisfy another buyer's gate.
+    count(
+      supabaseAdmin
+        .from("question_bank")
+        .select("id", { count: "exact", head: true })
+        .eq("vertical", audience.researchVertical)
+        .eq("avatar", audience.researchAvatarSlug)
+        .eq("objection_phrase", true)
+    ),
   ]);
   return {
     researchText: brief?.researchText ?? null,
@@ -99,6 +109,7 @@ async function avatarState(audience: ResolvedAudience | null): Promise<DatasetSn
     approvedNumbers: bank.approvedNumbers.length,
     keywordRows,
     keywordRowsWithUrl,
+    objectionRows,
   };
 }
 

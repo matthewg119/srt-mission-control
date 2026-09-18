@@ -52,8 +52,16 @@ export const PRE_CALL_HEADLINES = 33;
 /** One pillar and six supports. Must match PRE_CALL_SUPPORTS + 1 in page-plan.ts. */
 export const PRE_CALL_PAGES = 7;
 
-/** The fewest emotional rows a vertical needs before headlines may be written for it. */
-export const EMOTIONAL_FLOOR = 20;
+/**
+ * The fewest emotional rows this buyer needs before headlines may be written for them.
+ *
+ * ‼️ RE-EXPORTED, NOT DECLARED. It lives in dataset-spec.ts now, beside the field that declares the
+ * same threshold, because two floors is how the gate and the card explaining the gate start
+ * disagreeing about what "enough" means. Kept exported here because the probe and the ladder both
+ * already import it from this file.
+ */
+import { EMOTIONAL_FLOOR } from "./dataset-spec";
+export { EMOTIONAL_FLOOR };
 
 const STEP = "pre_call_pages";
 

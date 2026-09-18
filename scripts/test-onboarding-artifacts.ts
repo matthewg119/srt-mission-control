@@ -3693,7 +3693,7 @@ import * as visionT from "../src/lib/hub/skin-vision";
   const numbered = contract.filter((l) => /^## \d+\. /.test(l));
   eq("the contract numbers every research section", numbered.length, drr.RESEARCH_SECTION_KEYS.length);
   ok("every printed number is its key's position", numbered.every((l, i) => l.startsWith(`## ${i + 1}. `)));
-  ok("the sixteen sections include the framework's seven", drr.RESEARCH_SECTION_KEYS.length === 16 && drr.RESEARCH_SECTION_KEYS.indexOf("awareness") === 15);
+  ok("the seventeen sections include the framework's eight", drr.RESEARCH_SECTION_KEYS.length === 17 && drr.RESEARCH_SECTION_KEYS.indexOf("awareness") === 15 && drr.RESEARCH_SECTION_KEYS.indexOf("emotional_language") === 16);
   const closeAt = contract.findIndex((l) => /^## Phrases worth building pages around/.test(l));
   ok("the ranked phrases close under an unnumbered heading after section 16", closeAt > contract.indexOf(numbered[numbered.length - 1]));
   ok("the KEYWORDS worked rows are in the contract", contract.includes("KEYWORDS") && contract.some((l) => l.split("|").length === 4));

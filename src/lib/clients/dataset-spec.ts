@@ -68,6 +68,8 @@ export interface DatasetSnapshot {
     approvedNumbers: number;
     keywordRows: number;
     keywordRowsWithUrl: number;
+    /** Objection-shaped phrases filed against THIS vertical AND THIS avatar. */
+    objectionRows: number;
   };
   offer: {
     /**
@@ -165,6 +167,17 @@ function scriptSection(key: string, label: string, usedFor: string, sectionKey: 
   };
 }
 
+/**
+ * The fewest objection-shaped phrases this buyer needs before headlines may be written for them.
+ *
+ * ‼️ THE FLOOR LIVES HERE, AND IT USED TO LIVE IN THE HEADLINE ENGINE. Two floors is how a gate and
+ * the card that explains the gate start disagreeing about what "enough" is, so precall-headlines.ts
+ * imports this rather than declaring its own. This is the FIRST count-with-a-threshold in the dataset
+ * layer: every other present() is a boolean, and the only count-based ones are `> 0`. That is the
+ * reason it is stated as a named constant with this comment rather than inlined as a numeral.
+ */
+export const EMOTIONAL_FLOOR = 20;
+
 /** Worth knowing, and nothing asks for it yet. Declared so the card shows the gap instead of it not existing. */
 function notAsked(dataset: DatasetKey, key: string, label: string, usedFor: string): FieldSpec {
   return { dataset, key, label, usedFor, filledBy: { kind: "research", sectionKey: null, asked: false }, present: NOT_ASKED };
@@ -214,6 +227,22 @@ export const DATASET_FIELDS: readonly FieldSpec[] = [
   scriptSection("curiosity_lost_solutions", "old or lost solutions", "the rediscovered-secret hook", "curiosity"),
   scriptSection("corruption_narrative", "what they believe ruined things", "the \"it used to be better until\" angle", "corruption"),
   scriptSection("awareness_stage", "awareness stage (5 to 1, with quotes)", "where a page starts the reader and where it leaves them", "awareness"),
+  // ‼️ THE ONLY FIELD IN THIS REGISTRY WHOSE present() IS A THRESHOLD RATHER THAN A BOOLEAN, and the
+  // headline engine is why: it refuses to write until this buyer's objections are on file, so "the
+  // section was answered" is not the same question as "is there enough to write from". A research
+  // report that comes back with three quotes answers the section and does not clear the floor.
+  //
+  // It counts the AVATAR's rows, not the client's own reviews. Those are tier one in emotionalLayer()
+  // and are counted there; filing a client's own customers under an avatar key every other client in
+  // the vertical reads is the poisoned-corpus failure question_bank has no client_id to prevent.
+  {
+    dataset: "avatar",
+    key: "emotional_language",
+    label: `objections in this buyer's own words (at least ${EMOTIONAL_FLOOR})`,
+    usedFor: "the headline engine refuses to write to a rung without them, and vocBlock renders empty",
+    filledBy: { kind: "research", sectionKey: "emotional_language", asked: true, scriptOnly: true },
+    present: (ctx) => ctx.snap.avatar.objectionRows >= EMOTIONAL_FLOOR || ctx.snap.avatar.vocQuotes >= EMOTIONAL_FLOOR,
+  },
 
   // ── AVATAR, the avatar sheet (step 11, `avatar sheet:`) ────────────────────
   docField("avatar", "age_range", "age range", "the story's protagonist and setting", "avatar_sheet", ["demographics.age_range"]),
@@ -385,7 +414,7 @@ function reasonFor(field: FieldSpec, snap: DatasetSnapshot): string {
  */
 export const NOTHING_ON_FILE: DatasetSnapshot = {
   audience: { label: "this audience", isPrimary: true, stance: "patient", hasVocabulary: false, buyerMarket: null, hardLines: 0, confirmedAt: null },
-  avatar: { researchText: null, vocQuotes: 0, approvedNumbers: 0, keywordRows: 0, keywordRowsWithUrl: 0 },
+  avatar: { researchText: null, vocQuotes: 0, approvedNumbers: 0, keywordRows: 0, keywordRowsWithUrl: 0, objectionRows: 0 },
   offer: { applies: true, treatment: null, terms: 0, positioning: null, magnetKey: null, lockedAt: null, outcomePromise: null, price: null },
   documents: { avatarSheet: null, shortOffer: null, beliefs: 0, letterApproved: false },
   audit: { linked: true, pickedAvatar: false, buyerMap: false },

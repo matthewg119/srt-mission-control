@@ -468,6 +468,33 @@ const SECTIONS: SectionSpec[] = [
       `${val(spoken(c.primaryTreatment))}, and what they would have to learn to move one stage closer. No ` +
       `percentages or shares: nobody measured them. If you found nobody at a stage, say so.`,
   },
+  // ‼️ APPENDED AT THE VERY END, AND scriptOnly, AND BOTH HALVES ARE LOAD-BEARING (2026-09-21).
+  // The parser maps section N to RESEARCH_SECTION_KEYS[N - 1]. Appending a NON-scriptOnly section
+  // here would make it number ten in COMPACT_SECTIONS while RESEARCH_SECTION_KEYS[9] is
+  // "hopes_and_dreams", so every compact report would file this answer under that key. Inserting it
+  // at the end of the non-script run instead would shift all seven script-only sections and re-file
+  // every stored report's answers. A tail append is the only move that renumbers nothing.
+  //
+  // The gap prompt asks for it BY ITS REAL NUMBER, which is why a script-only section is still
+  // reachable from `prompts`: a subset renumbered from one is what files section twelve's answer
+  // under section one, silently and permanently.
+  {
+    key: "emotional_language",
+    title: "Lenguaje emocional: objeciones en sus palabras",
+    heading: "Emotional language: objections in their own words",
+    scriptOnly: true,
+    searches: 8,
+    brief: () =>
+      "The objections this buyer actually voices, quoted verbatim, one per line, in their words rather than ours.",
+    instruction: (c) =>
+      `Find what ${c.avatarLabel} actually says when they hesitate, in their own words. Not what a marketer ` +
+      `would say they object to: the sentences they type in forums, reviews, comments and complaints. Hunt ` +
+      `for fear, money, time, regret, comparison with somebody else, and "has anyone else done this". ` +
+      `Quote each one VERBATIM with its link, one per line. Do not tidy the grammar, do not merge two ` +
+      `people into one sentence, and do not correct what they believe: a wrong belief stated in their words ` +
+      `is worth more here than a right one in ours. If you cannot find enough real ones, say how many you ` +
+      `found rather than inventing the rest.`,
+  },
 ];
 
 /**

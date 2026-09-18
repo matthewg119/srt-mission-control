@@ -124,7 +124,7 @@ const snap: DatasetSnapshot = {
   audience: { label: "women over 60 wanting a lift", isPrimary: false, stance: "patient", hasVocabulary: true, buyerMarket: "med-spa", hardLines: 3, confirmedAt: null },
   avatar: {
     researchText: [1, 2, 3, 4, 5, 6, 7, 8].map((n) => `## ${n}. S\n${filler("finding")}`).join("\n"),
-    vocQuotes: 0, approvedNumbers: 0, keywordRows: 0, keywordRowsWithUrl: 0,
+    vocQuotes: 0, approvedNumbers: 0, keywordRows: 0, keywordRowsWithUrl: 0, objectionRows: 0,
   },
   offer: { applies: false, treatment: null, terms: 0, positioning: null, magnetKey: null, lockedAt: null, outcomePromise: null, price: null },
   documents: { avatarSheet: null, shortOffer: null, beliefs: 0, letterApproved: false },
