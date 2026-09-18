@@ -20,6 +20,7 @@
 // What it costs is a download and a parse of a file that cannot have changed, on every single
 // prompt build, and the door is where things that should happen once live.
 
+import { createHash } from "node:crypto";
 import { supabaseAdmin } from "@/lib/db";
 import { getOrFetch, cacheKeyOf } from "@/lib/data/dataset-cache";
 import { isResearchDocument } from "./research-intake";
@@ -144,7 +145,14 @@ export async function docTextsFor(clientId: string, opts: { limit?: number } = {
   // Measured against production 2026-09-18, after the first version shipped.
   const { data, error } = await supabaseAdmin
     .from("client_docs")
-    .select("id, filename, content_type, storage_ref, delivery_step_key, uploaded_at, transcript")
+    .select("id, filename, content_type, storage_ref, delivery_step_key, uploaded_at, transcript, source")
+    // ‼️ WHAT SOMEBODY SENT IN, NEVER WHAT WE PRODUCED. Measured on SRT 2026-09-18: of eight rows,
+    // six were `source: "generated"` — our own review card, citation cleanup list, page candidate
+    // and custom question PDFs — and the final prompt was pasting them into a research brief as
+    // though the client had written them. Handing a researcher our own output back is worse than
+    // noise: it reads as evidence about the buyer and it is evidence about us. The client's real
+    // answers arrive as an upload or a paste, and those are what this is for.
+    .neq("source", "generated")
     .eq("client_id", clientId)
     .order("uploaded_at", { ascending: true })
     .limit(limit);
@@ -158,6 +166,20 @@ export async function docTextsFor(clientId: string, opts: { limit?: number } = {
   if (!data) return [];
 
   const out: DocText[] = [];
+  // ‼️ THE SAME FILE DROPPED TWICE IS ONE DOCUMENT. Slack fires `message` with files AND a racing
+  // `file_shared`, and a person re-uploading after a failed step is normal, so duplicate rows are
+  // the usual case rather than the odd one: SRT's one real upload was on file twice. Pasting it
+  // twice into the prompt spends the budget on a copy and makes a reader think two people said
+  // the same thing independently. Keyed on the TEXT, so a re-upload under a new filename still
+  // collapses and two genuinely different files with one name do not.
+  const seen = new Set<string>();
+  const keep = (text: string): boolean => {
+    const key = createHash("sha256").update(text).digest("hex");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  };
+
   for (const row of data) {
     const filename = (row.filename as string | null) ?? "";
     const contentType = (row.content_type as string | null) ?? "";
@@ -169,6 +191,7 @@ export async function docTextsFor(clientId: string, opts: { limit?: number } = {
     // again would extract nothing, and the transcript is the document.
     const transcript = (row.transcript as string | null) ?? null;
     if (transcript && transcript.trim()) {
+      if (!keep(transcript)) continue;
       out.push({
         docId: row.id as string,
         filename: filename || "voice note",
@@ -185,6 +208,7 @@ export async function docTextsFor(clientId: string, opts: { limit?: number } = {
 
     const read = await textOfDoc({ clientId, docId: row.id as string, filename, contentType, storageRef });
     if (!read) continue;
+    if (!keep(read.text)) continue;
 
     out.push({
       docId: row.id as string,
