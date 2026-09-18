@@ -327,6 +327,14 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
         threadTs: payload.container?.message_ts ?? "",
         value: action.value ?? "",
       });
+    case "page_approve":
+      return pageApproveAction({
+        channel,
+        slackTs: payload.container?.message_ts ?? "",
+        userName: payload.user?.username ?? null,
+        userId,
+        value: action.value ?? "",
+      });
     // ── The concierge's audience: which of the two lanes this client's widget speaks from ──
     case "concierge_audience_patient":
     case "concierge_audience_owner":
@@ -575,6 +583,70 @@ ${board}`;
     })().catch((e) =>
       console.error("[slack/actions] page_publish_request failed:", (e as Error).message)
     )
+  );
+
+  return NextResponse.json({ ok: true });
+}
+
+/**
+ * Approve a page from the drafting channel, and publish it.
+ *
+ * Matthew, 2026-09-22: "the approve button should basically approve the page/post we were about to
+ * post, it should be a confirmation for after we check the page being compliant".
+ *
+ * ‼️ THIS PUBLISHES, AND pagePublishRequestAction ABOVE STILL DOES NOT. They are different things
+ * and both are correct. That one answers "can this publish?" BEFORE the walk to the board and is
+ * deliberately read-only. This one is the press itself, and it goes through publishPage(), which is
+ * the single place the Day 0 wall, the quality gate and setPublished are sequenced. The objection
+ * recorded on that function was that a second publisher would be "a second place to get the
+ * ordering wrong"; there is still exactly one place, and this calls it.
+ *
+ * ‼️ IT IS A CONFIRMATION, NOT A BYPASS. publishPage re-runs both rails, so a page edited between
+ * the check and this press is refused as stale rather than published on a verdict about text that
+ * is no longer on it. The button cannot skip anything the board could not skip.
+ *
+ * ‼️ NO WAIVE BUTTON IS EVER OFFERED BESIDE APPROVE. The waiver is mentioned only here, in the
+ * refusal, which is the Day 0 wall's own rule: offering it beside Publish makes it a second button,
+ * which is the same as having no wall. It needs a written reason, so it is typed rather than pressed.
+ */
+async function pageApproveAction(args: {
+  channel: string;
+  slackTs: string;
+  userName: string | null;
+  userId: string;
+  value: string;
+}): Promise<NextResponse> {
+  // `${clientId}:${pageId}`. Both halves are uuids, so a plain split is safe.
+  const [clientId, pageId] = args.value.split(":");
+  if (!clientId || !pageId) return NextResponse.json({ ok: true });
+
+  const actor = args.userName ? `@${args.userName}` : args.userId;
+
+  waitUntil(
+    (async () => {
+      const { publishPage } = await import("@/lib/hub/publish-page");
+      const res = await publishPage({ clientId, pageId, publish: true, by: actor });
+
+      if (!res.ok) {
+        const r = res.refusal;
+        const extra =
+          r.blockedBy === "quality_gate" && r.waivable
+            ? "\n\nIf this is a refusal you mean to overrule, type `waive: <the reason>` in this thread. " +
+              "The reason is recorded on the verdict and posted to the infra channel."
+            : r.blockedBy === "quality_gate" && r.gateReason !== "blocked"
+              ? "\n\nRun `check` again in this thread: the verdict no longer describes what is on the page."
+              : "";
+        await slack.postThreadReply(args.channel, args.slackTs, `:no_entry: Not published. ${r.error}${extra}`);
+        return;
+      }
+
+      await slack.postThreadReply(
+        args.channel,
+        args.slackTs,
+        `:white_check_mark: Approved by ${actor} and published.` +
+          (res.pageUrl ? `\n${res.pageUrl}` : "\n_No client domain is attached yet, so there is no live URL._")
+      );
+    })().catch((e) => console.error("[slack/actions] page_approve failed:", (e as Error).message))
   );
 
   return NextResponse.json({ ok: true });

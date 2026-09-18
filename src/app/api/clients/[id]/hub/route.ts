@@ -15,6 +15,7 @@ import { subdomainLabel } from "@/lib/clients/normalize";
 import { assertDay0Archived, isDay0Error, DAY_ZERO_STEP_KEY } from "@/lib/clients/day-zero";
 import { assertGatePassed, isGateError, runGate, waiveGate, latestGateRun } from "@/lib/hub/page-gate";
 import { capturePage } from "@/lib/clients/page-dataset";
+import { publishPage } from "@/lib/hub/publish-page";
 import {
   loadEvidenceFor,
   verifySource,
@@ -258,122 +259,47 @@ export async function POST(
     }
 
     // ── Publish or unpublish ──────────────────────────────────────────────────
+    //
+    // ‼️ THE ORDERING MOVED INTO @/lib/hub/publish-page AND THAT IS THE ONLY CHANGE.
+    // Both rails, their order, and the reasoning for it now live in ONE function, because the
+    // Slack approval card added 2026-09-22 has to publish through the same path. The objection
+    // recorded in the actions route was that a second publisher would be "a second place to get
+    // the ordering wrong"; sharing the implementation is what answers it. setPublished and
+    // assertGatePassed each still have exactly one caller, and both are in that module.
     case "page_publish":
     case "page_unpublish": {
       const pageId = String(body.pageId ?? "");
       if (!pageId) return NextResponse.json({ ok: false, error: "Which page?" }, { status: 400 });
 
-      const publish = action === "page_publish";
+      const res = await publishPage({
+        clientId,
+        pageId,
+        publish: action === "page_publish",
+        by: actor,
+      });
 
-      // ‼️ THE DAY 0 WALL. Runner v3's one hard rail.
-      //
-      // BEFORE setPublished, not after, and that ordering is the whole point: publishing
-      // is not one write. It flips client_pages.status, then autoCompleteStep('first_page')
-      // ticks a delivery step, refreshes the Slack checklist, posts a thread reply and
-      // INSERTS a client_messages row telling the client their page is live. A check
-      // placed after any of that has already told the client something that should not
-      // have happened yet.
-      //
-      // Unpublishing is never gated. Taking a page down is the remedy, not the harm.
-      if (publish) {
-        try {
-          await assertDay0Archived(
-            clientId,
-            (client.dba_name as string | null) ?? (client.legal_name as string),
-            // Quote the checklist row back at them in its own words, so the error names
-            // the thing they have to go and tick rather than a paraphrase of it.
-            stepByKey(DAY_ZERO_STEP_KEY)?.label
-          );
-        } catch (e) {
-          if (!isDay0Error(e)) throw e;
-          return NextResponse.json(
-            {
-              ok: false,
-              error: e.message,
-              blockedBy: e.stepKey,
-              // The board turns this into the waive control rather than hard-coding the
-              // step key in the component.
-              waivable: true,
-            },
-            { status: 409 }
-          );
-        }
-
-        // ‼️ THE QUALITY GATE. The SECOND hard rail, added 2026-08-26 on Matthew's call,
-        // reversing the note in CLAUDE.md that said Day 0 would be the only one.
-        //
-        // AFTER Day 0 and BEFORE setPublished, and both halves of that matter. After, because
-        // Day 0 is about the measurement baseline and is the more fundamental refusal: telling
-        // somebody their page is generic when the real problem is that publishing it destroys
-        // the baseline sends them to fix the wrong thing. Before setPublished for exactly the
-        // reason written above: publishing is not one write, and a check after it has already
-        // ticked first_page and told the client their page is live.
-        //
-        // It refuses in three distinct ways, and the board renders each differently: never
-        // checked, checked then edited, and checked and failed.
-        try {
-          await assertGatePassed(clientId, pageId);
-        } catch (e) {
-          if (!isGateError(e)) throw e;
-          return NextResponse.json(
-            {
-              ok: false,
-              error: e.message,
-              blockedBy: "quality_gate",
-              gateReason: e.reason,
-              checks: e.checks,
-              // A never-run or stale gate is not waivable: the answer is to press Check, and
-              // offering a waiver there would train people to skip the cheap fix. Only a real
-              // refusal can be waived.
-              waivable: e.reason === "blocked",
-            },
-            { status: 409 }
-          );
-        }
-      }
-
-      const result = await setPublished(clientId, pageId, publish);
-      if (!result.ok) return NextResponse.json({ ok: false, error: result.error });
-
-      // ‼️ THE SNAPSHOT OF WHAT SHIPPED, AND IT IS THE MOST VALUABLE ROW IN THE DATASET. Every
-      // other capture is a draft; this one is the version that went on somebody's domain, after
-      // whatever editing happened in between. Fire and forget, and deliberately unawaited-in-
-      // effect: capturePage swallows its own failures, because losing a research row must never
-      // fail a publish that has already passed the Day 0 wall and the gate.
-      //
-      // ‼️ planRowId IS RESOLVED FIRST, AND WITHOUT IT THE MOST VALUABLE ROW IN THE CORPUS IS THE
-      // ONE THAT KNOWS LEAST. capturePage reads the angle, narrative, indoctrination, audience,
-      // offer, magnet candidates and every keyword field through the plan row; with none it records
-      // the published body and nulls what the page was arguing. The drafted row carried all of it
-      // and the published row did not, so the very diff this table exists for was unreadable.
-      if (publish) {
-        const { planRowForPage } = await import("@/lib/clients/page-plan");
-        const publishedPlanRow = await planRowForPage(clientId, pageId);
-        void capturePage({
-          clientId,
-          pageId,
-          planRowId: publishedPlanRow?.id ?? null,
-          reason: "published",
-        });
-      }
-
-      let pageUrl: string | null = null;
-
-      if (publish && client.domain) {
-        const label = subdomainLabel(client.subdomain as string | null, client.domain as string);
-        pageUrl = `https://${label}.${client.domain}/${result.slug}`;
-
-        // Ticking first_page is what posts the notify_first_page draft, and it now has a
-        // real URL behind it. autoCompleteStep is reused rather than reimplemented: it owns
-        // the tick, the checklist refresh and the draft in one place.
-        await autoCompleteStep(clientId, "first_page", `Published ${pageUrl}`).catch((e) => {
-          console.error("[clients/hub] first_page tick failed:", (e as Error).message);
-        });
+      if (!res.ok) {
+        const r = res.refusal;
+        if (r.blockedBy === "not_found") return NextResponse.json({ ok: false, error: r.error });
+        // The board turns blockedBy into the waive control rather than hard-coding the step key.
+        return NextResponse.json(
+          r.blockedBy === "day_0"
+            ? { ok: false, error: r.error, blockedBy: r.stepKey, waivable: true }
+            : {
+                ok: false,
+                error: r.error,
+                blockedBy: "quality_gate",
+                gateReason: r.gateReason,
+                checks: r.checks,
+                waivable: r.waivable,
+              },
+          { status: 409 }
+        );
       }
 
       return NextResponse.json({
         ok: true,
-        pageUrl,
+        pageUrl: res.pageUrl,
         pages: await listAllForBoard(clientId),
       });
     }

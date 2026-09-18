@@ -29,7 +29,7 @@
 
 import crypto from "crypto";
 import { supabaseAdmin } from "@/lib/db";
-import { slack } from "@/lib/slack-bot";
+import { slack, type SlackBlock } from "@/lib/slack-bot";
 import { callClaudeJSON } from "@/lib/claude-calls";
 import { hasBannedDash } from "@/lib/copy-guard";
 import {
@@ -1274,6 +1274,65 @@ const MARK: Record<CheckStatus, string> = {
 };
 
 /** The verdict as a Slack card. Failures first, because that is what gets acted on. */
+/**
+ * The verdict card, with the Approve control on it.
+ *
+ * Matthew, 2026-09-22: "the approve button should basically approve the page/post we were about to
+ * post, it should be a confirmation for after we check the page being compliant".
+ *
+ * ‼️ APPROVE IS SHOWN ON A BLOCKED VERDICT TOO, AND NO WAIVE BUTTON EVER SITS BESIDE IT.
+ * This is the Day 0 wall's rule applied to the second rail: "The board only offers it AFTER a
+ * publish has been refused. Offering it beside Publish would make it a second button, which is the
+ * same as having no wall." So pressing Approve on a blocked page produces the refusal, and the
+ * refusal is what mentions the waiver. Hiding Approve instead would be worse, not better: it would
+ * leave a person with a blocked card and no way to find out what the refusal actually says.
+ *
+ * ‼️ THE BUTTON IS A CONFIRMATION, NEVER A BYPASS. Its handler re-runs both rails through
+ * publishPage(), so a page edited between the check and the press is refused as stale rather than
+ * published on a verdict about text that is no longer there.
+ *
+ * ‼️ THE VALUE CARRIES THE TWO IDS AND NOTHING THAT CAN GO STALE SEPARATELY, the `${clientId}:${id}`
+ * shape every other card in this repo uses (see client_magnet_approve). Both halves are uuids, so
+ * a plain split is safe.
+ */
+export function verdictBlocks(args: {
+  run: GateRun;
+  pageSlug: string;
+  clientId: string;
+  pageId: string;
+}): SlackBlock[] {
+  const text = renderVerdict(args.run, args.pageSlug);
+
+  // A block's text field has the same 3,000 character ceiling a message body does, and going over
+  // fails the WHOLE message with invalid_blocks and nothing rendered.
+  const chunks: string[] = [];
+  let current = "";
+  for (const line of text.split("\n")) {
+    if (current && current.length + line.length + 1 > 2900) {
+      chunks.push(current);
+      current = "";
+    }
+    current = current ? `${current}\n${line}` : line;
+  }
+  if (current) chunks.push(current);
+
+  return [
+    ...chunks.map((c) => ({ type: "section", text: { type: "mrkdwn", text: c } })),
+    {
+      type: "actions",
+      elements: [
+        {
+          type: "button",
+          text: { type: "plain_text", text: ":white_check_mark: Approve and publish" },
+          style: args.run.verdict === "block" ? undefined : "primary",
+          action_id: "page_approve",
+          value: `${args.clientId}:${args.pageId}`,
+        },
+      ],
+    },
+  ] as SlackBlock[];
+}
+
 export function renderVerdict(run: GateRun, pageSlug: string): string {
   const head =
     run.verdict === "block"

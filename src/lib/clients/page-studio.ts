@@ -1786,6 +1786,45 @@ async function runScanCommand(threadTs: string): Promise<void> {
   }
 }
 
+/**
+ * `waive: <reason>` after a refusal. Publishes over a block, on purpose, with a reason on record.
+ *
+ * ‼️ A WAIVER IS A VERDICT ROW, NOT A FLAG, and waiveGate is what writes it: it copies the previous
+ * checks forward, appends one `waived` entry, carries the hash of the text being waived and posts
+ * to the infra channel. So it goes stale the moment the page is edited, exactly as a pass does.
+ *
+ * ‼️ ONE PRESS WAIVES EVERY BLOCK-TIER CHECK, INCLUDING THE COMPLIANCE ONE, AND THAT IS THE CHOSEN
+ * BEHAVIOUR (Matthew, 2026-09-22). A compliance block is the same shape as `unsupported`, a factual
+ * claim no source carries, so it is not a different class of refusal and does not need a different
+ * door. Per-check waivers were considered and declined: one waiver concept, one reason, one alert.
+ *
+ * It does NOT publish. The person presses Approve again afterwards, which re-runs both rails
+ * against the new verdict. Waiving and publishing in one step would make the waiver the publish
+ * button, which is what "a waiver is a door, not a bypass" refuses.
+ */
+async function waiveCommand(session: Session, reason: string): Promise<void> {
+  if (!session.pageId) {
+    await say(session.threadTs, "Pick a number first. A waiver is recorded against one page.");
+    return;
+  }
+
+  const { waiveGate } = await import("@/lib/hub/page-gate");
+  const by = "page studio";
+  const res = await waiveGate({ clientId: session.clientId, pageId: session.pageId, reason, by });
+
+  if (!res.ok) {
+    await say(session.threadTs, `:warning: Not waived: ${res.error}`);
+    return;
+  }
+
+  await say(
+    session.threadTs,
+    ":writing_hand: *Waived and recorded.* The reason is on the verdict and has gone to the infra " +
+      "channel.\nPress *Approve and publish* again to publish over it. The waiver goes stale the " +
+      "moment the page is edited, exactly as a pass does."
+  );
+}
+
 async function check(session: Session): Promise<void> {
   if (!session.pageId) {
     await say(session.threadTs, "Pick a number first, then `check` runs the gate on that page.");
@@ -1794,7 +1833,7 @@ async function check(session: Session): Promise<void> {
 
   await say(session.threadTs, "Running the gate. This reads the page against its evidence.");
 
-  const { runGate, renderVerdict } = await import("@/lib/hub/page-gate");
+  const { runGate, renderVerdict, verdictBlocks } = await import("@/lib/hub/page-gate");
   const res = await runGate(session.clientId, session.pageId, { runBy: "page studio" });
 
   if (!res.ok) {
@@ -1808,7 +1847,14 @@ async function check(session: Session): Promise<void> {
     .eq("id", session.pageId)
     .maybeSingle();
 
-  await say(session.threadTs, renderVerdict(res.run, (page?.slug as string) ?? ""));
+  const slug = (page?.slug as string) ?? "";
+  // The text is still sent as the message body, because blocks alone render as an empty message
+  // in a notification and in any client that does not support them.
+  await say(
+    session.threadTs,
+    renderVerdict(res.run, slug),
+    verdictBlocks({ run: res.run, pageSlug: slug, clientId: session.clientId, pageId: session.pageId })
+  );
 }
 
 /**
@@ -2941,6 +2987,15 @@ export async function handlePageStudioEvent(args: {
   // Above the body append, like every other verb, and anchored at both ends. See SCAN_COMMAND.
   if (SCAN_COMMAND.test(command)) {
     await runScanCommand(session.threadTs);
+    return true;
+  }
+
+  // ‼️ COLON-ANCHORED, THE SAME SHAPE `add:` AND `replace:` USE, and for the same reason: a bare
+  // /^waive/ would swallow "waive the setup fee for her", which is an ordinary sentence in a
+  // channel about client pages. The colon is what makes it a command.
+  const waiving = /^\s*waive\s*:\s*([\s\S]+)$/i.exec(text);
+  if (waiving) {
+    await waiveCommand(session, waiving[1].trim());
     return true;
   }
 

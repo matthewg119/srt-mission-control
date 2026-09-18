@@ -2530,9 +2530,13 @@ import { pageSlug } from "../src/lib/hub/pages";
   });
 
   ok("setPublished has exactly one caller outside its own module", callers.length === 1);
+  // ‼️ THE CALLER MOVED OUT OF THE ROUTE ON 2026-09-22 AND THE WALL DID NOT WEAKEN. The ordering
+  // now lives in lib/hub/publish-page.ts so the board and the Slack approval card share ONE
+  // implementation of it, which is exactly what the "a second publisher would be a second place to
+  // get the ordering wrong" objection asks for. Still one caller; it is just no longer in a route.
   ok(
-    "and that caller is the hub route, which asserts Day 0 first",
-    callers[0]?.includes(path.join("api", "clients", "[id]", "hub")) ?? false
+    "and that caller is publish-page.ts, the one place that owns the ordering",
+    callers[0]?.includes(path.join("lib", "hub", "publish-page")) ?? false
   );
 
   if (callers[0]) {
@@ -2629,14 +2633,22 @@ import { pageSlug } from "../src/lib/hub/pages";
   // ‼️ THE ORDERING IS THE WHOLE POINT OF BOTH RAILS. Publishing is not one write: it flips the
   // status, ticks first_page, refreshes the Slack checklist and tells the client their page is
   // live. A check after any of that has already said something that should not have been said.
-  const publishBlock = route.slice(route.indexOf('case "page_publish"'));
+  // ‼️ READ FROM publish-page.ts, NOT FROM THE ROUTE, SINCE 2026-09-22. The route delegates now, so
+  // slicing it at `case "page_publish"` would find no rails at all and pass vacuously on two
+  // indexOf(-1) comparisons. That is the failure shape this whole block exists to catch, so the
+  // source it reads has to follow the code it is about.
+  const publishBlock = read("src/lib/hub/publish-page.ts");
   ok(
-    "page_publish gates on Day 0 before the quality gate",
-    publishBlock.indexOf("assertDay0Archived") < publishBlock.indexOf("assertGatePassed")
+    "publishPage gates on Day 0 before the quality gate",
+    publishBlock.indexOf("assertDay0Archived") < publishBlock.indexOf("await assertGatePassed")
   );
   ok(
     "and both gates run before setPublished",
-    publishBlock.indexOf("assertGatePassed") < publishBlock.indexOf("await setPublished")
+    publishBlock.indexOf("await assertGatePassed") < publishBlock.indexOf("await setPublished")
+  );
+  ok(
+    "the route no longer contains the ordering itself, so there is only one copy of it",
+    !/await setPublished\(/.test(route) && !/await assertGatePassed\(/.test(route)
   );
 
   // A second publisher would put the ordering above in two places, which is how one of them
@@ -2661,7 +2673,7 @@ import { pageSlug } from "../src/lib/hub/pages";
   );
   ok(
     "a never-run or stale gate is not waivable",
-    /waivable: e\.reason === "blocked"/.test(route)
+    /waivable: e\.reason === "blocked"/.test(publishBlock)
   );
   ok(
     "a waiver carries the hash of the body it waived",
