@@ -9,6 +9,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { microsoft } from "@/lib/microsoft";
+import { supabaseAdmin } from "@/lib/db";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -66,6 +67,11 @@ export async function POST(req: NextRequest) {
       contentBytes: a.contentBase64 as string,
     }));
 
+  const attachmentBytes = attachments.reduce(
+    (n, a) => n + Math.floor((a.contentBytes.length * 3) / 4),
+    0
+  );
+
   try {
     await microsoft.sendMail({
       to: toList,
@@ -75,10 +81,54 @@ export async function POST(req: NextRequest) {
       attachments: attachments.length ? attachments : undefined,
       // no fromMailbox -> sends as the connected account (matthew@srtagency.com)
     });
+    await logSend(toList, subject, attachments.length > 0, attachmentBytes, "sent");
     return NextResponse.json({ ok: true });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("notify/funnel: sendMail failed:", msg);
+    await logSend(toList, subject, attachments.length > 0, attachmentBytes, "failed", msg);
     return NextResponse.json({ ok: false, error: msg.slice(0, 300) }, { status: 502 });
+  }
+}
+
+/**
+ * Record the send. ‼️ THIS IS OUR SIDE ONLY, AND IT NEVER BECOMES DELIVERY CONFIRMATION.
+ * Graph /sendMail answers 202 with an empty body, so there is no message id to keep, and
+ * Microsoft pushes no bounce or complaint events. A row saying "sent" means Graph accepted
+ * it, not that anyone received it. Delivery still lives in message trace.
+ *
+ * WHY IT EXISTS. This route is the public email relay for srtagency.com, and on 2026-09-18 a
+ * script drove /api/invisible-lead through it to mail thirteen strangers. When the question
+ * became "who did we mail, and did any of it bounce", nothing anywhere could answer, and the
+ * reconstruction was reading Sent Items by hand. The subject line identifies the calling
+ * route on its own, so nothing upstream had to change to make this useful.
+ *
+ * ‼️ IT MUST NEVER CHANGE WHAT THE CALLER SEES. The mail has already gone by the time this
+ * runs; a logging failure is a logging failure, not a failed send. Hence its own try/catch,
+ * and hence the caller getting its answer either way.
+ *
+ * No caller IP is recorded on purpose: this is called server to server from a Vercel lambda,
+ * so the only address visible here is our own. The abuser's IP is in srt-agwb's function logs.
+ */
+async function logSend(
+  recipients: string[],
+  subject: string,
+  hasAttachment: boolean,
+  attachmentBytes: number,
+  status: "sent" | "failed",
+  error?: string
+): Promise<void> {
+  try {
+    const { error: dbErr } = await supabaseAdmin.from("funnel_relay_sends").insert({
+      recipients,
+      subject,
+      has_attachment: hasAttachment,
+      attachment_bytes: attachmentBytes,
+      status,
+      error: error ? error.slice(0, 1000) : null,
+    });
+    if (dbErr) console.error("notify/funnel: send log failed:", dbErr.message);
+  } catch (err) {
+    console.error("notify/funnel: send log threw:", err instanceof Error ? err.message : err);
   }
 }
