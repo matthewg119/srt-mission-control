@@ -26,8 +26,25 @@ import { supabaseAdmin } from "@/lib/db";
 import { callClaudeJSON, type ClaudeModel } from "@/lib/claude-calls";
 import { stripEmDashes } from "@/lib/reel/text";
 import { AWARENESS_STAGES, type AwarenessStage } from "@/lib/audit-engine/awareness";
-import { headlineFaults, headlinePrompt, normalizeHeadline } from "./client-headlines";
+import { headlineFaults, headlinePrompt, headlineShapeLine, normalizeHeadline } from "./client-headlines";
 import type { StoredKeyword } from "./keyword-expansion";
+import { isPostFormatId, type PostFormatId } from "@/config/post-formats";
+
+/**
+ * One planned page's argument, and the SHAPE the page under it takes.
+ *
+ * ‼️ THE SHAPE IS A CONSTRAINT ON THE HEADLINE, NEVER A TEMPLATE FOR IT. There is deliberately no
+ * per-shape headline pattern with slots: the measured failure this lane exists to fix (2026-09-17)
+ * was thirty three candidates that all argued the same thing, and a per-shape template reproduces
+ * that one level down. The shape says what a headline for this page has to NAME; it never says how.
+ */
+export interface PickedAngle {
+  keyword: string;
+  idea: string;
+  indoctrination: string | null;
+  postFormat: PostFormatId | null;
+}
+
 
 /** Matthew asked for thirty three every time this runs. */
 export const PRE_CALL_HEADLINES = 33;
@@ -52,15 +69,49 @@ function stageName(stage: AwarenessStage): string {
 // The emotional layer a vertical has to have first
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * WHICH source answered the emotional gate.
+ *
+ * ‼️ A COUNT THAT CANNOT SAY WHERE IT CAME FROM IS A COUNT THAT LIES. "47 on file" and "47 on file,
+ * none of them this client's" are different facts and the card has to be able to say the second.
+ * Same doctrine as cidSource in the GBP lane and score_measured in the scraper lane.
+ */
+export type EmotionalTier = "client_reviews" | "vertical_avatar" | "shared_bank" | "none";
+
 export interface EmotionalLayer {
   vertical: string | null;
-  /** Objection-shaped phrases on file for this vertical. */
+  /** The avatar slug the counts are scoped to, or null when no avatar is confirmed. */
+  avatar: string | null;
+  /** Objection-shaped phrases on file, FROM THE TIER THAT ANSWERED. */
   count: number;
+  /** Which tier that was. */
+  tier: EmotionalTier;
+  /**
+   * Objection rows for the vertical IGNORING the avatar, which is what this used to count.
+   *
+   * Kept so the card can state the exact shape of the SRT finding out loud: the vertical carries
+   * plenty and none of them belong to this client's buyer.
+   */
+  verticalAll: number;
+  /** This client's own customer reviews on file. Tier one, counted whichever tier answered. */
+  ownReviews: number;
   /** Necessary beliefs on file for this client's audience. */
   beliefs: number;
   ok: boolean;
 }
 
+/**
+ * Do we have THIS CLIENT'S buyer, in their own words?
+ *
+ * ‼️ IT USED TO ANSWER A DIFFERENT QUESTION. It counted question_bank filtered on `vertical` ALONE,
+ * so one avatar's objections satisfied another's gate and a client with nothing of their own passed
+ * on the vertical's inheritance. Measured on srt-agency-llc 2026-09-18: 47 objection rows against a
+ * floor of 20, zero CUSTOMER_REVIEW rows, vocabulary {} still marked source 'preset'. The gate read
+ * green while vocBlock rendered empty and nothing said why.
+ *
+ * Three tiers, mirroring clientVocQuotes's existing two-tier read, and the layer reports which one
+ * answered rather than only how many.
+ */
 export async function emotionalLayer(clientId: string): Promise<EmotionalLayer> {
   const { conciergeTenant } = await import("@/lib/concierge/for-client");
   const tenant = await conciergeTenant(clientId);
@@ -70,30 +121,124 @@ export async function emotionalLayer(clientId: string): Promise<EmotionalLayer> 
   const story = await storyContextFor(clientId).catch(() => null);
   const beliefs = story?.beliefs?.length ?? 0;
 
-  if (!vertical) return { vertical, count: 0, beliefs, ok: false };
+  // Tier 1: this client's own customers, in their own words. Never shared, never inherited.
+  const { count: reviewCount } = await supabaseAdmin
+    .from("page_sources")
+    .select("id", { count: "exact", head: true })
+    .eq("client_id", clientId)
+    .eq("source_type", "CUSTOMER_REVIEW");
+  const ownReviews = reviewCount ?? 0;
 
-  const { count } = await supabaseAdmin
+  const base: EmotionalLayer = {
+    vertical,
+    avatar: null,
+    count: 0,
+    tier: "none",
+    verticalAll: 0,
+    ownReviews,
+    beliefs,
+    ok: false,
+  };
+
+  if (!vertical) return decide(base, [["client_reviews", ownReviews]]);
+
+  // The old, avatar-blind number. Reported, never used as the gate.
+  const { count: allCount } = await supabaseAdmin
     .from("question_bank")
     .select("id", { count: "exact", head: true })
     .eq("vertical", vertical)
     .eq("objection_phrase", true);
+  base.verticalAll = allCount ?? 0;
 
-  const found = count ?? 0;
-  // ‼️ THE OBJECTIONS BLOCK AND THE BELIEFS ONLY WARN (2026-09-16). Requiring both refused SRT, whose
-  // vertical carries 47 objections and whose necessary_beliefs document has never been pasted: the ladder
-  // had already been written and anchored without them, and the headline prompt treats beliefs as one
-  // block among several. Matthew asked for the twenty emotional questions per vertical, which is what
-  // this gate is, and a missing framework document is a thing to say on the card rather than a wall.
-  return { vertical, count: found, beliefs, ok: found >= EMOTIONAL_FLOOR };
+  const { audienceFor } = await import("./audiences");
+  const aud = await audienceFor(clientId);
+  const avatar = aud.ok ? aud.audience.researchAvatarSlug : null;
+  base.avatar = avatar;
+
+  // Tier 2: this vertical AND this avatar. ‼️ THE AVATAR FILTER IS THE FIX, and it is why a
+  // legitimately inherited bank no longer satisfies a client whose buyer nobody has researched.
+  // Rows written before an avatar could be confirmed carry avatar null and are correctly excluded:
+  // stamping this client's current avatar onto them would be inventing the tag and then treating it
+  // as evidence, which is what page_candidates.avatar already refuses to do.
+  let tier2 = 0;
+  if (avatar) {
+    const { count } = await supabaseAdmin
+      .from("question_bank")
+      .select("id", { count: "exact", head: true })
+      .eq("vertical", vertical)
+      .eq("objection_phrase", true)
+      .eq("avatar", avatar);
+    tier2 = count ?? 0;
+  }
+
+  // Tier 3: the shared brief for this vertical and avatar. Behind it sits nothing.
+  let tier3 = 0;
+  if (aud.ok) {
+    const { sharedBankFor } = await import("./audiences");
+    const bank = await sharedBankFor(aud.audience).catch(() => null);
+    tier3 = bank?.vocQuotes.length ?? 0;
+  }
+
+  return decide(base, [
+    ["client_reviews", ownReviews],
+    ["vertical_avatar", tier2],
+    ["shared_bank", tier3],
+  ]);
 }
 
-/** What to post when a vertical has never been given its emotional layer. */
+/**
+ * The first tier that clears the floor answers. If none does, the FULLEST tier answers and the gate
+ * fails, so the ask card can say how far short it is and which source it was measuring.
+ *
+ * ‼️ THE OBJECTIONS BLOCK AND THE BELIEFS ONLY WARN (2026-09-16). Requiring both refused SRT outright
+ * and was softened on purpose. Tightening WHAT IS COUNTED while it still only warns is safe; making
+ * it a wall is a separate decision and is Matthew's.
+ */
+function decide(base: EmotionalLayer, tiers: Array<[EmotionalTier, number]>): EmotionalLayer {
+  for (const [tier, count] of tiers) {
+    if (count >= EMOTIONAL_FLOOR) return { ...base, tier, count, ok: true };
+  }
+  let best: [EmotionalTier, number] = ["none", 0];
+  for (const [tier, count] of tiers) {
+    if (count > best[1]) best = [tier, count];
+  }
+  return { ...base, tier: best[1] > 0 ? best[0] : "none", count: best[1], ok: false };
+}
+
+/** How the layer describes its own source, in a sentence a person can act on. */
+export function emotionalSourceLine(layer: EmotionalLayer): string {
+  switch (layer.tier) {
+    case "client_reviews":
+      return `${layer.count} of this client's own customer reviews are on file, so the headlines are written from their buyer's words.`;
+    case "vertical_avatar":
+      return `${layer.count} objection${layer.count === 1 ? "" : "s"} on file for *${layer.vertical}* / *${layer.avatar}*, which is this client's buyer but not this client's customers.`;
+    case "shared_bank":
+      return `${layer.count} quote${layer.count === 1 ? "" : "s"} from the shared brief for *${layer.vertical}* / *${layer.avatar}*. Inherited, not collected here.`;
+    default:
+      return "Nothing is on file for this client's buyer.";
+  }
+}
+
+/**
+ * What to post when the emotional layer is thin.
+ *
+ * ‼️ IT NAMES THE GAP BETWEEN THE VERTICAL AND THE AVATAR, which is the whole finding. A card saying
+ * "0 objections" under a vertical carrying 47 reads like a database fault and sends somebody to look
+ * for one. "47 in the vertical, none of them this buyer's" sends them to do the research.
+ */
 export function emotionalAskLines(layer: EmotionalLayer): string[] {
+  const orphaned = layer.verticalAll > layer.count;
   return [
-    `:octagonal_sign: *No headlines yet.* ${layer.vertical ?? "This client's vertical"} has ${layer.count} objection${layer.count === 1 ? "" : "s"} on file and ${layer.beliefs} necessary belief${layer.beliefs === 1 ? "" : "s"}.`,
+    `:octagonal_sign: *No headlines yet.* ${emotionalSourceLine(layer)}`,
+    orphaned
+      ? `_${layer.vertical} carries ${layer.verticalAll} objection${layer.verticalAll === 1 ? "" : "s"} in total, but they are not filed against ${layer.avatar ? `*${layer.avatar}*` : "a confirmed avatar"}, so this engine will not write from them._`
+      : "",
+    layer.beliefs > 0 ? `${layer.beliefs} necessary belief${layer.beliefs === 1 ? "" : "s"} on file.` : "",
     `The engine needs ${EMOTIONAL_FLOOR} to write to a rung rather than to a category. Without them it writes competent copy about the service and nothing in the output says it was generic.`,
     "",
-    `*Paste ${EMOTIONAL_FLOOR} questions this buyer actually asks*, one per line, in their words, under an \`emotional:\` line:`,
+    "*The fastest way to close this is `prompts` in this thread*, which hands you a research prompt to run online and file back with `research:`.",
+    "",
+    `Or *paste ${EMOTIONAL_FLOOR} questions this buyer actually asks*, one per line, in their words, under an \`emotional:\` line:`,
     "```emotional:\nwhy does it cost that much when the place down the road is half\nwhat happens if it goes wrong and I have to get it fixed\n...\n```",
     "Fears, money, time, regret, comparison, who else has done it. Not features, not what we sell.",
     layer.beliefs === 0
@@ -118,6 +263,19 @@ export async function ingestEmotional(args: {
     return { ok: false, message: ":warning: Nothing stored. This client has no vertical on its concierge row yet." };
   }
 
+  // ‼️ A PASTE THAT CANNOT BE ATTRIBUTED IS A PASTE THE GATE WILL NOT COUNT. This wrote avatar: null,
+  // so every phrase landed un-attributed and the avatar-filtered read above could never see it: a
+  // person would paste twenty objections and watch the card still say zero. The read filters on the
+  // avatar, so the write has to stamp it, and both halves are one fix.
+  if (!layer.avatar) {
+    return {
+      ok: false,
+      message:
+        ":warning: Nothing stored. No avatar is confirmed for this client, so these phrases would be " +
+        "filed against nobody and no gate would ever count them. Confirm the avatar at step 8 first.",
+    };
+  }
+
   const { normalizePhrase } = await import("./phrase-quality");
   const seen = new Set<string>();
   const rows = m[1]
@@ -136,7 +294,7 @@ export async function ingestEmotional(args: {
       objection_phrase: true,
       kind: "objection",
       speaker: "buyer",
-      avatar: null,
+      avatar: layer.avatar,
     }));
 
   if (rows.length === 0) return { ok: false, message: ":warning: Nothing stored. No line was long enough to be a question somebody asks." };
@@ -153,7 +311,7 @@ export async function ingestEmotional(args: {
   return {
     ok: true,
     message: [
-      `:white_check_mark: *${rows.length} question${rows.length === 1 ? "" : "s"} filed against ${layer.vertical}* by ${args.by}. Every client in this vertical reads them.`,
+      `:white_check_mark: *${rows.length} question${rows.length === 1 ? "" : "s"} filed against ${layer.vertical} / ${layer.avatar}* by ${args.by}. Every client selling to this same buyer reads them, and there is no per-client key to unpick them by.`,
       after.ok
         ? "The emotional layer is complete. `headlines` writes the thirty three."
         : `Still ${Math.max(0, EMOTIONAL_FLOOR - after.count)} short of ${EMOTIONAL_FLOOR}${after.beliefs === 0 ? ", and no necessary beliefs are on file" : ""}.`,
@@ -226,24 +384,23 @@ interface Generated {
  * cost the brief a block and never cost somebody their headlines: the generator is useful without
  * it and was the only thing that existed until 2026-09-17.
  */
-async function pickedAnglesFor(
-  clientId: string
-): Promise<Array<{ keyword: string; idea: string; indoctrination: string | null }>> {
+async function pickedAnglesFor(clientId: string): Promise<PickedAngle[]> {
   try {
     const { supabaseAdmin } = await import("@/lib/db");
     const { data, error } = await supabaseAdmin
       .from("page_angles")
-      .select("idea, indoctrination, plan_id, page_plan!page_angles_plan_id_fkey!inner(target_keyword, rank)")
+      .select("id, idea, indoctrination, plan_id, page_plan!page_angles_plan_id_fkey!inner(target_keyword, rank)")
       .eq("client_id", clientId)
       .eq("status", "approved");
 
     if (error || !data) return [];
 
-    return data
+    const ordered = data
       .map((r) => {
         const plan = (r as unknown as { page_plan: { target_keyword: string; rank: number } | Array<{ target_keyword: string; rank: number }> }).page_plan;
         const p = Array.isArray(plan) ? plan[0] : plan;
         return {
+          id: String(r.id),
           keyword: p?.target_keyword ?? "",
           rank: p?.rank ?? 0,
           idea: String(r.idea),
@@ -251,11 +408,44 @@ async function pickedAnglesFor(
         };
       })
       .filter((r) => r.keyword)
-      .sort((a, b) => a.rank - b.rank)
-      .map(({ keyword, idea, indoctrination }) => ({ keyword, idea, indoctrination }));
+      .sort((a, b) => a.rank - b.rank);
+
+    const shapes = await postFormatsFor(ordered.map((r) => r.id));
+
+    return ordered.map(({ id, keyword, idea, indoctrination }) => ({
+      keyword,
+      idea,
+      indoctrination,
+      postFormat: shapes.get(id) ?? null,
+    }));
   } catch {
     return [];
   }
+}
+
+/**
+ * Each angle's shape, read separately so a database without the column costs the shape and nothing else.
+ *
+ * ‼️ ITS OWN SELECT, THE PATTERN page-angles.ts:withPostFormats AND page-plan.ts:withPostFormat BOTH
+ * USE, AND FOR THE IDENTICAL REASON. One unknown column fails the WHOLE PostgREST select, and the
+ * caller's try/catch degrades to [], which would silently drop every angle from the headline brief on
+ * a deploy that reached production before docs/2026-09-18-post-formats.sql. A missing column must cost
+ * the shape, never the seven ideas.
+ */
+async function postFormatsFor(ids: string[]): Promise<Map<string, PostFormatId>> {
+  const out = new Map<string, PostFormatId>();
+  if (ids.length === 0) return out;
+  try {
+    const { supabaseAdmin } = await import("@/lib/db");
+    const { data, error } = await supabaseAdmin.from("page_angles").select("id, post_format").in("id", ids);
+    if (error || !data) return out;
+    for (const r of data as Array<Record<string, unknown>>) {
+      if (isPostFormatId(r.post_format)) out.set(String(r.id), r.post_format);
+    }
+  } catch {
+    return out;
+  }
+  return out;
 }
 
 export async function generatePreCallHeadlines(args: {
@@ -271,7 +461,7 @@ export async function generatePreCallHeadlines(args: {
    * becoming a precondition. With it, a headline argues one of seven ideas; without it, it can only
    * be a line about a phrase, which is what "those headlines are not good at all" was describing.
    */
-  angles?: Array<{ keyword: string; idea: string; indoctrination: string | null }>;
+  angles?: PickedAngle[];
 }): Promise<{ ok: true; candidates: Candidate[]; dropped: number } | { ok: false; error: string }> {
   const count = args.count ?? PRE_CALL_HEADLINES;
   const pool = await headlineKeywordPool(args.clientId, args.stage);
@@ -319,15 +509,27 @@ export async function generatePreCallHeadlines(args: {
       ? [
           "",
           "WHAT EACH PAGE ARGUES, WHICH IS WHAT THESE HEADLINES ARE FOR",
-          ...args.angles.map(
-            (a, i) =>
+          ...args.angles.map((a, i) => {
+            const shape = headlineShapeLine(a.postFormat);
+            return (
               `  ${String.fromCharCode(65 + i)}. for "${a.keyword}": ${a.idea}` +
-              (a.indoctrination ? `\n     the belief it installs: ${a.indoctrination}` : "")
-          ),
+              (a.indoctrination ? `\n     the belief it installs: ${a.indoctrination}` : "") +
+              (shape ? `\n     ${shape}` : "")
+            );
+          }),
           "",
           "A headline is the door into ONE of those arguments. Write it so the page underneath is the",
           "only thing that could follow it. A line that could sit above any of them is a line about a",
           "phrase rather than about an idea, and it is the thing being replaced here.",
+          ...(args.angles.some((a) => a.postFormat)
+            ? [
+                "",
+                "Where a page's shape is named above, the headline has to be a door into THAT shape. The",
+                "shape is a constraint on what the line must name, never a pattern to fill in: two",
+                "headlines for the same shape should still argue different things. And a shape never",
+                "exempts a headline from the rules above, which every line is still judged on.",
+              ]
+            : []),
         ]
       : []),
   ].join("\n");
@@ -695,9 +897,22 @@ export async function handlePreCallHeadlineReply(input: {
   const rung = state.ladder.rungs.find((r) => r.stage === stage);
   if (!rung) return { message: `:warning: The stored ladder has no stage ${stage}. \`ladder\` rewrites it.` };
 
+  // ‼️ A LOCKED OFFER WITH NO OUTCOME PROMISE IS A REAL STATE AND IT IS NOT REFUSED HERE.
+  // offerLocked() checks treatment and lockedAt only, and offers.ts:693 argues that partial lock is
+  // deliberate because the magnet can be drafted afterwards. So this does not add a wall: it says
+  // out loud that the engine has no promise to write toward, which is the thing that was silent.
+  // Measured on srt-agency-llc 2026-09-18: locked, outcome_promise NULL, positioning NULL.
+  const { loadOffer } = await import("./offers");
+  const offer = await loadOffer(input.clientId).catch(() => null);
+  const noPromise = Boolean(offer && !offer.outcomePromise);
+
   return {
     message:
       `:hourglass_flowing_sand: Writing ${PRE_CALL_HEADLINES} headlines at stage ${stage}, ${stageName(stage)}, one approved search each. About a minute.` +
+      (layer.tier !== "client_reviews" ? `\n:information_source: ${emotionalSourceLine(layer)}` : "") +
+      (noPromise
+        ? "\n:warning: No outcome promise is on file for the locked offer, so these are aimed at the treatment alone. `offer: outcome <the promise>` at step 10 gives the engine something to write toward."
+        : "") +
       (thin
         ? "\n:warning: No necessary beliefs are on file for this audience, so the lines are written from the objections and the offer alone. `beliefs:` at the prep call step sharpens the next run."
         : ""),

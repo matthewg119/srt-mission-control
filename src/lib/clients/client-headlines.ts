@@ -24,7 +24,44 @@ import { vocBlock } from "@/lib/reel/voc-quotes";
 import { loadAeoHeadlineEngine } from "@/data/reel/aeo-headline-engine";
 import { approvedNumbersBlock, repeatedOpenings } from "@/lib/reel/creative-director";
 import { carriesKeyword } from "@/lib/hub/keyword-placement";
+import { getPostFormat, type PostFormatId } from "@/config/post-formats";
 import { audienceFor, sharedBankFor } from "./audiences";
+
+/**
+ * What a headline for each written-post shape has to NAME. One line, per shape.
+ *
+ * ‼️ EVERY STRING HERE IS DIGIT-FREE, AND unbackedNumbers BELOW IS WHY. It refuses any figure of two
+ * or more digits that is not in numberHaystack, so a numeral in this block is a number the model is
+ * invited to echo and is then refused for echoing. Say "how many", never a numeral. Same rule
+ * post-formats.ts states about its own strings, and that _probe-post-formats.ts asserts.
+ *
+ * ‼️ A CONSTRAINT, NEVER A TEMPLATE. There is deliberately no per-shape headline pattern with slots.
+ * The measured failure this lane exists to fix (2026-09-17) was thirty three candidates that all
+ * argued the same thing, and a per-shape template reproduces exactly that one level down. It says
+ * what the line must name; it never says how. And it never exempts a headline from isQueryShaped.
+ *
+ * It lives HERE rather than in precall-headlines.ts because both headline doors need it and that
+ * file already imports this one. The reverse import would be a cycle.
+ */
+const SHAPE_DUTY: Record<PostFormatId, string> = {
+  answer_first: "a headline for it promises the answer itself, not that an answer exists",
+  list: "a headline for it carries how many there are and what ranked them",
+  comparison: "a headline for it names both subjects, or the choice between them",
+  decision_guide: "a headline for it names the decision being made, not the category it sits in",
+  teardown: "a headline for it quotes the claim being taken apart, in the words it is usually said in",
+};
+
+/**
+ * The shape line printed in a headline brief, or "" when no shape is on file.
+ *
+ * PURE, so the probe can assert what reaches the prompt without a database or a model.
+ */
+export function headlineShapeLine(id: PostFormatId | null | undefined): string {
+  if (!id) return "";
+  const format = getPostFormat(id);
+  if (!format) return "";
+  return `the page under it is a ${format.label.toLowerCase()}: ${SHAPE_DUTY[id]}`;
+}
 
 /**
  * A quote as the headline prompt consumes it.
@@ -530,6 +567,15 @@ export async function generateKeywordHeadlines(args: {
   clientId: string;
   keyword: string;
   count?: number;
+  /**
+   * The shape of the page these headlines are for, when the plan row carries one.
+   *
+   * ‼️ OPTIONAL, AND NULL IS THE OLD BEHAVIOUR EXACTLY. It adds a block to the brief rather than
+   * becoming a precondition, the same way the angles block does in precall-headlines.ts. A shape is
+   * a constraint on what the line must NAME and never a template to fill in, and it never exempts a
+   * headline from isQueryShaped or from any other rule above.
+   */
+  postFormat?: PostFormatId | null;
 }): Promise<{ ok: true; headlines: string[]; audienceId: string | null } | { ok: false; error: string }> {
   const count = args.count ?? 3;
   const keyword = args.keyword.trim();
@@ -540,6 +586,7 @@ export async function generateKeywordHeadlines(args: {
   const ctx = got.ctx;
 
   const numberHaystack = [...ctx.approvedNumbers, ...ctx.quotes.map((q) => q.text)].join(" ");
+  const shapeLine = headlineShapeLine(args.postFormat);
 
   const faultsFor = (headlines: string[]): string[] => {
     const out = headlineFaults(headlines, count, numberHaystack).map((f) =>
@@ -567,6 +614,17 @@ export async function generateKeywordHeadlines(args: {
         "general and leave the phrase out. This is checked in code.",
         "",
         `Give ${count} genuinely different angles on it, not ${count} rewrites of one line.`,
+        ...(shapeLine
+          ? [
+              "",
+              "THE SHAPE OF THE PAGE UNDERNEATH",
+              `  ${shapeLine}`,
+              "",
+              "Write the headline as a door into that shape. It is a constraint on what the line has to",
+              "name, not a pattern to fill in, and it does not exempt anything above: a shape does not",
+              "make a bare phrase into a headline.",
+            ]
+          : []),
       ].join("\n"),
       user: `Return JSON with exactly ${count} AEO direct-response headlines, in English, every one carrying "${keyword}".`,
       maxTokens: 2000,

@@ -313,7 +313,14 @@ export async function writeHeadlinesFor(
 
   const { generateKeywordHeadlines, storeHeadlines } = await import("./client-headlines");
 
-  const got = await generateKeywordHeadlines({ clientId, keyword: row.targetKeyword });
+  // ‼️ row.postFormat WAS ALREADY HELD HERE AND WAS DISCARDED. The plan row knows the shape of the
+  // page these three headlines are for, so a comparison page stopped getting a headline written for
+  // a generic answer page and the two arguing past each other.
+  const got = await generateKeywordHeadlines({
+    clientId,
+    keyword: row.targetKeyword,
+    postFormat: row.postFormat,
+  });
   if (!got.ok) return got;
 
   const stored = await storeHeadlines({ clientId, headlines: got.headlines, origin: "keyword", audienceId: got.audienceId });
