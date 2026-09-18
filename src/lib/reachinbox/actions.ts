@@ -7,6 +7,8 @@
 import { slack, slackThreadLink, type SlackBlock } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
 import { postApprovalRequest } from "@/lib/ai-intel/slack-approval";
+import { microsoft } from "@/lib/microsoft";
+import { wrapWithSignature } from "@/config/email-signature";
 import { formatLintFindings } from "@/lib/audit-engine/draft-linter";
 import { runAuditPipeline } from "@/lib/audit-engine/run-audit-pipeline";
 import { handleAuditThreadReply } from "@/lib/audit-engine/thread-assistant";
@@ -33,9 +35,10 @@ export type DraftOutcome =
   | "error";
 
 /**
- * Draft the answer and put it on an approval card IN THE PROSPECT'S THREAD.
+ * Draft the answer into Matthew's Outlook Drafts, and put the approval card IN THE PROSPECT'S
+ * THREAD pointing at it.
  *
- * Sends nothing. postApprovalRequest stores the draft in pending_slack_actions and the existing
+ * Sends nothing. The draft waits in his mailbox where he can rewrite it, and the existing
  * ai_approve / ai_edit / ai_cancel buttons own everything after that, which is why this function
  * has no send path of its own to get wrong.
  */
@@ -84,17 +87,85 @@ export async function runDraftForProspect(p: OutreachProspectRow): Promise<Draft
 
   const { subject, body } = gated.draft;
 
+  // ‼️ THE DRAFT IS PLACED IN MATTHEW'S OWN MAILBOX, NOT HELD IN THE DATABASE.
+  //
+  // He asked to review these where he reads mail. So the email is created as a real Outlook draft
+  // in the connected account, the Slack card links straight to it, and approving fires THAT draft
+  // byte for byte (see sendEmail in execute-action.ts). Anything he rewrites in Outlook is
+  // therefore the thing that actually ships, which is not true of a body held in a jsonb column.
+  //
+  // The signature is baked in here on purpose: sendDraft sends the bytes as they are and appends
+  // nothing, so a draft without it would go out unsigned.
+  let draft: { id: string; webLink: string } | null = null;
+  try {
+    draft = await microsoft.createDraft({
+      // No mailbox means /me, which is the connected account: matthew@srtagency.com.
+      to: p.email,
+      subject,
+      body: wrapWithSignature(body),
+    });
+  } catch (err) {
+    // Graph being down must not cost him the draft entirely. Fall back to the older path, where
+    // the body lives on the card and approving composes and sends it.
+    console.error("[reachinbox] createDraft failed, falling back to compose on approve:", err);
+  }
+
+  const summary = [
+    `*${displayName(p)}* replied to the campaign. Here is the answer.`,
+    `To: ${p.email}`,
+    `Subject: ${subject}`,
+    "",
+    body,
+  ].join("\n");
+
+  const headerText = draft
+    ? `:pencil: Draft ready in your inbox for *${displayName(p)}*`
+    : `:pencil: Draft ready for *${displayName(p)}*`;
+
+  const elements: Array<Record<string, unknown>> = [
+    {
+      type: "button",
+      text: { type: "plain_text", text: ":thumbsup: Approve and send" },
+      style: "primary",
+      action_id: "ai_approve",
+      value: "pending",
+    },
+    {
+      type: "button",
+      text: { type: "plain_text", text: ":pencil2: Edit here" },
+      action_id: "ai_edit",
+      value: "pending",
+    },
+    {
+      type: "button",
+      text: { type: "plain_text", text: ":no_entry: Cancel" },
+      style: "danger",
+      action_id: "ai_cancel",
+      value: "pending",
+    },
+  ];
+  if (draft?.webLink) {
+    elements.push({
+      type: "button",
+      text: { type: "plain_text", text: ":envelope: Open in Outlook" },
+      url: draft.webLink,
+    });
+  }
+
+  const footer = draft
+    ? "It is sitting in your Drafts. Edit it in Outlook if you want, then press Approve and send and exactly what is in the draft goes out. Editing here instead replaces the draft."
+    : "Outlook would not take the draft, so this one is held here. Approving composes and sends it.";
+
   const res = await postApprovalRequest({
-    summary: [
-      `*${displayName(p)}* replied to the campaign. Here is the answer.`,
-      `To: ${p.email}`,
-      `Subject: ${subject}`,
-      "",
-      body,
-    ].join("\n"),
+    summary,
     channel: p.slack_channel_id,
     // Lands IN this prospect's thread rather than at the top of the channel.
     threadTs: p.slack_thread_ts,
+    blocks: [
+      { type: "section", text: { type: "mrkdwn", text: `${headerText}\n${summary}` } },
+      { type: "actions", elements },
+      { type: "context", elements: [{ type: "mrkdwn", text: footer }] },
+    ],
     payload: {
       // send_email, never send_marketing_email: the latter is blocked at the door of
       // postApprovalRequest because email marketing is paused.
@@ -104,19 +175,28 @@ export async function runDraftForProspect(p: OutreachProspectRow): Promise<Draft
       body,
       is_html: false,
       contact_id: p.contact_id ?? undefined,
-      // ‼️ from_mailbox IS DELIBERATELY UNSET AND MUST STAY UNSET. sendEmail() hands it straight
-      // to microsoft.sendMail({fromMailbox}), and undefined means /me, which is the connected
-      // account, which is matthew@srtagency.com. Filling it from chooseOutreachMailbox() would
-      // silently move this to submissions@.
+      outlook_draft_id: draft?.id,
+      outlook_draft_url: draft?.webLink,
+      // ‼️ from_mailbox IS DELIBERATELY UNSET AND MUST STAY UNSET. It is handed straight to
+      // Graph, and undefined means /me, the connected account, which is matthew@srtagency.com.
+      // It also has to match the mailbox the draft was created in, or sendDraft looks for it in
+      // the wrong place.
       //
-      // requires_matthew is also unset on purpose: MATTHEW_SLACK_USER_ID is empty in production,
-      // so isMatthew() returns false for everyone and that flag would make the card unapprovable.
+      // requires_matthew is unset on purpose too: isMatthew() is only as good as
+      // MATTHEW_SLACK_USER_ID, and the flag would make the card unapprovable if that is wrong.
       note: { title: "Campaign reply drafted", content: `${subject}\n\n${body}` },
     },
   });
 
   if (!res.slackTs) {
-    await say(p, "I drafted the reply but could not post the approval card. Check the logs.");
+    // The card is the only way to approve, so a card that never posted means the draft would sit
+    // in Outlook with nothing pointing at it. Say where it is.
+    await say(
+      p,
+      draft
+        ? `I could not post the approval card, but the draft is in your Outlook Drafts: <${draft.webLink}|open it>.`
+        : "I drafted the reply but could not post the approval card. Check the logs."
+    );
     return "error";
   }
   return "drafted";

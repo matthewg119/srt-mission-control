@@ -44,7 +44,7 @@ const REACHINBOX_TOOLS = [
   {
     name: "draft_campaign_reply",
     description:
-      "Write Matthew's reply to what this prospect said and post it as an approval card in this thread. It SENDS NOTHING: Matthew still has to approve or edit the card. Use this when he asks for a draft, an answer, or a reply.",
+      "Write Matthew's reply to what this prospect said, put it in his Outlook Drafts, and post an approval card in this thread that links to it. It SENDS NOTHING: he still has to press approve. Use this when he asks for a draft, an answer, or a reply.",
     input_schema: { type: "object", properties: {}, required: [] },
   },
   {

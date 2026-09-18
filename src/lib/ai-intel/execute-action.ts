@@ -67,25 +67,51 @@ async function sendEmail(payload: PendingActionPayload): Promise<ExecuteResult> 
   if (!payload.to || !payload.subject || !payload.body) {
     return { ok: false, error: "missing_email_fields" };
   }
-  const htmlBody = await buildHtmlBody(payload.body, !!payload.is_html, payload.signature_name);
-  const replyToId = payload.reply_to_graph_message_id as string | undefined;
-  if (replyToId) {
-    // Threaded reply (e.g. statements received by email) — lands in the lead's
-    // original conversation instead of a fresh message.
-    await microsoft.sendReplyHtml({
-      messageId: replyToId,
-      html: htmlBody,
-      mailbox: payload.from_mailbox as string | undefined,
-      to: payload.to,
-    });
+
+  // ‼️ AN OUTLOOK DRAFT, IF THERE IS ONE, IS THE THING THAT SHIPS.
+  //
+  // The draft was placed in Matthew's own mailbox so he could read it, rewrite it and fix the tone
+  // where he actually reads mail. Composing a fresh message here from payload.body would silently
+  // throw all of that away and send the model's original words instead. So the draft is fired byte
+  // for byte, the same doctrine sendAuditPitch already follows.
+  //
+  // The one exception is the Slack Edit modal, which sets was_approved_as_is false. Then the Slack
+  // text is the newer of the two and wins, and the stale draft is deleted rather than left sitting
+  // in Drafts looking like something still waiting to go out.
+  const draftId = payload.outlook_draft_id;
+  const editedInSlack = payload.was_approved_as_is === false;
+  const sendReviewedDraft = Boolean(draftId) && !editedInSlack;
+
+  if (draftId && !sendReviewedDraft) {
+    await microsoft
+      .deleteDraft(draftId, payload.from_mailbox as string | undefined)
+      .catch((e) => console.error("[execute-action] stale draft not deleted:", (e as Error).message));
+  }
+
+  if (sendReviewedDraft) {
+    // The mailbox must match the one the draft was created in, or Graph looks in the wrong place.
+    await microsoft.sendDraft(draftId as string, payload.from_mailbox as string | undefined);
   } else {
-    await microsoft.sendMail({
-      to: payload.to,
-      subject: payload.subject,
-      body: htmlBody,
-      isHtml: true,
-      fromMailbox: payload.from_mailbox as string | undefined,
-    });
+    const htmlBody = await buildHtmlBody(payload.body, !!payload.is_html, payload.signature_name);
+    const replyToId = payload.reply_to_graph_message_id as string | undefined;
+    if (replyToId) {
+      // Threaded reply (e.g. statements received by email) — lands in the lead's
+      // original conversation instead of a fresh message.
+      await microsoft.sendReplyHtml({
+        messageId: replyToId,
+        html: htmlBody,
+        mailbox: payload.from_mailbox as string | undefined,
+        to: payload.to,
+      });
+    } else {
+      await microsoft.sendMail({
+        to: payload.to,
+        subject: payload.subject,
+        body: htmlBody,
+        isHtml: true,
+        fromMailbox: payload.from_mailbox as string | undefined,
+      });
+    }
   }
 
   // Log the send back onto the lead (e.g. "Email sent successfully …").

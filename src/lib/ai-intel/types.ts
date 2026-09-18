@@ -87,6 +87,13 @@ export interface PendingActionPayload {
   // When set, the email is sent FROM this shared mailbox (POST /users/{mailbox}/sendMail)
   // instead of the connected account. Used so funder replies go out from submissions@.
   from_mailbox?: string;
+  // When set, the email ALREADY EXISTS as a draft in Outlook and approving sends that draft
+  // byte for byte rather than composing a fresh message. This is what lets Matthew open the
+  // draft, edit it in his own mail client, and have the edited version be the thing that ships.
+  // sendEmail() refuses to compose when this is present unless the Slack Edit modal overrode it.
+  outlook_draft_id?: string;
+  /** Deep link to that draft, so the Slack card can offer "Open in Outlook". */
+  outlook_draft_url?: string;
   // When set, the email is sent as a threaded reply to this Graph message id
   // (createReply → send) so it lands in the lead's original conversation.
   reply_to_graph_message_id?: string;

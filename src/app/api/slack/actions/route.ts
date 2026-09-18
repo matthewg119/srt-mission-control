@@ -737,6 +737,16 @@ async function cancelAction(args: { slackTs: string; channel: string; userId: st
     await handleMarketingEmailCancel(action.payload);
   }
 
+  // A cancelled card must not leave a live draft sitting in Matthew's Drafts folder looking like
+  // something still waiting to go out. deleteDraft re-checks isDraft against Graph first, so a
+  // message he already sent by hand is never touched.
+  if (action?.payload.outlook_draft_id) {
+    const { microsoft } = await import("@/lib/microsoft");
+    await microsoft
+      .deleteDraft(action.payload.outlook_draft_id, action.payload.from_mailbox)
+      .catch((e) => console.error("[reachinbox] cancel: draft not deleted:", (e as Error).message));
+  }
+
   await slack.postThreadReply(args.channel, args.slackTs, `🚫 Cancelled by <@${args.userId}>. AI will not act on this.`);
   return NextResponse.json({ ok: true });
 }
