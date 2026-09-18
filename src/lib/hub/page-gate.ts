@@ -44,6 +44,7 @@ import { storyPlacement } from "@/lib/hub/page-stories";
 import { schemaForPage } from "@/lib/hub/jsonld";
 import { offerForPage } from "@/lib/concierge/for-client";
 import { pageCategoryFor } from "@/lib/hub/page-category";
+import { GUIDELINE_RULES } from "@/config/guideline-rules";
 
 /**
  * Every path that consults this gate. Documentation, not enforcement: enforcement is the call
@@ -96,6 +97,8 @@ export interface GateRun {
   verdict: Verdict;
   checks: GateCheck[];
   bodyHash: string;
+  /** NULL on any run written before the metadata half existed. See hashMeta. */
+  metaHash: string | null;
   createdAt: string;
 }
 
@@ -115,6 +118,35 @@ export function hashBody(answerMd: string): string {
     .createHash("sha256")
     .update(answerMd.replace(/\s+/g, " ").trim())
     .digest("hex");
+}
+
+/**
+ * The hash of everything else a verdict read: the title, the meta description and the slug.
+ *
+ * ‼️ A SECOND HASH RATHER THAN A WIDER hashBody, AND THE DIFFERENCE MATTERS.
+ *
+ * hashBody covers answer_md ONLY, and that is already a live hole rather than a future one:
+ * checkHouseStyle reads `title` and `metaDescription` today, so a house-style pass does not go
+ * stale when the title changes. The compliance checks added 2026-09-22 read both as well, because
+ * a claim about credentials is usually made in the title.
+ *
+ * Widening hashBody would have fixed it by invalidating EVERY stored verdict at once, and would
+ * then have told somebody whose title never moved that "the page changed since the check", which
+ * is false in the one place this system is most careful about not being. Backfilling a widened
+ * hash would be worse: it would claim old verdicts read text they never read.
+ *
+ * So body_hash keeps its exact meaning and this records, separately, what else was read. NULL on
+ * every row written before this existed, which is honest: those runs did not read the metadata,
+ * and they carry no metadata check to be wrong about. See assertGatePassed.
+ */
+export function hashMeta(parts: { title: string | null; metaDescription: string | null; slug: string | null }): string {
+  // Each part is whitespace-normalised on its OWN, then joined with a newline, and the joined
+  // string is NOT collapsed again. Collapsing after the join would make ("a b", "c") and
+  // ("a", "b c") hash the same, so a title edit that moved a word into the meta description
+  // would leave the verdict looking fresh.
+  const norm = (v: string | null) => (v ?? "").replace(/\s+/g, " ").trim();
+  const joined = [norm(parts.title), norm(parts.metaDescription), norm(parts.slug)].join("\n");
+  return crypto.createHash("sha256").update(joined).digest("hex");
 }
 
 // ---------------------------------------------------------------------------
@@ -597,6 +629,23 @@ interface ModelVerdict {
   unsupported: string[];
   generic: boolean;
   genericDetail: string;
+  // ── The compliance half, added 2026-09-22 ────────────────────────────────────────────────────
+  //
+  // ‼️ FIELDS ON THE EXISTING VERDICT, NOT A SECOND CALL, AND THERE ARE THREE REASONS.
+  //   1. runGate has three callers and `check` is explicitly designed to be pressed several times
+  //      while writing. A second call doubles the cost of every press.
+  //   2. page_gate_runs.model is ONE nullable text column, already overloaded with the literal
+  //      "waiver". Two calls need two answers in one column.
+  //   3. The catch branch below collapses every model check into a single model_review skip. A
+  //      second call needs a second catch, and two skip paths disagree about what actually ran.
+  /** Claims about experience, credentials or first-hand use that no source carries. */
+  experienceClaims: string[];
+  peopleFirst: boolean;
+  peopleFirstDetail: string;
+  authority: boolean;
+  authorityDetail: string;
+  spam: boolean;
+  spamDetail: string;
 }
 
 const REVIEW_SYSTEM = `You are checking one page before it is published on a small business's own
@@ -618,7 +667,31 @@ website. You are not editing it and you are not rewriting it. You answer three q
 
 BE STRICT ON 2 AND FORGIVING ON 3. An unsupported claim is published on their domain under their
 name and can be checked by a reader. A generic page is merely weak. If you are unsure whether
-something is supported, list it: a person reads this list and decides.`;
+something is supported, list it: a person reads this list and decides.
+
+Then four more, against Google's published guidance. You are given the TITLE and the META
+DESCRIPTION as well as the body, because a claim about who wrote something is usually made there.
+
+4. EXPERIENCE CLAIMS. List any claim of first-hand experience, credentials, qualifications,
+   licences, years in business, awards, certifications, or of having personally done, used or
+   treated the thing, that the sources do not carry. Quote it. This is the same test as 2, applied
+   to the one kind of claim a reader is most likely to check. Do NOT list a claim the sources do
+   carry, and do NOT list an opinion or a general statement about the industry.
+
+5. PEOPLE FIRST. Was this written to help the reader or to rank? Would somebody leave it feeling
+   they could act? Say what you think and why, in one or two sentences.
+
+6. AUTHORITY. Does anything establish who is behind this page and why they would know? This is
+   about SILENCE, not about a claim: 4 is an unbacked claim that was made, this is nothing being
+   said at all. Answer true when something does establish it.
+
+7. SPAM. Is it keyword-stuffed, largely copied from elsewhere, written only to carry a link, or
+   promising something it does not deliver? Answer true only when one of those is actually the case.
+
+BE FORGIVING ON 5, 6 AND 7. They are impressions and a person reads them; only 4 is a matter of
+fact. Never refuse a page for being plain.
+
+${GUIDELINE_RULES}`;
 
 function isModelVerdict(v: unknown): v is ModelVerdict {
   const d = v as ModelVerdict;
@@ -629,7 +702,15 @@ function isModelVerdict(v: unknown): v is ModelVerdict {
     Array.isArray(d.unsupported) &&
     d.unsupported.every((s) => typeof s === "string") &&
     typeof d.generic === "boolean" &&
-    typeof d.genericDetail === "string"
+    typeof d.genericDetail === "string" &&
+    Array.isArray(d.experienceClaims) &&
+    d.experienceClaims.every((s) => typeof s === "string") &&
+    typeof d.peopleFirst === "boolean" &&
+    typeof d.peopleFirstDetail === "string" &&
+    typeof d.authority === "boolean" &&
+    typeof d.authorityDetail === "string" &&
+    typeof d.spam === "boolean" &&
+    typeof d.spamDetail === "string"
   );
 }
 
@@ -637,6 +718,8 @@ async function modelChecks(args: {
   clientName: string;
   question: string;
   answerMd: string;
+  title: string | null;
+  metaDescription: string | null;
   evidence: EvidenceRef[];
 }): Promise<{ checks: GateCheck[]; model: string | null }> {
   const evidence = args.evidence
@@ -646,6 +729,12 @@ async function modelChecks(args: {
   const user = [
     `THE BUSINESS: ${args.clientName}`,
     `THE QUESTION THIS PAGE CLAIMS TO ANSWER: ${args.question}`,
+    "",
+    // ‼️ THE TITLE AND META ARE HERE BECAUSE A CREDENTIAL CLAIM USUALLY LIVES IN ONE OF THEM, and
+    // they are covered by meta_hash so the verdict goes stale when either changes. Before that
+    // column existed, checkHouseStyle already read both against a hash that covered neither.
+    `THE TITLE: ${args.title ?? "(none)"}`,
+    `THE META DESCRIPTION: ${args.metaDescription ?? "(none)"}`,
     "",
     "THE PAGE:",
     args.answerMd,
@@ -659,12 +748,14 @@ async function modelChecks(args: {
       model: "claude-sonnet-4-6",
       system: REVIEW_SYSTEM,
       user,
-      maxTokens: 1500,
+      maxTokens: 2500,
       temperature: 0,
-      schemaHint: `{ "answersTheQuestion": boolean, "answersDetail": string, "unsupported": string[], "generic": boolean, "genericDetail": string }`,
+      schemaHint: `{ "answersTheQuestion": boolean, "answersDetail": string, "unsupported": string[], "generic": boolean, "genericDetail": string, "experienceClaims": string[], "peopleFirst": boolean, "peopleFirstDetail": string, "authority": boolean, "authorityDetail": string, "spam": boolean, "spamDetail": string }`,
       validate: isModelVerdict,
       describeInvalid: () =>
-        "Return all five fields: answersTheQuestion, answersDetail, unsupported, generic, genericDetail.",
+        "Return all eleven fields: answersTheQuestion, answersDetail, unsupported, generic, " +
+        "genericDetail, experienceClaims, peopleFirst, peopleFirstDetail, authority, " +
+        "authorityDetail, spam, spamDetail.",
     });
 
     const d = res.data;
@@ -692,6 +783,49 @@ async function modelChecks(args: {
           tier: "warn",
           status: d.generic ? "fail" : "pass",
           detail: d.genericDetail,
+        },
+        // ── Google's guidance ───────────────────────────────────────────────────────────────
+        //
+        // ‼️ ONE OF THESE FOUR BLOCKS AND THE OTHER THREE WARN, and the line is this file's own:
+        // "a gate that blocks on taste gets waived out of habit within a fortnight, and a rail
+        // everybody steps over is worse than no rail because it looks like one."
+        //
+        // Helpful-content signals, E-E-A-T impressions and "does this read as mass-produced" are
+        // TASTE by that definition, so they sit beside `generic` at warn. The narrow slice that
+        // earns block is the same shape as `unsupported` directly above it: a factual claim about
+        // experience or credentials that no source carries, which is publishable-and-FALSE on a
+        // domain the client controls, under their name.
+        //
+        // E-E-A-T is deliberately not one check. Its Experience half is a claim about the world
+        // and its Authoritativeness half is an impression, so they are split across the two tiers
+        // rather than averaged into one verdict that is honest about neither.
+        {
+          key: "experience_claims",
+          tier: "block",
+          status: d.experienceClaims.length === 0 ? "pass" : "fail",
+          detail:
+            d.experienceClaims.length === 0
+              ? "No claim about experience or credentials that a source does not carry."
+              : `${d.experienceClaims.length} claim${d.experienceClaims.length === 1 ? "" : "s"} about experience or credentials with nothing behind ${d.experienceClaims.length === 1 ? "it" : "them"}:\n` +
+                d.experienceClaims.slice(0, 6).map((s) => `  - ${s}`).join("\n"),
+        },
+        {
+          key: "people_first",
+          tier: "warn",
+          status: d.peopleFirst ? "pass" : "fail",
+          detail: d.peopleFirstDetail,
+        },
+        {
+          key: "authority",
+          tier: "warn",
+          status: d.authority ? "pass" : "fail",
+          detail: d.authorityDetail,
+        },
+        {
+          key: "spam_signals",
+          tier: "warn",
+          status: d.spam ? "fail" : "pass",
+          detail: d.spamDetail,
         },
       ],
     };
@@ -876,6 +1010,8 @@ export async function runGate(
       clientName,
       question: page.question ?? "",
       answerMd: body,
+      title: page.title,
+      metaDescription: page.meta_description,
       evidence,
     });
     checks.push(...m.checks);
@@ -884,6 +1020,7 @@ export async function runGate(
 
   const verdict = verdictOf(checks);
   const bodyHash = hashBody(body);
+  const metaHash = hashMeta({ title: page.title, metaDescription: page.meta_description, slug: page.slug });
 
   const { data: saved, error } = await supabaseAdmin
     .from("page_gate_runs")
@@ -893,6 +1030,7 @@ export async function runGate(
       verdict,
       checks,
       body_hash: bodyHash,
+      meta_hash: metaHash,
       model,
       run_by: opts?.runBy ?? null,
     })
@@ -908,6 +1046,7 @@ export async function runGate(
       verdict,
       checks,
       bodyHash,
+      metaHash,
       createdAt: (saved?.created_at as string) ?? new Date().toISOString(),
     },
   };
@@ -917,7 +1056,7 @@ export async function runGate(
 export async function latestGateRun(pageId: string): Promise<GateRun | null> {
   const { data } = await supabaseAdmin
     .from("page_gate_runs")
-    .select("id, verdict, checks, body_hash, created_at")
+    .select("id, verdict, checks, body_hash, meta_hash, created_at")
     .eq("page_id", pageId)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -929,6 +1068,7 @@ export async function latestGateRun(pageId: string): Promise<GateRun | null> {
     verdict: data.verdict as Verdict,
     checks: (data.checks as GateCheck[] | null) ?? [],
     bodyHash: data.body_hash as string,
+    metaHash: (data.meta_hash as string | null) ?? null,
     createdAt: data.created_at as string,
   };
 }
@@ -966,7 +1106,7 @@ export function isGateError(e: unknown): e is GateBlockedError {
 export async function assertGatePassed(clientId: string, pageId: string): Promise<GateRun> {
   const { data } = await supabaseAdmin
     .from("client_pages")
-    .select("answer_md")
+    .select("answer_md, title, meta_description, slug")
     .eq("id", pageId)
     .eq("client_id", clientId)
     .maybeSingle();
@@ -974,6 +1114,11 @@ export async function assertGatePassed(clientId: string, pageId: string): Promis
   if (!data) throw new GateBlockedError("never_run", "That page does not exist.");
 
   const current = hashBody(((data.answer_md as string | null) ?? "").trim());
+  const currentMeta = hashMeta({
+    title: (data.title as string | null) ?? null,
+    metaDescription: (data.meta_description as string | null) ?? null,
+    slug: (data.slug as string | null) ?? null,
+  });
   const run = await latestGateRun(pageId);
 
   if (!run) {
@@ -988,6 +1133,23 @@ export async function assertGatePassed(clientId: string, pageId: string): Promis
       "stale",
       `The page changed after it was checked, so the ${run.verdict === "block" ? "verdict" : "pass"} ` +
         `describes text that is no longer on it. Check it again.`,
+      run.checks
+    );
+  }
+
+  // ‼️ A NULL meta_hash IS A RUN FROM BEFORE THE METADATA HALF EXISTED, AND IT IS NOT REFUSED.
+  // Refusing would invalidate every stored verdict the moment this shipped, and would report a page
+  // whose title never moved as "changed", which is false. Such a run carries no compliance check and
+  // no metadata claim, so there is nothing about it to be wrong. It is an absence, not a failure.
+  //
+  // A run that DOES carry one is held to it: the compliance checks and checkHouseStyle both read the
+  // title and the meta description, so a verdict that no longer describes them is exactly as stale
+  // as one that no longer describes the body.
+  if (run.metaHash !== null && run.metaHash !== currentMeta) {
+    throw new GateBlockedError(
+      "stale",
+      "The title, meta description or slug changed after the page was checked, and the checks that " +
+        "read them describe text that is no longer there. Check it again.",
       run.checks
     );
   }
@@ -1034,7 +1196,7 @@ export async function waiveGate(args: {
 
   const { data: page } = await supabaseAdmin
     .from("client_pages")
-    .select("answer_md, slug")
+    .select("answer_md, slug, title, meta_description")
     .eq("id", args.pageId)
     .eq("client_id", args.clientId)
     .maybeSingle();
@@ -1058,6 +1220,14 @@ export async function waiveGate(args: {
       },
     ],
     body_hash: hashBody(((page.answer_md as string | null) ?? "").trim()),
+    // A waiver goes stale the moment the page is edited, exactly as a pass does, and "the page"
+    // now includes the title and the meta description. Without this the waiver would outlive a
+    // rewrite of the very line somebody signed their name to waiving.
+    meta_hash: hashMeta({
+      title: (page.title as string | null) ?? null,
+      metaDescription: (page.meta_description as string | null) ?? null,
+      slug: (page.slug as string | null) ?? null,
+    }),
     model: previous?.id ? "waiver" : null,
     run_by: args.by,
   });

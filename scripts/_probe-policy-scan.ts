@@ -11,6 +11,8 @@
 // character too loose does not throw: it silently files a sentence of somebody's dictation as a
 // command and puts nothing on screen to say it did.
 
+import { readFileSync } from "fs";
+import { hashMeta } from "../src/lib/hub/page-gate";
 import { GUIDELINE_RULES, GUIDELINE_RULES_MAX, GUIDELINE_SOURCES, RATER_GUIDELINES_KIND } from "../src/config/guideline-rules";
 import { SCAN_COMMAND } from "../src/lib/clients/policy-scan";
 import { diffLines, hashPolicyText, normalizePolicyText } from "../src/lib/clients/policy-documents";
@@ -109,6 +111,62 @@ ok("an identical pair has no diff at all", same.addedTotal === 0 && same.removed
 const big = diffLines("", Array.from({ length: 50 }, (_, i) => `line ${i}`).join("\n"));
 ok("the shown lines are capped", big.added.length <= 12, String(big.added.length));
 ok("and the TOTAL is still reported honestly", big.addedTotal === 50, String(big.addedTotal));
+
+// ── 6. The metadata hash ────────────────────────────────────────────────────
+console.log("\n6. meta_hash records what else the verdict read, without invalidating anything");
+
+const m = (title: string | null, meta: string | null, slug: string | null) => hashMeta({ title, metaDescription: meta, slug });
+
+ok("the same metadata hashes the same", m("A", "B", "c") === m("A", "B", "c"));
+ok("a changed title is a different hash, so the verdict goes stale", m("A", "B", "c") !== m("A2", "B", "c"));
+ok("a changed meta description is too", m("A", "B", "c") !== m("A", "B2", "c"));
+ok("a changed slug is too", m("A", "B", "c") !== m("A", "B", "c2"));
+ok("a re-wrapped title is NOT, so whitespace alone never invalidates a check", m("A   B", "C", "d") === m("A B", "C", "d"));
+ok(
+  "and a word moved from the title into the meta description does NOT collide",
+  m("a b", "c", "") !== m("a", "b c", ""),
+  "this is why the parts are normalised separately and joined with a newline"
+);
+ok("a null field is not the same as an empty one colliding with its neighbour", m(null, "x", null) !== m("x", null, null));
+
+// ── 7. Where the compliance checks sit, read off the source ─────────────────
+//
+// ‼️ ASSERTED AGAINST THE FILE AS TEXT, the same way test-onboarding-artifacts.ts asserts the
+// publish ordering. The tiers live inside modelChecks, which cannot run without a model call, and
+// the one thing that must never drift silently is WHICH of these blocks.
+console.log("\n7. One compliance check blocks and the rest warn");
+
+const gate = readFileSync(new URL("../src/lib/hub/page-gate.ts", import.meta.url), "utf8");
+
+function tierOf(key: string): string | null {
+  const re = new RegExp(`key:\\s*"${key}",\\s*\\n\\s*tier:\\s*"(block|warn)"`);
+  return re.exec(gate)?.[1] ?? null;
+}
+
+ok("experience_claims BLOCKS: it is a claim about the world that no source carries", tierOf("experience_claims") === "block", String(tierOf("experience_claims")));
+ok("people_first only warns: it is taste", tierOf("people_first") === "warn", String(tierOf("people_first")));
+ok("authority only warns: it is an impression", tierOf("authority") === "warn", String(tierOf("authority")));
+ok("spam_signals only warns", tierOf("spam_signals") === "warn", String(tierOf("spam_signals")));
+ok("the existing unsupported check still blocks", tierOf("unsupported") === "block");
+ok("the existing generic check still only warns", tierOf("generic") === "warn");
+
+ok(
+  "a failed model call is still a SKIP, never a pass and never a block",
+  /key:\s*"model_review",\s*\n\s*tier:\s*"block",\s*\n\s*status:\s*"skip"/.test(gate)
+);
+ok(
+  "and there is still exactly ONE model call in the gate",
+  (gate.match(/callClaudeJSON</g) ?? []).length === 1,
+  String((gate.match(/callClaudeJSON</g) ?? []).length)
+);
+ok(
+  "verdictOf is unchanged: a skip never contributes to a verdict",
+  /if \(checks\.some\(\(c\) => c\.tier === "block" && c\.status === "fail"\)\) return "block";/.test(gate)
+);
+ok(
+  "assertGatePassed does not refuse on a null meta_hash",
+  /run\.metaHash !== null && run\.metaHash !== currentMeta/.test(gate)
+);
 
 console.log(`\n${fail === 0 ? "All checks passed." : `${fail} of ${pass + fail} checks failed.`}`);
 process.exitCode = fail === 0 ? 0 : 1;
