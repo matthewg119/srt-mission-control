@@ -76,7 +76,7 @@ comment on column public.dataset_suggestions.client_id is
   'NULL means the observation is about a vertical or a shape rather than one client. A per-client '
   'measurement must never be written into a shared argument.';
 
--- Verify. Expect one row, with 12 columns.
+-- Verify. Expect one row, with 13 columns.
 select table_name, count(*) as cols
 from information_schema.columns
 where table_schema = 'public' and table_name = 'dataset_suggestions'

@@ -83,7 +83,7 @@ comment on column public.policy_documents.content_hash is
 comment on column public.policy_documents.source is
   'fetched = the weekly scan read it. pasted = a person replaced it by hand (the rater guidelines).';
 
--- Verify. Expect one row, with 10 columns.
+-- Verify. Expect one row, with 11 columns.
 select table_name, count(*) as cols
 from information_schema.columns
 where table_schema = 'public' and table_name = 'policy_documents'

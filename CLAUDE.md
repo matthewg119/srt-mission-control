@@ -2682,8 +2682,10 @@ calls `attributeFromScreenshot`), `_probe-presence-url.ts`, `_probe-question-set
 `--freeze`), and `_probe-cascade.ts` rewritten for the cursor — its proposition is now exactly one
 waiting step at a time, which INVERTS what it used to assert.
 
-**Still owed, and none of it is code:** the bot is not a member of `#aeo-seo-page-drafting`
-(`is_member: false`), so the page studio cannot receive a message until it is invited;
+**Still owed, and none of it is code:** ~~the bot is not a member of `#aeo-seo-page-drafting`
+(`is_member: false`)~~ **FIXED, verified 2026-09-18: `is_member: true`.** Check it with
+`bunx tsx --env-file=.env.local scripts/_join-page-studio.ts`, which reads, joins and re-reads
+rather than asserting;
 `OPENAI_API_KEY` gates the voice-note hop and `transcribeAudio` returns `{ok:false}` with the
 thread saying so rather than failing silently; `CLIENT_LINK_SECRET` is unset, so `clientPreviewUrl`
 returns null and the cards print "No shareable link could be minted" rather than a dead URL; and
@@ -4523,7 +4525,10 @@ SLACK_PAGE_STUDIO_CHANNEL=   # C09QPHZGPUY, #aeo-seo-page-drafting. Env-first wi
                              # code fallback, because this lane has exactly one channel.
                              # ‼️ THE BOT MUST BE A MEMBER. Posting into a public channel works
                              # without it; RECEIVING message events does not, which is how this
-                             # channel sat dead for weeks. The Thursday cards will post; the typed
-                             # `scan for latest`, `waive:` and the Approve button will not arrive
-                             # until the bot is invited.
+                             # channel sat dead for weeks. The Thursday cards post either way; the
+                             # typed `scan for latest`, `waive:` and the Approve button do not
+                             # arrive without membership.
+                             # Verified 2026-09-18: is_member IS true. The note at the top of this
+                             # file saying otherwise was stale and is corrected.
+                             # Re-check: bunx tsx --env-file=.env.local scripts/_join-page-studio.ts
 ```

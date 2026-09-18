@@ -315,6 +315,26 @@ export async function ingestEmotional(args: {
     .upsert(rows, { onConflict: "vertical,avatar,normalized", ignoreDuplicates: true });
   if (error) return { ok: false, message: `:warning: Nothing stored: ${error.message}` };
 
+  // ‼️ THE RECORD THAT SOMEBODY LOOKED, WHICH DERIVATION CANNOT RECOVER. emotionalLayer() derives
+  // the COUNT and the TIER from the rows at read time, so neither is stored. What it cannot derive
+  // is that a person filled this on a date: "47 inherited from the vertical" and "47, confirmed for
+  // this client in March" are different facts and only the second is a decision.
+  //
+  // ‼️ ON client_audiences, NEVER ON question_bank. That table has no client_id, four migration
+  // comments defend that, and with no per-client key a wrong write there is not correctable.
+  //
+  // Its own tolerant update, and a failure NEVER fails the paste: the phrases are already filed and
+  // losing a provenance stamp must not tell somebody their twenty objections were not stored.
+  const { audienceFor } = await import("./audiences");
+  const aud = await audienceFor(args.clientId);
+  if (aud.ok) {
+    const { error: stampError } = await supabaseAdmin
+      .from("client_audiences")
+      .update({ emotional_source: "pasted", emotional_checked_at: new Date().toISOString() })
+      .eq("id", aud.audience.id);
+    if (stampError) console.error("[precall-headlines] emotional stamp not written:", stampError.message);
+  }
+
   const after = await emotionalLayer(args.clientId);
   return {
     ok: true,
