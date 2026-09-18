@@ -29,6 +29,10 @@ export interface EnrichTarget {
   ownerName: string | null;
   city: string | null;
   state: string | null;
+  /** The site to crawl. Distinct from `domain`, which is the normalised key. */
+  website?: string | null;
+  /** An address the SOURCE FILE already carried, if it did. Cheapest possible rung. */
+  fileEmail?: string | null;
 }
 
 export interface EnrichHit {
@@ -38,6 +42,12 @@ export interface EnrichHit {
   title: string | null;
   provider: string;
   costUsd: number;
+  /**
+   * Where the rung actually found it, when it can say. `scrapeEmail` returns things like
+   * `scrape:/contact:mailto`, and losing that would mean the attempt trail records WHICH rung
+   * answered but not WHAT it looked at, which is half of what makes a waterfall swappable.
+   */
+  sourceDetail?: string | null;
 }
 
 export interface EnrichAttempt {
@@ -54,13 +64,41 @@ export interface EnrichResult {
   attempts: EnrichAttempt[];
 }
 
+/**
+ * How a rung is turned on.
+ *
+ * ‼️ A FREE RUNG HAS NO CREDENTIAL AND MUST NOT PRETEND TO HAVE ONE. `envKey: string` forced every
+ * provider to name an env var, so wiring our own site crawler in meant inventing something like
+ * FREE_SCRAPE_ENABLED. That is the worst of both: the rung is DARK on a fresh deploy, and
+ * `enrichLines` tells the operator to go set a key for a thing that needs no key. Making the gate
+ * a union instead lets the honest answer be expressible.
+ */
+export type ProviderGate =
+  /** A vendor. Dark until the key is set, and the card says so once. */
+  | { kind: "env"; envKey: string }
+  /** Ours, self-hosted, nothing to buy. Always live. */
+  | { kind: "free" };
+
 export interface Provider {
   key: string;
   label: string;
-  /** The env var that turns it on. Absent means the rung is skipped and said so once. */
-  envKey: string;
+  gate: ProviderGate;
   /** Roughly what one lookup costs, for the spend estimate shown before the gate. */
   costPerLookup: number;
+  /**
+   * Whether a role address from THIS rung counts as a hit.
+   *
+   * ‼️ IT IS A PROPERTY OF THE SOURCE, NOT A WORKAROUND. A role address from a named-person
+   * DATABASE is a miss: you paid for a person and got a mailbox, and the next rung may still have
+   * the person. A role address from a SITE CRAWL is the target: `pickBestEmail` ranks a same-domain
+   * role address first precisely because a single-location clinic reads info@ itself, and
+   * email-scrape.ts calls those "monitored front-office inboxes, the best outreach targets".
+   *
+   * Wiring the crawl rung with this false is the highest-severity silent bug available here: the
+   * rung reports "0 found, N role address" on a list it actually solved, and the obvious reading is
+   * that the crawler is broken.
+   */
+  acceptsRole?: boolean;
   find(target: EnrichTarget): Promise<EnrichHit | null>;
 }
 
@@ -73,27 +111,103 @@ export interface Provider {
  * rows the verified one never has to be asked about, which looks like better coverage and is worse
  * mail.
  *
- * Empty today on purpose: no provider is chosen yet, and inventing an adapter for a vendor nobody
- * has signed up to would be a file that compiles and lies. `enrichOne` below handles an empty
- * waterfall correctly and says so, which is the honest state of stage 4 right now.
+ * ‼️ THE TWO FREE RUNGS COME FIRST AND THAT IS THE SAME RULE, NOT AN EXCEPTION TO IT. An address
+ * the source file already carried, and an address published on the company's own contact page, are
+ * as verified-only as it gets: nobody inferred them from a pattern. A paid database slots in
+ * BENEATH them, where it is asked only about the companies neither free rung could answer, which is
+ * also the only place its coverage number means anything.
+ *
+ * No paid rung today: no vendor is chosen, and inventing an adapter for one nobody has signed up to
+ * would be a file that compiles and lies. Adding one is a single object here plus its env key.
  */
-export const PROVIDERS: Provider[] = [];
+export const PROVIDERS: Provider[] = [
+  {
+    key: "file",
+    label: "the dropped file",
+    gate: { kind: "free" },
+    costPerLookup: 0,
+    // A Maps scraper that already found the address published it from the same contact page our
+    // own crawl would fetch. Same provenance, so the same answer on role addresses.
+    acceptsRole: true,
+    async find(t) {
+      const email = (t.fileEmail || "").trim().toLowerCase();
+      if (!email || !email.includes("@")) return null;
+      return {
+        email,
+        firstName: firstNameOf(t.ownerName),
+        lastName: lastNameOf(t.ownerName),
+        title: null,
+        provider: "file",
+        costUsd: 0,
+      };
+    },
+  },
+  {
+    key: "site-scrape",
+    label: "their own website",
+    gate: { kind: "free" },
+    costPerLookup: 0,
+    acceptsRole: true,
+    async find(t) {
+      const site = t.website || (t.domain ? "https://" + t.domain : null);
+      if (!site) return null;
+      // Imported lazily: email-scrape.ts pulls in the fetch stack, and enrich.ts is imported by an
+      // offline probe that must not need it.
+      const { scrapeEmail } = await import("@/lib/email-scrape");
+      const found = await scrapeEmail(site);
+      if (!found) return null;
+      return {
+        email: found.email.toLowerCase(),
+        firstName: firstNameOf(t.ownerName),
+        lastName: lastNameOf(t.ownerName),
+        title: null,
+        provider: "site-scrape",
+        costUsd: 0,
+        sourceDetail: found.source,
+      };
+    },
+  },
+];
 
-/** Which rungs are actually usable, and which are dark for want of a key. */
+function firstNameOf(owner: string | null): string | null {
+  const parts = (owner || "").trim().split(/\s+/).filter(Boolean);
+  return parts.length ? parts[0] : null;
+}
+
+function lastNameOf(owner: string | null): string | null {
+  const parts = (owner || "").trim().split(/\s+/).filter(Boolean);
+  return parts.length > 1 ? parts[parts.length - 1] : null;
+}
+
+/**
+ * Which rungs are actually usable, and which are dark for want of a key.
+ *
+ * A `free` rung is unconditionally live: there is no key to be missing, so it can never be dark,
+ * and `enrichLines` must never invite somebody to configure it.
+ */
 export function configuredProviders(): { live: Provider[]; dark: Provider[] } {
   const live: Provider[] = [];
   const dark: Provider[] = [];
-  for (const p of PROVIDERS) (process.env[p.envKey] ? live : dark).push(p);
+  for (const p of PROVIDERS) {
+    if (p.gate.kind === "free") live.push(p);
+    else (process.env[p.gate.envKey] ? live : dark).push(p);
+  }
   return { live, dark };
 }
 
 /**
  * Walk the waterfall for one company, stopping at the first deliverable named address.
  *
- * ‼️ A ROLE ADDRESS DOES NOT STOP THE WALK. info@ and booking@ are what an Instagram bio and a
- * contact page hand over, and step 7 strips them anyway when a named person is wanted. Accepting one
- * here would end the walk on the thing the next stage is about to throw away, so it is recorded as a
- * miss with the reason and the next rung is asked.
+ * ‼️ A ROLE ADDRESS DOES NOT STOP THE WALK, UNLESS THE RUNG SAYS IT SHOULD. info@ and booking@ are
+ * what a broad DATABASE hands over when it has no person, and accepting one there would end the
+ * walk on the thing the next rung might have answered properly, so it is recorded as a miss with
+ * the reason and the next rung is asked.
+ *
+ * A rung that sets `acceptsRole` is making the opposite claim about its own source, and for a site
+ * crawl the claim is correct: a same-domain role address published on a clinic's contact page is
+ * the mailbox the owner actually reads, and it is `pickBestEmail`'s FIRST choice rather than its
+ * fallback. Treating that as a miss would throw away most of what the free rungs find and report
+ * the crawler as broken. See `Provider.acceptsRole`.
  */
 export async function enrichOne(target: EnrichTarget): Promise<EnrichResult> {
   const attempts: EnrichAttempt[] = [];
@@ -109,12 +223,18 @@ export async function enrichOne(target: EnrichTarget): Promise<EnrichResult> {
         attempts.push({ provider: p.key, ok: true, found: false, detail: "no match", ms });
         continue;
       }
-      if (ROLE_PATTERN.test(hit.email)) {
+      if (ROLE_PATTERN.test(hit.email) && !p.acceptsRole) {
         attempts.push({ provider: p.key, ok: true, found: false, detail: `role address (${hit.email})`, ms });
         continue;
       }
 
-      attempts.push({ provider: p.key, ok: true, found: true, detail: hit.email, ms });
+      attempts.push({
+        provider: p.key,
+        ok: true,
+        found: true,
+        detail: hit.sourceDetail ? `${hit.email} (${hit.sourceDetail})` : hit.email,
+        ms,
+      });
       return { id: target.id, hit, attempts };
     } catch (e) {
       attempts.push({
@@ -162,11 +282,17 @@ export function summarize(results: readonly EnrichResult[]): EnrichSummary {
 export function enrichLines(s: EnrichSummary): string[] {
   const { live, dark } = configuredProviders();
 
+  // ‼️ `dark` HOLDS ONLY `env` RUNGS BY CONSTRUCTION, so naming a key here is always possible.
+  // A free rung can never be dark, which is why this branch cannot print "dark for want of a key:
+  // undefined" the way it would have if a free rung had been given a fake env var to satisfy the
+  // old `envKey: string`.
+  const darkKeys = dark.map((p) => (p.gate.kind === "env" ? p.gate.envKey : p.key));
+
   if (!live.length) {
     return [
       ":warning: *No enrichment provider is configured*, so nothing was enriched and nothing was spent.",
       dark.length
-        ? `Set one of ${dark.map((p) => `\`${p.envKey}\``).join(", ")} to turn a rung on.`
+        ? `Set one of ${darkKeys.map((k) => `\`${k}\``).join(", ")} to turn a rung on.`
         : "The waterfall is empty. A provider has to be chosen and added to PROVIDERS in enrich.ts.",
     ];
   }
@@ -179,7 +305,7 @@ export function enrichLines(s: EnrichSummary): string[] {
     lines.push(`  • ${label}: ${b.found} found, ${b.missed} no match${b.failed ? `, ${b.failed} failed` : ""}`);
   }
   if (dark.length) {
-    lines.push(`  _${dark.length} rung${dark.length === 1 ? "" : "s"} dark for want of a key: ${dark.map((p) => p.envKey).join(", ")}_`);
+    lines.push(`  _${dark.length} rung${dark.length === 1 ? "" : "s"} dark for want of a key: ${darkKeys.join(", ")}_`);
   }
   return lines;
 }

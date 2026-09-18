@@ -138,13 +138,53 @@ async function main() {
 
   const est = estimateCost(1000);
   check("a spend estimate exists before the gate", typeof est.usd === "number");
-  check("with no provider configured it estimates zero", est.live === 0 ? est.usd === 0 : true);
-  check("PROVIDERS is empty and honest about it", PROVIDERS.length === 0 || configuredProviders().live.length >= 0);
-  const noProviderLines = enrichLines(summarize([]));
+
+  // ‼️ THESE THREE CHECKS ASSERTED THE UN-WIRED STATE AND HAD TO CHANGE WHEN IT WAS WIRED. Worth
+  // noting that the old "PROVIDERS is empty and honest about it" was
+  // `PROVIDERS.length === 0 || configuredProviders().live.length >= 0`, whose right half is
+  // vacuously true, so it would have gone on passing whatever landed in the array. Replaced with
+  // assertions that can actually fail.
+  const live = configuredProviders().live;
+  const dark = configuredProviders().dark;
+  check("the waterfall has at least one live rung", live.length > 0, `live=${live.length}`);
   check(
-    "an unconfigured waterfall says so rather than reporting 0%",
-    noProviderLines.some((l) => /No enrichment provider is configured/.test(l)),
-    noProviderLines.join(" ")
+    "every free rung is live and none of them is dark",
+    PROVIDERS.filter((p) => p.gate.kind === "free").every((p) => live.includes(p)) &&
+      dark.every((p) => p.gate.kind === "env"),
+    `dark=${dark.map((p) => p.key).join(",")}`
+  );
+  check(
+    "a free waterfall estimates zero even with rungs live",
+    est.live > 0 && est.usd === 0,
+    `live=${est.live} usd=${est.usd}`
+  );
+
+  // ‼️ THE ROLE-ADDRESS RULE IS A PROPERTY OF THE SOURCE, AND IT IS THE HIGHEST-SEVERITY SILENT
+  // BUG AVAILABLE HERE. `pickBestEmail` ranks a same-domain role address FIRST, so a crawl rung
+  // that treated one as a miss would report "0 found, N role address" on a list it actually
+  // solved, and the obvious reading is that the crawler is broken.
+  check(
+    "the site-crawl rung accepts a role address",
+    PROVIDERS.find((p) => p.key === "site-scrape")?.acceptsRole === true
+  );
+  // The gate is still there and still defaults to rejecting: `acceptsRole` is opt-in, so a paid
+  // database added later inherits the strict behaviour without anybody remembering to ask for it.
+  check(
+    "a rung must opt in; the role gate still guards the ones that have not",
+    /ROLE_PATTERN\.test\(hit\.email\) && !p\.acceptsRole/.test(esrc),
+    "enrichOne no longer gates role addresses at all"
+  );
+
+  const providerLines = enrichLines(summarize([]));
+  check(
+    "a configured waterfall reports coverage rather than claiming nothing is configured",
+    !providerLines.some((l) => /No enrichment provider is configured/.test(l)),
+    providerLines.join(" ")
+  );
+  check(
+    "no rung is ever reported dark for want of a key it does not have",
+    !providerLines.some((l) => /undefined/.test(l)),
+    providerLines.join(" ")
   );
 
   // ── 4. Verdicts ───────────────────────────────────────────────────────────

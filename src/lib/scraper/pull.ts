@@ -115,6 +115,86 @@ export function fromOutscraper(
   };
 }
 
+/** The header names a dropped CSV resolved to, already matched by rules.ts. */
+export interface CsvColumns {
+  company: string;
+  website: string;
+  city: string | null;
+  state: string | null;
+  phone: string | null;
+  email: string | null;
+  /** Maps-shaped extras, when the scraper emitted them. All optional. */
+  rating: string | null;
+  reviews: string | null;
+  categories: string | null;
+  placeId: string | null;
+}
+
+/**
+ * One row of a dropped CSV, in the shared shape.
+ *
+ * ‼️ `place_id` IS SYNTHESISED FROM THE ROW INDEX, AND IT IS NOT A HACK. storeRawLeads dedupes on
+ * (run_id, place_id) and skips the check entirely when place_id is null, so a CSV pull would not
+ * be idempotent: the `pulling` arm is re-driven on any tick that dies mid-write, and every
+ * re-entry would insert the whole file again. The column's real contract is "the stable key across
+ * two reads of the same source", and for a dropped file the row index is exactly that. There is
+ * one run per batch, so (run_id, "csv:17") is unique.
+ *
+ * The `csv:` prefix is load-bearing in a different way: it keeps the value greppably NOT a Google
+ * place id, so nobody later joins raw_leads to med_spa_leads on it and gets silence.
+ *
+ * ‼️ A REAL place_id FROM THE FILE WINS. A Maps scraper that emitted one is identifying the same
+ * business better than the row number can, and two exports of one metro then dedupe against each
+ * other rather than both landing.
+ */
+export function fromCsv(
+  row: Record<string, string>,
+  ctx: {
+    runId: string;
+    rowIndex: number;
+    cols: CsvColumns;
+    sourceQuery: string | null;
+    sourceMetro?: string | null;
+    verticalSlug?: string | null;
+  }
+): RawLeadInput | null {
+  const cell = (header: string | null): string | null => (header ? str(row[header]) : null);
+
+  const businessName = cell(ctx.cols.company);
+  // Same refusal as fromOutscraper: raw_leads.business_name is NOT NULL, and a nameless row could
+  // not be judged by qualify.ts even if it could be stored.
+  if (!businessName) return null;
+
+  const website = cell(ctx.cols.website);
+  const realPlaceId = cell(ctx.cols.placeId);
+
+  return {
+    runId: ctx.runId,
+    source: "csv",
+    sourceQuery: ctx.sourceQuery,
+    sourceMetro: ctx.sourceMetro ?? null,
+    placeId: realPlaceId ?? "csv:" + ctx.rowIndex,
+    businessName,
+    domain: normalizeDomain(website),
+    website,
+    phone: cell(ctx.cols.phone),
+    fullAddress: null,
+    city: cell(ctx.cols.city),
+    state: cell(ctx.cols.state),
+    postalCode: null,
+    categories: cell(ctx.cols.categories),
+    primaryType: cell(ctx.cols.categories),
+    rating: num(cell(ctx.cols.rating)),
+    reviewCount: num(cell(ctx.cols.reviews)),
+    instagramHandle: null,
+    ownerName: null,
+    verticalSlug: ctx.verticalSlug ?? null,
+    businessType: null,
+    avatarSlug: null,
+    raw: row as Record<string, unknown>,
+  };
+}
+
 export interface StoreResult {
   inserted: number;
   skipped: number;
