@@ -24,6 +24,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
 import { channelFor } from "./step-board";
+import { pageStudioHint } from "./page-studio";
 
 function appUrl(): string {
   return process.env.NEXT_PUBLIC_APP_URL || "https://mission.srtagency.com";
@@ -155,7 +156,7 @@ export function indexText(f: IndexFacts): string {
     "",
     "*Set anything up from here*",
     `  • Everything: ${board}`,
-    `  • Offer, avatar, keywords, pages, review quotes: type \`page ${f.slug ?? f.name}\` in <#${pageStudio()}>`,
+    `  • Offer, avatar, keywords, pages, review quotes: type \`page ${f.slug ?? f.name}\` in ${pageStudioHint()}`,
     `  • Theme and design: ${board}#theme`,
     `  • Concierge: ${board}#concierge`,
     `  • Review handover and destinations: ${board}#review-handover`,
@@ -164,9 +165,10 @@ export function indexText(f: IndexFacts): string {
   ].join("\n");
 }
 
-function pageStudio(): string {
-  return process.env.SLACK_PAGE_STUDIO_CHANNEL || "C09QPHZGPUY";
-}
+// ‼️ IMPORTED, NOT RE-DECLARED. This was a verbatim second copy of page-studio.ts's body, literal
+// channel id and all, so the fallback would not have followed if the canonical one ever changed and
+// this card would have pointed at a dead channel with nothing on screen to say so. pageStudioHint()
+// already existed and renders the <#id> form this line wants.
 
 /**
  * Render the index, creating and pinning it the first time.

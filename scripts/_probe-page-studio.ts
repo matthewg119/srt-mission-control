@@ -23,6 +23,7 @@
 
 import { slack } from "../src/lib/slack-bot";
 import { pageStudioChannel, unwrapFormatting } from "../src/lib/clients/page-studio";
+import { SCAN_COMMAND } from "../src/lib/clients/policy-scan";
 
 let failures = 0;
 
@@ -114,7 +115,7 @@ async function main(): Promise<void> {
   const PREVIEW_CMD = /^preview$/i;
   const REPLACE_CMD = /^\s*replace\s*:\s*([\s\S]+)$/i;
 
-  const argCommands: Array<[string, "offer" | "avatar" | "keywords" | "review" | "text" | "preview" | "replace" | "body"]> = [
+  const argCommands: Array<[string, "offer" | "avatar" | "keywords" | "review" | "text" | "preview" | "replace" | "scan" | "body"]> = [
     ["offer", "offer"],
     ["offer: lip filler", "offer"],
     ["offer: lip filler | the one they rebook", "offer"],
@@ -157,6 +158,13 @@ async function main(): Promise<void> {
     ["previews go out to the client first", "body"],
     ["replace the second paragraph with something shorter", "body"],
     ["replacing the hero image tomorrow", "body"],
+    // `scan for latest` reads the context database. Same trap, same anchoring.
+    ["scan", "scan"],
+    ["scan for latest", "scan"],
+    ["scan for latest guidance", "scan"],
+    ["scan for latest changes in the copy", "body"],
+    ["scan the reviews before you write", "body"],
+    ["we should scan", "body"],
   ];
 
   for (const [typed, expected] of argCommands) {
@@ -166,7 +174,9 @@ async function main(): Promise<void> {
     // does: a body pasted back carries its own backticks and must not be unwrapped.
     const got = REPLACE_CMD.test(typed)
       ? "replace"
-      : OFFER_CMD.test(c)
+      : SCAN_COMMAND.test(c)
+        ? "scan"
+        : OFFER_CMD.test(c)
         ? "offer"
         : AVATAR_CMD.test(c)
           ? "avatar"

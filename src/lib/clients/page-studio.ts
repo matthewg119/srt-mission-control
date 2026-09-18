@@ -59,6 +59,7 @@ import {
 import type { PlanRow, FrameContext } from "./page-plan";
 import { BATCH_COMMAND, HEADLINE_COMMAND, SKELETON_COMMAND } from "./page-batch";
 import { storyCardLines } from "@/lib/hub/page-stories";
+import { SCAN_COMMAND } from "./policy-scan";
 
 /**
  * The channel this lane owns.
@@ -1764,6 +1765,27 @@ async function draft(session: Session): Promise<void> {
 }
 
 /** `check` — run the quality gate and say what it found. */
+/**
+ * `scan for latest`, typed. The same job the Thursday passenger does, on demand.
+ *
+ * ‼️ announce: true, WHICH THE CRON NEVER PASSES. Silence is the correct output for the weekly run
+ * and is exactly wrong for a person who just asked a question: an unanswered command reads as a
+ * broken one. So the cron posts only when something moved, and this always answers.
+ */
+async function runScanCommand(threadTs: string): Promise<void> {
+  await say(threadTs, "Reading Google's published guidance. Five pages, about a minute.");
+  const { runPolicyScan } = await import("./policy-scan");
+  const res = await runPolicyScan({ force: true, announce: true, by: "scan for latest" });
+  if (!res.posted) {
+    await say(
+      threadTs,
+      res.failed.length
+        ? `:warning: Nothing could be read: ${res.failed.join("; ")}`
+        : ":warning: The scan ran but the card could not be posted. Check the bot is in this channel."
+    );
+  }
+}
+
 async function check(session: Session): Promise<void> {
   if (!session.pageId) {
     await say(session.threadTs, "Pick a number first, then `check` runs the gate on that page.");
@@ -2731,6 +2753,13 @@ export async function handlePageStudioEvent(args: {
       await startSession(command, args.messageTs);
       return true;
     }
+    // ‼️ A CHANNEL QUESTION, NOT A PAGE ONE, which is why it lives at the top level as well as in
+    // a thread. It asks what Google has published since we last looked, and the answer belongs to
+    // the lane rather than to whatever page happens to be open.
+    if (SCAN_COMMAND.test(command)) {
+      await runScanCommand(args.messageTs);
+      return true;
+    }
     if (text || args.files.length) {
       await say(
         args.messageTs,
@@ -2906,6 +2935,12 @@ export async function handlePageStudioEvent(args: {
 
   if (/^check$/i.test(command)) {
     await check(session);
+    return true;
+  }
+
+  // Above the body append, like every other verb, and anchored at both ends. See SCAN_COMMAND.
+  if (SCAN_COMMAND.test(command)) {
+    await runScanCommand(session.threadTs);
     return true;
   }
 

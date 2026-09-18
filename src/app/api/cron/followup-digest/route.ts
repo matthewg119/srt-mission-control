@@ -19,6 +19,7 @@ import { runWeeklyReports } from "@/lib/clients/weekly-report";
 import { runWeeklyHeadlines } from "@/lib/clients/weekly-headlines";
 import { runTimeLogNudges } from "@/lib/clients/time-log-nudge";
 import { runFunnelReport } from "@/lib/experiments/funnel-report";
+import { runPolicyScan } from "@/lib/clients/policy-scan";
 import { stepDigest } from "@/lib/clients/step-engine";
 import { slack } from "@/lib/slack-bot";
 
@@ -121,6 +122,21 @@ ${text}`);
           return { posted: 0, skipped: 0 };
         });
 
+    // Eighth passenger, same reasoning and the same isolation. Reads Google's five published
+    // guidance pages and posts a card into the drafting channel ONLY when one of them moved.
+    // Thursday only, the same day as the two above, and it returns immediately on the other six
+    // days without a single HTTP request.
+    //
+    // No week stamp: the content hash is a stronger idempotency key than the ISO week here. A
+    // second run on the same Thursday re-reads the same bytes, matches what is live, stores
+    // nothing and posts nothing. See the header of policy-scan.ts.
+    const policyScan = dry
+      ? { checked: 0, changed: [], failed: [], posted: false, skipped: null }
+      : await runPolicyScan().catch((e) => {
+          console.error("[followup-digest] policy scan failed:", (e as Error).message);
+          return { checked: 0, changed: [], failed: [], posted: false, skipped: null };
+        });
+
     return NextResponse.json({
       ok: true,
       dry,
@@ -131,6 +147,7 @@ ${text}`);
       weeklyHeadlines: headlines,
       timeLogNudges: timeLog,
       funnelReport,
+      policyScan,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
