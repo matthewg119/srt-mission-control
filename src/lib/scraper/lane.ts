@@ -25,8 +25,52 @@
 
 import { waitUntil } from "@vercel/functions";
 import { slack } from "@/lib/slack-bot";
-import { parseCsv } from "./csv";
+import { parseCsv, toCsv } from "./csv";
+import { supabaseAdmin } from "@/lib/db";
 import { filterRows } from "./filter";
+import { hasMx } from "./mx";
+import { scrapeOwnerName } from "@/lib/medspa-owner-scrape";
+import { checkMany } from "@/lib/outreach/suppression";
+import { DEFAULT_VERTICAL, icpFor } from "./icp";
+import {
+  fromCsv,
+  funnelLines,
+  startRun,
+  storeRawLeads,
+  type CsvColumns,
+  type RawLeadInput,
+} from "./pull";
+import {
+  QUALIFY_CHUNK,
+  dropReviewLines,
+  groupDrops,
+  qualifyChunk,
+  QUALIFY_MODEL,
+} from "./qualify";
+import { enrichLines, enrichOne, summarize, type EnrichAttempt, type EnrichResult } from "./enrich";
+import {
+  applyVerification,
+  bindRunToBatch,
+  dropReasons,
+  dropWebsiteless,
+  droppedRows,
+  funnelFor,
+  getRun,
+  heldBackRows,
+  pendingCatchall,
+  pendingEnrich,
+  pendingQualify,
+  pendingSuppression,
+  qualifyTally,
+  recordCatchallRecheck,
+  recordEnrichment,
+  recordSuppression,
+  sendableRows,
+  setOwnerName,
+  unverifiedEmails,
+  updateRun,
+  writeVerdicts,
+} from "./listprep";
 import {
   columnVerdict,
   resolveCityColumn,
@@ -157,6 +201,19 @@ const KEYCAPS: Record<string, number> = { one: 1, two: 2, three: 3 };
 /** 1️⃣ / 2️⃣ / 3️⃣ on the cutoff card, as a percentage of the file to KEEP off the bottom. */
 const CUTOFF_PRESETS: Record<number, number> = { 1: 30, 2: 50, 3: 70 };
 
+/**
+ * Which keycap on the PICKER means which workflow.
+ *
+ * ‼️ THIS TABLE EXISTS BECAUSE THE DISPATCH USED TO BE `keycap === 1 ? "filter" : "score"`, IN
+ * FOUR PLACES, AND EVERY ONE FELL THROUGH TO SCORE. With two arms that was correct. With three it
+ * is a way to spend money: a 3️⃣ that fell through would insert company rows and buy a DataForSEO
+ * SERP for every one of them, with no error anywhere and a thread that reads as though the right
+ * thing happened. A missing keycap must be an absent entry here, never a default branch.
+ *
+ * `_probe-scraper.ts` asserts PICK[3] === "listprep" for exactly that reason.
+ */
+const PICK: Record<number, Workflow> = { 1: "filter", 2: "score", 3: "listprep" };
+
 export function scraperChannel(): string {
   return process.env.SLACK_SCRAPER_CHANNEL || "";
 }
@@ -245,7 +302,7 @@ async function fail(batch: BatchRow, message: string): Promise<void> {
  */
 async function rewindPick(
   batch: BatchRow,
-  input: { reason: string; other: Workflow; otherColumn: string }
+  input: { reason: string; runnable: Array<{ workflow: Workflow; columns: Record<string, string> }> }
 ): Promise<void> {
   if (!batch.workflow_pick_ts) return fail(batch, input.reason);
 
@@ -329,19 +386,30 @@ async function reportStatus(channel: string): Promise<void> {
     await slack.postMessage(channel, "No batch has run in this channel yet. Drop a CSV here.");
     return;
   }
-  const pending = await countPending(batch.id);
-  const clean = await countByVerdict(batch.id, "clean");
-  const junk = await countByVerdict(batch.id, "junk");
-  const lines = [
+  const header =
     "*" + (batch.file_name ?? "last batch") + "*, status `" + batch.status + "`" +
-      (batch.workflow ? ", workflow `" + batch.workflow + "`" : ""),
-    "```",
-    "rows      " + batch.total_rows,
-    "clean     " + clean,
-    "junk      " + junk,
-    "pending   " + pending,
-    "```",
-  ];
+    (batch.workflow ? ", workflow `" + batch.workflow + "`" : "");
+
+  // ‼️ A LISTPREP BATCH OWNS NO `scraper_rows`, so the three counts below are all zero for it and
+  // `status` would report a finished 900-lead run as having done nothing. Its numbers live on the
+  // pipeline run instead.
+  let lines: string[];
+  if (batch.workflow === "listprep" && batch.list_run_id) {
+    lines = [header, "```", ...funnelLines(await funnelFor(batch.list_run_id)), "```"];
+  } else {
+    const pending = await countPending(batch.id);
+    const clean = await countByVerdict(batch.id, "clean");
+    const junk = await countByVerdict(batch.id, "junk");
+    lines = [
+      header,
+      "```",
+      "rows      " + batch.total_rows,
+      "clean     " + clean,
+      "junk      " + junk,
+      "pending   " + pending,
+      "```",
+    ];
+  }
   if (batch.mv_status) lines.push("MillionVerifier: `" + batch.mv_status + "`");
   if (Number(batch.score_cost_usd ?? 0) > 0) {
     lines.push("DataForSEO spend: $" + Number(batch.score_cost_usd).toFixed(4));
@@ -494,6 +562,7 @@ async function postWorkflowPicker(batch: BatchRow, headers: string[]): Promise<v
       companyColumn: resolveCompanyColumn(headers),
       cityColumn: resolveCityColumn(headers),
       websiteColumn: resolveWebsiteColumn(headers),
+      headers,
       duplicateCount: batch.dedupe_dupe_count,
       newCount: batch.dedupe_new_count,
     })
@@ -580,6 +649,34 @@ async function handleThreadedCsv(event: ScraperEvent, file: SlackFile): Promise<
  * The email column is resolved HERE rather than at the drop, which is the whole point of the
  * picker: a company list must be able to reach 2️⃣ without dying on this check first.
  */
+/**
+ * Hand a parsed file to the workflow that was picked. THE ONLY PLACE THAT DISPATCHES ON WORKFLOW.
+ *
+ * ‼️ EXHAUSTIVE `switch`, WITH A `never` DEFAULT, AND BOTH HALVES EARN THEIR KEEP. The three call
+ * sites used to each write `if (workflow === "filter") … else beginScoreWorkflow(…)`, so a fourth
+ * arm would silently run the scoring workflow and BUY A SERP PER ROW. Routing every caller through
+ * one function makes adding an arm a compile error in exactly one place instead of a billing
+ * surprise in three.
+ */
+async function beginWorkflow(
+  workflow: Workflow,
+  batch: BatchRow,
+  parsed: ReturnType<typeof parseCsv>
+): Promise<void> {
+  switch (workflow) {
+    case "filter":
+      return beginFilterWorkflow(batch, parsed);
+    case "score":
+      return beginScoreWorkflow(batch, parsed);
+    case "listprep":
+      return beginListPrepWorkflow(batch, parsed);
+    default: {
+      const _never: never = workflow;
+      throw new Error("unhandled workflow: " + String(_never));
+    }
+  }
+}
+
 async function beginFilterWorkflow(batch: BatchRow, parsed: ReturnType<typeof parseCsv>): Promise<void> {
   const verdict = columnVerdict("filter", parsed.headers);
   if (verdict.kind !== "ok") {
@@ -592,11 +689,12 @@ async function beginFilterWorkflow(batch: BatchRow, parsed: ReturnType<typeof pa
     // genuinely terminal. `columnVerdict` makes the split, so the rewind can never be offered on a
     // pick that would bounce off the same refusal. See its comment for why that is the bound.
     if (verdict.kind === "terminal") {
-      return fail(batch, reason + " There is no company column either, so :two: cannot run on it.");
+      return fail(batch, reason + " No other workflow can run on it either: :two: needs a company " +
+        "column and :three: needs a company column and a website column.");
     }
-    return rewindPick(batch, { reason, other: verdict.other, otherColumn: verdict.otherColumn });
+    return rewindPick(batch, { reason, runnable: verdict.runnable });
   }
-  const emailColumn = verdict.column;
+  const emailColumn = verdict.columns.email;
 
   const knownEmails = await knownProspectEmails();
   // The drop's verdicts, carried in by index. `already_in_crm` still runs underneath: that one asks
@@ -638,11 +736,12 @@ async function beginScoreWorkflow(batch: BatchRow, parsed: ReturnType<typeof par
     // Symmetric with beginFilterWorkflow, and the symmetry is the point: exactly one refusal in
     // each workflow is a WRONG PICK rather than a broken file, and it is the required-column one.
     if (verdict.kind === "terminal") {
-      return fail(batch, reason + " There is no email column either, so :one: cannot run on it.");
+      return fail(batch, reason + " There is no email column either, so :one: cannot run on it, " +
+        "and :three: needs this same company column.");
     }
-    return rewindPick(batch, { reason, other: verdict.other, otherColumn: verdict.otherColumn });
+    return rewindPick(batch, { reason, runnable: verdict.runnable });
   }
-  const companyColumn = verdict.column;
+  const companyColumn = verdict.columns.company;
 
   const cityColumn = resolveCityColumn(parsed.headers);
   const websiteColumn = resolveWebsiteColumn(parsed.headers);
@@ -779,9 +878,8 @@ export async function advanceBatch(batch: BatchRow, deadline = Date.now() + MX_B
       // Re-driving is safe: both inserters upsert with ignoreDuplicates on (batch_id, row_index).
       if (!batch.workflow) return;
       const parsed = await reloadCsv(batch);
-      if (batch.workflow === "filter") await beginFilterWorkflow(batch, parsed);
-      else await beginScoreWorkflow(batch, parsed);
-      // Both entries drive the rest of the machine themselves, so this call is done.
+      await beginWorkflow(batch.workflow, batch, parsed);
+      // Every entry drives the rest of the machine itself, so this call is done.
       return;
     }
 
@@ -818,12 +916,558 @@ export async function advanceBatch(batch: BatchRow, deadline = Date.now() + MX_B
       batch = (await getBatch(batch.id)) ?? batch;
     }
 
+    // --- Workflow C -------------------------------------------------------------------------
+    //
+    // Placed BEFORE the shared `verifying` arm, and each one returns rather than falling through,
+    // because C shares three statuses with the other workflows and owns no `scraper_rows`.
+
+    if (batch.status === "pulling") {
+      const done = await sweepPull(batch);
+      if (!done) return;
+      batch = (await getBatch(batch.id)) ?? batch;
+    }
+
+    if (batch.status === "qualifying") {
+      const done = await sweepQualify(batch, deadline);
+      if (!done) return;
+      batch = (await getBatch(batch.id)) ?? batch;
+    }
+
+    if (batch.status === "qualified") {
+      // ‼️ THIS ARM POSTS A GUARDED CARD AND RETURNS. It never advances. That is what makes
+      // `qualified` safe to list in ACTIVE_STATUSES: the cron may poll it forever and the only
+      // effect is re-reading one row.
+      await postDropReview(batch);
+      return;
+    }
+
+    if (batch.status === "enriching") {
+      const done = await sweepEnrich(batch, deadline);
+      if (!done) return;
+      batch = (await getBatch(batch.id)) ?? batch;
+    }
+
+    if (batch.status === "catchall_recheck") {
+      const done = await sweepCatchall(batch, deadline);
+      if (!done) return;
+      batch = (await getBatch(batch.id)) ?? batch;
+    }
+
+    if (batch.status === "suppressing") {
+      const done = await sweepSuppression(batch, deadline);
+      if (!done) return;
+      await publishSendable(batch);
+      return;
+    }
+
     if (batch.status === "verifying") {
+      // ‼️ BRANCH BEFORE READING A ROW. A listprep batch reaching `pollVerification` would pass its
+      // `mv_file_id` guard, write MV verdicts into `scraper_rows` where it has NONE, match nothing,
+      // post a summary with no CSV attached, and report itself done. Not an error anywhere: a
+      // silent truncation of the whole run, which is the exact failure store.ts's header opens with.
+      if (batch.workflow === "listprep") {
+        await pollListPrepVerification(batch);
+        return;
+      }
       await pollVerification(batch);
     }
   } catch (e) {
     await fail(batch, (e as Error).message);
   }
+}
+
+// ================================================================================================
+// Workflow C: qualify before you enrich, and suppress against our own source of truth.
+//
+// ‼️ EVERY SWEEP BELOW TAKES THE SHARED DEADLINE AND PARKS RATHER THAN OVERRUNNING. The tick's
+// budget is shared across every active batch, and a Vercel function is killed at 300s with no
+// chance to write. Returning false leaves the worklist exactly as the database has it, so the next
+// tick resumes without re-doing or re-buying anything. That is the same contract sweepMx and
+// sweepScoring already keep.
+// ================================================================================================
+
+/**
+ * 3️⃣ Build a send list.
+ *
+ * Opens the pipeline run and moves to `pulling`. Everything after this is the stage machine.
+ */
+async function beginListPrepWorkflow(
+  batch: BatchRow,
+  parsed: ReturnType<typeof parseCsv>
+): Promise<void> {
+  const verdict = columnVerdict("listprep", parsed.headers);
+  if (verdict.kind !== "ok") {
+    const reason =
+      "That file is missing " + verdict.missing.join(" and ") + ", so :three: cannot build a send " +
+      "list from it. A send list needs a business name to judge and a website to crawl for an " +
+      "address. Headers found: " +
+      parsed.headers.map((h) => "`" + h + "`").join(", ");
+    if (verdict.kind === "terminal") {
+      return fail(batch, reason + " No other workflow can run on it either.");
+    }
+    return rewindPick(batch, { reason, runnable: verdict.runnable });
+  }
+
+  // Guarded: a re-driven `parsing` arm must not open a second run. `list_run_id` is the guard, and
+  // it is the column BATCH_COLUMNS has to carry or this check is always true. See store.ts.
+  if (batch.list_run_id) {
+    await updateBatch(batch.id, { status: "pulling" });
+    const fresh = await getBatch(batch.id);
+    if (fresh) await advanceBatch(fresh);
+    return;
+  }
+
+  const started = await startRun({
+    label: batch.file_name,
+    source: "csv",
+    queries: batch.batch_label ? [batch.batch_label] : [],
+    icp: icpFor(DEFAULT_VERTICAL),
+    slackChannelId: batch.slack_channel_id,
+    slackThreadTs: batch.slack_thread_ts,
+  });
+  if (!started.ok) return fail(batch, started.error);
+
+  await bindRunToBatch(started.runId, batch.id);
+  await updateBatch(batch.id, {
+    status: "pulling",
+    workflow: "listprep",
+    list_run_id: started.runId,
+    total_rows: parsed.rows.length,
+    headers: parsed.headers,
+  });
+
+  await say(
+    batch,
+    [
+      ":three: *Building a send list* from " +
+        (parsed.rows.length - skipIndexesOf(batch).size) +
+        " new rows.",
+      "",
+      "Judging every one against this profile before anything is crawled or verified:",
+      "```",
+      icpFor(DEFAULT_VERTICAL),
+      "```",
+      "_Edit it in `src/lib/scraper/icp.ts`. The text above is stored on this run, so a later " +
+        "edit changes the next run and never rewrites this one._",
+    ].join("\n")
+  );
+
+  const fresh = await getBatch(batch.id);
+  if (fresh) await advanceBatch(fresh);
+}
+
+/** Stage 1: the dropped file into `raw_leads`. Synchronous, so it finishes or fails in one tick. */
+async function sweepPull(batch: BatchRow): Promise<boolean> {
+  if (!batch.list_run_id) {
+    await fail(batch, "the pipeline run is missing, so there is nothing to pull into.");
+    return false;
+  }
+
+  const parsed = await reloadCsv(batch);
+  const cols = dedupeColumns(parsed.headers);
+  if (!cols.company || !cols.website) {
+    await fail(batch, "the company or website column vanished between the pick and the pull.");
+    return false;
+  }
+
+  const headers = parsed.headers;
+  const pick = (names: string[]): string | null =>
+    headers.find((h) => names.includes(h.trim().toLowerCase())) ?? null;
+
+  const csvCols: CsvColumns = {
+    company: cols.company,
+    website: cols.website,
+    city: cols.city,
+    state: resolveStateColumn(headers),
+    phone: cols.phone,
+    email: cols.email,
+    // Maps-shaped extras. Absent is normal and costs verdict quality, not correctness: qualify.ts
+    // feeds category and review count to the model, so a file without them is judged on less.
+    rating: pick(["rating", "stars", "average rating"]),
+    reviews: pick(["reviews", "review count", "reviews count", "number of reviews", "user ratings total"]),
+    categories: pick(["categories", "category", "type", "types", "subtypes", "primary type"]),
+    placeId: pick(["place_id", "place id", "google_id", "google id", "cid"]),
+  };
+
+  // ‼️ THE DROP'S DUPLICATES NEVER ENTER raw_leads. Same reasoning as beginScoreWorkflow's Riga
+  // comment: a row that is not in the table is never qualified, never crawled, and never has a
+  // MillionVerifier credit spent on it. Filtering here is cheaper than filtering at every stage.
+  const skip = skipIndexesOf(batch);
+  const inputs: RawLeadInput[] = [];
+  parsed.rows.forEach((row, i) => {
+    if (skip.has(i)) return;
+    const mapped = fromCsv(row, {
+      runId: batch.list_run_id as string,
+      rowIndex: i,
+      cols: csvCols,
+      sourceQuery: batch.batch_label,
+      verticalSlug: DEFAULT_VERTICAL,
+    });
+    if (mapped) inputs.push(mapped);
+  });
+
+  const stored = await storeRawLeads(inputs);
+  if (stored.error) {
+    await fail(batch, stored.error);
+    return false;
+  }
+
+  const nameless = parsed.rows.length - skip.size - inputs.length;
+  await updateRun(batch.list_run_id, { stage: "qualifying", raw_count: inputs.length });
+  await updateBatch(batch.id, { status: "qualifying" });
+
+  await say(
+    batch,
+    ":inbox_tray: " + stored.inserted + " leads in, qualifying against the profile now." +
+      (nameless > 0 ? "  _" + nameless + " had no business name and could not be stored._" : "")
+  );
+  return true;
+}
+
+/** Stage 2: keep or drop, in chunks, writing each chunk before the next is asked for. */
+async function sweepQualify(batch: BatchRow, deadline: number): Promise<boolean> {
+  const runId = batch.list_run_id;
+  if (!runId) return false;
+
+  // The free rule first, exactly as filter.ts runs its string checks before the DNS lookup.
+  await dropWebsiteless(runId);
+
+  while (Date.now() < deadline) {
+    const chunk = await pendingQualify(runId, QUALIFY_CHUNK);
+    if (!chunk.length) break;
+
+    const icp = (await getRun(runId))?.icp_text || icpFor(DEFAULT_VERTICAL);
+    let verdicts = await qualifyChunk(chunk, icp);
+
+    // ‼️ ONE RETRY, THEN THE ROW IS PARKED AS UNJUDGED. A model timeout is usually transient, so
+    // re-asking once inside the same tick is worth it. Re-asking FOREVER is not: without the
+    // second write below, a chunk the model deterministically chokes on comes back every five
+    // minutes and the batch never leaves `qualifying`.
+    const unjudged = verdicts.filter((v) => v.keep === null).map((v) => v.id);
+    if (unjudged.length) {
+      const retry = await qualifyChunk(chunk.filter((c) => unjudged.includes(c.id)), icp);
+      const byId = new Map(retry.map((v) => [v.id, v]));
+      verdicts = verdicts.map((v) => (v.keep === null && byId.get(v.id) ? byId.get(v.id)! : v));
+    }
+    // Anything still unjudged gets a reason written WITHOUT a keep, which is the middle state that
+    // takes it off the worklist while keeping it out of the drop counts. See listprep.ts.
+    verdicts = verdicts.map((v) =>
+      v.keep === null && !v.reason ? { ...v, reason: "the model did not return a verdict twice" } : v
+    );
+
+    await writeVerdicts(verdicts, QUALIFY_MODEL);
+  }
+
+  const left = await pendingQualify(runId, 1);
+  if (left.length) return false; // Budget ran out. Same worklist next tick, nothing re-asked.
+
+  const tally = await qualifyTally(runId);
+  await updateRun(runId, { stage: "qualified", qualified_count: tally.kept });
+  await updateBatch(batch.id, { status: "qualified" });
+  return true;
+}
+
+/** The human checkpoint. Guarded on `drop_review_ts`, posts once, advances never. */
+async function postDropReview(batch: BatchRow): Promise<void> {
+  const runId = batch.list_run_id;
+  if (!runId) return;
+  const run = await getRun(runId);
+  if (!run || run.drop_review_ts) return;
+
+  const tally = await qualifyTally(runId);
+  const reasons = await dropReasons(runId);
+  const groups = groupDrops(
+    reasons.map((r) => ({ id: r.name, keep: false, reason: r.reason, businessName: r.name }))
+  );
+
+  const dropped = await droppedRows(runId);
+  if (dropped.length) {
+    await uploadCsv(
+      batch,
+      "dropped.csv",
+      toCsv(["business_name", "website", "city", "state", "qualify_reason"], dropped)
+    );
+  }
+
+  const ts = await say(
+    batch,
+    dropReviewLines({
+      raw: tally.raw,
+      kept: tally.kept,
+      unjudged: tally.unjudged,
+      groups,
+    }).join("\n")
+  );
+  if (ts) await updateRun(runId, { drop_review_ts: ts });
+}
+
+/** Stage 4: the owner's name, then the address. Both free. */
+async function sweepEnrich(batch: BatchRow, deadline: number): Promise<boolean> {
+  const runId = batch.list_run_id;
+  if (!runId) return false;
+
+  while (Date.now() < deadline) {
+    const batchOf = await pendingEnrich(runId, 25);
+    if (!batchOf.length) break;
+
+    for (const lead of batchOf) {
+      if (Date.now() >= deadline) break;
+
+      // ‼️ THE NAME BEFORE THE ADDRESS, AND NOT AS A WATERFALL RUNG. scrapeOwnerName returns a
+      // name rather than an email, so it cannot satisfy Provider.find; forcing it in would corrupt
+      // the one abstraction enrich.ts asks to stay clean. It runs first because `ownerName` is an
+      // INPUT the first paid rung will search on, and because first_name is the merge variable the
+      // send list exists to carry.
+      let ownerName = lead.ownerName;
+      if (!ownerName && lead.website) {
+        try {
+          ownerName = await scrapeOwnerName(lead.website);
+          if (ownerName) await setOwnerName(lead.id, ownerName);
+        } catch {
+          // A site that refuses a crawl is not a failed lead. The address rung still gets a turn.
+        }
+      }
+
+      const fileEmail = csvEmailOf(lead.raw, batch.headers ?? []);
+      const result = await enrichOne({
+        id: lead.id,
+        businessName: lead.businessName,
+        domain: lead.domain ?? "",
+        ownerName,
+        city: lead.city,
+        state: lead.state,
+        website: lead.website,
+        fileEmail,
+      });
+      await recordEnrichment({
+        runId,
+        rawLeadId: lead.id,
+        hit: result.hit,
+        attempts: result.attempts,
+      });
+    }
+  }
+
+  const left = await pendingEnrich(runId, 1);
+  if (left.length) return false;
+
+  const funnel = await funnelFor(runId);
+  await updateRun(runId, { stage: "verifying", enriched_count: funnel.enriched });
+
+  const unverified = await unverifiedEmails(runId);
+  if (!unverified.length) {
+    // Nothing to verify means nothing to send, and saying so beats an empty MillionVerifier card.
+    await say(
+      batch,
+      ":warning: *No addresses were found* on any of the " + funnel.qualified +
+        " kept sites, so there is nothing to verify. `dropped.csv` above shows what was cut; if " +
+        "that looks wrong the ICP is the thing to change."
+    );
+    await updateRun(runId, { stage: "done", finished_at: new Date().toISOString() });
+    await updateBatch(batch.id, { status: "done" });
+    return false;
+  }
+
+  await updateBatch(batch.id, { status: "verifying", mv_awaiting_approval: true });
+  await say(
+    batch,
+    [
+      ...enrichLines(summarize(await enrichAttemptsFor(runId))),
+      "",
+      ":white_check_mark: to verify those " + unverified.length +
+        " addresses with MillionVerifier. Nothing is uploaded until you react.",
+    ].join("\n")
+  );
+  return false;
+}
+
+/** Stage 5: MillionVerifier, reusing workflow 1's gate and client. */
+async function pollListPrepVerification(batch: BatchRow): Promise<void> {
+  const runId = batch.list_run_id;
+  if (!runId) return;
+  if (batch.mv_awaiting_approval) return; // Still behind the ✅.
+
+  if (!batch.mv_file_id) {
+    const rows = await unverifiedEmails(runId);
+    if (!rows.length) {
+      await updateBatch(batch.id, { status: "catchall_recheck" });
+      return;
+    }
+    const info = await uploadEmails(rows.map((r) => r.email), (batch.file_name ?? "sendable") + ".txt");
+    await updateBatch(batch.id, { mv_file_id: info.file_id, mv_status: info.status });
+    return;
+  }
+
+  const info = await fileInfo(batch.mv_file_id);
+  await updateBatch(batch.id, { mv_status: info.status, mv_counts: info as unknown as Record<string, unknown> });
+  if (info.status !== "finished") return;
+
+  const text = await downloadResult(batch.mv_file_id, "all");
+  const verdicts = parseResultLines(text);
+  await applyVerification(runId, verdicts);
+
+  const funnel = await funnelFor(runId);
+  await updateRun(runId, { stage: "catchall_recheck", verified_count: funnel.verified });
+  await updateBatch(batch.id, { status: "catchall_recheck" });
+
+  const fresh = await getBatch(batch.id);
+  if (fresh) await advanceBatch(fresh);
+}
+
+/**
+ * Stage 5b: a second look at the catch-alls, free.
+ *
+ * ‼️ AN MX LOOKUP CANNOT PROVE AN ADDRESS EXISTS, AND THIS DOES NOT CLAIM IT DOES. A domain with no
+ * mail exchanger cannot receive mail, so `invalid` is sound. A domain WITH one is still catch-all
+ * and stays catch-all: the recheck resolved nothing, which is a finding rather than a failure, and
+ * the tri-state is what lets it be recorded as one. MillionVerifier's paid single-address verify is
+ * the upgrade if catch-all volume ever justifies it.
+ */
+async function sweepCatchall(batch: BatchRow, deadline: number): Promise<boolean> {
+  const runId = batch.list_run_id;
+  if (!runId) return false;
+
+  const rows = await pendingCatchall(runId);
+  for (const row of rows) {
+    if (Date.now() >= deadline) return false;
+    const domain = row.email.split("@")[1] ?? "";
+    if (!domain) {
+      await recordCatchallRecheck(row.id, "invalid");
+      continue;
+    }
+    const verdict = await hasMx(domain);
+    // null is "we could not tell", which is NOT evidence of anything. Stamped anyway so the row
+    // leaves the worklist; it stays catch_all, which is the honest answer.
+    await recordCatchallRecheck(row.id, verdict === false ? "invalid" : "catch_all");
+  }
+
+  await updateRun(runId, { stage: "suppressing" });
+  await updateBatch(batch.id, { status: "suppressing" });
+  return true;
+}
+
+/** Stage 6: has anyone here been contacted before, on any channel. */
+async function sweepSuppression(batch: BatchRow, deadline: number): Promise<boolean> {
+  const runId = batch.list_run_id;
+  if (!runId) return false;
+
+  while (Date.now() < deadline) {
+    const rows = await pendingSuppression(runId, 200);
+    if (!rows.length) break;
+
+    const { hits } = await checkMany(
+      rows.map((r) => ({
+        id: r.id,
+        email: r.email,
+        domain: r.domain,
+        companyName: r.companyName,
+        phone: r.phone,
+      }))
+    );
+    for (const row of rows) {
+      // ‼️ EVERY ROW CHECKED IS STAMPED, INCLUDING THE CLEAN ONES. `suppressed_at` is the worklist
+      // marker; `suppressed_reason` is the verdict. Stamping only the hits would leave the clean
+      // rows indistinguishable from the unchecked ones and the sweep would never finish.
+      await recordSuppression(row.id, hits.get(row.id)?.reason ?? null);
+    }
+  }
+
+  const left = await pendingSuppression(runId, 1);
+  return left.length === 0;
+}
+
+/** The terminal artifact, plus the negative that goes with it. */
+async function publishSendable(batch: BatchRow): Promise<void> {
+  const runId = batch.list_run_id;
+  if (!runId) return;
+
+  const rows = await sendableRows(runId);
+  const held = await heldBackRows(runId);
+  const funnel = await funnelFor(runId);
+
+  if (rows.length) {
+    await uploadCsv(batch, "sendable.csv", toCsv(SENDABLE_HEADERS, rows as unknown as Array<Record<string, string>>));
+  }
+  if (held.length) {
+    await uploadCsv(
+      batch,
+      "held-back.csv",
+      toCsv(
+        ["business_name", "website", "city", "state", "email", "email_status", "suppressed_reason"],
+        held
+      )
+    );
+  }
+
+  await updateRun(runId, {
+    stage: "done",
+    sendable_count: rows.length,
+    finished_at: new Date().toISOString(),
+  });
+  await updateBatch(batch.id, { status: "done" });
+
+  const valid = rows.filter((r) => r.email_status === "valid").length;
+  await say(
+    batch,
+    [
+      rows.length
+        ? ":white_check_mark: *" + rows.length + " sendable leads* in `sendable.csv`. " +
+          valid + " verified valid, " + (rows.length - valid) + " catch-all."
+        : ":warning: *Nothing survived to the send list.* `held-back.csv` and `dropped.csv` above " +
+          "say where they went.",
+      "",
+      ...funnelLines(funnel),
+      "",
+      "_Upload `sendable.csv` to ReachInbox. Split on `email_status` if you want the catch-alls in " +
+        "their own campaign._",
+    ].join("\n")
+  );
+}
+
+const SENDABLE_HEADERS = [
+  "email", "first_name", "last_name", "company", "owner_name", "website", "domain",
+  "city", "state", "phone", "email_status", "provider", "qualify_reason",
+];
+
+/** The address the dropped file already carried, if it had one. */
+function csvEmailOf(raw: Record<string, unknown>, headers: string[]): string | null {
+  const col = resolveEmailColumn(headers);
+  if (!col) return null;
+  const v = raw[col];
+  return typeof v === "string" && v.includes("@") ? v.trim().toLowerCase() : null;
+}
+
+/** The attempt trail for the run, so `summarize` can report per-rung coverage. */
+async function enrichAttemptsFor(runId: string): Promise<EnrichResult[]> {
+  const { data } = await supabaseAdmin
+    .from("raw_leads")
+    .select("id, enrich_attempts")
+    .eq("run_id", runId)
+    .not("enriched_at", "is", null);
+  const { data: hits } = await supabaseAdmin
+    .from("sendable_leads")
+    .select("raw_lead_id, email, first_name, last_name, provider, provider_cost_usd")
+    .eq("run_id", runId);
+  const byRaw = new Map((hits ?? []).map((h) => [String((h as Record<string, unknown>).raw_lead_id), h]));
+
+  return (data ?? []).map((r) => {
+    const row = r as Record<string, unknown>;
+    const hit = byRaw.get(String(row.id)) as Record<string, unknown> | undefined;
+    return {
+      id: String(row.id),
+      hit: hit
+        ? {
+            email: String(hit.email ?? ""),
+            firstName: (hit.first_name as string | null) ?? null,
+            lastName: (hit.last_name as string | null) ?? null,
+            title: null,
+            provider: String(hit.provider ?? ""),
+            costUsd: Number(hit.provider_cost_usd ?? 0),
+          }
+        : null,
+      attempts: (row.enrich_attempts as EnrichAttempt[]) ?? [],
+    };
+  });
 }
 
 /** Returns true when nothing is pending any more and the batch has moved to `filtered`. */
@@ -1647,7 +2291,8 @@ export async function handleScraperReaction(input: {
 
   switch (gate) {
     case "workflow_pick": {
-      if (!keycap || keycap > 2) return false;
+      const picked = PICK[keycap ?? 0];
+      if (!picked) return false;
       // ‼️ STILL GUARDED, BUT IT SAYS SO NOW. A second reaction on the picker must not re-parse
       // and re-insert the whole file. For one release this returned here SILENTLY, and on
       // 2026-09-04 that ate a :two: on a batch workflow 1 had just refused for a missing email
@@ -1655,10 +2300,10 @@ export async function handleScraperReaction(input: {
       // again, and a picker that was dead forever. In this lane the reaction IS the interface, so a
       // swallowed gate reaction is the one failure that cannot be afforded.
       if (batch.workflow) {
-        waitUntil(noteLatePick(batch, keycap === 1 ? "filter" : "score"));
+        waitUntil(noteLatePick(batch, picked));
         return true;
       }
-      waitUntil(runWorkflowPick(batch, keycap === 1 ? "filter" : "score"));
+      waitUntil(runWorkflowPick(batch, picked));
       return true;
     }
 
@@ -1688,7 +2333,24 @@ export async function handleScraperReaction(input: {
       waitUntil(releaseMvUpload(batch));
       return true;
     }
+
+    case "drop_review": {
+      if (!isCheck) return false;
+      // Guarded on the STATUS, not on the reaction: a second ✅ on a review card for a batch
+      // already past `qualified` must not restart the crawl.
+      if (batch.status !== "qualified") return true;
+      waitUntil(releaseEnrichment(batch).catch((e) => fail(batch, (e as Error).message)));
+      return true;
+    }
   }
+}
+
+/** The ✅ on the drop-review card: the kept rows go into the crawl. */
+async function releaseEnrichment(batch: BatchRow): Promise<void> {
+  if (batch.list_run_id) await updateRun(batch.list_run_id, { stage: "enriching" });
+  await updateBatch(batch.id, { status: "enriching" });
+  const fresh = await getBatch(batch.id);
+  if (fresh) await advanceBatch(fresh);
 }
 
 /**
@@ -1729,8 +2391,7 @@ async function runWorkflowPick(batch: BatchRow, workflow: Workflow): Promise<voi
     await updateBatch(batch.id, { workflow, status: "parsing" });
     const parsed = await reloadCsv(batch);
     const fresh = (await getBatch(batch.id)) ?? batch;
-    if (workflow === "filter") await beginFilterWorkflow(fresh, parsed);
-    else await beginScoreWorkflow(fresh, parsed);
+    await beginWorkflow(workflow, fresh, parsed);
   } catch (e) {
     await fail(batch, (e as Error).message);
   }

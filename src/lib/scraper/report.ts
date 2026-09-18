@@ -9,7 +9,7 @@
 
 import { toCsv } from "./csv";
 import type { DedupeMatch, DuplicateRow } from "./dedup";
-import { JUNK_REASON_ORDER, type JunkReason } from "./rules";
+import { JUNK_REASON_ORDER, missingColumns, runnableWorkflows, type JunkReason } from "./rules";
 import type { BatchStatus, StoredRow, Workflow } from "./store";
 import type { CutoffPlan, ScoreResult } from "./score";
 import {
@@ -278,7 +278,13 @@ export function formatWorkflowPicker(input: {
   companyColumn: string | null;
   cityColumn: string | null;
   websiteColumn: string | null;
-  /** From the drop's dedupe. Both workflows run on the new rows only. */
+  /**
+   * The raw headers, so the hint block can call `runnableWorkflows` rather than re-deriving which
+   * arms fit from the four resolved columns above. Optional so an older caller still compiles;
+   * absent simply drops the hint, it never guesses.
+   */
+  headers?: string[];
+  /** From the drop's dedupe. Every workflow runs on the new rows only. */
   duplicateCount: number;
   newCount: number;
 }): string {
@@ -310,28 +316,48 @@ export function formatWorkflowPicker(input: {
     ":two:  *Score first.* Rank every business on how visible it already is, so the dominant ones " +
       "can be dropped before anybody pays to reveal contacts."
   );
+  lines.push(
+    ":three:  *Build a send list.* Qualify every business against the med spa profile, scrape the " +
+      "kept sites for an address at no cost, verify behind a :white_check_mark:, suppress against " +
+      "everyone we have ever mailed, then `sendable.csv`."
+  );
   lines.push("");
   lines.push("Columns I can see:");
   lines.push("```");
-  lines.push("email     " + (input.emailColumn ?? "not found"));
-  lines.push("company   " + (input.companyColumn ?? "not found"));
+  // ‼️ EACH LINE NAMES WHICH ARM NEEDS THE COLUMN. The old gloss called website "optional, absent
+  // means not measured", which was workflow-2 language and became false the moment :three: existed:
+  // for the list-prep arm an absent website is not an unmeasured signal, it is the whole run.
+  lines.push("email     " + (input.emailColumn ?? "not found") + "   required by :one:");
+  lines.push("company   " + (input.companyColumn ?? "not found") + "   required by :two: and :three:");
+  lines.push("website   " + (input.websiteColumn ?? "not found") + "   required by :three:; optional for :two:, absent means not measured");
   lines.push("city      " + (input.cityColumn ?? "not found") + "   optional, absent means not measured");
-  lines.push("website   " + (input.websiteColumn ?? "not found") + "   optional, absent means not measured");
   lines.push("```");
 
   // A read, never a decision. The wording says so out loud so nobody later mistakes it for one.
-  if (!input.emailColumn && input.companyColumn) {
-    lines.push("");
-    lines.push(
-      "_No email column in this file, so :two: is probably it. Your call either way, nothing " +
-        "starts until you react._"
+  //
+  // ‼️ DRIVEN OFF `runnableWorkflows`, THE SAME FUNCTION `columnVerdict` USES. Hand-written
+  // if/else guesses about which arm fits were fine with two arms and two columns; with three arms
+  // they are a second opinion that can disagree with the verdict, and the disagreement shows up as
+  // a card recommending a pick that then bounces.
+  const headers = input.headers ?? [];
+  const runnable = headers.length ? runnableWorkflows(headers) : null;
+  if (runnable) {
+    const blocked = (["filter", "score", "listprep"] as Workflow[]).filter(
+      (w) => !runnable.includes(w)
     );
-  } else if (input.emailColumn && !input.companyColumn) {
-    lines.push("");
-    lines.push(
-      "_There is an email column and no company column, so :one: is probably it. Your call either " +
-        "way, nothing starts until you react._"
-    );
+    if (runnable.length === 1) {
+      lines.push("");
+      lines.push(
+        "_" + KEYCAP[runnable[0]] + " is the only one this file has the columns for. Your call " +
+          "either way, nothing starts until you react._"
+      );
+    } else if (blocked.length > 0) {
+      lines.push("");
+      lines.push(
+        "_" + blocked.map((w) => KEYCAP[w] + " needs " + missingColumns(w, headers).join(" and ")).join(", ") +
+          ". React one of those anyway and it hands the picker straight back, having spent nothing._"
+      );
+    }
   }
 
   if (input.newCount === 0) {
@@ -343,14 +369,19 @@ export function formatWorkflowPicker(input: {
   }
 
   lines.push("");
-  lines.push("React :one: or :two: on THIS message.");
+  lines.push("React :one:, :two: or :three: on THIS message.");
   return lines.join("\n");
 }
 
-const KEYCAP: Record<Workflow, string> = { filter: ":one:", score: ":two:" };
+const KEYCAP: Record<Workflow, string> = {
+  filter: ":one:",
+  score: ":two:",
+  listprep: ":three:",
+};
 const WORKFLOW_NAME: Record<Workflow, string> = {
   filter: "filter and verify",
   score: "score first",
+  listprep: "build a send list",
 };
 
 /**
@@ -387,26 +418,46 @@ function purgeAndRedrop(batchId: string, picked: Workflow): string[] {
  */
 export function formatPickRewind(input: {
   reason: string;
-  other: Workflow;
-  otherColumn: string;
+  runnable: Array<{ workflow: Workflow; columns: Record<string, string> }>;
 }): string {
-  const key = KEYCAP[input.other];
+  // ‼️ EVERY RUNNABLE ARM IS NAMED, NOT JUST ONE. With three arms the runnable set can hold two,
+  // and naming a single representative is what would let somebody bounce a second time without
+  // having been told it was coming. See columnVerdict: the completeness of this list is what
+  // replaced the old one-hop bound.
+  const keys = input.runnable.map((r) => KEYCAP[r.workflow]);
+  const offers = input.runnable.map(
+    (r) =>
+      KEYCAP[r.workflow] + " *" + WORKFLOW_NAME[r.workflow] + "* can run: " +
+      Object.values(r.columns).map((c) => "`" + c + "`").join(" and ") + " " +
+      (Object.keys(r.columns).length > 1 ? "are" : "is") + " there."
+  );
+  const react =
+    keys.length === 1 ? keys[0] : keys.slice(0, -1).join(", ") + " or " + keys[keys.length - 1];
   return [
     ":x: " + input.reason,
     "",
     // Stated out loud because it is the claim he is being asked to trust before reacting again.
-    "Nothing was inserted and nothing was spent, so the picker above is live again. `" +
-      input.otherColumn + "` is there, so " + key + " *" + WORKFLOW_NAME[input.other] +
-      "* can run on this file.",
+    "Nothing was inserted and nothing was spent, so the picker above is live again.",
+    ...offers,
     "",
-    "React " + key + " on the picker above. *If " + key + " is already on it, take it off and " +
-      "put it back.* Slack only tells me about a reaction the moment it is added, so one that is " +
-      "already sitting there never reaches me.",
+    "React " + react + " on the picker above. *If the one you want is already on it, take it off " +
+      "and put it back.* Slack only tells me about a reaction the moment it is added, so one that " +
+      "is already sitting there never reaches me.",
   ].join("\n");
 }
 
-/** Stages where rows are already inserted and a workflow is genuinely in flight. */
-const IN_FLIGHT: BatchStatus[] = ["parsing", "mx", "filtered", "verifying", "scoring", "auditing"];
+/**
+ * Stages where rows are already inserted and a workflow is genuinely in flight.
+ *
+ * ‼️ THE WORKFLOW C STAGES BELONG HERE AND THE COMPILER WILL NOT TELL YOU. This is a
+ * `BatchStatus[]`, so adding statuses to the union does not break it; a late 3️⃣ on a running
+ * list-prep batch would fall through to the "finished or dead" wording and offer the wrong
+ * recovery.
+ */
+const IN_FLIGHT: BatchStatus[] = [
+  "parsing", "mx", "filtered", "verifying", "scoring", "auditing",
+  "pulling", "qualifying", "qualified", "enriching", "catchall_recheck", "suppressing",
+];
 
 /**
  * A reaction on a picker that has already been picked.

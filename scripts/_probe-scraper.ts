@@ -10,8 +10,10 @@
 // ‼️ THE SUMMARY AND THE process.exit MUST STAY THE LAST TWO STATEMENTS IN THIS FILE. The DM probe
 // records what happens otherwise: five checks once sat below them and never ran.
 
+import { readFileSync } from "node:fs";
 import { parseCsv, parseCsvRows, toCsv } from "../src/lib/scraper/csv";
-import { columnVerdict, emailDomain, isDisposableDomain, isRoleAccount, resolveEmailColumn } from "../src/lib/scraper/rules";
+import { columnVerdict, emailDomain, isDisposableDomain, isRoleAccount, resolveEmailColumn, runnableWorkflows } from "../src/lib/scraper/rules";
+import type { Workflow } from "../src/lib/scraper/store";
 import { applyMxVerdicts, filterRows } from "../src/lib/scraper/filter";
 import { formatBreakdown, formatLatePick, formatPickRewind } from "../src/lib/scraper/report";
 import { parseResultLines } from "../src/lib/scraper/millionverifier";
@@ -244,9 +246,9 @@ eq(
 // A missing required column is a WRONG PICK, not a broken file.
 
 eq(
-  "a company list picked for filtering rewinds to score",
-  columnVerdict("filter", ["company", "city", "state", "website"]),
-  { kind: "rewind", missing: "email", other: "score", otherColumn: "company" }
+  "a company list picked for filtering rewinds",
+  columnVerdict("filter", ["company", "city", "state", "website"]).kind,
+  "rewind"
 );
 eq(
   "leads (5).csv's real headers rewind rather than die",
@@ -257,46 +259,126 @@ eq(
 );
 eq(
   "a contact list picked for scoring rewinds to filter",
-  columnVerdict("score", ["Email", "First Name"]),
-  { kind: "rewind", missing: "company", other: "filter", otherColumn: "Email" }
+  columnVerdict("score", ["Email", "First Name"]).kind,
+  "rewind"
 );
 
-// The bound. A rewind is only ever offered once the OTHER workflow's column is confirmed present,
-// so pick -> rewind -> pick cannot bounce twice. A file carrying NEITHER column has to stay
-// terminal, or the picker hands back a choice between two refusals and the lane loops.
+// ================================================================================================
+// THE TERMINATION BOUND, ENUMERATED RATHER THAN SAMPLED.
+//
+// ‼️ THE OLD PROOF DIED WHEN THE THIRD ARM LANDED, AND PRETENDING OTHERWISE WOULD BE THE WORST
+// OUTCOME. With two arms, "this arm cannot run and some arm can" forced the runnable set to be a
+// singleton, so a rewind card always named the one arm that works and the bound was one hop. With
+// three arms a file carrying only `company` leaves 2️⃣ runnable while BOTH 1️⃣ and 3️⃣ bounce, so
+// somebody can bounce twice. The bound is now |workflows| - |runnable|, which is two.
+//
+// What pays for the weaker bound is that the proof is now COMPLETE instead of exemplary: three
+// arms distinguished by three columns is 2^3 header subsets x 3 arms = 24 cells, and every one is
+// checked below. The four properties are what the lane actually relies on.
+// ================================================================================================
+{
+  const COLS = { email: "Email", company: "Company", website: "Website" } as const;
+  const ARMS: Workflow[] = ["filter", "score", "listprep"];
+  let cells = 0;
+  let ok = true;
+  const fails: string[] = [];
+
+  for (let mask = 0; mask < 8; mask++) {
+    const headers = [
+      mask & 1 ? COLS.email : null,
+      mask & 2 ? COLS.company : null,
+      mask & 4 ? COLS.website : null,
+    ].filter(Boolean) as string[];
+    const runnable = runnableWorkflows(headers);
+
+    for (const arm of ARMS) {
+      cells++;
+      const v = columnVerdict(arm, headers);
+      const armRuns = runnable.includes(arm);
+
+      // The verdict and the runnable set are the same computation, or the card lies to the person.
+      if (armRuns !== (v.kind === "ok")) {
+        ok = false;
+        fails.push(`${arm} [${headers}] verdict ${v.kind} but runnable=${armRuns}`);
+      }
+      // P4: terminal exactly when nothing can run, and therefore arm-independent.
+      if ((v.kind === "terminal") !== (runnable.length === 0)) {
+        ok = false;
+        fails.push(`${arm} [${headers}] terminal/runnable disagree`);
+      }
+      if (v.kind === "rewind") {
+        // P1: every arm offered is genuinely runnable on these exact headers.
+        if (!v.runnable.every((r) => columnVerdict(r.workflow, headers).kind === "ok")) {
+          ok = false;
+          fails.push(`${arm} [${headers}] offered an arm that would bounce`);
+        }
+        // P2: never offer back the arm that just refused.
+        if (v.runnable.some((r) => r.workflow === arm)) {
+          ok = false;
+          fails.push(`${arm} [${headers}] offered itself`);
+        }
+        // P3: the COMPLETE set, not a representative. This is what replaced the one-hop bound:
+        // a second bounce is only possible on an arm the card already said would bounce.
+        if (v.runnable.length !== runnable.length) {
+          ok = false;
+          fails.push(`${arm} [${headers}] offered ${v.runnable.length} of ${runnable.length}`);
+        }
+      }
+    }
+  }
+  eq("all 8 header subsets x 3 arms enumerated", cells, 24);
+  check("the rewind bound holds on every cell" + (fails.length ? ": " + fails.join("; ") : ""), ok);
+}
+
 eq(
   "neither column is terminal, never a rewind (filter)",
-  columnVerdict("filter", ["first_name", "phone"]),
-  { kind: "terminal", missing: "email" }
+  columnVerdict("filter", ["first_name", "phone"]).kind,
+  "terminal"
 );
 eq(
   "neither column is terminal, never a rewind (score)",
-  columnVerdict("score", ["first_name", "phone"]),
-  { kind: "terminal", missing: "company" }
+  columnVerdict("score", ["first_name", "phone"]).kind,
+  "terminal"
 );
 check(
-  "no headers can produce a rewind in either direction",
-  (["filter", "score"] as const).every((w) =>
+  "no headers can produce a rewind in any direction",
+  (["filter", "score", "listprep"] as const).every((w) =>
     [[], ["first_name"], ["phone", "zip"]].every((h) => columnVerdict(w, h).kind !== "rewind")
   )
 );
 
 eq("both columns present, filter runs", columnVerdict("filter", ["Email", "Company"]), {
   kind: "ok",
-  column: "Email",
+  columns: { email: "Email" },
 });
 eq("both columns present, score runs", columnVerdict("score", ["Email", "Company"]), {
   kind: "ok",
-  column: "Company",
+  columns: { company: "Company" },
 });
+
+// ‼️ 3️⃣ NEEDS TWO COLUMNS, AND A COMPANY-ONLY FILE MUST NOT REACH IT. `enrichOne` degrades to
+// "not enriched" rather than throwing, so a website-less file would run a full paid qualification
+// sweep and then produce zero sendable rows.
+eq(
+  "listprep needs a website, not just a company",
+  columnVerdict("listprep", ["Company", "City"]).kind,
+  "rewind"
+);
+eq("listprep runs with company and website", columnVerdict("listprep", ["Company", "Website"]), {
+  kind: "ok",
+  columns: { company: "Company", website: "Website" },
+});
+check(
+  "a company-only file leaves exactly :two: runnable",
+  runnableWorkflows(["Company", "City"]).join() === "score"
+);
 
 // ‼️ Slack never re-fires reaction_added for an emoji already on the message, and after a wrong
 // pick the other keycap is usually already sitting there. Without this line the rewind looks
 // exactly as broken as the silence it replaces.
 const rewindCard = formatPickRewind({
   reason: "No email column in that file, so there is nothing to filter. Headers found: `company`",
-  other: "score",
-  otherColumn: "company",
+  runnable: [{ workflow: "score", columns: { company: "company" } }],
 });
 check("the rewind says to take the reaction off and put it back", rewindCard.includes("take it off and put it back"));
 check("the rewind names the keycap to react", rewindCard.includes(":two:"));
@@ -305,6 +387,19 @@ check(
   "the rewind promises nothing was inserted and nothing was spent",
   rewindCard.includes("Nothing was inserted and nothing was spent")
 );
+
+// ‼️ WITH TWO ARMS OFFERED, BOTH ARE NAMED. Naming one would reinstate the old singleton
+// assumption inside a card that can now carry two, and the un-named arm is exactly where a second
+// bounce comes from.
+const twoArmRewind = formatPickRewind({
+  reason: "That file is missing website.",
+  runnable: [
+    { workflow: "filter", columns: { email: "Email" } },
+    { workflow: "score", columns: { company: "Company" } },
+  ],
+});
+check("a two-arm rewind names :one:", twoArmRewind.includes(":one:"));
+check("a two-arm rewind names :two:", twoArmRewind.includes(":two:"));
 
 // ‼️ "Just drop the file again" is the obvious advice and it is WRONG: recordSeen runs at the
 // drop, before the pick, so a re-drop of a batch that later died comes back as duplicates. Any arm
@@ -356,6 +451,60 @@ async function liveMx(): Promise<void> {
   }
   console.log(
     "  (true = has MX, false = definitively none, null = nobody could ask, so the row stays pending)"
+  );
+}
+
+// ================================================================================================
+// THE DISPATCH. Source-read rather than imported, because lane.ts pulls in the Slack client and
+// this probe is offline.
+//
+// ‼️ THIS IS THE CHECK THAT GUARDS THE ONLY STEP HERE THAT CAN SPEND MONEY. The pick used to be
+// `keycap === 1 ? "filter" : "score"` in four separate places, every one falling through to score.
+// A 3️⃣ that fell through would insert company rows and buy a DataForSEO SERP for each of them,
+// with no error and a thread that reads as though the right thing happened.
+{
+  const lane = readFileSync("src/lib/scraper/lane.ts", "utf8");
+  // ‼️ COMMENTS STRIPPED BEFORE ANY "THIS PATTERN IS GONE" CHECK. The comment explaining WHY the
+  // ternary was removed contains the ternary, so a raw source test fails on its own documentation
+  // and the obvious fix is to delete the explanation. Strip first, assert second.
+  const laneCode = lane
+    .split("\n")
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join("\n");
+  check(
+    "the pick is a table, not a ternary",
+    /const PICK: Record<number, Workflow> = \{ 1: "filter", 2: "score", 3: "listprep" \}/.test(laneCode)
+  );
+  check(
+    "3 maps to listprep and nothing falls through to score",
+    !/keycap === 1 \? "filter" : "score"/.test(laneCode),
+    "a ternary dispatch survives in lane.ts"
+  );
+  check(
+    "the keycap cap is gone, so an unknown keycap is absent rather than defaulted",
+    !/keycap > 2/.test(laneCode)
+  );
+  check(
+    "workflow dispatch is one exhaustive switch with a never default",
+    /const _never: never = workflow/.test(lane)
+  );
+  // The shared statuses are the ones a two-workflow assumption survives into.
+  check(
+    "the shared verifying arm branches on workflow before it reads a row",
+    /batch\.workflow === "listprep"[\s\S]{0,200}pollListPrepVerification/.test(lane)
+  );
+  check(
+    "list_run_id is in BATCH_COLUMNS, or the pull opens a run every tick",
+    /list_run_id/.test(readFileSync("src/lib/scraper/store.ts", "utf8").match(/const BATCH_COLUMNS =[\s\S]*?;/)?.[0] ?? "")
+  );
+  const rep = readFileSync("src/lib/scraper/report.ts", "utf8");
+  const inFlight = rep.match(/const IN_FLIGHT: BatchStatus\[\] = \[[\s\S]*?\];/)?.[0] ?? "";
+  check(
+    "IN_FLIGHT carries the workflow C stages, which the compiler cannot check",
+    ["pulling", "qualifying", "enriching", "catchall_recheck", "suppressing"].every((s) =>
+      inFlight.includes(s)
+    ),
+    inFlight
   );
 }
 

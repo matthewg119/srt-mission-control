@@ -24,10 +24,26 @@ export type BatchStatus =
   | "filtered"
   | "verifying"
   | "done"
-  | "error";
+  | "error"
+  // Workflow 3️⃣, in order. `verifying`, `done` and `error` are SHARED with workflow 1️⃣, which is
+  // why every arm that handles them has to branch on `batch.workflow` first. See the `verifying`
+  // arm in lane.ts: a listprep batch owns no `scraper_rows`, so falling into `pollVerification`
+  // would match nothing and report `done` over an empty file.
+  | "pulling"
+  | "qualifying"
+  | "qualified"
+  | "enriching"
+  | "catchall_recheck"
+  | "suppressing";
 
-/** 1️⃣ filter and verify, 2️⃣ score first. Null until somebody reacts on the picker. */
-export type Workflow = "filter" | "score";
+/**
+ * 1️⃣ filter and verify, 2️⃣ score first, 3️⃣ build a send list. Null until somebody reacts.
+ *
+ * ‼️ WIDENING THIS IS THE POINT: every `Record<Workflow, …>` in the lane fails to compile until it
+ * accounts for the new arm, which is how the four `else → score` fall-throughs were found. Never
+ * dispatch on it with an if/else; use an exhaustive `switch` with a `never` default.
+ */
+export type Workflow = "filter" | "score" | "listprep";
 
 /**
  * The gate cards, one per `*_ts` column.
@@ -36,7 +52,12 @@ export type Workflow = "filter" | "score";
  * `mv_approval_ts` alone, and with four gate cards in one thread it has to know WHICH card was
  * reacted to. A shared column would make a ✅ on the picker release a MillionVerifier upload.
  */
-export type GateKind = "workflow_pick" | "scoring_approval" | "cutoff_confirm" | "mv_approval";
+export type GateKind =
+  | "workflow_pick"
+  | "scoring_approval"
+  | "cutoff_confirm"
+  | "mv_approval"
+  | "drop_review";
 
 export interface BatchRow {
   id: string;
@@ -82,6 +103,16 @@ export interface BatchRow {
   dedupe_ran_at: string | null;
   /** Stamped once clean.csv and junk.csv are in the thread, so a re-entry cannot post them twice. */
   csv_posted_at: string | null;
+  /**
+   * Workflow 3️⃣'s `list_pipeline_runs` row. Null for every other workflow.
+   *
+   * ‼️ THIS IS THE GUARD THAT STOPS THE `pulling` ARM OPENING A RUN PER TICK. It is also the exact
+   * column the migration added and `BATCH_COLUMNS` forgot for a day: left out of that string it
+   * reads back `undefined`, `!batch.list_run_id` is true forever, and every five minutes the cron
+   * starts a fresh run and orphans the previous one along with its raw leads. Silent, and it looks
+   * like the pull is simply slow.
+   */
+  list_run_id: string | null;
   error: string | null;
   created_at: string;
   updated_at: string;
@@ -131,7 +162,7 @@ const BATCH_COLUMNS =
   "score_cost_usd, email_column, headers, total_rows, clean_count, junk_count, mv_file_id, " +
   "mv_status, mv_counts, mv_awaiting_approval, mv_approval_ts, workflow_pick_ts, " +
   "scoring_approval_ts, cutoff_confirm_ts, csv_posted_at, dedupe_dupe_indexes, " +
-  "dedupe_dupe_count, dedupe_new_count, dedupe_ran_at, error, created_at, updated_at";
+  "dedupe_dupe_count, dedupe_new_count, dedupe_ran_at, list_run_id, error, created_at, updated_at";
 
 // ‼️ A COLUMN MISSING FROM THIS STRING IS SILENTLY `undefined`, NOT AN ERROR, and on this table that
 // costs money rather than correctness. `!row.gbp_task_id` would be true on every row forever, so
@@ -142,12 +173,22 @@ const ROW_COLUMNS =
   "website, dominance_score, score_components, dataforseo_task_id, queued_for_apollo, " +
   "optimization_score, optimization_components, gbp_task_id, gbp_cid, gbp_place_id, gbp_serp";
 
-/** Which gate a `*_ts` column belongs to. One list, so the router and the lookup cannot drift. */
-const GATE_COLUMNS: Array<{ gate: GateKind; column: string }> = [
-  { gate: "workflow_pick", column: "workflow_pick_ts" },
-  { gate: "scoring_approval", column: "scoring_approval_ts" },
-  { gate: "cutoff_confirm", column: "cutoff_confirm_ts" },
-  { gate: "mv_approval", column: "mv_approval_ts" },
+/**
+ * Which gate a `*_ts` column belongs to. One list, so the router and the lookup cannot drift.
+ *
+ * ‼️ `drop_review` LIVES ON A DIFFERENT TABLE, which is why rows carry `table`. The 2026-09-17
+ * migration put that column on `list_pipeline_runs`, where it belongs: it is a property of the
+ * pipeline run, not of the dropped file. Adding a fifth `*_ts` to `scraper_batches` to keep this
+ * list uniform would duplicate a column that already exists, and duplicated state drifting apart
+ * is the exact failure this single list was created to prevent. Generalising the list to name its
+ * table is the cheaper half of that trade.
+ */
+const GATE_COLUMNS: Array<{ gate: GateKind; column: string; table: "batches" | "runs" }> = [
+  { gate: "workflow_pick", column: "workflow_pick_ts", table: "batches" },
+  { gate: "scoring_approval", column: "scoring_approval_ts", table: "batches" },
+  { gate: "cutoff_confirm", column: "cutoff_confirm_ts", table: "batches" },
+  { gate: "mv_approval", column: "mv_approval_ts", table: "batches" },
+  { gate: "drop_review", column: "drop_review_ts", table: "runs" },
 ];
 
 // Supabase-js issues selects and filtered updates as GET/PATCH with the filter in the QUERY STRING,
@@ -262,6 +303,16 @@ const ACTIVE_STATUSES: BatchStatus[] = [
   "mx",
   "filtered",
   "verifying",
+  // Workflow 3️⃣. `qualified` is listed for the same reason `awaiting_workflow` and `scored` are:
+  // it is a gate, but its card is guarded by `list_pipeline_runs.drop_review_ts`, so a re-entry
+  // re-reads one row and does nothing, and a card whose Slack post failed gets retried instead of
+  // the batch sitting silent forever. Its arm must contain ONLY the guarded card post.
+  "pulling",
+  "qualifying",
+  "qualified",
+  "enriching",
+  "catchall_recheck",
+  "suppressing",
 ];
 
 export async function activeBatches(): Promise<BatchRow[]> {
@@ -300,7 +351,29 @@ export async function batchByGateTs(
   channel: string,
   ts: string
 ): Promise<{ batch: BatchRow; gate: GateKind } | null> {
-  for (const { gate, column } of GATE_COLUMNS) {
+  for (const { gate, column, table } of GATE_COLUMNS) {
+    if (table === "runs") {
+      // The ts lives on the run, so resolve the run first and come back through `list_run_id`.
+      // Scoped by channel on the BATCH, exactly like every other arm: two runs in two channels
+      // can hold the same Slack ts only if Slack reuses one, but the scope is what makes that
+      // impossible to rely on by accident.
+      const { data: run, error: runErr } = await supabaseAdmin
+        .from("list_pipeline_runs")
+        .select("id")
+        .eq(column, ts)
+        .maybeSingle();
+      if (runErr) throw new Error("batchByGateTs(" + column + "): " + runErr.message);
+      if (!run) continue;
+      const { data, error } = await supabaseAdmin
+        .from("scraper_batches")
+        .select(BATCH_COLUMNS)
+        .eq("slack_channel_id", channel)
+        .eq("list_run_id", (run as { id: string }).id)
+        .maybeSingle();
+      if (error) throw new Error("batchByGateTs(" + column + " -> batch): " + error.message);
+      if (data) return { batch: data as unknown as BatchRow, gate };
+      continue;
+    }
     const { data, error } = await supabaseAdmin
       .from("scraper_batches")
       .select(BATCH_COLUMNS)
