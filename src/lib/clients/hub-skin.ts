@@ -63,7 +63,7 @@ import type { ReferenceProvenance } from "@/lib/hub/theme";
 /**
  * The steps where a design conversation belongs.
  *
- * 15 builds the hub and asks for the confirmation; 16 is the review tool, which shares the same
+ * 15 builds the hub and asks for the confirmation; 16 is the AI Referral Engine, which shares the same
  * theme and skin objects, so "make it look like this" typed in either thread means the same
  * thing. Anywhere else the words fall through to the ordinary assistant, which is correct: a
  * sentence containing "template" in the intake thread is a sentence, not a command.
@@ -74,7 +74,7 @@ import type { ReferenceProvenance } from "@/lib/hub/theme";
  * this, a screenshot dropped there fell through to the ordinary upload capture and was filed as
  * a document nobody would look at again.
  */
-const SKIN_STEPS = new Set(["hub_preview", "review_tool_preview", "site_replica"]);
+const SKIN_STEPS = new Set(["hub_preview", "referral_engine_preview", "site_replica"]);
 
 /**
  * The shape the Slack events route already hands every other file handler.
@@ -101,7 +101,7 @@ function appUrl(): string {
 /**
  * The INTERNAL preview, which is the only one that renders an unconfirmed look.
  *
- * `?kind=reviews` shows the review tool through the same skin, so both surfaces can be checked
+ * `?kind=reviews` shows the AI Referral Engine through the same skin, so both surfaces can be checked
  * without leaving the thread.
  */
 export function designPreviewUrl(clientId: string, kind: "hub" | "reviews" = "hub"): string {
@@ -323,7 +323,7 @@ function previewLines(clientId: string): string[] {
   return [
     "",
     `*Look at it:* ${designPreviewUrl(clientId)}`,
-    `*The review tool, same skin:* ${designPreviewUrl(clientId, "reviews")}`,
+    `*The AI Referral Engine, same skin:* ${designPreviewUrl(clientId, "reviews")}`,
     "",
     "This preview needs a login and shows the design before it is confirmed, which the " +
       "shareable client link deliberately does not. Change it as many times as you like. " +

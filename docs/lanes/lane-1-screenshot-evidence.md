@@ -271,7 +271,7 @@ page and learn page hub to show to the client in the call."*
 
 **Shared, your arms only:**
 - `step-engine.ts`: cases `presence_sweep_manual`, `review_audit`, `citation_cleanup`,
-  `hub_preview`, `review_tool_preview`, plus `presenceRefusal` and `presenceCoverageFor`.
+  `hub_preview`, `referral_engine_preview`, plus `presenceRefusal` and `presenceCoverageFor`.
 - `step-verify.ts`: verifiers `presence_sweep_manual`, `review_audit`,
   `citation_cleanup_list`, `citation_cleanup`.
 - `slack/events/route.ts`: the existing onboarding-channel **files** branch only

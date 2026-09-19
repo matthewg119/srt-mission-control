@@ -57,7 +57,7 @@ Same shape every time, so months stack.
 
 **Questions that changed** — moved to named, and moved to not-named. **Show both.** A month where something slipped and you showed it is worth more than three months of only-good news.
 
-**Review tool** — cards handed, scans, completions, posted, % containing an objection phrase.
+**AI Referral Engine** — cards handed, scans, completions, posted, % containing an objection phrase.
 
 **Hub** — traffic, top pages, AI referral sessions broken out by engine, crawler activity labeled *leading indicator*.
 
@@ -97,7 +97,7 @@ To the tenant's `slack_channel_id`. Never hardcode a channel.
 
 Six things, this order, one email plus an optional short call.
 
-1. **Results package** — Day 0 vs 30 / 60 / 90, named / not named, who was named instead, review tool numbers, hub traffic and attribution, outreach log. Fidelity footer. Sample size on every number.
+1. **Results package** — Day 0 vs 30 / 60 / 90, named / not named, who was named instead, AI Referral Engine numbers, hub traffic and attribution, outreach log. Fidelity footer. Sample size on every number.
 2. **Timing report** — hours their pilot took, by category, in plain language. Subscription hours and implementation hours separately. Month one and month two separately (month one carries the learning curve; say so).
 3. **Permission confirmed** — anonymized use stands unless revoked; named use asked plainly, once, with what named would mean.
 4. **Testimonial** — asked once, optional, their words, told upfront it carries the no-cost-pilot disclosure wherever used.

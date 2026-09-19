@@ -405,7 +405,7 @@ export function card(state: PageState, height: number, opts?: { border?: RGB }):
  * Runner v3 section 13 is emphatic that the call sheet has "no placeholders, no blanks I fill
  * in live" for values we already hold — these boxes are for the values only the client can
  * give, which is a different thing: a NAP correction, a substituted term that is wrong, the
- * named person for the review tool.
+ * named person for the AI Referral Engine.
  */
 export function correctionBox(
   state: PageState,

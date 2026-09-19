@@ -45,14 +45,21 @@ import { confirmationText, verdictDetail, verifyStep, type Verdict } from "@/lib
 // The step definitions moved to @/config/delivery-steps so a client component can import
 // them without pulling this module (and node:dns, via the step engine) into the browser
 // bundle. Re-exported here because every existing import points at this file.
-import { DELIVERY_STEPS, type DeliveryStep } from "@/config/delivery-steps";
+import { currentStepKey, DELIVERY_STEPS, type DeliveryStep } from "@/config/delivery-steps";
 export { DELIVERY_STEPS };
 // `export type { X } from "..."` re-exports WITHOUT creating a local binding, so the
 // signatures below could not see the name. Imported as well as re-exported.
 export type { DeliveryStep } from "@/config/delivery-steps";
 
+/**
+ * ‼️ RESOLVES A RETIRED KEY BEFORE LOOKING IT UP, and that is the whole reason a Slack card
+ * posted before the 2026-09-19 rename still works when somebody scrolls back and taps it. See
+ * LEGACY_STEP_KEYS in config/delivery-steps.ts. Everything that turns an untrusted key into a
+ * step comes through here, so this is the one place the mapping has to happen.
+ */
 export function stepByKey(key: string): DeliveryStep | undefined {
-  return DELIVERY_STEPS.find((s) => s.key === key);
+  const current = currentStepKey(key);
+  return DELIVERY_STEPS.find((s) => s.key === current);
 }
 
 interface StepRow {

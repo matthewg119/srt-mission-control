@@ -4,7 +4,7 @@
 --
 -- WHY THIS EXISTS. Seven delivery steps carried `auto: true` with nothing behind them:
 -- review_audit, custom_question_set, page_candidates, citation_cleanup_list,
--- review_tool_preview, time_log_entries and weekly_report. registry.ts's unreachableAutoSteps()
+-- referral_engine_preview, time_log_entries and weekly_report. registry.ts's unreachableAutoSteps()
 -- existed to WAIVE them as blockers, because otherwise findings_doc and call_sheet were in a
 -- permanent deadlock and could never have generated for any client.
 --
@@ -14,7 +14,7 @@
 --   citation_cleanup_list  reads nap_discrepancies. A citation_cleanup_items table would be a
 --                          SECOND copy of state the sweep already owns, and the first re-run
 --                          would make the list and the sweep disagree about what is wrong.
---   review_tool_preview    reads clients.theme and client_hosts. It produces a URL, which goes
+--   referral_engine_preview    reads clients.theme and client_hosts. It produces a URL, which goes
 --                          in client_delivery_steps.output_ref like every other step's output.
 
 -- ─────────────────────────────────────────────────────────────────────────────

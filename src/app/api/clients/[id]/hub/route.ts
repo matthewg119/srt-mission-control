@@ -3,7 +3,7 @@
 // AUTHENTICATED. Middleware guards /dashboard/*, not /api/*, so this route checks the
 // session itself — the same pattern as the dns, draft, delivery-step and time-log routes
 // beside it. It is also unreachable on a client-controlled hostname: middleware refuses
-// every /api path there except the review tool's submit endpoint.
+// every /api path there except the AI Referral Engine's submit endpoint.
 
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";

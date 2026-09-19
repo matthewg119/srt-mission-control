@@ -5,7 +5,7 @@
 // ‼️ THIS PANEL IS THE MISSING WRITER FOR THREE THINGS THAT ONLY EVER HAD READERS.
 // Step 29's refusal said "Set it on the client board" and there was no control anywhere that
 // wrote `review_request_mode`, so that step could never be confirmed for any client. The two
-// URL fields are why the review tool's "Post on Google" button has never once appeared: it
+// URL fields are why the AI Referral Engine's "Post on Google" button has never once appeared: it
 // reads `review_workflow.google_url` and nothing has ever written it. See the route header.
 //
 // The intake destinations are printed above the URL boxes, not as decoration: step 4 asks WHERE
@@ -18,7 +18,7 @@
 // The funnel offers six destinations. This panel offered Google and RealSelf. So a client who
 // answered Trustpilot, Yelp, BBB or Facebook had their choice recorded on
 // review_destination_primary and there was nowhere on any screen to put the matching link.
-// SRT Agency's own row says 'trustpilot'. The review tool then rendered no button, correctly
+// SRT Agency's own row says 'trustpilot'. The AI Referral Engine then rendered no button, correctly
 // and silently, because absent beats wrong, and every customer got the fallback hint.
 //
 // All six are drawn from REVIEW_PLATFORMS now, and the panel SAYS WHICH ONE THE CLIENT PICKED,
@@ -154,7 +154,7 @@ export function ReviewWorkflowForm({
 
         <div>
           <label className={LABEL} htmlFor="rw-owner">
-            Who owns the tool (step {stepNumber("review_tool_handed")})
+            Who owns the tool (step {stepNumber("referral_engine_handed")})
           </label>
           <input
             id="rw-owner"
@@ -165,8 +165,8 @@ export function ReviewWorkflowForm({
           />
           <p className="mt-1 text-[11px] text-[rgba(255,255,255,0.45)]">
             {roleNotName
-              ? `That is a role, not a person. Step ${stepNumber("review_tool_handed")} says handed to the NAMED person, and a link sent to a desk is a link nobody owns.`
-              : `Step ${stepNumber("review_tool_handed")}'s card reads this back so you can check the handover went to the right person.`}
+              ? `That is a role, not a person. Step ${stepNumber("referral_engine_handed")} says handed to the NAMED person, and a link sent to a desk is a link nobody owns.`
+              : `Step ${stepNumber("referral_engine_handed")}'s card reads this back so you can check the handover went to the right person.`}
           </p>
         </div>
       </div>
@@ -239,7 +239,7 @@ export function ReviewWorkflowForm({
         </div>
 
         <p className="mt-2 text-[11px] text-[rgba(255,255,255,0.45)]">
-          These are the buttons on the review tool. With nothing set, every customer gets a hint
+          These are the buttons on the AI Referral Engine. With nothing set, every customer gets a hint
           telling her to go and find the page herself, which is where most of them stop.{" "}
           <span className="text-[#F5A623]">
             Leave a box empty rather than guessing: a wrong link sends her to somebody else&apos;s
@@ -265,7 +265,7 @@ export function ReviewWorkflowForm({
           {view.previewUrl ? (
             <li>
               <a className="text-[#F5A623] underline" href={view.previewUrl}>
-                Open the review tool
+                Open the AI Referral Engine
               </a>{" "}
               and check the buttons are the ones you expect. Nothing typed there is stored.
             </li>
@@ -288,7 +288,7 @@ export function ReviewWorkflowForm({
           )}
           <li>
             Step {stepNumber("review_request_configured")} confirms on the mode above. Step{" "}
-            {stepNumber("review_tool_handed")} confirms on a handover to the named person, with
+            {stepNumber("referral_engine_handed")} confirms on a handover to the named person, with
             the evidence in its own Slack thread.
           </li>
         </ul>

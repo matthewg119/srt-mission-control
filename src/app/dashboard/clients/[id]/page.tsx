@@ -76,7 +76,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   baseline_retest: "Baseline retest",
   pages_new: "Pages, new",
   pages_refresh: "Pages, refresh",
-  review_tool_setup: "Review tool setup",
+  referral_engine_setup: "AI Referral Engine setup",
   review_responses: "Review responses",
   outreach: "Outreach",
   reporting_video: "Reporting video",
@@ -222,7 +222,7 @@ export default async function ClientDetailPage({
   if (!client) notFound();
 
   // Steps 29 and 30. `review_workflow` is intake step 4's bag; the two URL keys are added to it
-  // by the Review handover panel and are read by destinationsFor() in the hub's review tool.
+  // by the Review handover panel and are read by destinationsFor() in the hub's AI Referral Engine.
   const reviewWorkflowBag = (client.review_workflow ?? {}) as Record<string, unknown>;
   // ‼️ THE WHOLE BAG, NOT TWO PICKED KEYS. It used to lift google_url and realself_url by name,
   // which is how the panel came to have two boxes for six platforms and how a client whose
@@ -672,7 +672,7 @@ export default async function ClientDetailPage({
       {/*
         Steps 29 and 30. ‼️ Nothing wrote clients.review_request_mode, clients.review_owner_name
         or review_workflow.google_url / .realself_url before this panel existed, so step 29 could
-        never be confirmed by anybody and the review tool's "Post on Google" button has never
+        never be confirmed by anybody and the AI Referral Engine's "Post on Google" button has never
         appeared for a single client. Read the route header before changing what it writes.
       */}
       <div
@@ -683,7 +683,7 @@ export default async function ClientDetailPage({
           <h2 className="text-sm font-medium text-white">Review handover</h2>
           <span className="text-xs text-[rgba(255,255,255,0.4)]">
             steps {stepNumber("review_request_configured")} and{" "}
-            {stepNumber("review_tool_handed")}
+            {stepNumber("referral_engine_handed")}
           </span>
         </div>
         <ReviewWorkflowForm clientId={id} view={reviewWorkflowView} />
@@ -914,7 +914,7 @@ export default async function ClientDetailPage({
             if (step.step === 6) {
               answers.push(
                 { label: "Results permission", value: (client.consent_results as string) ?? "anonymized" },
-                { label: "Review tool language", value: (client.language as string) ?? "en" }
+                { label: "AI Referral Engine language", value: (client.language as string) ?? "en" }
               );
             }
 

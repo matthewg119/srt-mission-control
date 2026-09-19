@@ -180,7 +180,7 @@ async function main(): Promise<void> {
     // ── The Slack grammar, against this client ──────────────────────────────
     console.log("\nThe thread grammar");
     ok("step 15 is a design step", isSkinStep("hub_preview"));
-    ok("step 16 is a design step", isSkinStep("review_tool_preview"));
+    ok("step 16 is a design step", isSkinStep("referral_engine_preview"));
     ok("an unrelated step is not", !isSkinStep("avatar_harvest"));
 
     const menu = await handleSkinThreadReply({

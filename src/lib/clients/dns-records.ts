@@ -41,7 +41,7 @@ export const DNS_RECORDS: DnsRecordDef[] = [
   {
     key: "cname_reviews",
     type: "CNAME",
-    label: "CNAME, the review tool",
+    label: "CNAME, the AI Referral Engine",
     host: () => "reviews",
     why: "The QR on the review cards points here. It goes in now so nobody has to go back into the registrar later.",
   },

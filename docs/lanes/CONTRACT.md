@@ -105,7 +105,7 @@ break them.
   file path.
 - `test-onboarding-artifacts.ts` asserts the string `no issues found` appears **nowhere** in
   a rendered client PDF, in any casing, including inside a sentence disclaiming it.
-- **No model goes near `src/lib/hub/review-assemble.ts` or the review tool.** FTC 16 CFR
+- **No model goes near `src/lib/hub/review-assemble.ts` or the AI Referral Engine.** FTC 16 CFR
   Part 465. A model reading a URL off an ops screenshot is a different thing in a different
   place; do not let it become a precedent for the customer-facing lane.
 - **Ask before deleting production data.**

@@ -1,7 +1,7 @@
 # Claude Code — Onboarding Runner v3
 
 **Supersedes:** Onboarding Runner v1 and v2. Delete both. This is the only onboarding paste.
-**Status:** addendum to `SRT-ClaudeCode-Build-Prompt-v4.md`. Does not replace it. v4 still defines the schema, the hub, the funnel, the photographs and the review tool. This defines how an onboarding is DRIVEN, amends v4 §6, §7, §8, adds v4 §12 (step engine + Slack gates) and v4 §13 (audit to tenant bridge).
+**Status:** addendum to `SRT-ClaudeCode-Build-Prompt-v4.md`. Does not replace it. v4 still defines the schema, the hub, the funnel, the photographs and the AI Referral Engine. This defines how an onboarding is DRIVEN, amends v4 §6, §7, §8, adds v4 §12 (step engine + Slack gates) and v4 §13 (audit to tenant bridge).
 **Depends on (canon, read in the repo, never pasted):**
 - `SRT-Pilot-Amendment-A1-Volume-and-Harvest.md` — ratified. Volume tracks, the harvest, tracked-set discipline. Changes `D-P5`.
 - `SRT-Pilot-Amendment-A2-Market-Audit-Bridge-Universal-Set.md` — ratified. Market radius, audit to tenant separation, `universal_v1`, the four engines.
@@ -25,7 +25,7 @@ Start the session with `SRT-ClaudeCode-Kickoff-Onboarding-Runner-v3.md`. Paste e
 # WHAT THIS ADDS
 
 Build Prompt v4 defines the schema, the hub, the funnel, the photographs
-and the review tool. It does not define how an onboarding is DRIVEN. This
+and the AI Referral Engine. It does not define how an onboarding is DRIVEN. This
 adds that: a step engine, gated one step at a time, run from the client's
 Slack channel, where automated work runs itself and manual work is posted
 to me as an instruction I reply to with screenshots. It also joins the
@@ -88,7 +88,7 @@ PREPARE — before the call, none of it touches their properties
  5e Citation cleanup list built and ranked        auto      photograph_1
  5f Hub built, themed, PREVIEW live in Mission
     Control, theme confirmed by me                auto+me   photograph_1
- 5g Review tool PREVIEW live, themed to match     auto      photograph_1
+ 5g AI Referral Engine PREVIEW live, themed to match     auto      photograph_1
  5h Review card PDF generated                     auto      photograph_1
  5i Call sheet PDF generated and attached         auto      photograph_1
 
@@ -115,7 +115,7 @@ BUILD — unblocked by step 10, not before
 15  Cards printed and handed to the clinic        me        build
 16  Automated request configured in their booking
     system, or card_only recorded                 me        build
-17  Review tool handed to the named person        me        build
+17  AI Referral Engine handed to the named person        me        build
 18  Time log has entries from day 0               auto      build
 19  Weekly Slack report firing                    auto      build
 20  Day-30 report date set                        me        build
@@ -546,11 +546,11 @@ Theme confirmed by me in the dashboard before the preview is shown.
 Vercel custom domains pre-registered for both client hosts so the CNAME
 at step 9 resolves immediately.
 
-5g · REVIEW TOOL PREVIEW.
-Built per v4 §8 and SRT-Review-Tool-BUILD-SPEC-v2.md. Reachable at the
+5g · AI REFERRAL ENGINE PREVIEW.
+Built per v4 §8 and SRT-Referral-Engine-BUILD-SPEC-v2.md. Reachable at the
 same internal preview host so it can be demoed on screen alongside the hub.
 
-  THEMED, but only visually. The review tool takes the same theme object
+  THEMED, but only visually. The AI Referral Engine takes the same theme object
   as the hub — logo, palette, fonts — so it reads as the clinic's page and
   not an agency page. The COPY, the four questions, the flow, the bullet
   labels, the destination links and every rule in the build spec are
@@ -628,14 +628,14 @@ tenant record. No placeholders, no blanks I fill in live.
     Booking/messaging software from intake: ____
     Automated request lives in it, or card_only — circle one
     Destination: Google primary / RealSelf for procedure visits
-    Named person for the review tool: ____ (a name, not "the front desk")
+    Named person for the AI Referral Engine: ____ (a name, not "the front desk")
     Restate once: every patient, own phone at home, nothing offered,
     nobody prompted for a name
     Intake flags — lobby tablet? incentives? — if either was yes, it is a
     conversation here and it stops
 
   50-55 PREVIEW WALKTHROUGH
-    Hub preview link. Review tool preview link. The card.
+    Hub preview link. AI Referral Engine preview link. The card.
     Then the 100 page candidates — mark what they want first.
 
   55-60 CONSENT confirmed aloud, verbatim from pilot doc §16.4.

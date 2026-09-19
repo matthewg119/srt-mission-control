@@ -105,7 +105,7 @@ create index if not exists client_pages_published_idx
 alter table public.client_pages enable row level security;
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- review_tool_submissions — SRT-Review-Tool-BUILD-SPEC-v2.md
+-- review_tool_submissions — SRT-Referral-Engine-BUILD-SPEC-v2.md
 -- ─────────────────────────────────────────────────────────────────────────────
 --
 -- NO NAME, EMAIL, PHONE, IP, USER AGENT, SESSION ID OR DEVICE FINGERPRINT. If a field

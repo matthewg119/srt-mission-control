@@ -78,7 +78,7 @@ export const GATED = [
  *     call setPublished and must never be changed to: exactly one caller is what makes the
  *     grep at the bottom of this file a real hole check rather than a habit.
  *   the preview route                 — our infrastructure, noindex, no client DNS.
- *   the review tool                   — theirs to hand out, and it publishes nothing.
+ *   the AI Referral Engine                   — theirs to hand out, and it publishes nothing.
  */
 export const NOT_GATED = [
   "POST /api/clients/[id]/hub  action=register",

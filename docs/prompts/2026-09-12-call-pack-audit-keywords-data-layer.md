@@ -156,7 +156,7 @@ moved; Vercel builds main. Read `CLAUDE.md` (grep it, it is huge) and the two 09
 - Run it (dry first), then verify from the DB and Slack: step 11's card posts with the phone and Call
   now, and the walk proceeds as Matthew works it.
 - Finish the proofs still owed: the concierge demo link opens (#20, now its verifier fetches it), the
-  review tool check fetches for real, the drafting waves hand off to the next batch (#23), the plan map
+  AI Referral Engine check fetches for real, the drafting waves hand off to the next batch (#23), the plan map
   fills in.
 
 ## Invariants. Do not loosen any of these.

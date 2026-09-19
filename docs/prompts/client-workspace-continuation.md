@@ -21,7 +21,7 @@ Nine commits, oldest first. Each one is worth `git show`ing before touching the 
 | Commit | What it did |
 |---|---|
 | `a7ea14a` | The page studio could not hear you. The bot was not a member of `#aeo-seo-page-drafting`, so Slack never delivered the events; and backticked commands did not match. Both fixed, `scripts/_probe-page-studio.ts` checks both. |
-| `781f230` | The review tool is a chat. Stars, mic priming, one question at a time, Hemingway word marks, three looks. |
+| `781f230` | The AI Referral Engine is a chat. Stars, mic priming, one question at a time, Hemingway word marks, three looks. |
 | `ac0b965` | The six review destinations live in one table. SRT chose Trustpilot and there was no box for its link. |
 | `a3a4c57` | A screenshot offers three designs; `pick n` stores one and confirms the theme. |
 | `c34d508` | `offer_proposed` and `offer_locked`, steps 10 and 23. `clients.offer`. |
@@ -230,7 +230,7 @@ as a regression; if you fix anything, fix the data.
 
 No model in the review content path and no recorded voice leaving the device ·
 `review_tool_submissions` gains no identifying column · nothing branches on the star rating, and
-`_probe-review-gating.ts` subtracts five exact expressions from `review-client.tsx` to prove it ·
+`_probe-review-gating.ts` subtracts five exact expressions from `referral-engine-client.tsx` to prove it ·
 `skin.ts` and `skin-vision.ts` carry tokens only; a variation is three token sets and never three
 layouts · `verified_source` is `system` or `thread`, no third value, no override · the tool proposes
 and a person confirms · ambiguity stays null and says so · one anchor at a time, Slack internal

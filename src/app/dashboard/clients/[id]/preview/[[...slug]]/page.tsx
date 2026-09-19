@@ -12,7 +12,7 @@
 //
 // ‼️ WHY THIS IS SAFE TO PUT UNDER /dashboard, AND WHY THAT IS NOT AN ACCIDENT
 //
-// The review tool is reachable here too (?kind=reviews), and the build spec's rule is
+// The AI Referral Engine is reachable here too (?kind=reviews), and the build spec's rule is
 // absolute: a submission from a preview must never reach review_tool_submissions, "gated on
 // the HOST, not on a flag someone can forget to set."
 //
@@ -39,8 +39,8 @@ import { hostsFor } from "@/lib/hub/vercel-domains";
 import { HubIndexBody, HubAnswerBody } from "@/components/hub/hub-bodies";
 import { themeStyle } from "@/lib/hub/theme";
 import { EMPTY_SKIN, skinStyle, hubRootClass } from "@/lib/hub/skin";
-import { ReviewTool, readLook } from "@/app/hub/[host]/reviews/review-tool";
-import type { ChatLook } from "@/app/hub/[host]/reviews/review-client";
+import { ReferralEngine, readLook } from "@/app/hub/[host]/reviews/referral-engine";
+import type { ChatLook } from "@/app/hub/[host]/reviews/referral-engine-client";
 import { loadCandidates } from "@/lib/clients/hub-skin";
 import {
   brandFromReference,
@@ -181,7 +181,7 @@ export default async function HubPreview({ params, searchParams }: Props) {
       />
       <div className="hub-wrap">
         {kind === "reviews" ? (
-          <ReviewTool client={client} look={look} />
+          <ReferralEngine client={client} look={look} />
         ) : slug ? (
           <PreviewAnswer clientId={params.id} host={host} slug={slug} client={client} />
         ) : (
