@@ -65,6 +65,7 @@ import {
   recordCatchallRecheck,
   recordEnrichment,
   recordSuppression,
+  recordHandoff,
   sendableRows,
   setOwnerName,
   unverifiedEmails,
@@ -1441,6 +1442,12 @@ async function publishSendable(batch: BatchRow): Promise<void> {
     );
   }
 
+  // ‼️ THE BOARD IS WRITTEN BEFORE THE BATCH IS CALLED DONE. suppression.ts answers "have we mailed
+  // this person" out of `outreach_prospects`, and until now nothing wrote a row there except a
+  // REPLY, so everyone who ignored us stayed invisible to the next list. Measured on production
+  // 2026-09-19: that table held zero rows while a 136 address campaign had already gone out.
+  const handoff = await recordHandoff(runId, rows, batch.batch_label || batch.file_name);
+
   await updateRun(runId, {
     stage: "done",
     sendable_count: rows.length,
@@ -1459,6 +1466,28 @@ async function publishSendable(batch: BatchRow): Promise<void> {
           "say where they went.",
       "",
       ...funnelLines(funnel),
+      ...(rows.length
+        ? [
+            "",
+            handoff.error
+              ? ":rotating_light: *" +
+                handoff.recorded +
+                " of " +
+                rows.length +
+                " recorded as contacted, then it failed:* " +
+                handoff.error +
+                "  The rest are NOT on the board, so a future list will not suppress them and they " +
+                "can be mailed twice. Worth fixing before the next drop."
+              : ":ledger: All " +
+                handoff.recorded +
+                " are now on the outreach board as contacted, so the next list suppresses them." +
+                (handoff.alreadyKnown
+                  ? "  " + handoff.alreadyKnown + " were already there."
+                  : "") +
+                "  *If you do not actually upload this file, say so:* they are suppressed from now " +
+                "on either way.",
+          ]
+        : []),
       "",
       "_Upload `sendable.csv` to ReachInbox. Split on `email_status` if you want the catch-alls in " +
         "their own campaign._",

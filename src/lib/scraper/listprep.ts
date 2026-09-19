@@ -560,3 +560,117 @@ export async function funnelFor(runId: string): Promise<Funnel> {
     ),
   };
 }
+
+// --- Stage 8: the handoff record ----------------------------------------------------------------
+
+// Same bounds and the same reasoning as store.ts: supabase-js puts an `.in()` filter in the QUERY
+// STRING, so a read chunk is bounded by URL length rather than by anything Postgres cares about.
+// Deliberately re-declared rather than imported, because store.ts is the batch/row half of the lane
+// and this file is the run half; the two do not otherwise depend on each other.
+const IN_CHUNK = 100;
+const INSERT_CHUNK = 500;
+
+/**
+ * Write down that this run's addresses have been handed off for sending.
+ *
+ * ‼️ WITHOUT THIS, SUPPRESSION IS BLIND AND RE-MAILING IS THE DEFAULT. suppression.ts answers
+ * "have we contacted this person" by reading `outreach_prospects`, and the only thing that has ever
+ * minted a row there for a ReachInbox lead is `createCampaignProspect`, which runs when somebody
+ * REPLIES. Everyone who ignored us stayed invisible. Measured on production 2026-09-19:
+ * `outreach_prospects` held ZERO rows, so `already_contacted` and `domain_contacted` could never
+ * fire, while a 136 address campaign had already gone out on 2026-09-16.
+ *
+ * ‼️ STAMPED AT PUBLISH, NOT AT A SEPARATE "I UPLOADED IT" REACTION, and the asymmetry is the
+ * reason. A row wrongly marked handed off costs one lead we never mail. A row wrongly left unmarked
+ * costs the same person a second cold sequence from a second domain, which is how sending domains
+ * get burned at volume. The cheaper mistake is the one that is made here on purpose. The card says
+ * so out loud, because the operator is the only one who knows whether the upload actually happened.
+ *
+ * ‼️ `confirmed` IS LEFT FALSE, DELIBERATELY. `outreach_prospects_due_idx` is
+ * `where state <> 'CLOSED' and paused = false and confirmed = true`, which is the worklist the
+ * Microsoft Graph nudge sender drains. These addresses are being mailed by ReachInbox. Confirming
+ * them here would enrol every one of them in a SECOND sequence out of matthew@srtagency.com, from
+ * the tenant that carries client mail, which is the single worst thing this lane could do.
+ *
+ * Insert-only by design: suppression runs before publish, so an address that is already in
+ * `outreach_prospects` was already held back and cannot be in `rows`. The pre-read is a guard
+ * against a re-driven publish, not a merge.
+ */
+export async function recordHandoff(
+  runId: string,
+  rows: SendableExportRow[],
+  campaign: string | null
+): Promise<{ recorded: number; alreadyKnown: number; error: string | null }> {
+  if (!rows.length) return { recorded: 0, alreadyKnown: 0, error: null };
+
+  const byEmail = new Map<string, SendableExportRow>();
+  for (const r of rows) {
+    const email = r.email.trim().toLowerCase();
+    if (email) byEmail.set(email, r);
+  }
+  const emails = [...byEmail.keys()];
+
+  // Which of these does the board already know? Chunked for the same reason every other `.in()` in
+  // this lane is: supabase-js puts the filter in the query string, so the bound is URL length.
+  const known = new Set<string>();
+  for (let i = 0; i < emails.length; i += IN_CHUNK) {
+    const slice = emails.slice(i, i + IN_CHUNK);
+    const { data, error } = await supabaseAdmin
+      .from("outreach_prospects")
+      .select("email")
+      .in("email", slice);
+    if (error) return { recorded: 0, alreadyKnown: 0, error: "reading the board failed: " + error.message };
+    for (const r of data ?? []) known.add(String(r.email ?? "").toLowerCase());
+  }
+
+  const now = new Date().toISOString();
+  const fresh = emails.filter((e) => !known.has(e));
+  let recorded = 0;
+
+  for (let i = 0; i < fresh.length; i += INSERT_CHUNK) {
+    const slice = fresh.slice(i, i + INSERT_CHUNK).map((email) => {
+      const r = byEmail.get(email) as SendableExportRow;
+      const name = [r.first_name, r.last_name].filter(Boolean).join(" ") || r.owner_name || null;
+      return {
+        email,
+        name,
+        company: r.company || null,
+        // ‼️ THE WEBSITE IS WHAT MAKES `domain_contacted` WORK. suppression.ts matches a domain with
+        // `website ilike %domain%`, so a null here silently narrows the check to exact-address only
+        // and the second person at the same clinic gets mailed anyway.
+        website: r.website || (r.domain ? "https://" + r.domain : null),
+        city: r.city || null,
+        phone: r.phone || null,
+        source: "listprep",
+        campaign,
+        first_sent_at: now,
+        last_touch_at: now,
+      };
+    });
+
+    const { error } = await supabaseAdmin.from("outreach_prospects").insert(slice);
+    if (error) {
+      return {
+        recorded,
+        alreadyKnown: known.size,
+        error: "writing the board failed after " + recorded + " rows: " + error.message,
+      };
+    }
+    recorded += slice.length;
+  }
+
+  // The per-address stamp, so a run can be audited without joining back through the board.
+  const { error: stampErr } = await supabaseAdmin
+    .from("sendable_leads")
+    .update({ sent_at: now })
+    .eq("run_id", runId)
+    .is("suppressed_reason", null)
+    .is("sent_at", null)
+    .in("email_status", ["valid", "catch_all"]);
+
+  return {
+    recorded,
+    alreadyKnown: known.size,
+    error: stampErr ? "stamping sendable_leads failed: " + stampErr.message : null,
+  };
+}
