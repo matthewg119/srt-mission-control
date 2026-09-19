@@ -346,7 +346,7 @@ Prep call: phone them, lock the one offer and the words their customers use for 
 | Writes | nothing |
 | Reads | nothing |
 | [Done] reads | no table |
-| Dataset fields | 4 needed, 4 wanted |
+| Dataset fields | 4 needed, 5 wanted |
 | Downstream | steps 11 `avatar_harvest`, 12 `keyword_set`, 13 `custom_question_set`, 14 `page_candidates`, 21 `pre_call_pages` declare they wait on this; the fields it fills unblock steps 12 `keyword_set`, 21 `pre_call_pages` |
 
 **[Done] refuses on:**
@@ -367,6 +367,8 @@ Step 10 needs 4 more things before it can complete.
     → `price: $399 per session` (its own message), on offer_locked
 :warning: how they want it positioned
     → `offer: <name> | <positioning>`, on offer_locked
+:warning: the guarantee, in the client's own words
+    → `guarantee: <what they will actually honour>`, on offer_locked
 :warning: the approved sales letter
     → `letter use`, `letter draft` or `letter replace:`, then `letter approve`, on offer_locked
 :warning: 2 fields: the customer picked for the Loom, best and worst customer map

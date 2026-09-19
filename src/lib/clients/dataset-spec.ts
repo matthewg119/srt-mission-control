@@ -84,6 +84,8 @@ export interface DatasetSnapshot {
     lockedAt: string | null;
     outcomePromise: string | null;
     price: string | null;
+    /** The risk reversal as the client will actually honour it. NULL is a legitimate answer. */
+    guarantee: string | null;
   };
   /**
    * The framework documents on file for this audience, as the keys their parsers found answered.
@@ -330,6 +332,21 @@ export const DATASET_FIELDS: readonly FieldSpec[] = [
     usedFor: "every headline and CTA for this audience",
     filledBy: { kind: "step", step: "offer_locked", how: "`outcome: more appointments` (its own message)", built: true },
     present: (ctx) => Boolean(ctx.snap.offer.outcomePromise) },
+  // ‼️ A COLUMN WITH A WRITER, A READER AND NO DECLARED FIELD, FOUND 2026-09-19.
+  // client_offers.guarantee has a type, a `guarantee:` command, a guarantee_set_at stamp, and
+  // page-angles.ts branches on it ("NO GUARANTEE ON FILE. Say nothing about risk."). It was never
+  // declared here, so the gap lane never asked for it, `prompts` never offered it and the final
+  // prompt never reported it missing. This file's own rule is that a field declared anywhere else
+  // does not exist as far as the system is concerned, and this was that rule failing in the
+  // direction that costs most: a field the system USES and cannot ASK for.
+  //
+  // ‼️ A WANT, NEVER A NEED, AND THE EMPTY CASE IS REAL. Plenty of clients honour no guarantee at
+  // all, and offers.ts is explicit that one a model invented is a promise somebody has to keep. An
+  // absent guarantee is an answer, not a blocked step.
+  { dataset: "offer", key: "guarantee", label: "the guarantee, in the client's own words",
+    usedFor: "the risk reversal on a rung, and the page prompt's refusal to mention risk without one",
+    filledBy: { kind: "step", step: "offer_locked", how: "`guarantee: <what they will actually honour>`", built: true },
+    present: (ctx) => Boolean(ctx.snap.offer.guarantee) },
   { dataset: "offer", key: "positioning", label: "how they want it positioned",
     usedFor: "the pillar page's angle",
     filledBy: { kind: "step", step: "offer_locked", how: "`offer: <name> | <positioning>`", built: true },
@@ -427,7 +444,7 @@ function reasonFor(field: FieldSpec, snap: DatasetSnapshot): string {
 export const NOTHING_ON_FILE: DatasetSnapshot = {
   audience: { label: "this audience", isPrimary: true, stance: "patient", hasVocabulary: false, buyerMarket: null, hardLines: 0, confirmedAt: null },
   avatar: { researchText: null, vocQuotes: 0, approvedNumbers: 0, keywordRows: 0, keywordRowsWithUrl: 0, objectionRows: 0 },
-  offer: { applies: true, treatment: null, terms: 0, positioning: null, magnetKey: null, lockedAt: null, outcomePromise: null, price: null },
+  offer: { applies: true, treatment: null, terms: 0, positioning: null, magnetKey: null, lockedAt: null, outcomePromise: null, price: null, guarantee: null },
   documents: { avatarSheet: null, shortOffer: null, beliefs: 0, letterApproved: false },
   audit: { linked: true, pickedAvatar: false, buyerMap: false },
   reviews: 0,

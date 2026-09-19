@@ -126,7 +126,7 @@ const snap: DatasetSnapshot = {
     researchText: [1, 2, 3, 4, 5, 6, 7, 8].map((n) => `## ${n}. S\n${filler("finding")}`).join("\n"),
     vocQuotes: 0, approvedNumbers: 0, keywordRows: 0, keywordRowsWithUrl: 0, objectionRows: 0,
   },
-  offer: { applies: false, treatment: null, terms: 0, positioning: null, magnetKey: null, lockedAt: null, outcomePromise: null, price: null },
+  offer: { applies: false, treatment: null, terms: 0, positioning: null, magnetKey: null, lockedAt: null, outcomePromise: null, price: null, guarantee: null },
   documents: { avatarSheet: null, shortOffer: null, beliefs: 0, letterApproved: false },
   audit: { linked: false, pickedAvatar: false, buyerMap: false },
   reviews: 0,
@@ -165,11 +165,16 @@ check("the card says nothing has been offered to this audience yet", lines.some(
 const primarySnap: DatasetSnapshot = {
   ...snap,
   audience: { ...snap.audience!, isPrimary: true },
-  offer: { applies: true, treatment: "lip filler", terms: 2, positioning: null, magnetKey: null, lockedAt: "2026-09-15", outcomePromise: "more appointments", price: "$399 per session" },
+  offer: { applies: true, treatment: "lip filler", terms: 2, positioning: null, magnetKey: null, lockedAt: "2026-09-15", outcomePromise: "more appointments", price: "$399 per session", guarantee: null },
 };
 const primaryOffer = evaluateDatasets(primarySnap, RESEARCH_SECTION_KEYS).find((r) => r.dataset === "offer")!;
 check("an outcome on file counts as present", !primaryOffer.gaps.some((g) => g.field.key === "outcome_promise"));
 check("a price on file counts as present", !primaryOffer.gaps.some((g) => g.field.key === "price"));
+// ‼️ THE GUARANTEE IS A WANT AND ITS ABSENCE IS A REAL ANSWER, so a client who honours none shows
+// a gap and is never blocked by it. Declared 2026-09-19 after it was found to have a column, a
+// command and a reader, and no field: the system used it and could not ask for it.
+check("an absent guarantee shows as a gap", primaryOffer.gaps.some((g) => g.field.key === "guarantee"));
+check("and it never blocks a step", !primaryOffer.gaps.some((g) => g.field.key === "guarantee" && g.blocking));
 check("the primary audience is charged its offer fields", primaryOffer.total > 0);
 check("the card has no em dash", !lines.some((l) => /[—–]/.test(l)));
 

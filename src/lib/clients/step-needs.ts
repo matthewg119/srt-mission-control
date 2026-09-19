@@ -207,7 +207,9 @@ export const STEP_NEEDS: Record<StepKey, StepNeed> = {
     kind: "fields",
     // What the prep call is FOR. Each of these has its own command, named in dataset-spec's filler.
     needs: ["offer.short_offer", "offer.customer_terms", "offer.outcome_promise", "offer.price"],
-    wants: ["offer.positioning", "offer.sales_letter", "audience.dream_customer", "audience.buyer_map"],
+    // guarantee added 2026-09-19: the column, the command and the reader all existed and no field
+    // declared it, so nothing ever asked. A want, because an absent guarantee is a real answer.
+    wants: ["offer.positioning", "offer.guarantee", "offer.sales_letter", "audience.dream_customer", "audience.buyer_map"],
   },
   avatar_harvest: {
     kind: "fields",

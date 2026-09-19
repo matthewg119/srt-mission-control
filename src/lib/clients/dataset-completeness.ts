@@ -228,6 +228,7 @@ export async function completenessFor(
         lockedAt: offer.lockedAt,
         outcomePromise: offer.outcomePromise,
         price: offer.price,
+        guarantee: offer.guarantee,
       },
       audit,
       reviews,
