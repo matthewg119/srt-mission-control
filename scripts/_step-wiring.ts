@@ -84,7 +84,7 @@ const COMMANDS: Record<string, string[]> = {
   keyword_set: ["`keywords approve`", "`keywords drop N`", "`keywords add:`", "`keywords more <category>`"],
   custom_question_set: ["`objection: <what they said>`", "`objection: ... | belief: <key>`"],
   hub_preview: ["`universe <name>`", "`template <name>`", "`skin reset`", "`pick 1|2|3`", "paste a screenshot"],
-  review_tool_preview: ["`review link: <url>`", "[Paste review link]", "`universe <name>`"],
+  referral_engine_preview: ["`review link: <url>`", "[Paste review link]", "`universe <name>`"],
   review_card_pdf: ["`review link: <url>`", "[Paste review link]"],
   concierge_preview: ["[Include concierge (add-on)] / [Not now, install later]", "[Patient lane] / [Owner lane]", "`concierge install`", "[Character menu] / [Skip, keep the default]", "`mascot`, `mascot concepts`", "`mascot pick a, b, c`, `mascot <key>`, `mascot skip`", "`mascot corner bottom-left`", "paste art with `mascot <key> <state>`"],
   site_replica: ["`universe <name>`", "paste a screenshot"],

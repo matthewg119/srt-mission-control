@@ -18,7 +18,7 @@ alter table clients
   add column if not exists hub_skin jsonb;
 
 comment on column clients.hub_skin is
-  'Hub/review-tool SKIN: {template, ground colours, headingFamily, radius, measure, baseSize, '
+  'Hub/AI Referral Engine SKIN: {template, ground colours, headingFamily, radius, measure, baseSize, '
   'source, sourceNote, updatedAt, updatedBy}. Validated by src/lib/hub/skin.ts readSkin() on '
   'every read, so a bad value is dropped rather than rendered. NULL = the Document template '
   'with no overrides, which is what every hub built before 2026-09-02 renders. Confirmation '

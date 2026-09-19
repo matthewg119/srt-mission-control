@@ -4,7 +4,7 @@
 import type { HubClient } from "@/lib/hub/resolve";
 import { HubLogo } from "@/components/hub/hub-bodies";
 import { REVIEW_PLATFORMS } from "@/lib/hub/review-destinations";
-import { ReviewClient, type ChatLook, type ReviewDestination } from "./review-client";
+import { ReferralEngineClient, type ChatLook, type ReviewDestination } from "./referral-engine-client";
 
 /**
  * The three chat looks, and the one everybody gets.
@@ -77,7 +77,7 @@ function destinationsFor(client: HubClient): ReviewDestination[] {
   }));
 }
 
-export function ReviewTool({ client, look }: { client: HubClient; look?: ChatLook }) {
+export function ReferralEngine({ client, look }: { client: HubClient; look?: ChatLook }) {
   return (
     <>
       {/*
@@ -90,7 +90,7 @@ export function ReviewTool({ client, look }: { client: HubClient; look?: ChatLoo
         what a customer notices and nobody testing a single page ever does.
       */}
       <HubLogo client={client} />
-      <ReviewClient
+      <ReferralEngineClient
         businessName={client.displayName}
         clientId={client.id}
         destinations={destinationsFor(client)}

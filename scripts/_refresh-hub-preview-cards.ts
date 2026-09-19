@@ -32,7 +32,7 @@ import { slack } from "../src/lib/slack-bot";
 import { postStep } from "../src/lib/clients/step-engine";
 import { loadSkin } from "../src/lib/clients/hub-skin";
 
-const STEPS = ["hub_preview", "review_tool_preview"];
+const STEPS = ["hub_preview", "referral_engine_preview"];
 
 /** The only status a posted card sits at. See the header for why the others are skipped. */
 const REFRESHABLE = "awaiting_me";
@@ -123,7 +123,7 @@ async function main(): Promise<void> {
 
   const rows = data ?? [];
   if (!rows.length) {
-    console.log("No hub_preview or review_tool_preview rows exist yet. Nothing to refresh.");
+    console.log("No hub_preview or referral_engine_preview rows exist yet. Nothing to refresh.");
     return;
   }
 

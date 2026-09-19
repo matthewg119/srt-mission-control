@@ -357,7 +357,7 @@ export const AUTO_RUNNERS: Record<string, AutoRunner> = {
   },
 
   // Creates concierge_configs and posts the demo link. Produces no bytes, like
-  // review_tool_preview. Idempotent: a re-run re-seeds the embed allowlist and deliberately
+  // referral_engine_preview. Idempotent: a re-run re-seeds the embed allowlist and deliberately
   // touches neither `enabled` nor the booking config, so re-running it on a LIVE client cannot
   // take their widget down. See the header of concierge-setup.ts.
   concierge_preview: async (clientId) => {
@@ -390,12 +390,12 @@ export const AUTO_RUNNERS: Record<string, AutoRunner> = {
     return buildSiteReplica(clientId);
   },
 
-  review_tool_preview: async (clientId) => {
+  referral_engine_preview: async (clientId) => {
     // Produces no bytes. It verifies that the preview is genuinely themed and posts the URL,
     // and refuses when the theme is unconfirmed — which is the only way "themed to match" can
-    // be false. See review-preview.ts.
-    const { verifyReviewToolPreview } = await import("../review-preview");
-    return verifyReviewToolPreview(clientId);
+    // be false. See referral-engine-preview.ts.
+    const { verifyReferralEnginePreview } = await import("../referral-engine-preview");
+    return verifyReferralEnginePreview(clientId);
   },
 
   // ‼️ THE AUTO HALF MINTS A KEY AND NOTHING ELSE. It deliberately does NOT try to install the
@@ -503,7 +503,7 @@ export function unreachableAutoSteps(): Set<string> {
  * documents. day_zero_archive is a gate rather than a generator and carries no `auto`.
  *
  * The list this used to name — review_audit, custom_question_set, page_candidates,
- * citation_cleanup_list, review_tool_preview — are all implemented now, which is what took
+ * citation_cleanup_list, referral_engine_preview — are all implemented now, which is what took
  * unreachableAutoSteps() to empty and released the findings/call-sheet deadlock.
  *
  * ‼️ A NON-EMPTY DIFFERENCE BETWEEN THIS AND ROUTE_COMPLETED IS THE REGRESSION TO CATCH.

@@ -968,7 +968,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     const { themeConfirmed, themeOverrides } = await import("./hub-setup");
     if (!(await themeConfirmed(ctx.clientId))) {
       // The label says "themed". Ticking with the theme unconfirmed is what made
-      // review_tool_preview refuse on the next line with a message that read as its own fault.
+      // referral_engine_preview refuse on the next line with a message that read as its own fault.
       return notYet(
         "the theme on this client's hub",
         `${attached.length} host${attached.length === 1 ? "" : "s"} attached, theme not confirmed`,
@@ -1324,15 +1324,15 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
   // that never happened, on a host that was NXDOMAIN. It now fetches: the client's own reviews host
   // once its CNAME is verified, and before that the tokenised preview on our internal host, which
   // needs no DNS at all. The evidence line names which one was asked and what it answered.
-  review_tool_preview: async (ctx) => {
-    const { reviewToolPreviewReady, observeReviewTool } = await import("./review-preview");
+  referral_engine_preview: async (ctx) => {
+    const { referralEnginePreviewReady, observeReferralEngine } = await import("./referral-engine-preview");
 
-    const ready = await reviewToolPreviewReady(ctx.clientId);
+    const ready = await referralEnginePreviewReady(ctx.clientId);
     if (!ready.ok) {
-      return notYet("a confirmed theme for the review tool", "the theme has not been confirmed", ready.error);
+      return notYet("a confirmed theme for the AI Referral Engine", "the theme has not been confirmed", ready.error);
     }
 
-    const seen = await observeReviewTool(ctx.clientId);
+    const seen = await observeReferralEngine(ctx.clientId);
     // Host only: the preview URL carries a 14-day token and evidence lines are kept.
     const host = seen.url ? new URL(seen.url).host : null;
 
@@ -1340,7 +1340,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
       return notYet(
         seen.via === "live"
           ? `a request to ${host}, made just now`
-          : `a request for the review tool preview${host ? ` on ${host}` : ""}, made just now`,
+          : `a request for the AI Referral Engine preview${host ? ` on ${host}` : ""}, made just now`,
         seen.detail,
         seen.via === "live"
           ? "The reviews CNAME is verified, so their own host is what gets checked. A 404 there usually means the host is not attached on Vercel or its client_hosts row is off."
@@ -1351,7 +1351,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     return verified(
       seen.via === "live"
         ? `${host} answered ${seen.status} to a request made just now`
-        : `the review tool preview on ${host} answered ${seen.status} to a request made just now (their reviews CNAME is not verified yet, so the preview link was checked)`,
+        : `the AI Referral Engine preview on ${host} answered ${seen.status} to a request made just now (their reviews CNAME is not verified yet, so the preview link was checked)`,
       ready.themed
         ? "theme confirmed with overrides"
         : "theme confirmed with no overrides, so SRT's defaults render deliberately"
@@ -1946,7 +1946,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
     );
   },
 
-  review_tool_handed: async (ctx) => {
+  referral_engine_handed: async (ctx) => {
     const owner = ctx.client.review_owner_name as string | null;
     const replies = await humanReplies(ctx);
     if (replies === null) return threadUnreadable;

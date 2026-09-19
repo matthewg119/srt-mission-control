@@ -114,9 +114,9 @@ export function intakePatchFrom(
   put(reviewWorkflow, "booking_software", a.booking_software);
 
   // ‼️ THE PLATFORM NAME, AND DELIBERATELY NOT A URL. `review_destination` is one of six names
-  // the funnel offers, and it decides the ORDER of the buttons in the review tool plus which URL
+  // the funnel offers, and it decides the ORDER of the buttons in the AI Referral Engine plus which URL
   // field the Review handover panel needs filled. destinationsFor() in
-  // app/hub/[host]/reviews/review-tool.tsx renders a destination only where a HUMAN pasted the
+  // app/hub/[host]/reviews/referral-engine.tsx renders a destination only where a HUMAN pasted the
   // real URL, and that stays true: "absent beats wrong", because a link built from a business
   // name sends a real patient to somebody else's profile.
   //
@@ -169,8 +169,8 @@ export function intakePatchFrom(
   // ‼️ THE WEBSITE WRITES `domain` AS WELL AS `website`, AND SKIPPING THAT IS THE TRAP THAT COST
   // V1 EIGHT STEPS. api/onboarding/save's own comment records it: hostsFor(), seedDnsRecords()
   // and the entire hub lane are built from `domain`, so hub_preview fails with "No domain on
-  // file" and takes review_tool_preview, review_card_pdf, concierge_preview, dns_records,
-  // subdomain_live, first_page and review_tool_handed down with it.
+  // file" and takes referral_engine_preview, review_card_pdf, concierge_preview, dns_records,
+  // subdomain_live, first_page and referral_engine_handed down with it.
   //
   // ‼️ IT COMES OFF THE SIGNING ROW NOW, NOT OFF AN ANSWER (2026-09-03). The website moved to
   // screen one when the question set went from nine to six, and this line moved with it. Reading

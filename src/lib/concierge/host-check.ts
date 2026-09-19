@@ -99,7 +99,7 @@ export type ProbeResult =
 /**
  * Did this exact URL answer 200, just now?
  *
- * For the links a step card hands a person (the step 20 demo link, the step 19 review tool), so a
+ * For the links a step card hands a person (the step 20 demo link, the step 19 AI Referral Engine), so a
  * card can print a link only after it was actually requested. Same never-throws rule as
  * widgetHostReachable above, and `detail` reads the same way: the middle of a sentence.
  *

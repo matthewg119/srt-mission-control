@@ -24,7 +24,7 @@
 -- WHAT THE WALL BLOCKS: publishing a page at the live hub host. Later, when they exist:
 -- submitting a directory correction, editing a GBP field.
 -- WHAT IT DOES NOT BLOCK, and never did: attaching Vercel domains, seeding or checking
--- DNS, saving a draft, the preview, the review tool. Preview and staging are ours. The
+-- DNS, saving a draft, the preview, the AI Referral Engine. Preview and staging are ours. The
 -- wall is about their properties.
 
 -- ─────────────────────────────────────────────────────────────────────────────

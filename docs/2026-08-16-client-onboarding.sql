@@ -273,13 +273,17 @@ create table if not exists public.time_log (
   note           text
 );
 
+-- ‼️ 'referral_engine_setup' WAS 'referral_engine_setup' UNTIL 2026-09-19. Edited in place rather
+-- than left as it was, because this file is declared safe to re-run, and a re-run carrying the
+-- old value would put a constraint back that rejects every row the rename wrote. See
+-- 2026-09-19-referral-engine-rename.sql.
 alter table public.time_log drop constraint if exists time_log_task_category_check;
 alter table public.time_log add constraint time_log_task_category_check
   check (task_category in (
     'baseline_retest',
     'pages_new',
     'pages_refresh',
-    'review_tool_setup',
+    'referral_engine_setup',
     'review_responses',
     'outreach',
     'reporting_video',

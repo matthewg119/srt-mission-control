@@ -3,7 +3,7 @@
 
 **Amends:** `SRT-AEO-Onboarding-v2-PILOT.md` — `D-P5`, §10.2, §12, §14. Compliance canon otherwise unchanged.
 **Also touches:** `SRT-AEO-Delivery-Offer-v2.md` §4 (counts), `SRT-Question-Sets-v1.md` (custom set timing), `SRT-Artifact-Templates-v1.md` §3 (confounds line).
-**Does not touch:** §10.3, §16, the review tool spec, or any Integrity Law. None of this changes what the review tool does.
+**Does not touch:** §10.3, §16, the AI Referral Engine spec, or any Integrity Law. None of this changes what the AI Referral Engine does.
 **Status:** RATIFIED. A2 §1 records it: the veto window closed with no veto raised.
 
 ---

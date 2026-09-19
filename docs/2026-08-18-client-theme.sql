@@ -1,8 +1,8 @@
--- The client's visual theme for the hub and the review tool.
+-- The client's visual theme for the hub and the AI Referral Engine.
 --
 -- Safe to run more than once.
 --
--- WHY THIS EXISTS. Runner v3 5f and 5g: the hub and the review tool have to read as the
+-- WHY THIS EXISTS. Runner v3 5f and 5g: the hub and the AI Referral Engine have to read as the
 -- clinic's own pages, not as an agency's. A customer who scans a card in a waiting room and
 -- lands on something that looks like a SaaS product does not leave a review.
 --
@@ -37,7 +37,7 @@ alter table public.clients
   add column if not exists theme jsonb;
 
 comment on column public.clients.theme is
-  'Visual theme for the hub and review tool: logoUrl, accent, accentSoft, fontFamily, plus '
+  'Visual theme for the hub and AI Referral Engine: logoUrl, accent, accentSoft, fontFamily, plus '
   'extractedFrom/extractedAt/confirmedAt/confirmedBy. VISUAL ONLY — no copy, no labels, no '
   'destinations (Runner v3 5g). Read it through readTheme() in src/lib/hub/theme.ts, which '
   'validates every value before it reaches a style attribute. Not applied to any page until '

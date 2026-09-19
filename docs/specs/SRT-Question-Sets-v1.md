@@ -73,7 +73,7 @@ Substituted per tenant from the intake record. The **question shapes** are unive
 19. med spa in {city} open evenings or weekends
 20. med spa in {city} with a nurse practitioner or physician on site
 
-> Questions 12–16 are the ones that matter most and the ones most agencies skip. They're phrased the way a nervous first-time patient types into a chat box — which is exactly the retrieval context you're trying to enter. They also map directly to the intake Step 3 objections and to the review tool's question 1.
+> Questions 12–16 are the ones that matter most and the ones most agencies skip. They're phrased the way a nervous first-time patient types into a chat box — which is exactly the retrieval context you're trying to enter. They also map directly to the intake Step 3 objections and to the AI Referral Engine's question 1.
 
 ---
 

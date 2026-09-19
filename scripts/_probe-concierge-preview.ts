@@ -8,7 +8,7 @@
  * Control's own origin, which already serves /w/{slug}, and a signed preview token is what opens a
  * tenant whose widget is still switched off (which, before concierge_live, is all of them).
  *
- * D5, 2026-09-11: "Previews first, DNS later. Hub, review tool and concierge must all be viewable
+ * D5, 2026-09-11: "Previews first, DNS later. Hub, AI Referral Engine and concierge must all be viewable
  * before the call with no DNS."
  *
  * It prints what it asked for and what came back, and nothing else: no writes, no Slack, no step.

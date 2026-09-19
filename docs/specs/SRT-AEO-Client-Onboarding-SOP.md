@@ -1,5 +1,7 @@
 # SRT Agency — AEO Client Onboarding SOP
 
+> **Renamed 2026-09-19.** What this document calls the AI Referral Engine was written down as the "review tool", and the free plan as the "AI Visibility Review Engine". Both are the AI Referral Engine now, and the text below has been updated to say so. Nothing about the mechanism changed; only the name did. The `reviews.` host, the `/hub/[host]/reviews` route and the `review_workflow` table keep their old spelling on purpose, because clients have already typed that hostname into a registrar and printed QR codes resolve through it.
+
 **Version 1.0 | Owner: Matthew Garcia | Delivery model: Hybrid subdomain hub**
 
 ---
@@ -282,7 +284,7 @@ This is the highest-leverage single asset for local AI answers. Do it thoroughly
 - [ ] Location/service-area page
 - [ ] All content routed through the Mission Control review queue before publish
 
-### 5.4 — Review engine
+### 5.4 — AI Referral Engine
 
 - [ ] Review request flow live (SMS/email — respect A2P status; until approved, lead-initiated or email only)
 - [ ] Short-link review URLs for Google and the top vertical platform
@@ -350,7 +352,7 @@ A client is "onboarded" when all of the following are true:
 - Google Business Profile is fully built and SRT has manager access
 - Content hub is live on their subdomain with valid schema and is indexed
 - Baseline AI scorecard is captured and archived
-- Review engine is live
+- AI Referral Engine is live
 - First monthly report is scheduled
 
 Anything less, and the 30-day report will be weak — which is the only moment where this offer is at risk of churn.

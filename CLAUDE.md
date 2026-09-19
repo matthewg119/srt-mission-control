@@ -2307,14 +2307,14 @@ pointed at evidence the step does not produce, so honest finished work read as o
 
 **The Review handover panel** (`/api/clients/[id]/review-workflow` + `review-workflow-form.tsx`)
 is the missing writer for `review_request_mode`, `review_owner_name` and
-`review_workflow.google_url` / `.realself_url`. That last pair is why **the review tool's "Post on
+`review_workflow.google_url` / `.realself_url`. That last pair is why **the AI Referral Engine's "Post on
 Google" button has never appeared for any client**: `destinationsFor()` has always read those keys
 and intake step 4 collects `destinations` as a multiselect of display LABELS. Every customer got
 the fallback hint telling her to go and find the review page herself.
 - **The bag is MERGED, never replaced.** `review_workflow` is intake step 4's jsonb and owns ten
   other keys; `save/route.ts` assigns the whole bag, so a replace here deletes the intake answers
   the call sheet is built from.
-- A URL is parsed and must be `https:`, or refused. `review-tool.tsx`'s rule is unchanged and is
+- A URL is parsed and must be `https:`, or refused. `referral-engine.tsx`'s rule is unchanged and is
   the reason: **absent beats wrong, never synthesise a link**, because a guessed review URL sends
   a real customer to somebody else's business.
 - `review_destination_secondary` still has zero readers. Left in place, noted here rather than
@@ -2414,7 +2414,7 @@ verifier still counts `selected` rows, so the evidence rule is untouched.
 and only ever returned one on refusal, so `_probe-cascade.ts` had an assertion about step 2's
 evidence tier that could not have gone green on any run.
 
-#### The review tool: a microphone and a readability hint, and still no model
+#### The AI Referral Engine: a microphone and a readability hint, and still no model
 
 > ‼️ **MATTHEW ASKED FOR REVIEWS REWRITTEN TO A 6TH-GRADE LEVEL WITH AN EMOTIONAL HOOK ADDED, AND
 > THAT IS THE ONE THING THIS TOOL CANNOT DO.** It is generating review content the customer did
@@ -3003,7 +3003,7 @@ and a person writes the answer.
 > the step was ticked before anything was published.
 
 ### `reviews.{domain}` — a mirror, not a ghostwriter
-`docs/specs/SRT-Review-Tool-BUILD-SPEC-v2.md`. The host resolves through the same
+`docs/specs/SRT-Referral-Engine-BUILD-SPEC-v2.md`. The host resolves through the same
 `client_hosts` row with `kind = 'reviews'`, so the QR on the printed cards is live from the
 moment the domain is attached.
 
