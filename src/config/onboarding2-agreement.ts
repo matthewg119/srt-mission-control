@@ -21,6 +21,10 @@
 // is month to month with no guarantee and no refund. `review_free` is a real deliverable that
 // costs nothing and is not signed at all.
 //
+// ‼️ THE CURRENT VERSION IS v7, AND IT IS A RENAME, NOT A SECOND SPLIT. The free offer is the AI
+// Referral Engine as of 2026-09-19. The split described below is still the structure; only the
+// free document's wording moved. See the changelog over VERSION for why all three stamps moved.
+//
 // ‼️ THE STRUCTURE CHANGED, AND THE REASON IS THAT `page` USED TO LIVE ON THE SECTION.
 // In v5 each clause carried its own `n` and `page`, and an IIFE threw if the page numbers skipped
 // or ran backwards. That cannot survive variants: a clause shared by two documents needs two page
@@ -132,8 +136,12 @@ import {
  * v4: fourteen sections cut to nine.
  * v5: two client-obligation clauses added at 2 and 3, everything after shifted up by two.
  * v6: one document became three, keyed by offer. `page` moved off the clause onto the layout.
+ * v7: the free offer was renamed the AI Referral Engine. Only free_terms changed text, and the
+ *     yearly and monthly documents are word for word what they were under v6. Their stamp moved
+ *     anyway, because VERSION is shared and a per-variant bump would need three constants to
+ *     stay in step by hand, which is the drift this file exists to refuse.
  */
-const VERSION = "v6";
+const VERSION = "v7";
 
 export const TEMPLATE_VERSIONS: Record<OfferKey, string> = {
   review_free: `${VERSION}-free`,
@@ -729,7 +737,7 @@ const SECTIONS: Record<string, SectionBody> = {
   // the coverage check at /sign.
   free_terms: {
     key: "free_terms",
-    heading: guard("sf h", "The Review Engine, free of charge"),
+    heading: guard("sf h", "The AI Referral Engine, free of charge"),
     body: [
       guard(
         "sf b1",
@@ -855,7 +863,7 @@ const VARIANTS: Record<OfferKey, OfferVariant> = {
       ),
       guard("close b2", "SRT Agency LLC, Matthew Garcia, CEO"),
     ],
-    footer: [FOOTER_TAIL[0], guard("foot y 2", "v6-yearly, twelve sections."), FOOTER_TAIL[1]],
+    footer: [FOOTER_TAIL[0], guard("foot y 2", "v7-yearly, twelve sections."), FOOTER_TAIL[1]],
   },
 
   month_349: {
@@ -890,15 +898,15 @@ const VARIANTS: Record<OfferKey, OfferVariant> = {
       ),
       guard("close b2", "SRT Agency LLC, Matthew Garcia, CEO"),
     ],
-    footer: [FOOTER_TAIL[0], guard("foot m 2", "v6-monthly, eleven sections."), FOOTER_TAIL[1]],
+    footer: [FOOTER_TAIL[0], guard("foot m 2", "v7-monthly, eleven sections."), FOOTER_TAIL[1]],
   },
 
   review_free: {
     offer: "review_free",
     templateVersion: TEMPLATE_VERSIONS.review_free,
-    title: guard("t f", "SRT Agency - Review Engine Service Terms"),
+    title: guard("t f", "SRT Agency - AI Referral Engine Service Terms"),
     preamble: [
-      guard("pre f version", "Version 6, Review Engine, no charge"),
+      guard("pre f version", "Version 7, AI Referral Engine, no charge"),
       guard("pre between", 'Between: SRT Agency LLC ("SRT," "we," "us")'),
       guard("pre and", 'And: [Client Business Legal Name] ("Client," "you")'),
       guard("pre effective", "Effective: [Date of e-signature]"),
@@ -908,11 +916,11 @@ const VARIANTS: Record<OfferKey, OfferVariant> = {
     closing: [
       guard(
         "close f b1",
-        "Nothing here is signed and nothing here is charged. These are the terms the Review Engine is provided under."
+        "Nothing here is signed and nothing here is charged. These are the terms the AI Referral Engine is provided under."
       ),
       guard("close b2", "SRT Agency LLC, Matthew Garcia, CEO"),
     ],
-    footer: [FOOTER_TAIL[0], guard("foot f 2", "v6-free, one section."), FOOTER_TAIL[1]],
+    footer: [FOOTER_TAIL[0], guard("foot f 2", "v7-free, one section."), FOOTER_TAIL[1]],
   },
 };
 

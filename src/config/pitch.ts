@@ -389,7 +389,7 @@ export const GUARANTEE_COUNT = 5;
  *
  * ‼️ $4,188 IS THE PROGRAM ALONE AND DOES NOT INCLUDE THE CONCIERGE. Matthew's call, 2026-09-16,
  * chosen over the $6,576 that includes it. That means the funnel card must never call it a TOTAL:
- * it sits on the optimization line, and the Concierge and the Review Tool are shown underneath as
+ * it sits on the optimization line, and the Concierge and the AI Referral Engine are shown underneath as
  * free additions on top of it. A card that said "total value $4,188" directly above a line
  * valuing the Concierge at $199 a month would be inviting the reader to check the arithmetic and
  * find it wrong, which is the one thing the value stack must never do.
@@ -501,13 +501,20 @@ export interface Offer {
 export const OFFERS: readonly Offer[] = [
   {
     key: "review_free",
-    // ‼️ ALL THREE NAMES START "AI VISIBILITY" ON PURPOSE (Matthew, 2026-09-16). The free one was
-    // called "Review Engine" and the paid ones "The Year" and "Month to Month", which read as
-    // three different products and made the free one look like a side offer somebody could take
-    // instead of buying. It is not a side offer, it is the second pillar of the same mechanism,
-    // and naming it so the shared half comes first is what makes it a LEAD MAGNET rather than a
-    // fork in the road: you are already doing AI visibility, this is how much of it you want.
-    name: "AI Visibility Review Engine",
+    // ‼️ NAMED FOR WHAT IT MOVES, NOT FOR THE PILLAR IT SITS IN (Matthew, 2026-09-19). This was
+    // "AI Visibility Review Engine" under an earlier rule that all three names open with "AI
+    // Visibility", so the free one read as the same product as the paid ones rather than a side
+    // offer. That rule still holds for the two paid names and is retired for this one, because it
+    // was solving the wrong half: the problem was never that the free card looked separate, it
+    // was that "review engine" names the plumbing, and an owner does not buy plumbing. She buys
+    // the referral. call-coach-playbook.ts has been arguing exactly that for months, that the
+    // referral which used to happen in person now happens inside ChatGPT, and the name finally
+    // says what the playbook says.
+    //
+    // ‼️ THE KEY IS STILL `review_free` AND IT IS NEVER TO BE RENAMED. It is stored in
+    // onboarding2_signings.offer_key and it is in the live /pricing links. A name is copy, a key
+    // is a promise, and the two move on different clocks.
+    name: "AI Referral Engine",
     tagline: "Pillar 2 of the method, Familiar, done for you.",
     price: null,
     anchor: null,
@@ -528,7 +535,7 @@ export const OFFERS: readonly Offer[] = [
       // ‼️ THE TOOL IS NAMED ON ITS OWN LINE AND TAGGED FREE, rather than being left implicit in
       // the four lines describing what it does. Matthew's ask: a visitor has to be able to see
       // that the thing they are being given is a real, named product.
-      { text: "The AI Review Tool, set up on your site", tag: "FREE", strong: true },
+      { text: "The AI Referral Engine, set up on your site", tag: "FREE", strong: true },
       { text: "Automatic review requests after every visit" },
       { text: "The words your front desk says at checkout" },
       { text: "A one tap request link for the counter" },
@@ -543,7 +550,7 @@ export const OFFERS: readonly Offer[] = [
     anchor: PRICE_YEAR_ANCHOR,
     priceNote: `Works out at ${PRICE_YEAR_EQUIV}.`,
     includes: [
-      "Familiar: everything in the Review Engine",
+      "Familiar: everything in the AI Referral Engine",
       "Findable: your key pages rewritten so AI can quote them",
       "Findable: every NAP mismatch across the web, fixed",
       "Fresh: your monthly AI Visibility Report",
@@ -563,7 +570,7 @@ export const OFFERS: readonly Offer[] = [
       // on top rather than components of it.
       { text: "ChatGPT Client Optimization, all three pillars", tag: VALUE_PROGRAM_YEAR },
       { text: "AI Skin Concierge on your site", was: PRICE_CONCIERGE, tag: "FREE" },
-      { text: "The AI Review Tool", tag: "FREE" },
+      { text: "The AI Referral Engine", tag: "FREE" },
       {
         text: `${GUARANTEE_COUNT} booked appointments in ${GUARANTEE_WINDOW}, or your money back`,
         strong: true,
@@ -578,7 +585,7 @@ export const OFFERS: readonly Offer[] = [
     anchor: null,
     priceNote: "Cancel with 30 days notice.",
     includes: [
-      "Familiar: everything in the Review Engine",
+      "Familiar: everything in the AI Referral Engine",
       "Findable: your key pages rewritten so AI can quote them",
       "Findable: every NAP mismatch across the web, fixed",
       "Fresh: your monthly AI Visibility Report",

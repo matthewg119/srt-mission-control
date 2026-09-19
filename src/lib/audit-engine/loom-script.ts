@@ -714,7 +714,7 @@ export async function buildLoomScript(
     `Customers block: ${aesthetics ? "AESTHETICS (hand-written patient types, with figures)" : "generated niche set"}`,
     opts.price
       ? `Selling: ${opts.price}, quoted by hand. The three standard plans and the guarantee do NOT apply and the script does not mention them.`
-      : `Selling: THREE plans. Free review engine, ${PRICE_YEAR_AMOUNT} for the year, ${PRICE_MONTH}.`,
+      : `Selling: THREE plans. Free AI Referral Engine, ${PRICE_YEAR_AMOUNT} for the year, ${PRICE_MONTH}.`,
     // ‼️ THE GUARANTEE IS ON ONE PLAN AND THE PRE-FLIGHT SAYS SO BEFORE RECORDING.
     // It used to print one guarantee unconditionally, which was right when there was one offer.
     // Reading it over the monthly plan would be selling a remedy that plan does not carry, which
@@ -976,7 +976,7 @@ export async function buildLoomScript(
     say(
       `The first one is free, and I mean actually free.`,
       "",
-      `We set up your review engine. The automation that asks every patient after a visit, the`,
+      `We set up your AI Referral Engine. The automation that asks every patient after a visit, the`,
       `scripts your front desk reads, the one tap link for the counter.`,
       "",
       `No card, no contract, and you keep it whether or not you ever pay me a penny.`,
