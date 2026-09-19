@@ -260,7 +260,7 @@ async function namedByQuestion(clientId: string): Promise<Map<string, boolean>> 
   return map;
 }
 
-/** Phrases the client's own customers used, via the review tool. Empty before the tool is live. */
+/** Phrases the client's own customers used, via the AI Referral Engine. Empty before the tool is live. */
 async function ownReviewText(clientId: string): Promise<string> {
   const { data } = await supabaseAdmin
     .from("review_tool_submissions")

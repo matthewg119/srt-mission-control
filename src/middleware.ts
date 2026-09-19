@@ -201,7 +201,7 @@ export default function middleware(req: NextRequest, ev: NextFetchEvent) {
     // below, so asking for it directly is a miss like any other.
     if (path === "/hub" || path.startsWith("/hub/")) return notFound(false);
 
-    // The review tool's submit endpoint. The host travels as a request header rather than
+    // The AI Referral Engine's submit endpoint. The host travels as a request header rather than
     // in the path: an API route has no full-route cache to key, so there is nothing here
     // for a header to leak across.
     if (path === HUB_API) {

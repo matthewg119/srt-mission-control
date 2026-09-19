@@ -1,6 +1,6 @@
-// The client's visual theme for the hub and the review tool.
+// The client's visual theme for the hub and the AI Referral Engine.
 //
-// Runner v3 5f and 5g: "THEMED, but only visually. The review tool takes the same theme
+// Runner v3 5f and 5g: "THEMED, but only visually. The AI Referral Engine takes the same theme
 // object as the hub — logo, palette, fonts — so it reads as the clinic's page and not an
 // agency page. The COPY, the four questions, the flow, the bullet labels, the destination
 // links and every rule in the build spec are IDENTICAL for every clinic and are not
@@ -20,7 +20,7 @@
 /**
  * Visual only. Four fields. No text.
  *
- * `accent` maps to --hub-accent (links, rules, the review tool's button) and `accentSoft`
+ * `accent` maps to --hub-accent (links, rules, the AI Referral Engine's button) and `accentSoft`
  * to --hub-accent-soft. Background and foreground are deliberately NOT themable: the hub is
  * a light document meant to be read and quoted, and a client-chosen background is how it
  * becomes unreadable on somebody's phone.
@@ -199,7 +199,7 @@ function luminance(hex: string): number | null {
  * The text colour that goes ON an accent fill: white or near-black, whichever reads better.
  *
  * ‼️ DERIVED, NEVER STORED, AND NEEDED THE MOMENT A PICK CAN WRITE A BRIGHT ACCENT. Every button
- * in the review tool was `color: #ffffff` on the accent, which is fine on the default #00705f and
+ * in the AI Referral Engine was `color: #ffffff` on the accent, which is fine on the default #00705f and
  * about 1.9:1 on srtagency.com's teal: a button nobody can read. Computed from the accent rather
  * than read off the reference, so it is never a colour a model chose.
  */

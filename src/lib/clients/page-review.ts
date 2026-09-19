@@ -20,7 +20,7 @@
 // the client's own marketing, which is the line draft-page.ts:3-8 already draws. review-read.ts
 // does the same act for review counts and review-quote-read.ts does it for the words.
 //
-// Nothing in this module imports src/lib/hub/review-assemble.ts, the review tool, or anything
+// Nothing in this module imports src/lib/hub/review-assemble.ts, the AI Referral Engine, or anything
 // under src/app/hub/. It must stay that way.
 // ─────────────────────────────────────────────────────────────────────────────
 //
@@ -106,7 +106,7 @@ export async function proposeReviewFromImage(args: {
   return { ok: true, proposal, read };
 }
 
-/** Store a quote picked out of the client's own review tool. Same slot, different door. */
+/** Store a quote picked out of the client's own AI Referral Engine. Same slot, different door. */
 export async function proposeReviewFromTool(args: {
   threadTs: string;
   quote: string;
@@ -118,7 +118,7 @@ export async function proposeReviewFromTool(args: {
     reviewedAtAsPrinted: null,
     subjectName: null,
     listingUrl: null,
-    platform: "the client's own review tool",
+    platform: "the client's own AI Referral Engine",
     via: "review_tool",
     readAt: new Date().toISOString(),
   };
@@ -330,7 +330,7 @@ export function formatPositioning(p: QuotePositioning, limit = 8): string[] {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The other door: quotes the client's own review tool already collected
+// The other door: quotes the client's own AI Referral Engine already collected
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface ToolQuote {

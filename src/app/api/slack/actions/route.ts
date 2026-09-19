@@ -113,7 +113,9 @@ async function logButtonPress(
     const matched = UUID_PREFIX.exec(value);
 
     let clientId = matched?.[1] ?? null;
-    let stepKey = matched?.[2] ?? null;
+    const { currentStepKey } = await import("@/config/delivery-steps");
+    // A retired key off an old card must not be logged as a step that no longer exists.
+    let stepKey = matched?.[2] ? currentStepKey(matched[2]) : null;
 
     if (!clientId && channel) {
       const { clientForThread } = await import("@/lib/clients/onboarding-docs");
@@ -1631,8 +1633,13 @@ async function deliveryStepAction(args: {
   userName: string | null;
   value: string;
 }): Promise<NextResponse> {
-  const [clientId, stepKey] = args.value.split(":");
-  if (!clientId || !stepKey) return NextResponse.json({ ok: true });
+  const [clientId, rawStepKey] = args.value.split(":");
+  if (!clientId || !rawStepKey) return NextResponse.json({ ok: true });
+  // ‼️ NORMALISED BEFORE ANYTHING READS OR WRITES IT. A card posted before the 2026-09-19
+  // rename still carries `review_tool_preview` in its value, and setDeliveryStep below would
+  // otherwise write that retired key straight back into a table the migration has moved.
+  const { currentStepKey } = await import("@/config/delivery-steps");
+  const stepKey = currentStepKey(rawStepKey);
 
   const actor = args.userName ? `@${args.userName}` : args.userId;
 
@@ -2042,7 +2049,8 @@ async function staleCardSuccessor(
     .maybeSingle();
   if (alive) return null;
 
-  const stepKey = args.value.split(":")[1] ?? "";
+  const { currentStepKey } = await import("@/config/delivery-steps");
+  const stepKey = currentStepKey(args.value.split(":")[1] ?? "");
   const { stepByKey } = await import("@/lib/clients/delivery-checklist");
   const label = stepByKey(stepKey)?.label ?? stepKey;
 
@@ -2519,7 +2527,7 @@ async function reviewLinkOpenAction(args: {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: "The page a customer lands on to write the review. The review tool's Post button opens it.",
+          text: "The page a customer lands on to write the review. The AI Referral Engine's Post button opens it.",
         },
       },
       {
@@ -2588,7 +2596,7 @@ async function reviewLinkSubmit(payload: SlackInteractivePayload): Promise<NextR
       const { postStep } = await import("@/lib/clients/step-engine");
       await setDeliveryStep({ clientId, stepKey: "review_card_pdf", transition: "complete", actor }).catch(() => null);
       await postStep(clientId, "review_card_pdf").catch(() => {});
-      await postStep(clientId, "review_tool_preview").catch(() => {});
+      await postStep(clientId, "referral_engine_preview").catch(() => {});
     })().catch((e) => console.error("[slack/actions] review link follow-up failed:", e))
   );
 

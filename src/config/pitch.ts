@@ -502,11 +502,11 @@ export const OFFERS: readonly Offer[] = [
   {
     key: "review_free",
     // ‼️ NAMED FOR WHAT IT MOVES, NOT FOR THE PILLAR IT SITS IN (Matthew, 2026-09-19). This was
-    // "AI Visibility Review Engine" under an earlier rule that all three names open with "AI
+    // "AI Visibility AI Referral Engine" under an earlier rule that all three names open with "AI
     // Visibility", so the free one read as the same product as the paid ones rather than a side
     // offer. That rule still holds for the two paid names and is retired for this one, because it
     // was solving the wrong half: the problem was never that the free card looked separate, it
-    // was that "review engine" names the plumbing, and an owner does not buy plumbing. She buys
+    // was that "AI Referral Engine" names the plumbing, and an owner does not buy plumbing. She buys
     // the referral. call-coach-playbook.ts has been arguing exactly that for months, that the
     // referral which used to happen in person now happens inside ChatGPT, and the name finally
     // says what the playbook says.

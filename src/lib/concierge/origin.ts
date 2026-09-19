@@ -58,7 +58,7 @@ export function conciergeOrigin(): string {
  * /start and /turn are relative, and engine.ts builds the booking hop from the frame origin /start
  * recorded. Only the loader tag names this function; everything after it follows.
  *
- * ‼️ THE ENV READ IS INLINED RATHER THAN BORROWED FROM config.ts OR review-preview.ts, for the
+ * ‼️ THE ENV READ IS INLINED RATHER THAN BORROWED FROM config.ts OR referral-engine-preview.ts, for the
  * reason at the top of this file: both of those pull the database client in behind them.
  */
 export function previewOrigin(): string {

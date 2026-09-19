@@ -1,4 +1,4 @@
--- The review tool's star rating, the attestation, and the private note.
+-- The AI Referral Engine's star rating, the attestation, and the private note.
 --
 -- Run against prod Supabase. Safe to run twice; every statement is idempotent.
 --

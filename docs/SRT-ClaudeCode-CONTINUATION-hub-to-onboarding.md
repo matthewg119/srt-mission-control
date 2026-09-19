@@ -69,7 +69,7 @@ Another session owns feat/client-comms-whatsapp and is merging origin/main
 - src/lib/hub/host-classify.ts, resolve.ts (host -> client, cached, tagged),
   pages.ts, jsonld.ts, review-assemble.ts, vercel-domains.ts.
 - src/app/hub/[host]/: index, [slug], robots.txt, sitemap.xml, llms.txt,
-  not-found, and the review tool. Indexable, canonical on the client host,
+  not-found, and the AI Referral Engine. Indexable, canonical on the client host,
   LocalBusiness + QAPage JSON-LD.
 - public/robots.txt is DELETED. It disallowed GPTBot, OAI-SearchBot,
   PerplexityBot, ClaudeBot and Google-Extended BY NAME and was served on every
@@ -207,7 +207,7 @@ them, or tell me the manual-only version is worth shipping first.
 ## 6. THE DOCS THE KICKOFF TELLS YOU TO READ ARE MOSTLY NOT IN THE REPO
 
 In docs/specs/: SRT-AEO-Onboarding-v2-PILOT.md, SRT-Question-Sets-v1.md,
-SRT-Artifact-Templates-v1.md, SRT-Review-Tool-BUILD-SPEC-v2.md. That is all.
+SRT-Artifact-Templates-v1.md, SRT-Referral-Engine-BUILD-SPEC-v2.md. That is all.
 
 MISSING: SRT-Pilot-Amendment-A1-Volume-and-Harvest.md,
 SRT-Pilot-Amendment-A2-Market-Audit-Bridge-Universal-Set.md,
@@ -234,13 +234,13 @@ Do not plan the step engine yet. Do not touch the presence sweep.
 
 1. Day 0 wall on clients, gating the hub publish path.
 2. Reconcile the two SRT rows; delete or merge whichever I say.
-3. Preview before live. Runner v3 5f/5g wants the hub and the review tool
+3. Preview before live. Runner v3 5f/5g wants the hub and the AI Referral Engine
    viewable BEFORE the call on our own infrastructure, noindex, no client DNS.
    client_pages already has draft vs published, so this is a preview host or a
    token-gated preview route plus a noindex rule — NOT a second hub. The
    review-spec rule is absolute: a preview submission must never reach
    review_tool_submissions, gated on the HOST and not a flag.
-4. Hub theming. Runner v3 5g wants the review tool to read as the clinic's own
+4. Hub theming. Runner v3 5g wants the AI Referral Engine to read as the clinic's own
    page — logo, palette, fonts — with copy and flow identical for every client.
    Nothing extracts a theme today and there is no theme column.
 5. onboarding_docs + Slack file capture. This is the load-bearing piece for the
@@ -266,7 +266,7 @@ Do not plan the step engine yet. Do not touch the presence sweep.
 - Six concurrent clients. Do not build a workflow engine.
 - Vocabulary in every artifact: named / not named / named alongside / named
   instead. Never ranked, position, #N, top result.
-- No model in the review tool path, ever. No staff-name field. No column that
+- No model in the AI Referral Engine path, ever. No staff-name field. No column that
   could identify a reviewer.
 - The hub MUST stay indexable. /r/[slug] and /v2 are noindex and are the wrong
   pattern to copy.

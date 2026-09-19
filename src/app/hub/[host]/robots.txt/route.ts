@@ -35,7 +35,7 @@ export async function GET(
       return "User-agent: *\nDisallow: /\n";
     }
 
-    // The review tool is one customer's page, opened from a QR code on a printed card. It
+    // The AI Referral Engine is one customer's page, opened from a QR code on a printed card. It
     // is a tool, not content, and it has nothing to be found.
     if (resolved.kind === "reviews") {
       return "User-agent: *\nDisallow: /\n";

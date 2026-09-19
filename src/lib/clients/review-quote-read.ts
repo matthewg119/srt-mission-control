@@ -8,7 +8,7 @@
 //
 // FTC 16 CFR Part 465 regulates a tool that GENERATES review content its user did not write.
 // That is the Rytr fact pattern, and it is why src/lib/hub/review-assemble.ts imports nothing
-// and why no model may go near the review tool.
+// and why no model may go near the AI Referral Engine.
 //
 // This file writes no review. It transcribes one a customer already published, so the client
 // can quote it in their own marketing, which is what draft-page.ts:3-8 already draws the line
@@ -16,7 +16,7 @@
 // under their name after a person read it, the same thing an agency has always written for a
 // client. Different artifact, different rule. Do not fold the two together."
 //
-// Nothing here imports review-assemble.ts, the review tool or anything under src/app/hub/.
+// Nothing here imports review-assemble.ts, the AI Referral Engine or anything under src/app/hub/.
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // ‼️ AND THE DANGEROUS INSTINCT IS TIDYING, NOT INVENTING.

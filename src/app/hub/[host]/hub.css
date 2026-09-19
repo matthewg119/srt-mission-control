@@ -29,7 +29,7 @@ body:has(.hub-root) {
  * ‼️ EVERY LAYOUT NUMBER A TEMPLATE MIGHT MOVE IS A VARIABLE, NOT A LITERAL. --hub-measure,
  * --hub-base and --hub-radius were literals (44rem, 17px, 8px) and every template variant
  * would have had to restate them in four places, including inside .rev-mirror where a 1px
- * disagreement moves the review tool's highlight off the words it belongs to.
+ * disagreement moves the AI Referral Engine's highlight off the words it belongs to.
  */
 .hub-root {
   --hub-bg: #ffffff;
@@ -185,7 +185,7 @@ body:has(.hub-root) {
 .hub-part { font-size: 0.9375rem; color: var(--hub-muted); }
 .hub-links { margin-top: 3rem; }
 
-/* ── The review tool ───────────────────────────────────────────────────────── */
+/* ── The AI Referral Engine ───────────────────────────────────────────────────────── */
 
 .rev-field { margin: 1.75rem 0 0; }
 .rev-field label {
@@ -238,7 +238,7 @@ body:has(.hub-root) {
 }
 .rev-out { margin-top: 0.5rem; }
 
-/* The microphone. Rendered only where the browser has SpeechRecognition; see review-client.tsx
+/* The microphone. Rendered only where the browser has SpeechRecognition; see referral-engine-client.tsx
    for why it is that API and never an upload. */
 .rev-mic {
   margin-top: 0.5rem;
@@ -655,7 +655,7 @@ body:has(.hub-tpl-editorial) { background: #fffdf9; }
    ‼️ THERE IS NO STYLE HERE THAT HIDES ANYTHING BASED ON THE RATING, and there must not be.
    Gating is a rating that decides whether she reaches the public review link. If a future
    change wants `.rev-dests { display: none }` under some condition, that condition is the
-   thing to argue about, not the CSS. See the header of review-client.tsx.
+   thing to argue about, not the CSS. See the header of referral-engine-client.tsx.
    ───────────────────────────────────────────────────────────────────────────── */
 .rev-stars {
   border: 0;

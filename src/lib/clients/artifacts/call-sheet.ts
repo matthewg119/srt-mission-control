@@ -390,7 +390,7 @@ function reviewMechanism(state: PageState, d: CallSheetData) {
   ]);
 
   correctionBox(state, "Automated request, or card_only — circle one", { lines: 1 });
-  correctionBox(state, "Named person for the review tool (a NAME, not \"the front desk\")", {
+  correctionBox(state, "Named person for the AI Referral Engine (a NAME, not \"the front desk\")", {
     prefill: d.reviewOwner,
   });
 
@@ -418,7 +418,7 @@ function preview(state: PageState, d: CallSheetData) {
   sectionHeading(state, "50 to 55 · Preview walkthrough");
   bulletList(state, [
     `Hub preview, themed. Their pages, their colours, on our domain, not live yet.`,
-    "Review tool preview, same theme. Type a demo answer live. Never show pre-filled sample answers.",
+    "AI Referral Engine preview, same theme. Type a demo answer live. Never show pre-filled sample answers.",
     "The AI Concierge preview. Run one real scan on your screen and let them watch it.",
     "Straight after the scan finishes, ask whether they want the appointment booking bot.",
     "The printed card.",

@@ -26,7 +26,7 @@ bunx tsx --env-file=.env.local scripts/_srtid.ts
 
 ```
 --  hub_preview          not_yet  2 hosts attached, theme not confirmed
---  review_tool_preview  not_yet  The theme has not been confirmed, so the review tool would
+--  referral_engine_preview  not_yet  The theme has not been confirmed, so the AI Referral Engine would
                                   render in SRT's default colours
 ```
 
@@ -52,7 +52,7 @@ hub_preview row     status awaiting_me, anchor 1788809813.517139, card 178880982
 > confirmation. That is a green tick over unchecked work, which `docs/lanes/CONTRACT.md` calls
 > the worst bug this design can have. **There is no override and there must not be one.**
 
-**One decision unblocks two steps.** `review_tool_preview` (17) is refusing on the same
+**One decision unblocks two steps.** `referral_engine_preview` (17) is refusing on the same
 `themeConfirmed()`. Confirming the theme clears both.
 
 ---
@@ -195,5 +195,5 @@ Then prove it:
 
 - Step 16's card carries a real preview link again, not the CLIENT_LINK_SECRET line.
 - `themeConfirmed()` is true, because a person confirmed it.
-- `hub_preview` and `review_tool_preview` both go green, by their own verifiers.
+- `hub_preview` and `referral_engine_preview` both go green, by their own verifiers.
 - Every card still offers its next step.
