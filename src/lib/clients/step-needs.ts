@@ -241,9 +241,9 @@ export const STEP_NEEDS: Record<StepKey, StepNeed> = {
     kind: "nothing",
     why: "the hub is built from the client's own theme and pages; its look is picked, not answered",
   },
-  review_tool_preview: {
+  referral_engine_preview: {
     kind: "nothing",
-    why: "the review tool mirrors listings that already exist and asks for no dataset field",
+    why: "the AI Referral Engine mirrors listings that already exist and asks for no dataset field",
   },
   concierge_preview: {
     kind: "fields",
@@ -303,7 +303,7 @@ export const STEP_NEEDS: Record<StepKey, StepNeed> = {
   },
   cards_printed: { kind: "nothing", why: "a physical deliverable handed over in person" },
   review_request_configured: { kind: "nothing", why: "a setting in their booking system, or the printed cards" },
-  review_tool_handed: { kind: "nothing", why: "a named person is given the tool; the naming is not a dataset field" },
+  referral_engine_handed: { kind: "nothing", why: "a named person is given the tool; the naming is not a dataset field" },
   concierge_live: {
     kind: "nothing",
     why: "the switch, the booking destination and the audience were all confirmed at concierge_preview",

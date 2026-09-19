@@ -141,7 +141,7 @@ before writing a suggestion that claims anything about it.
 **The ask:** *"make sure the style of this page is matched with the new SRT Agency look from
 srtagency.com, help me bring this resources page back."* And: *"use this layout as a potential
 variation or an example of how I want the variations of the pages to generate when I click on the
-step where we overlook how the pages we are going to post look and the review tool. This website is
+step where we overlook how the pages we are going to post look and the AI Referral Engine. This website is
 more complete than those examples."*
 
 Two halves:
@@ -151,7 +151,7 @@ Two halves:
 2. **In `srt-mission-control`:** offer this layout as a page variation at the preview step. The
    preview lane is `/preview/{token}?kind=site` and the hub templates are picked with
    `template <name>` in the step thread (`docs` and `project_hub_skin_templates` cover the four that
-   exist). Add the resources/guide layout as a fifth, so step 21's preview and the review tool can
+   exist). Add the resources/guide layout as a fifth, so step 21's preview and the AI Referral Engine can
    show it.
 
 ‼️ The preview link scheme Matthew means by *"the opus lopus morpus corpus dropus soup of letters"*

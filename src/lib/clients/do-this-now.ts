@@ -177,7 +177,7 @@ export const STEP_ACTIONS: Record<StepKey, StepAction> = {
       "Confirm the theme, then press Done.",
     ],
   },
-  review_tool_preview: {
+  referral_engine_preview: {
     verb: "confirm",
     bullets: ["Open the preview and check it is themed to match the hub. Then press Done."],
   },
@@ -289,7 +289,7 @@ export const STEP_ACTIONS: Record<StepKey, StepAction> = {
     verb: "confirm",
     bullets: ["Set up how review requests actually go out, then press Done."],
   },
-  review_tool_handed: {
+  referral_engine_handed: {
     verb: "confirm",
     bullets: [
       "`review link: <url>` records where their reviews are collected.",
