@@ -164,8 +164,8 @@ export async function POST(req: NextRequest) {
     //
     // The cost is not cosmetic. `domain` is what hostsFor(), seedDnsRecords() and the whole
     // hub lane are built from, so hub_preview fails with "No domain on file" and takes
-    // review_tool_preview, review_card_pdf, dns_records, subdomain_live, first_page and
-    // review_tool_handed down with it. Eight steps of a 33-step runner were unreachable for
+    // referral_engine_preview, review_card_pdf, dns_records, subdomain_live, first_page and
+    // referral_engine_handed down with it. Eight steps of a 33-step runner were unreachable for
     // anyone who signed up through /start. Confirmed on the live re-run of srtagency.com.
     const typedWebsite = typeof answers.website === "string" ? answers.website.trim() : "";
     if (typedWebsite) {

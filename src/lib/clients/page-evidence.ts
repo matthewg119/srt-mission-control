@@ -45,7 +45,7 @@ export type CollectedVia =
   | "audit"
   /** Read off a screenshot of a public listing dropped in the page studio. */
   | "review_screenshot"
-  /** Read out of the client's own review tool, review_tool_submissions. */
+  /** Read out of the client's own AI Referral Engine, review_tool_submissions. */
   | "review_tool";
 
 export interface PageSource {

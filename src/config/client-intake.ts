@@ -241,7 +241,7 @@ export const INTAKE_STEPS: StepDef[] = [
       },
       { key: "tool", label: "What tool do you use to ask, if any?", kind: "text" },
       {
-        // PILOT §6: separate from the review tool question, deliberately. This is where
+        // PILOT §6: separate from the AI Referral Engine question, deliberately. This is where
         // the automated request will eventually live (D-P8), so it is not optional.
         key: "booking_software",
         label: "What booking, scheduling or customer messaging software do you use?",
@@ -353,7 +353,7 @@ export const INTAKE_STEPS: StepDef[] = [
       },
       {
         key: "language",
-        label: "Language for your customers' review tool",
+        label: "Language for your customers' AI Referral Engine",
         kind: "select",
         required: true,
         options: ["English", "Spanish", "Both", "Other"],

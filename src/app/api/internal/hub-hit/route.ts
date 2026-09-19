@@ -61,7 +61,7 @@ function authorized(req: NextRequest): boolean {
  */
 async function isRealPath(clientId: string, kind: string, path: string): Promise<boolean> {
   if (path === "/") return true;
-  // The review tool is one tool on one URL. It has no slugs at all.
+  // The AI Referral Engine is one tool on one URL. It has no slugs at all.
   if (kind === "reviews") return false;
   if (HUB_FILES.has(path)) return true;
 

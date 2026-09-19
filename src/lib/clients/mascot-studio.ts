@@ -144,7 +144,7 @@ export async function mascotPreviewUrl(clientId: string, key: string): Promise<s
   try {
     const [{ signOnboardingToken }, { PREVIEW_TOKEN_TTL_DAYS }, { previewOrigin }] = await Promise.all([
       import("./token"),
-      import("./review-preview"),
+      import("./referral-engine-preview"),
       import("@/lib/concierge/origin"),
     ]);
     const { token } = signOnboardingToken(clientId, PREVIEW_TOKEN_TTL_DAYS, "preview");

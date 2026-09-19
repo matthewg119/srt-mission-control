@@ -341,8 +341,8 @@ async function instructionsFor(
         // ‼️ MATTHEW CONFLATED THIS WITH STEP 16 AND THE CARDS HAVE TO MAKE THE DIFFERENCE
         // OBVIOUS. Three steps have "review" in the label and they own three different things.
         "*This is the competitor review-COUNT grid.* It is internal and no customer ever sees it.",
-        "It feeds findings section 3. The tool a customer uses is the review tool preview; handing",
-        `it over is step ${stepNumber("review_tool_handed")}.`,
+        "It feeds findings section 3. The tool a customer uses is the AI Referral Engine preview; handing",
+        `it over is step ${stepNumber("referral_engine_handed")}.`,
         "",
         ...formatReviewAuditCard({
           clientName: c.name,
@@ -356,8 +356,8 @@ async function instructionsFor(
       ];
     }
 
-    case "review_tool_preview": {
-      const { reviewPreviewUrl, clientPreviewUrl, previewLinkLine } = await import("./review-preview");
+    case "referral_engine_preview": {
+      const { reviewPreviewUrl, clientPreviewUrl, previewLinkLine } = await import("./referral-engine-preview");
       const { data: host } = await supabaseAdmin
         .from("client_hosts")
         .select("host, vercel_attached_at")
@@ -367,7 +367,7 @@ async function instructionsFor(
 
       return [
         "*This step owns whether the tool RENDERS and is themed.* It is not the review audit",
-        `(the review audit, an internal competitor grid) and not the handover (step ${stepNumber("review_tool_handed")}).`,
+        `(the review audit, an internal competitor grid) and not the handover (step ${stepNumber("referral_engine_handed")}).`,
         "",
         `Internal preview: ${reviewPreviewUrl(c.id)}`,
         ":lock: *That URL cannot be sent to a client.* It is a `/dashboard/` path and the page",
@@ -375,7 +375,7 @@ async function instructionsFor(
         "login screen. It belongs in this thread, which is internal, and nowhere else.",
         "It is still the one to use HERE, because it shows drafts and this one does not.",
         "",
-        ...previewLinkLine(clientPreviewUrl(c.id, "reviews"), "The review tool").split("\n"),
+        ...previewLinkLine(clientPreviewUrl(c.id, "reviews"), "The AI Referral Engine").split("\n"),
         "Anything typed into it from either preview is discarded rather than stored: the submit",
         "route takes the client only from `x-hub-host`, and middleware strips that header on our",
         "own hostnames. Type into it freely on the call.",
@@ -538,7 +538,7 @@ async function instructionsFor(
       if (!domain) return ["No domain on file, so there is no hub to build."];
 
       const hosts = hostsFor({ subdomain: (row?.subdomain as string | null) ?? null, domain });
-      const { clientPreviewUrl, previewLinkLine } = await import("./review-preview");
+      const { clientPreviewUrl, previewLinkLine } = await import("./referral-engine-preview");
       const themed = await themeConfirmed(c.id);
       const overrides = themed ? await themeOverrides(c.id) : [];
 
@@ -950,7 +950,7 @@ async function instructionsFor(
           : ":warning: *Nothing is recorded yet, so neither branch has been chosen* and [Done] will refuse.",
         client?.review_owner_name
           ? `The named person on the record is *${client.review_owner_name as string}*.`
-          : `No named person is on the record yet. Step ${stepNumber("review_tool_handed")} wants one.`,
+          : `No named person is on the record yet. Step ${stepNumber("referral_engine_handed")} wants one.`,
         "",
         ...(destinations.length
           ? [`They told us at intake they collect on: ${destinations.join(", ")}.`]
@@ -966,11 +966,11 @@ async function instructionsFor(
         "*Next:*",
         `  • Record the mode and paste the links: ${boardUrl(c, "review-destination")}`,
         `  • See what she will see: ${appUrl()}/dashboard/clients/${c.id}/preview?kind=reviews`,
-        `  • Then step ${stepNumber("review_tool_handed")} hands the tool to the named person.`,
+        `  • Then step ${stepNumber("referral_engine_handed")} hands the tool to the named person.`,
       ];
     }
 
-    case "review_tool_handed": {
+    case "referral_engine_handed": {
       const { data: client } = await supabaseAdmin
         .from("clients")
         .select("review_owner_name")
@@ -987,7 +987,7 @@ async function instructionsFor(
       const owner = (client?.review_owner_name as string | null) ?? null;
 
       return [
-        `*This step owns the HANDOVER.* Step ${stepNumber("review_tool_preview")} owned whether the tool renders; this is the`,
+        `*This step owns the HANDOVER.* Step ${stepNumber("referral_engine_preview")} owned whether the tool renders; this is the`,
         "conversation where a person is shown it and takes it on.",
         "",
         owner
@@ -1167,7 +1167,7 @@ async function instructionsFor(
         "  • *NAP read aloud* — the canonical record is what every listing is corrected to.",
         `  • *Question set approved* — step ${stepNumber("custom_question_set")}'s set is what day 30/60/90 is measured on.`,
         "  • *Consent confirmed* — named or anonymized results. It defaults to anonymized.",
-        "  • *Preview walked* — the hub, the review tool and the Concierge, on their own screen.",
+        "  • *Preview walked* — the hub, the AI Referral Engine and the Concierge, on their own screen.",
         "  • *Pages picked* — which of the candidates gets written first.",
         "  • *Tracking agreed* — the four answers below. This is the one that decides whether",
         "    we ever get paid, and it is the one that gets skipped.",
@@ -1427,7 +1427,7 @@ async function instructionsFor(
         ];
       }
 
-      const { clientPreviewUrl, previewLinkLine } = await import("./review-preview");
+      const { clientPreviewUrl, previewLinkLine } = await import("./referral-engine-preview");
       const { designSection } = await import("./hub-skin");
 
       return [
@@ -1873,7 +1873,7 @@ async function extraActionsFor(step: DeliveryStep, c: ClientFacts): Promise<Step
     return step21Actions(c.id).catch(() => []);
   }
 
-  if (step.key === "review_tool_preview" || step.key === "review_card_pdf") {
+  if (step.key === "referral_engine_preview" || step.key === "review_card_pdf") {
     return [{ label: "Paste review link", actionId: "review_link_open", value: c.id }];
   }
 
@@ -2287,8 +2287,8 @@ export interface Precondition {
  * it is checkable, a checklist that takes somebody's word for it is a checklist that lies.
  *
  * `hub_preview` is the case that proved it. It was ticked on the pilot with the theme
- * unconfirmed, so `review_tool_preview` refused on the very next line with "the theme has not
- * been confirmed" — a message that reads as a failure of the review tool rather than as the
+ * unconfirmed, so `referral_engine_preview` refused on the very next line with "the theme has not
+ * been confirmed" — a message that reads as a failure of the AI Referral Engine rather than as the
  * unfinished half of the step just marked done. The refusal belongs on the button that was
  * wrong, at the moment it was pressed.
  *
@@ -2433,8 +2433,8 @@ export async function stepPrecondition(clientId: string, stepKey: string): Promi
         message:
           "Not yet — the theme has not been confirmed, and this step's label says \"themed\". " +
           "Open the client board, Theme panel, then press Confirm. Until you do, the hub and " +
-          "the review tool render in SRT's colours on the client's own domain, and " +
-          "review_tool_preview will refuse for the same reason. Confirming with NOTHING SET is " +
+          "the AI Referral Engine render in SRT's colours on the client's own domain, and " +
+          "referral_engine_preview will refuse for the same reason. Confirming with NOTHING SET is " +
           "allowed and means you are keeping the defaults on purpose.",
       };
     }

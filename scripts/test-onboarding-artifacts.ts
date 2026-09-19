@@ -954,7 +954,7 @@ const stillUnimplemented = unimplementedAutoSteps();
 // Every auto step with no runner is now completed by a ROUTE instead. Nothing is merely missing.
 //
 // The five that used to be on this list — review_audit, custom_question_set, page_candidates,
-// citation_cleanup_list, review_tool_preview — have real runners as of 2026-08-22, which is what
+// citation_cleanup_list, referral_engine_preview — have real runners as of 2026-08-22, which is what
 // took unreachableAutoSteps() to empty. The four that remain are here because a runner would be
 // the WRONG shape for them, not because nobody got to them:
 const expectedUnimplemented = [
@@ -1388,7 +1388,7 @@ eq(
   );
 
   // -- mergeMarks: the pieces must join back to the original, exactly ---------
-  // The review tool paints these into a div underneath a transparent textarea. One dropped or
+  // The AI Referral Engine paints these into a div underneath a transparent textarea. One dropped or
   // duplicated character does not look broken, it looks like the hint is pointing at the wrong
   // sentence. Every case below deliberately has a word flag nested inside a hard sentence,
   // which is the arrangement the old single-cursor walk could not survive.
@@ -1438,7 +1438,7 @@ eq(
   );
 
   const client = fs.readFileSync(
-    path.join(__dirname, "..", "src", "app", "hub", "[host]", "reviews", "review-client.tsx"),
+    path.join(__dirname, "..", "src", "app", "hub", "[host]", "reviews", "referral-engine-client.tsx"),
     "utf8"
   );
   // The whisper transcriber must never be wired into the customer-facing tool: review_tool_
@@ -1450,7 +1450,7 @@ eq(
   // somebody to delete the explanation to make the test pass — which is how the reasoning gets
   // lost and the helper gets wired in a year later.
   ok(
-    "the review tool never imports the transcriber",
+    "the AI Referral Engine never imports the transcriber",
     !/^\s*import[^\n]*voice-notes/m.test(client)
   );
 }
@@ -1460,7 +1460,7 @@ eq(
 // ‼️ THE SAME SIX PLATFORMS USED TO BE SPELLED OUT IN THREE FILES WITH A COMMENT ASKING PEOPLE TO
 // KEEP THEM IN STEP, AND THEY WERE NOT. The onboarding2 funnel offered six names, the Review
 // handover panel had two boxes, and SRT Agency's own record names Trustpilot. So the platform
-// the client picked was the one with nowhere to put its link, the review tool rendered no
+// the client picked was the one with nowhere to put its link, the AI Referral Engine rendered no
 // button, and nothing anywhere said so. Measured in production 2026-09-08.
 {
   const platformSrc = fs.readFileSync(
@@ -2711,13 +2711,13 @@ import { pageSlug } from "../src/lib/hub/pages";
   );
 
   // ‼️ NOTHING IN THE REVIEW-QUOTE PATH MAY REACH review-assemble.ts. FTC 16 CFR Part 465: that
-  // file is the customer-facing review tool and imports nothing. Quoting a published review in
+  // file is the customer-facing AI Referral Engine and imports nothing. Quoting a published review in
   // the CLIENT's own marketing is a different artifact under a different rule, and the two must
   // not be folded together by an import that looks convenient.
   const pageReview = read("src/lib/clients/page-review.ts");
   const quoteRead = read("src/lib/clients/review-quote-read.ts");
   ok(
-    "the review-quote path never imports the review tool",
+    "the review-quote path never imports the AI Referral Engine",
     [pageReview, quoteRead].every((src) => {
       // ‼️ THE IMPORT LINES THEMSELVES, NOT A SCAN OF THE FILE. Both of these files ARGUE about
       // review-assemble.ts in their headers, at length, because the argument is the reason they

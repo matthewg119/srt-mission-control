@@ -485,7 +485,7 @@ export async function gatherSiteIntel(domain: string): Promise<SiteIntel> {
       errors.push("both learn. and guide. already resolve; this one needs a decision, not a default");
     }
     if (reviews === true) {
-      errors.push("reviews. already resolves and the review tool needs that exact name");
+      errors.push("reviews. already resolves and the AI Referral Engine needs that exact name");
     }
   }
 

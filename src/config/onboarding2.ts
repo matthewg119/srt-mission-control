@@ -289,16 +289,16 @@ export const QUALIFYING_QUESTIONS: QualifyingQuestion[] = [
     // ‼️ THIS ASKS FOR A PLATFORM, NOT A URL, AND THE DIFFERENCE IS THE WHOLE DESIGN.
     //
     // It answers "which of the six review destinations does this client want", which is what
-    // decides the order of the buttons in the review tool and which URL field the Review
+    // decides the order of the buttons in the AI Referral Engine and which URL field the Review
     // handover panel needs filled. It does NOT produce a link. A review URL typed by a client
     // into a chat box, or worse constructed by us from a business name, is a link that can send
     // a real patient to somebody else's profile. destinationsFor() in
-    // app/hub/[host]/reviews/review-tool.tsx renders a destination only where a human pasted the
+    // app/hub/[host]/reviews/referral-engine.tsx renders a destination only where a human pasted the
     // actual URL, and that stays true.
     //
     // ‼️ THE OPTIONS ARE THE SHARED TABLE, NOT A COPY OF IT (2026-09-08). They used to be six
     // literals with a comment asking whoever read it to keep them in step with PLATFORMS in
-    // review-tool.tsx and with the boxes on the Review handover panel. The panel had two of the
+    // referral-engine.tsx and with the boxes on the Review handover panel. The panel had two of the
     // six, so a client picking Trustpilot here chose a destination nothing could ever render.
     // A name offered here now cannot exist without a URL field to hold its link.
     key: "review_destination",
@@ -306,7 +306,7 @@ export const QUALIFYING_QUESTIONS: QualifyingQuestion[] = [
     options: REVIEW_PLATFORMS.map((p) => guard(`q7 ${p.key}`, p.name)),
     help: guard(
       "q7 help",
-      "Wherever you pick is where the review tool sends your patients when they finish writing."
+      "Wherever you pick is where the AI Referral Engine sends your patients when they finish writing."
     ),
   },
 ];

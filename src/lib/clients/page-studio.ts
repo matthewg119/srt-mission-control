@@ -2109,12 +2109,12 @@ async function reviewCommand(
     formatPositioning,
   } = await import("./page-review");
 
-  // `review quotes` — the other door, for a client whose own review tool is collecting.
+  // `review quotes` — the other door, for a client whose own AI Referral Engine is collecting.
   if (/^quotes?$/i.test(arg.trim())) {
     const quotes = await loadToolQuotes(session.clientId);
     if (!quotes.length) {
       await say(session.threadTs, [
-        "Nothing in this client's own review tool yet.",
+        "Nothing in this client's own AI Referral Engine yet.",
         "",
         "*Next:* screenshot a review off their Google, Yelp or Trustpilot listing and drop it " +
           "here with `review`, or hand the tool over so it starts collecting.",
@@ -2145,7 +2145,7 @@ async function reviewCommand(
       await say(session.threadTs, `:warning: Could not hold that: ${held.error}`);
       return;
     }
-    await sayProposal(session, chosen.text, "their own review tool", null);
+    await sayProposal(session, chosen.text, "their own AI Referral Engine", null);
     return;
   }
 
@@ -2157,7 +2157,7 @@ async function reviewCommand(
       "",
       "  • Drop a *screenshot* of the review with `review` in the message, and I read it out " +
         "word for word.",
-      "  • `review quotes` lists what this client's own review tool has already collected.",
+      "  • `review quotes` lists what this client's own AI Referral Engine has already collected.",
       "",
       "Nothing is filed until you press the button on what comes back. The quote is used " +
         "verbatim or not at all: nothing here rewrites what a customer wrote.",
@@ -2897,7 +2897,7 @@ export async function handlePageStudioEvent(args: {
   // two live captures recorded there were "avatars are hard to write" and "avatar research
   // takes a while". The same shapes exist here in quantity, because this is a lane about
   // reviews and somebody WILL type "reviews are up this month", "review the copy before it
-  // ships" and "our review tool is live" into it as dictation.
+  // ships" and "our AI Referral Engine is live" into it as dictation.
   //
   // So: `review` alone, or `review quotes`, or `review quote <n>`, and nothing else. The
   // plural `reviews` is deliberately not a command. _probe-page-studio.ts holds a copy of this

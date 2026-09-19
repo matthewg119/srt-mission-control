@@ -1,5 +1,7 @@
 # One strategy per client: the offer is the root, 9 pages are ready before the call
 
+> **Renamed 2026-09-19.** What this document calls the AI Referral Engine was written down as the "review tool", and the free plan as the "AI Visibility Review Engine". Both are the AI Referral Engine now, and the text below has been updated to say so. Nothing about the mechanism changed; only the name did. The `reviews.` host, the `/hub/[host]/reviews` route and the `review_workflow` table keep their old spelling on purpose, because clients have already typed that hostname into a registrar and printed QR codes resolve through it.
+
 A build prompt for a fresh session, written 2026-09-11 from two sessions' findings. Everything below
 was checked against the repo and prod that day. Line numbers drift; symbol names do not.
 
@@ -15,7 +17,7 @@ So one chain, per client, in this order, every link feeding the next:
 ```
 prep call (offer locked)  ->  keywords aimed at that offer  ->  page plan: 1 pillar + 8 supports
   ->  9 full drafts, each with a magnet that frames the anchor offer  ->  pages linked to each other
-  ->  hub + review tool + concierge previews, all openable with NO DNS  ->  the onboarding call
+  ->  hub + AI Referral Engine + concierge previews, all openable with NO DNS  ->  the onboarding call
   ->  DNS added on the call  ->  Day 0  ->  publish
 ```
 
@@ -57,7 +59,7 @@ writing code. This build is that brief, made concrete.
 | D2 | **9 pre-call pages: 1 pillar + 8 supports.** The pillar is the offer page. |
 | D3 | **Full drafts, no gaps**, written from what is on file. Drafts only; nothing publishes before Day 0 and the gate. |
 | D4 | **Every page's magnet is the anchor offer in disguise** (SRT: the AI visibility audit). |
-| D5 | **Previews first, DNS later.** Hub, review tool and concierge must all be viewable before the call with no DNS. Client DNS is added ON the call, as today. |
+| D5 | **Previews first, DNS later.** Hub, AI Referral Engine and concierge must all be viewable before the call with no DNS. Client DNS is added ON the call, as today. |
 | D6 | **Mic permission is requested on the tap** that leads to voice (the Next button), never on a later spinner. Applies to every voice surface from now on. See memory `feedback_mic_permission_on_tap`. |
 | D7 | Drafting pages belongs to the ONBOARDING workflow (delivery steps), not only the Slack page studio. The studio is where a person finishes them. |
 
@@ -196,16 +198,16 @@ a switched-off widget opens for a signed preview token (`src/lib/concierge/previ
    the host attached) is needed only when a widget goes LIVE on a client site. It does not block
    previews. Give Matthew the exact record in the final message; do not add it yourself.
 
-## Workstream F: the review tool's microphone
+## Workstream F: the AI Referral Engine's microphone
 
-`src/app/hub/[host]/reviews/review-client.tsx` and `review-tool.tsx`. The priming screen starts and
+`src/app/hub/[host]/reviews/referral-engine-client.tsx` and `referral-engine.tsx`. The priming screen starts and
 aborts a `SpeechRecognition` from a `useEffect` in the same tick, Chrome never shows the prompt, the
 "waiting on microphone approval" spinner hangs, and the real prompt appears only on "Tap and speak".
 
 Fix: call `navigator.mediaDevices.getUserMedia({ audio: true })` inside the Next button's click
 handler (second screen), stop every track the moment the promise settles, and go straight to the
 chat whether it was allowed or denied. The "One moment" screen shows only while the browser prompt
-is open. Keep the review tool's rules intact: no model anywhere near it, no MediaRecorder, no stream
+is open. Keep the AI Referral Engine's rules intact: no model anywhere near it, no MediaRecorder, no stream
 held open, nothing identifying stored (`review_tool_submissions` has no column for it on purpose).
 Apply the same pattern to `src/app/onboarding2/chat-bubble.tsx` and `src/app/start/start-form.tsx`
 if they have the same shape. Matthew likes the chatbot UI for reviews; do not change the look.
@@ -249,7 +251,7 @@ Then prove it live on `srt-agency-llc` resolved by slug, in this order: prep cal
 phone; `offer:` plus `terms:` locks; candidates rebuild aimed at the offer; plan of 1 pillar + 8
 proposes and approves; 9 drafts exist with maps and magnets; the step 18 concierge preview link
 opens the widget from the internal host with no DNS; step 17 only goes green after a real fetch; the
-review tool asks for the mic on Next.
+AI Referral Engine asks for the mic on Next.
 
 ## Known state you will meet
 

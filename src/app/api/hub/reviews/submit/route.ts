@@ -1,8 +1,8 @@
-// The review tool's only write, and the only API route reachable on a client-controlled
+// The AI Referral Engine's only write, and the only API route reachable on a client-controlled
 // hostname.
 //
 // THIS ROUTE MUST NOT READ x-forwarded-for. Not to store it, not to hash it, not to rate
-// limit on it. SRT-Review-Tool-BUILD-SPEC-v2.md forbids holding anything that could
+// limit on it. SRT-Referral-Engine-BUILD-SPEC-v2.md forbids holding anything that could
 // identify her, and "we never hold customer contacts" is true here because there is
 // nowhere to put one — review_tool_submissions has no column for a name, an email, a
 // phone, an IP, a user agent or a session id. Rate limiting is therefore a per-client

@@ -212,7 +212,7 @@ No client id given, skipping the live half. Pass one to run all ${stepKeys.lengt
     "day_zero_archive",
     "gbp_buildout",
     "cards_printed",
-    "review_tool_handed",
+    "referral_engine_handed",
     "day_30_date",
   ];
   for (const key of THREAD_TIER) {

@@ -375,7 +375,7 @@ export interface Mark {
  * ‼️ THE INVARIANT IS THAT THE PIECES JOIN BACK TO THE ORIGINAL STRING, CHARACTER FOR
  * CHARACTER, AND EVERYTHING ELSE HERE IS IN SERVICE OF IT.
  *
- * The review tool paints these into a div sitting exactly underneath a transparent textarea.
+ * The AI Referral Engine paints these into a div sitting exactly underneath a transparent textarea.
  * The two have to hold the same characters in the same order and wrap identically, or every
  * highlight slides off the words it is about (hub.css says the same thing about fonts and
  * padding). A renderer that dropped or duplicated one character would not look broken; it would

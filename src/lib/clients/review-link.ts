@@ -12,7 +12,7 @@
 //
 //   `review link: <url>` in the review steps' threads   (handleReviewLinkThreadReply)
 //   [Paste review link] on those cards, a Slack modal    (slack/actions reviewLinkModal)
-//   the paste box on the review tool preview page         (api/clients/[id]/review-workflow)
+//   the paste box on the AI Referral Engine preview page         (api/clients/[id]/review-workflow)
 //
 // ‼️ ABSENT BEATS WRONG STILL HOLDS. Nothing here builds a URL. A link is stored only when a person
 // pasted it, it is https, and its host is the platform it claims to be. A Yelp link pasted as
@@ -41,9 +41,9 @@ import {
  */
 export const REVIEW_LINK_STEPS = new Set([
   "offer_locked",
-  "review_tool_preview",
+  "referral_engine_preview",
   "review_card_pdf",
-  "review_tool_handed",
+  "referral_engine_handed",
 ]);
 
 export type SetReviewLinkResult =

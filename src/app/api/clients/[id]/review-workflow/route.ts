@@ -4,7 +4,7 @@
 //
 //   clients.review_request_mode    read by step 29's verifier and call-sheet.ts
 //   clients.review_owner_name      read by step 30's verifier and call-sheet.ts
-//   review_workflow.google_url     read by destinationsFor() in the hub's review tool
+//   review_workflow.google_url     read by destinationsFor() in the hub's AI Referral Engine
 //   review_workflow.realself_url   same
 //
 // Exactly the class CLAUDE.md documents for competitor_candidates.selected and
@@ -25,7 +25,7 @@
 // replace here would silently delete the client's own intake answers — the answers the call
 // sheet is built from.
 //
-// ‼️ A URL IS VALIDATED OR REFUSED, NEVER STORED AS TYPED. review-tool.tsx's rule is "absent
+// ‼️ A URL IS VALIDATED OR REFUSED, NEVER STORED AS TYPED. referral-engine.tsx's rule is "absent
 // beats wrong, never synthesise a link", because a guessed or fat-fingered review URL sends a
 // real customer to somebody else's business to leave a review about this one. A blank clears.
 //
@@ -49,7 +49,7 @@ type Mode = (typeof MODES)[number];
  * ‼️ IT WAS TWO OF SIX, AND THAT WAS THE BUG. This list held google_url and realself_url while
  * the funnel offered six platforms to choose from, so a client who picked Trustpilot, Yelp, BBB
  * or Facebook had their answer recorded on review_destination_primary with no box anywhere that
- * could accept the matching link. SRT Agency is one of them. The review tool then rendered no
+ * could accept the matching link. SRT Agency is one of them. The AI Referral Engine then rendered no
  * destination at all, correctly and silently, because absent beats wrong.
  *
  * Imported now rather than restated, from the one table all three surfaces share.

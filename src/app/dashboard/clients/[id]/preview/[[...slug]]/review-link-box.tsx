@@ -1,6 +1,6 @@
 "use client";
 
-// The paste box on the review tool preview (Matthew, 2026-09-15: "give us the chance to paste it
+// The paste box on the AI Referral Engine preview (Matthew, 2026-09-15: "give us the chance to paste it
 // there as well"). Looking at the review page is exactly when you notice it ends with no button.
 // Posts to the same writer the Slack thread and modal use.
 

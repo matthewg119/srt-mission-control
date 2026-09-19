@@ -288,7 +288,7 @@ data** (a face photo is a biometric identifier under Illinois BIPA — which car
 action — Texas CUBI, and Washington's My Health My Data Act); HIPAA business-associate status and a
 BAA; **before/after imagery, where a SIMULATED after-image is a STRONGER claim than a real one**, not
 a weaker one, under FTC typicality and state medical-board advertising rules; minors; corporate
-practice of medicine. This repo already takes FTC 16 CFR 465 seriously in the review tool — that is
+practice of medicine. This repo already takes FTC 16 CFR 465 seriously in the AI Referral Engine — that is
 the standard to hold the rest to. `clients.consent_results`, `consent_recorded_at` and
 `testimonial_disclosure_required` exist; find what writes them.
 

@@ -1,10 +1,12 @@
 # SRT Agency — AEO Onboarding v1.1
 
+> **Renamed 2026-09-19.** What this document calls the AI Referral Engine was written down as the "review tool", and the free plan as the "AI Visibility Review Engine". Both are the AI Referral Engine now, and the text below has been updated to say so. Nothing about the mechanism changed; only the name did. The `reviews.` host, the `/hub/[host]/reviews` route and the `review_workflow` table keep their old spelling on purpose, because clients have already typed that hostname into a registrar and printed QR codes resolve through it.
+
 **Companion to:** `SRT-AEO-Client-Onboarding-SOP.md` (v1.0)
 **Owner:** Matthew Garcia
 **Status:** Decisions locked. Build spec.
 
-This document captures every decision made about the post-payment onboarding flow, attribution, data layer, review engine, and citation outreach. Where it conflicts with v1.0, **this document wins**.
+This document captures every decision made about the post-payment onboarding flow, attribution, data layer, AI Referral Engine, and citation outreach. Where it conflicts with v1.0, **this document wins**.
 
 ---
 
@@ -17,7 +19,7 @@ This document captures every decision made about the post-payment onboarding flo
 | Client time: ~90 min | **Client time: ~60 min** |
 | Monthly report only | **Weekly Slack report** + monthly deep report |
 | Attribution not addressed | **Lead source layer** — referrer capture, AI crawler logs, post-submit attribution |
-| Review engine = request flow + templates | **Review funnel** — quiz-style landing page producing quotable, AEO-optimized reviews |
+| AI Referral Engine = request flow + templates | **Review funnel** — quiz-style landing page producing quotable, AEO-optimized reviews |
 | "Forum outreach" (undefined) | **Citation outreach** — cold email to local listicle publishers |
 | No call tracking decision | **No call tracking. Traffic only.** |
 
@@ -151,7 +153,7 @@ the count drifted: there are **two** CNAMEs, not one.
 While they're logged into the registrar:
 
 1. **CNAME** — `[subdomain].clientdomain.com` → Vercel. This is the hub.
-2. **CNAME** — `reviews.clientdomain.com` → Vercel. This is the review tool.
+2. **CNAME** — `reviews.clientdomain.com` → Vercel. This is the AI Referral Engine.
 3. **TXT** — Google Search Console domain-level verification.
 
 Record 2 goes in on the call even though the review host is not built yet. An unattached

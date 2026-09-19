@@ -22,7 +22,7 @@ const CATEGORIES = new Set([
   "baseline_retest",
   "pages_new",
   "pages_refresh",
-  "review_tool_setup",
+  "referral_engine_setup",
   "review_responses",
   "outreach",
   "reporting_video",

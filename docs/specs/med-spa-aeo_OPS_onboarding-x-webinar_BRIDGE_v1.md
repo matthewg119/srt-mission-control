@@ -1,6 +1,8 @@
 # MED SPA AEO — ONBOARDING BUILD × WEBINAR
 ## Bridge v1 — what the webinar promises, what the SRT build must do, and where they currently disagree
 
+> **Renamed 2026-09-19.** What this document calls the AI Referral Engine was written down as the "review tool", and the free plan as the "AI Visibility Review Engine". Both are the AI Referral Engine now, and the text below has been updated to say so. Nothing about the mechanism changed; only the name did. The `reviews.` host, the `/hub/[host]/reviews` route and the `review_workflow` table keep their old spelling on purpose, because clients have already typed that hostname into a registrar and printed QR codes resolve through it.
+
 **Governs:** the seam between `med-spa-aeo_PROJECT-CANON_v4.md` / `med-spa-aeo_06-CLOSE_FINAL_v7.md` (the promises) and `SRT-AEO-Onboarding-v1.2.md` + `SRT-ClaudeCode-Build-Prompt-v2.md` + `SRT-Review-Funnel-Spec.md` + `SRT-Prompt-Library.md` (the delivery machine).
 **Rule of precedence:** canon wins on anything said on camera or in the offer. SRT v1.2 wins on infrastructure choices canon never made. Where both are silent, this file decides and canon v5 inherits it.
 **Status:** proposed locks, veto window open. Silence = ratified. Feeds canon v5 (§9 patch list at the bottom).
@@ -29,7 +31,7 @@
 | Same-day scan | Fires on funnel completion, < 20 min, APIs where they exist. | With the canon grid change in B6. |
 | Store structured, render visual | `ai_baseline` rows are the artifact; cards rendered from data; 3–5 real UI screenshots per client for the deck. | Requires the Beat 10 wording check in B6. |
 | Fidelity disclosure | Report footer: API retrieval ≠ consumer chat UI; measured as a consistent, repeatable signal. | **Extend to the $39 audit report and the monthly scorecard.** Same sentence, every time. |
-| Spam protection | Honeypot + Turnstile + IP limit + timing flag, on every public form incl. the review tool. | — |
+| Spam protection | Honeypot + Turnstile + IP limit + timing flag, on every public form incl. the AI Referral Engine. | — |
 | Non-clinical forms | Name, email, phone, service interest. Nothing describing a person's health. | Also decides B2. |
 | Corpus, not training | `client_corpus` + `question_bank`, retrieval only. | **Vocabulary law:** never say "we train an AI on your business" in any script, SOP or sales line. There is no training. There is a corpus. |
 | Free audit vs paid audit | Free = 2–3 queries, one engine, teaser. Post-payment = full. | Keeps Q1 literally true. Locked harder in B8. |
@@ -49,7 +51,7 @@ Every row is something said on camera or written into the offer. Third column is
 | 4 | 4 new + 4 refreshed / 8 + 8 answer pages per month (Beat 12–13) | Content calendar generated per tier at exactly those counts | ⚠️ 30-day calendar = ~20 GBP posts + 10 hub pages → **B3** |
 | 5 | Same questions re-run monthly; scorecard + video (Beat 14) | Monthly re-run diffed against Day 0; video is the product | ✅ v1.0 §6 · weekly Slack report is extra, never promised |
 | 6 | Automated review requests, "the review system stays connected to your booking software" (Beat 16, 27, 32) | Trigger lives in the client's booking/text system; SRT never holds the patient list | ⚠️ v1.0 §5.4 has SRT sending SMS/email → **B2** |
-| 7 | The review tool: four open questions → bullet points → she edits → she posts. "It does not write the review." "We do not generate reviews with AI." No staff-name prompt. No tablet. Every patient. (Beat 17–19; Integrity Law 11) | Build the canon spec, exactly | ❌ SRT spec generates prose, asks for staff name, uses chips → **B1** |
+| 7 | The AI Referral Engine: four open questions → bullet points → she edits → she posts. "It does not write the review." "We do not generate reviews with AI." No staff-name prompt. No tablet. Every patient. (Beat 17–19; Integrity Law 11) | Build the canon spec, exactly | ❌ SRT spec generates prose, asks for staff name, uses chips → **B1** |
 | 8 | Written review responses "built on purpose, not 'thank you for your kind words'"; negative-review workflow — **Complete only** (Beat 20) | Per-review written responses, tier-gated | ⚠️ v1.0 §5.4 "response templates 5/3/1-star" for everyone → **B3, A6** |
 | 9 | Monthly directory & list outreach — **Complete only**; "we pitch, they decide"; **client sees the full log incl. non-responses**; paid listings disclosed; "that money goes to them, not to me" (Beat 22; Law 10; Part V #7) | Tier-gate; client-visible outreach log; paid-listing fields; no commissions | ⚠️ outreach untiered, 3–5/day, log internal-only → **B3, A4** |
 | 10 | Competitor displacement tracking — Complete (Beat 28) | Render `businesses_named` over time by competitor + `citation_observations` | ✅ data exists · ⚠️ needs a rendering + tier gate |
@@ -69,7 +71,7 @@ Every row is something said on camera or written into the offer. Third column is
 
 ## 3 · Blockers — proposed resolutions
 
-### B1 · The review tool. The SRT spec is a different product than the one on camera.
+### B1 · The AI Referral Engine. The SRT spec is a different product than the one on camera.
 
 | SRT-Review-Funnel-Spec.md | Canon (close v7 Part V + Beats 17–19) | Why it can't ship as written |
 |---|---|---|
@@ -85,7 +87,7 @@ Every row is something said on camera or written into the offer. Third column is
 
 **Build instruction for v2 §7:** *"Route `reviews.{domain}`. Build the spec in `med-spa-aeo_06-CLOSE_FINAL_v7.md` Part V. Four open questions verbatim. Output = her answers as bullet points, editable, copy button, then the destination link. No generation model in the path — string assembly only. No staff field anywhere in this route. Question set stored with a version id on every submission."*
 
-**Renaming:** the file is `SRT-Review-Funnel-Spec.md`; the deliverable on camera is "the patient review tool." Rename the file to match, so nobody builds from the wrong noun.
+**Renaming:** the file is `SRT-Review-Funnel-Spec.md`; the deliverable on camera is "the patient AI Referral Engine." Rename the file to match, so nobody builds from the wrong noun.
 
 ### B2 · "Automated review requests" — decide the mechanism so Beat 32 and the PHI line both stay true
 
@@ -107,7 +109,7 @@ There is no `tier` in the build. Everything is delivered to everyone, and two de
 ### B4 · The $1,499 boundary, in the schema and on the call
 
 - **Tag phases.** v1.0 §5.1 citation cleanup, §5.2 GBP buildout, and orphaned-access recovery (the §3.3 blockers) are **implementation scope.** Everything else in Phase 4–5 is subscription scope. `onboarding_steps` rows carry `scope ('subscription' | 'implementation')`.
-- **Two definitions of done.** Appendix C currently requires "NAP matched everywhere" and "GBP fully built." For a client who declined implementation, done = hub live, baseline archived, review tool handed off, first pages live, weekly report firing. **"We deliver the subscription as sold. We do not reduce scope."** — that sentence goes into the SOP verbatim (canon §12 blocker 9).
+- **Two definitions of done.** Appendix C currently requires "NAP matched everywhere" and "GBP fully built." For a client who declined implementation, done = hub live, baseline archived, AI Referral Engine handed off, first pages live, weekly report firing. **"We deliver the subscription as sold. We do not reduce scope."** — that sentence goes into the SOP verbatim (canon §12 blocker 9).
 - **Where it's offered:** the onboarding call, and only there. The findings doc's "fix list ranked by impact" *is* the pitch — the NAP evidence sells it. Nothing about implementation in the welcome email, the funnel, or the report.
 - **How it's charged:** never the saved card. Verbal yes on the recorded call **and** an emailed confirmation stating the amount → then a separate Stripe checkout link. Store `implementation_status`, `implementation_confirmed_at`, `implementation_email_ref` on the tenant. Build prompt v2 §2 must say this out loud so Claude Code doesn't helpfully reuse the payment method.
 
@@ -159,11 +161,11 @@ Change Q8 to *"about an hour"* — it's the first Q&A item cut if the runtime is
 - **A5 · Weekly report language.** Crawler hits are a leading indicator, never a result. The plain-English line may not imply movement in AI answers the monthly re-run hasn't shown. Weekly reporting is never mentioned on camera; monthly re-test + scorecard + video is the promise.
 - **A6 · Review responses** — per review, written, restating what happened. Templates deleted from §5.4.
 - **A7 · Onboarding funnel deltas.** Step 4: add booking-software question (B2) and RealSelf to destinations. Step 6 (or the agreement at checkout): case-study permission checkbox — opt-in, revocable, anonymized by default (the content-engine anonymization/permission law, §C2 — promote to canon).
-- **A8 · Raúl and legacy pricing.** If he's onboarded before the webinar, `price_override` + `terms_note` on the tenant hold his original numbers; every automated email must read price from the tenant, never a constant. Spanish: the review tool and the funnel need `language = 'es'` from day one — Spanish reviews are what serve Spanish queries.
+- **A8 · Raúl and legacy pricing.** If he's onboarded before the webinar, `price_override` + `terms_note` on the tenant hold his original numbers; every automated email must read price from the tenant, never a constant. Spanish: the AI Referral Engine and the funnel need `language = 'es'` from day one — Spanish reviews are what serve Spanish queries.
 - **A9 · Vertical scope.** SRT infra is vertical-agnostic; the webinar offer is med spa. `tenants.vertical` drives the universal question set (the med spa 20 come from the PDF; other verticals need their own set) and the platform list for the NAP sweep.
 - **A10 · Contract text at checkout.** Month-to-month, first month only (v1.0 "down payment" wording goes) · market radius clause (canon §12 #8) · refund-trigger language: trigger, window, decision-maker (canon §12 #7 — blocks recording Story 3) · Keep Everything terms as in B7 · no minimum term · paid-listing no-commission clause.
 - **A11 · "Named," never "ranked"** in every client-facing string the build renders: scorecards, Slack posts, report footers, findings doc headings.
-- **A12 · The 20-question PDF set is versioned** like the review-tool questions: the re-test promise (Beat 14, "the same ones") depends on the set not drifting.
+- **A12 · The 20-question PDF set is versioned** like the AI Referral Engine questions: the re-test promise (Beat 14, "the same ones") depends on the set not drifting.
 
 ---
 
@@ -178,7 +180,7 @@ Change Q8 to *"about an hour"* — it's the first Q&A item cut if the runtime is
 | 3 | **Photograph I** | Funnel complete | 20 universal × 4 engines run · findings doc assembled · 3–5 real screenshots captured · citation sources upserted |
 | 4 | **Call** | Booking time | Findings walked · NAP confirmed aloud · **custom questions approved** · access granted · all three DNS records live, two CNAMEs and one TXT · review mechanism + destination decided · implementation offered (yes → recorded + emailed) |
 | 5 | **Photograph II** | Call complete | Full 40/80 × 4 archived as Day 0 — **before any change lands** |
-| 6 | **Build** | Day 0 archived | Hub live ≤ day 7 · first answer pages ≤ day 14 · review tool handed to a named person · implementation track running if bought · weekly report firing |
+| 6 | **Build** | Day 0 archived | Hub live ≤ day 7 · first answer pages ≤ day 14 · AI Referral Engine handed to a named person · implementation track running if bought · weekly report firing |
 | 7 | **Report** | Day 30 | Re-run · scorecard · video · outreach log (Complete) · displacement view (Complete) |
 | 8 | **Renew** | Day 30 report delivered | Month-two decision · **refund-trigger check** (Story 3: if the market can't be won, say so and refund before they pay a second month) · timing log for the 15-hour claim |
 
@@ -187,7 +189,7 @@ Change Q8 to *"about an hour"* — it's the first Q&A item cut if the runtime is
 ## 6 · What the SRT build gives the webinar (use it)
 
 - **Proof, dated.** Every client is a Day-0 → day-30 → day-60 record on the four engines, with sample size built in. Beat 29 currently has one flooring case; the first med spa client turns it into a med spa case — one business, one city, N questions, confounds stated (were they running ads? what else changed?). Integrity Laws 3 and 6 apply the moment a number leaves the database.
-- **The review tool, demonstrated.** Real bullet mirrors → real posted reviews (with the patient's and the clinic's permission) is the strongest possible support for Beats 17–19. Capture the first ten as they happen.
+- **The AI Referral Engine, demonstrated.** Real bullet mirrors → real posted reviews (with the patient's and the clinic's permission) is the strongest possible support for Beats 17–19. Capture the first ten as they happen.
 - **The outreach log** — including non-responses — is the on-camera proof of "we pitch; they decide." Show a real one in Beat 22.
 - **The 15-hour figure and the six-cap** get validated by the first Complete client's timed month **before** they're recorded (Beat 36, canon §3). If it's twenty hours, it's four clinics, and the script says four. This is the strongest argument for the sequencing you've chosen.
 - **The citation database** grows with every free audit Matthew runs, whether or not anyone buys. By launch you may already hold a contact-verified map of what feeds AI answers in your first markets — that's Beat 21 with receipts.
@@ -198,7 +200,7 @@ Change Q8 to *"about an hour"* — it's the first Q&A item cut if the runtime is
 ## 7 · Clients first, then ads — what it does to the webinar
 
 1. **The outbound offer must equal the webinar offer.** Same prices, no minimum term, one clinic per market, six at a time, Keep Everything, implementation optional and offered at onboarding only. Otherwise the case studies you record carry a different deal than the one on the screen. `closing-brain.md` CONFIG still has placeholders ("$X setup + $Y/mo, 3-month minimum") — fill it from canon §3 before Matthew's next call. Guarantee-based closes are allowed *only* as Keep Everything (not a refund).
-2. **Testimonials fall under the same FTC posture as the review tool.** No incentives, no editing beyond what they said, permission on file, typical or disclosed. The Pool Party Test permission law applies to any client story that goes on camera.
+2. **Testimonials fall under the same FTC posture as the AI Referral Engine.** No incentives, no editing beyond what they said, permission on file, typical or disclosed. The Pool Party Test permission law applies to any client story that goes on camera.
 3. **If seats fill before launch, launch with the waitlist live.** Beat 37 already says what that looks like. Nothing about the script changes; the order page just tells the truth.
 4. **Traffic.** Canon §2 is organic Instagram; v3's cold-ad flow (ads → landing page + VSL-A → opt-in) is what comes back when ads return. VSL-A (v0 drafted, ~80 s) was written for exactly that role. Canon §2 gets a v5 note: "ads reintroduced after first client cohort; six-at-a-time is a standing constraint under either traffic source." No countdown, either way.
 5. **Recording order.** Beat 29 (proof), Beat 36 (the arithmetic), Beat 10 (screenshotted / logged), Q8 (call length), and any client story wait for real numbers. Everything else records now.
@@ -209,11 +211,11 @@ Change Q8 to *"about an hour"* — it's the first Q&A item cut if the runtime is
 
 Minimal edits, in order of the prompt's own sections:
 
-- **§1 schema:** add `tier`, `vertical`, `language`, `zip`, `market_key`, `radius_mi`, `market_locked_at`, `price_override`, `review_request_mode`, `implementation_status / _confirmed_at / _email_ref`, `case_study_consent`, `booking_software` to `tenants`; `scope` to `onboarding_steps`; `is_paid_listing` to `citation_sources`; `question_set_version` to `ai_baseline` and to the review-tool submissions table; a `market_holds` table (session id, market_key, expires_at); a `waitlist` table.
+- **§1 schema:** add `tier`, `vertical`, `language`, `zip`, `market_key`, `radius_mi`, `market_locked_at`, `price_override`, `review_request_mode`, `implementation_status / _confirmed_at / _email_ref`, `case_study_consent`, `booking_software` to `tenants`; `scope` to `onboarding_steps`; `is_paid_listing` to `citation_sources`; `question_set_version` to `ai_baseline` and to the AI Referral Engine submissions table; a `market_holds` table (session id, market_key, expires_at); a `waitlist` table.
 - **§2 provisioning:** two products on the same event; market lock + soft-hold + race handling; $39 credit; **the saved payment method is never charged for anything but the one-click subscription upgrade** — the $1,499 is a separate checkout after recorded yes + emailed confirmation.
 - **§3 funnel:** Step 4 additions (B2, RealSelf); Step 6 or checkout: consent + agreement clauses (A10).
 - **§5 baseline:** replace the query spec with B6 (20 universal versioned × 4 engines now; 40/80 × 4 within 72 h of the call; Claude/Copilot internal only). Add the fidelity footer to every rendered artifact.
-- **§7 review tool:** replace with the B1 build instruction. Delete the generation prompt from the path.
+- **§7 AI Referral Engine:** replace with the B1 build instruction. Delete the generation prompt from the path.
 - **§9 weekly report:** tier-gate the outreach and displacement blocks; A5 language rule.
 - **New §10:** monthly re-run + scorecard render + outreach log render (Complete) + displacement render (Complete), Day 0 diff.
 
@@ -221,7 +223,7 @@ Minimal edits, in order of the prompt's own sections:
 
 ## 9 · Canon v5 patch list (delta only)
 
-- §1 Naming: add **"the patient review tool"** (not "review funnel"); add "citation outreach" as an internal synonym of directory outreach.
+- §1 Naming: add **"the patient AI Referral Engine"** (not "review funnel"); add "citation outreach" as an internal synonym of directory outreach.
 - §2 Funnel: note the outbound path (free audit → conversation → Stripe) as the first-cohort channel; ads-after note (§7.4 above).
 - §3 Offer: subdomain `learn.` (fallback `guide.`) · automated review requests = configured in the client's booking software · GBP posts = implementation scope, not subscription · outreach budget 25/month/Complete until timed · engines named: ChatGPT, Perplexity, Gemini, Google AI · call ~1 h.
 - §5 Integrity Laws: add **13 — "There is no training. Never say we train an AI on a client's business."** Promote the anonymization/permission law (§C2) from the ops manual.
@@ -245,7 +247,7 @@ Minimal edits, in order of the prompt's own sections:
 | Lock | Decision |
 |---|---|
 | **D-OB1** | Subdomain `learn.`, fallback `guide.`; canon and ops manual patched. |
-| **D-OB2** | Review tool = canon Part V spec. Four open questions, bullet mirror, no model in the path, no staff field, sentiment-blind owner-contact option, Google → RealSelf. SRT spec retired. |
+| **D-OB2** | AI Referral Engine = canon Part V spec. Four open questions, bullet mirror, no model in the path, no staff field, sentiment-blind owner-contact option, Google → RealSelf. SRT spec retired. |
 | **D-OB3** | Automated review requests are configured inside the client's booking/messaging system; SRT never holds patient contacts. `card_only` mode when no system exists. |
 | **D-OB4** | Baseline = tier question set × ChatGPT / Perplexity / Gemini / Google AI. 20 universal now → approve custom on the call → full 40/80 within 72 h, before any change. Claude/Copilot internal only. |
 | **D-OB5** | Beat 10 → "Dated. Logged word for word." Fidelity footer on the $39 report, the findings doc, and every scorecard. |

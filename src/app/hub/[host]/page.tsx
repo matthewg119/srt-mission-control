@@ -11,7 +11,7 @@ import { listPublished, planLinkRows } from "@/lib/hub/pages";
 import { orderIndexPages } from "@/lib/hub/plan-links";
 import { HubIndexBody } from "@/components/hub/hub-bodies";
 import { ConciergeEmbed } from "@/lib/concierge/embed";
-import { ReviewTool } from "./reviews/review-tool";
+import { ReferralEngine } from "./reviews/referral-engine";
 
 export const revalidate = 300;
 
@@ -53,11 +53,11 @@ export default async function HubIndex({ params }: Props) {
 
   const { client, kind } = resolved;
 
-  // ‼️ NO CONCIERGE ON THE REVIEW TOOL, AND THAT IS WHY THIS RETURNS EARLY RATHER THAN SETTING A
+  // ‼️ NO CONCIERGE ON THE AI REFERRAL ENGINE, AND THAT IS WHY THIS RETURNS EARLY RATHER THAN SETTING A
   // FLAG. The tool is regulated separately (NOT_GATED in hub/page-gate.ts) and no model may go
   // near it. Mounting the widget in the shared layout used to put one on this page.
   if (kind === "reviews") {
-    return <ReviewTool client={client} />;
+    return <ReferralEngine client={client} />;
   }
 
   // Pillar first. planLinkRows returns [] until the plan has roles, which leaves the order alone.
