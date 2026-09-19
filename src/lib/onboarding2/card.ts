@@ -126,10 +126,10 @@ export function signedCard(args: {
 /**
  * How this lead should be titled, which is the offer unless they came in on the Concierge link.
  *
- * ‼️ A CONCIERGE ENQUIRY IS NOT A REVIEW ENGINE SIGNUP AND THE CARD MUST NOT SAY IT IS. Tapping
+ * ‼️ A CONCIERGE ENQUIRY IS NOT AN AI REFERRAL ENGINE SIGNUP AND THE CARD MUST NOT SAY IT IS. Tapping
  * the $199 figure records `review_free` on the row, because somebody asking what the Concierge
  * costs has not agreed to anything. That is the right thing to store and the wrong thing to
- * print: whoever opens this card is about to ring them, and "Review Engine, free" would send
+ * print: whoever opens this card is about to ring them, and "AI Referral Engine, free" would send
  * them into the call pitching the wrong product entirely.
  *
  * So the column stays honest and the LABEL says what actually happened.
