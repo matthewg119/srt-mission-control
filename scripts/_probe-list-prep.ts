@@ -29,6 +29,15 @@ import {
 } from "@/lib/outreach/suppression";
 import { configuredProviders, estimateCost, enrichLines, summarize, PROVIDERS } from "@/lib/scraper/enrich";
 import { funnelLines, extractInstagram, fromOutscraper } from "@/lib/scraper/pull";
+import {
+  DEFAULT_VERTICAL,
+  DENTIST_ICP,
+  ICP_BY_VERTICAL,
+  MED_SPA_ICP,
+  icpFor,
+  knownVerticals,
+  resolveVertical,
+} from "@/lib/scraper/icp";
 
 type Row = Record<string, unknown>;
 interface TxSQL {
@@ -188,7 +197,50 @@ async function main() {
   );
 
   // ── 4. Verdicts ───────────────────────────────────────────────────────────
-  console.log("\n4. the qualify verdicts");
+  // ── 4. The vertical, decided once and carried ─────────────────────────────
+  console.log("\n4. the vertical, resolved from the caption and carried on the run");
+
+  check("the med spa profile is registered", icpFor("medspa") === MED_SPA_ICP);
+  check("the dentist profile is registered", icpFor("dentist") === DENTIST_ICP);
+
+  // ‼️ THE CHECK THAT WOULD HAVE CAUGHT THE OLD BEHAVIOUR. icpFor used to return MED_SPA_ICP for
+  // any unknown key, so a typo in a caption alias silently judged the list against the wrong buyer
+  // and the drop reasons read like a bad list. Four separate `?? "medspa"` defaults have shipped in
+  // this codebase; this is the assertion that stops a fifth landing here.
+  check("an unknown vertical has no profile rather than the med spa one", icpFor("plumber") === null);
+  check("a blank vertical has no profile", icpFor(null) === null && icpFor("") === null);
+
+  check("a caption naming dentists resolves to dentist", resolveVertical("Dallas dentists batch 3").slug === "dentist");
+  check("a caption naming med spas resolves to medspa", resolveVertical("Phoenix med spa pull").slug === "medspa");
+  check("case and punctuation do not matter", resolveVertical("  MED-SPA / Tampa ").slug === "medspa");
+
+  // The longest alias wins, so a two word alias cannot be beaten by a one word alias that happens
+  // to appear later in the object. Insertion order is not a contract anybody should have to hold.
+  check("the longest alias wins", resolveVertical("cosmetic dentistry, Austin").slug === "dentist");
+
+  // An unmatched caption still yields a vertical so a drop never dead ends, but `matched` has to
+  // come back false or the card cannot warn and the default becomes invisible.
+  const unnamed = resolveVertical("Dallas batch 3");
+  check("an unnamed caption falls back to the default", unnamed.slug === DEFAULT_VERTICAL);
+  check("and says it did not match", unnamed.matched === false);
+  check("a named caption says it matched", resolveVertical("dentist list").matched === true);
+  check("a missing caption does not throw", resolveVertical(null).slug === DEFAULT_VERTICAL);
+
+  check(
+    "every registered vertical is reachable from some caption alias",
+    knownVerticals().every((v) => ICP_BY_VERTICAL[v] !== undefined),
+    knownVerticals().join(",")
+  );
+
+  // The run has to carry it, or sweepPull re-derives it a tick later from an editable alias table.
+  const listprepSrc = readFileSync("src/lib/scraper/listprep.ts", "utf8");
+  check("the run row carries the vertical", /vertical_slug/.test(listprepSrc));
+  check(
+    "and RUN_COLUMNS asks for it, or it reads as undefined on every row",
+    /RUN_COLUMNS[\s\S]{0,400}vertical_slug/.test(listprepSrc)
+  );
+
+  console.log("\n5. the qualify verdicts");
 
   const ids = ["a", "b"];
   const good = { verdicts: [{ id: "a", keep: true, reason: "owner operated med spa" }, { id: "b", keep: false, reason: "national chain" }] };
@@ -203,7 +255,7 @@ async function main() {
   check("the chunk size is sane", QUALIFY_CHUNK >= 5 && QUALIFY_CHUNK <= 50, String(QUALIFY_CHUNK));
 
   // ── 5. Drop reasons group on meaning, not on wording ──────────────────────
-  console.log("\n5. the bulk drop review, which is the human checkpoint");
+  console.log("\n6. the bulk drop review, which is the human checkpoint");
 
   const drops = [
     { id: "1", keep: false as const, reason: "chain, not owner operated", businessName: "Ideal Image" },
@@ -226,7 +278,7 @@ async function main() {
   check("it asks for the reaction", review.some((l) => /React :white_check_mark:/.test(l)));
 
   // ── 6. Suppression ────────────────────────────────────────────────────────
-  console.log("\n6. suppression, by domain as well as by email");
+  console.log("\n7. suppression, by domain as well as by email");
 
   check("www is stripped", normalizeDomain("https://www.Clinic.com/about?x=1") === "clinic.com");
   check("a co.uk is kept whole", normalizeDomain("clinic.co.uk") === "clinic.co.uk");
@@ -251,7 +303,7 @@ async function main() {
   check("an address we have never touched is not suppressed", none === null, JSON.stringify(none));
 
   // ── 7. The pull maps a Maps record ────────────────────────────────────────
-  console.log("\n7. the raw pull");
+  console.log("\n8. the raw pull");
 
   const rec = { name: "A Clinic", site: "https://www.aclinic.com", phone: "(336) 331-8066", city: "Austin", us_state: "TX", rating: "4.8", reviews: "212", place_id: "p1", instagram: "https://instagram.com/aclinic" };
   const mapped = fromOutscraper(rec, { runId: "r1", sourceQuery: "med spa 78701", sourceMetro: "austin" });
@@ -267,7 +319,7 @@ async function main() {
   check("0.7 is labelled a planning number", funnelLines({ raw: 1, qualified: 1, enriched: 1, verified: 1, sendable: 1 }).some((l) => /not a promise/.test(l)));
 
   // ── 8. The writes, rolled back ────────────────────────────────────────────
-  console.log("\n8. what the code inserts, actually inserted, then rolled back");
+  console.log("\n9. what the code inserts, actually inserted, then rolled back");
 
   const before = await sql`select count(*)::int as n from public.raw_leads`;
   try {

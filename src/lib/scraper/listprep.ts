@@ -32,6 +32,7 @@ export interface RunRow {
   batch_id: string | null;
   label: string | null;
   icp_text: string | null;
+  vertical_slug: string | null;
   stage: RunStage;
   raw_count: number;
   qualified_count: number;
@@ -42,9 +43,13 @@ export interface RunRow {
   error: string | null;
 }
 
+// ‼️ A COLUMN MISSING FROM THIS STRING IS SILENTLY `undefined`, NOT AN ERROR. Same trap as
+// BATCH_COLUMNS in store.ts: PostgREST returns only what it was asked for, so a field added to
+// RunRow and forgotten here reads as absent on every row and every guard written against it is
+// true forever. Add to both or neither.
 const RUN_COLUMNS =
-  "id, batch_id, label, icp_text, stage, raw_count, qualified_count, enriched_count, " +
-  "verified_count, sendable_count, drop_review_ts, error";
+  "id, batch_id, label, icp_text, vertical_slug, stage, raw_count, qualified_count, " +
+  "enriched_count, verified_count, sendable_count, drop_review_ts, error";
 
 export async function getRun(runId: string): Promise<RunRow | null> {
   const { data, error } = await supabaseAdmin

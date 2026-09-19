@@ -284,6 +284,13 @@ export function formatWorkflowPicker(input: {
    * absent simply drops the hint, it never guesses.
    */
   headers?: string[];
+  /**
+   * The vertical resolved from the drop caption, so :three: can name the profile it would judge
+   * against BEFORE anybody reacts. This is the earliest point a wrong vertical is visible and the
+   * only one where catching it costs nothing: after the pick, the qualify sweep has already spent
+   * a model call per row.
+   */
+  vertical?: { slug: string; matched: boolean };
   /** From the drop's dedupe. Every workflow runs on the new rows only. */
   duplicateCount: number;
   newCount: number;
@@ -317,9 +324,14 @@ export function formatWorkflowPicker(input: {
       "can be dropped before anybody pays to reveal contacts."
   );
   lines.push(
-    ":three:  *Build a send list.* Qualify every business against the med spa profile, scrape the " +
-      "kept sites for an address at no cost, verify behind a :white_check_mark:, suppress against " +
-      "everyone we have ever mailed, then `sendable.csv`."
+    ":three:  *Build a send list.* Qualify every business against the " +
+      (input.vertical ? "`" + input.vertical.slug + "`" : "med spa") +
+      " profile, scrape the kept sites for an address at no cost, verify behind a " +
+      ":white_check_mark:, suppress against everyone we have ever mailed, then `sendable.csv`." +
+      (input.vertical && !input.vertical.matched
+        ? "  :warning: Nothing in the caption named a vertical, so that is the default. Say one " +
+          "in the caption if this list is something else."
+        : "")
   );
   lines.push("");
   lines.push("Columns I can see:");
