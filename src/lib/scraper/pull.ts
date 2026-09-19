@@ -265,6 +265,8 @@ export async function startRun(args: {
   source: LeadSource;
   queries: string[];
   icp: string | null;
+  /** serviceKey() shaped, e.g. `medspa` or `dentist`. Copied onto every raw lead the run pulls. */
+  vertical: string;
   slackChannelId?: string | null;
   slackThreadTs?: string | null;
 }): Promise<{ ok: true; runId: string } | { ok: false; error: string }> {
@@ -275,6 +277,7 @@ export async function startRun(args: {
       source: args.source,
       source_queries: args.queries,
       icp_text: args.icp,
+      vertical_slug: args.vertical,
       stage: "pulling",
       slack_channel_id: args.slackChannelId ?? null,
       slack_thread_ts: args.slackThreadTs ?? null,

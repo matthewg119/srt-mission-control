@@ -31,7 +31,7 @@ import { filterRows } from "./filter";
 import { hasMx } from "./mx";
 import { scrapeOwnerName } from "@/lib/medspa-owner-scrape";
 import { checkMany } from "@/lib/outreach/suppression";
-import { DEFAULT_VERTICAL, icpFor } from "./icp";
+import { DEFAULT_VERTICAL, icpFor, knownVerticals, resolveVertical } from "./icp";
 import {
   fromCsv,
   funnelLines,
@@ -563,6 +563,7 @@ async function postWorkflowPicker(batch: BatchRow, headers: string[]): Promise<v
       cityColumn: resolveCityColumn(headers),
       websiteColumn: resolveWebsiteColumn(headers),
       headers,
+      vertical: resolveVertical(batch.batch_label),
       duplicateCount: batch.dedupe_dupe_count,
       newCount: batch.dedupe_new_count,
     })
@@ -1017,11 +1018,29 @@ async function beginListPrepWorkflow(
     return;
   }
 
+  // The vertical is resolved ONCE, here, and written to the run. Every later stage reads it back
+  // rather than re-deriving it: the alias table is editable, and a run whose rows were pulled under
+  // one vertical and qualified under another is not something the drop-review card could explain.
+  // Same contract as icp_text, which is copied onto the run for exactly this reason.
+  const vertical = resolveVertical(batch.batch_label);
+  const icp = icpFor(vertical.slug);
+  if (!icp) {
+    return fail(
+      batch,
+      "there is no buyer profile for the vertical `" +
+        vertical.slug +
+        "`, so nothing can be judged. Known verticals: " +
+        knownVerticals().map((v) => "`" + v + "`").join(", ") +
+        ". Add one in `src/lib/scraper/icp.ts`."
+    );
+  }
+
   const started = await startRun({
     label: batch.file_name,
     source: "csv",
     queries: batch.batch_label ? [batch.batch_label] : [],
-    icp: icpFor(DEFAULT_VERTICAL),
+    icp,
+    vertical: vertical.slug,
     slackChannelId: batch.slack_channel_id,
     slackThreadTs: batch.slack_thread_ts,
   });
@@ -1043,9 +1062,20 @@ async function beginListPrepWorkflow(
         (parsed.rows.length - skipIndexesOf(batch).size) +
         " new rows.",
       "",
+      vertical.matched
+        ? "Vertical: `" + vertical.slug + "`, from the caption on the drop."
+        : ":warning: Vertical: `" +
+          vertical.slug +
+          "` (the default). Nothing in the caption named one, so if this list is not " +
+          vertical.slug +
+          " then every row below is about to be judged against the wrong profile. Known " +
+          "verticals: " +
+          knownVerticals().map((v) => "`" + v + "`").join(", ") +
+          ". Say one in the caption when you drop the file.",
+      "",
       "Judging every one against this profile before anything is crawled or verified:",
       "```",
-      icpFor(DEFAULT_VERTICAL),
+      icp,
       "```",
       "_Edit it in `src/lib/scraper/icp.ts`. The text above is stored on this run, so a later " +
         "edit changes the next run and never rewrites this one._",
@@ -1069,6 +1099,10 @@ async function sweepPull(batch: BatchRow): Promise<boolean> {
     await fail(batch, "the company or website column vanished between the pick and the pull.");
     return false;
   }
+
+  // Read the vertical back off the run rather than re-resolving it from the caption. beginListPrep
+  // already decided, and this arm can be re-driven on a later tick.
+  const verticalSlug = (await getRun(batch.list_run_id))?.vertical_slug || DEFAULT_VERTICAL;
 
   const headers = parsed.headers;
   const pick = (names: string[]): string | null =>
@@ -1101,7 +1135,7 @@ async function sweepPull(batch: BatchRow): Promise<boolean> {
       rowIndex: i,
       cols: csvCols,
       sourceQuery: batch.batch_label,
-      verticalSlug: DEFAULT_VERTICAL,
+      verticalSlug,
     });
     if (mapped) inputs.push(mapped);
   });
@@ -1136,7 +1170,15 @@ async function sweepQualify(batch: BatchRow, deadline: number): Promise<boolean>
     const chunk = await pendingQualify(runId, QUALIFY_CHUNK);
     if (!chunk.length) break;
 
-    const icp = (await getRun(runId))?.icp_text || icpFor(DEFAULT_VERTICAL);
+    // ‼️ NO FALLBACK PROFILE. This used to fall back to the med spa ICP when icp_text was somehow
+    // missing, which would judge a dentist list against the wrong buyer and spend a model call per
+    // row doing it, with drop reasons that read like a bad list rather than a bad lookup. startRun
+    // writes icp_text on every run, so a null here means something is wrong that guessing hides.
+    const icp = (await getRun(runId))?.icp_text;
+    if (!icp) {
+      await fail(batch, "this run has no buyer profile on file, so nothing can be judged.");
+      return false;
+    }
     let verdicts = await qualifyChunk(chunk, icp);
 
     // ‼️ ONE RETRY, THEN THE ROW IS PARKED AS UNJUDGED. A model timeout is usually transient, so
