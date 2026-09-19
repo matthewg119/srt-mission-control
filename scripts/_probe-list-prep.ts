@@ -298,6 +298,55 @@ async function main() {
   check("the summary reports counts, not rates", lines[0].includes("88 of 100"));
   check("an opt-out is named before a stale touch", lines.findIndex((l) => /not to be contacted/.test(l)) < lines.findIndex((l) => /mailed before/.test(l)));
 
+  // ‼️ THE BRANCH THAT USED TO BE BACKWARDS. It read `state.includes("CLOSED")` and reported it as
+  // "an open conversation (CLOSED)", so the one state that is definitively not open was the only
+  // one it caught, and the four that ARE open fell through. The row was still suppressed, which is
+  // why nothing looked broken; but the card read as nonsense, and deleting the branch to tidy that
+  // up would have un-suppressed every opt-out that reached us by email.
+  // ‼️ ASSERTED AS CODE SHAPE, NOT AS THE ABSENCE OF A STRING. The obvious check here is
+  // `!/includes\("CLOSED"\)/`, and it fails: the comment in suppression.ts quotes the old broken
+  // test on purpose so nobody reinstates it. `normalize` only fixes CRLF, it does not strip
+  // comments, so an absence check over a commented file tests the prose and not the program.
+  check("CLOSED is matched exactly, not by substring", /state === "CLOSED"/.test(ssrc));
+  check(
+    "and active_deal is reached only from the open states",
+    /REPLIED_INTERESTED[\s\S]{0,200}found\.set\("active_deal"/.test(ssrc)
+  );
+  check("an opt-out close outranks a plain close", /OPT_OUT_CLOSE/.test(ssrc));
+  check("and closed_reason is actually selected", /closed_reason/.test(ssrc));
+
+  // The writer that makes contacts.do_not_contact more than a read. It was a gate nothing but the
+  // CRM stage picker ever set, so an emailed opt-out stopped one ladder and no others.
+  const osrc = normalize(readFileSync("src/lib/outreach/opt-out.ts", "utf8"));
+  check("an opt-out writes the flag suppression reads", /do_not_contact: true/.test(osrc));
+  check("it only ever flips rows that are currently false", /eq\("do_not_contact", false\)/.test(osrc));
+  check("it never unsets the flag", !/do_not_contact: false/.test(osrc));
+  check(
+    "the reply sweep calls it when somebody asks out",
+    /wantsOut[\s\S]{0,200}markDoNotContact/.test(
+      normalize(readFileSync("src/lib/followup-operator/reply-sweep.ts", "utf8"))
+    )
+  );
+
+  // The handoff record. Without it `already_contacted` can never fire, because the only thing that
+  // has ever minted an outreach_prospects row for a ReachInbox lead is a REPLY.
+  const lpsrc = normalize(readFileSync("src/lib/scraper/listprep.ts", "utf8"));
+  check("publishing records the handoff", /export async function recordHandoff/.test(lpsrc));
+  check("it writes the board suppression reads", /from\("outreach_prospects"\)[\s\S]{0,200}insert/.test(lpsrc));
+  check(
+    "it carries a website, or domain_contacted silently narrows to exact address",
+    /website: r\.website/.test(lpsrc)
+  );
+  // ‼️ THE ONE THAT MATTERS MOST. outreach_prospects_due_idx is
+  // `where state <> 'CLOSED' and paused = false and confirmed = true`, and it is the worklist the
+  // Graph nudge sender drains. Confirming these would enrol every handed-off address in a SECOND
+  // sequence out of matthew@srtagency.com, from the tenant that carries client mail.
+  check("it does NOT confirm the prospect into the Graph sender's worklist", !/confirmed: true/.test(lpsrc));
+  check(
+    "the lane records the handoff before it calls the batch done",
+    /recordHandoff[\s\S]{0,400}status: "done"/.test(normalize(readFileSync("src/lib/scraper/lane.ts", "utf8")))
+  );
+
   // A real lookup against production, read only. An unknown address must not be suppressed.
   const none = await checkSuppression({ email: "nobody-abc123@example-not-real-domain.test" });
   check("an address we have never touched is not suppressed", none === null, JSON.stringify(none));
