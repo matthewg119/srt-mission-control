@@ -531,7 +531,7 @@ Hub built, themed, preview live, theme confirmed by me
 | Reads | `clients` |
 | [Done] reads | `client_hosts` |
 | Dataset fields | none: the hub is built from the client's own theme and pages; its look is picked, not answered |
-| Downstream | steps 17 `review_tool_preview`, 18 `concierge_preview`, 19 `site_replica`, 20 `review_card_pdf`, 22 `call_sheet` declare they wait on this |
+| Downstream | steps 17 `referral_engine_preview`, 18 `concierge_preview`, 19 `site_replica`, 20 `review_card_pdf`, 22 `call_sheet` declare they wait on this |
 
 **[Done] refuses on:**
 
@@ -543,29 +543,29 @@ Hub built, themed, preview live, theme confirmed by me
 *Step 16* asks for nothing from the datasets: the hub is built from the client's own theme and pages; its look is picked, not answered.
 ```
 
-### 17. `review_tool_preview`
+### 17. `referral_engine_preview`
 
-Review tool preview live, themed to match
+AI Referral Engine preview live, themed to match
 
 | | |
 | --- | --- |
 | Phase, mode | Before the call, auto |
 | Waits on | `hub_preview` |
-| Runner | `verifyReviewToolPreview()` in `src/lib/clients/review-preview.ts` |
+| Runner | `verifyReferralEnginePreview()` in `src/lib/clients/referral-engine-preview.ts` |
 | Writes | `client_delivery_steps` |
 | Reads | `client_dns_records`, `client_hosts`, `clients` |
 | [Done] reads | no table |
-| Dataset fields | none: the review tool mirrors listings that already exist and asks for no dataset field |
+| Dataset fields | none: the AI Referral Engine mirrors listings that already exist and asks for no dataset field |
 | Downstream | `client_delivery_steps` is selected in 28 other file(s), e.g. `src/app/api/clients/[id]/time-log/route.ts`, `src/app/api/internal/board-kick/route.ts`, `src/app/api/internal/run-step/route.ts` |
 
 **[Done] refuses on:**
 
-- a confirmed theme for the review tool
+- a confirmed theme for the AI Referral Engine
 
 **What it would have to ask, with nothing on file:**
 
 ```
-*Step 17* asks for nothing from the datasets: the review tool mirrors listings that already exist and asks for no dataset field.
+*Step 17* asks for nothing from the datasets: the AI Referral Engine mirrors listings that already exist and asks for no dataset field.
 ```
 
 ### 18. `concierge_preview`
@@ -938,7 +938,7 @@ Subdomain live and verified in Search Console
 | Reads | `clients` |
 | [Done] reads | no table |
 | Dataset fields | none: DNS and Search Console verification, both observed |
-| Downstream | steps 32 `first_page`, 35 `review_tool_handed`, 36 `concierge_live` declare they wait on this |
+| Downstream | steps 32 `first_page`, 35 `referral_engine_handed`, 36 `concierge_live` declare they wait on this |
 
 **[Done] refuses on:**
 
@@ -1026,9 +1026,9 @@ Automated request configured in their booking system, or card_only recorded
 *Step 34* asks for nothing from the datasets: a setting in their booking system, or the printed cards.
 ```
 
-### 35. `review_tool_handed`
+### 35. `referral_engine_handed`
 
-Review tool handed to the named person
+AI Referral Engine handed to the named person
 
 | | |
 | --- | --- |

@@ -50,7 +50,7 @@ Cursor: **11. `avatar_harvest`**.
 | 14 | `page_candidates` | complete | system | 2026-09-15 |
 | 15 | `citation_cleanup_list` | complete | system | 2026-09-15 |
 | 16 | `hub_preview` | complete | system | 2026-09-15 |
-| 17 | `review_tool_preview` | complete | system | 2026-09-15 |
+| 17 | `referral_engine_preview` | complete | system | 2026-09-15 |
 | 18 | `concierge_preview` | complete | system | 2026-09-16 |
 | 19 | `site_replica` | complete | system | 2026-09-16 |
 | 20 | `review_card_pdf` | running | not verified | no |
@@ -68,7 +68,7 @@ Cursor: **11. `avatar_harvest`**.
 | 32 | `first_page` | pending | not verified | no |
 | 33 | `cards_printed` | pending | not verified | no |
 | 34 | `review_request_configured` | pending | not verified | no |
-| 35 | `review_tool_handed` | pending | not verified | no |
+| 35 | `referral_engine_handed` | pending | not verified | no |
 | 36 | `concierge_live` | pending | not verified | no |
 | 37 | `tracking_installed` | pending | not verified | no |
 | 38 | `self_report_field` | pending | not verified | no |
@@ -198,10 +198,10 @@ Step 11 needs 3 more things before it can complete.
 *Step 16* asks for nothing from the datasets: the hub is built from the client's own theme and pages; its look is picked, not answered.
 ```
 
-### 17. `review_tool_preview`
+### 17. `referral_engine_preview`
 
 ```
-*Step 17* asks for nothing from the datasets: the review tool mirrors listings that already exist and asks for no dataset field.
+*Step 17* asks for nothing from the datasets: the AI Referral Engine mirrors listings that already exist and asks for no dataset field.
 ```
 
 ### 18. `concierge_preview`
@@ -324,7 +324,7 @@ Step 22 can complete. 4 things would make it better.
 *Step 34* asks for nothing from the datasets: a setting in their booking system, or the printed cards.
 ```
 
-### 35. `review_tool_handed`
+### 35. `referral_engine_handed`
 
 ```
 *Step 35* asks for nothing from the datasets: a named person is given the tool; the naming is not a dataset field.
