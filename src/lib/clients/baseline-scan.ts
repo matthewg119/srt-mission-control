@@ -11,6 +11,7 @@ import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { runAuditPipeline } from "@/lib/audit-engine/run-audit-pipeline";
 import { autoCompleteStep, setDeliveryStep } from "@/lib/clients/delivery-checklist";
 import { anchorTsFor, notifyStep } from "@/lib/clients/step-board";
+import { normalizeBusinessType, normalizeVerticalSlug } from "@/lib/clients/vertical-slug";
 
 export const BASELINE_STEP_KEY = "baseline_scan";
 
@@ -91,8 +92,14 @@ export async function adoptAuditClassification(
 
   if (reportErr) return { ok: false, error: reportErr.message };
 
-  const vertical = (report?.vertical_slug as string | null) ?? null;
-  const businessType = (report?.business_type as string | null) ?? null;
+  // ‼️ NORMALISED HERE, AT THE SINGLE WRITER, AND NOWHERE ELSE. This is the fix both
+  // audience-presets.ts and question-sets.ts record as owed. A model asked for kebab-case will
+  // eventually type `med_spa` or `Med Spa`, and every reader downstream matches on exact strings,
+  // so the drift shows up as a client silently missing every branch keyed on its own vertical
+  // rather than as an error. Case and separators are squashed; genuinely different words are NOT
+  // collapsed, because that is a claim about the business and belongs in a reviewed allowlist.
+  const vertical = normalizeVerticalSlug(report?.vertical_slug as string | null);
+  const businessType = normalizeBusinessType(report?.business_type as string | null);
 
   // No report, or a report that classified nothing. Nothing to adopt and nothing to invent:
   // the four readers refuse loudly, which is the designed outcome.

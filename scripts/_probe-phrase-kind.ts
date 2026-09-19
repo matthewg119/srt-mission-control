@@ -4,7 +4,7 @@
 //   bunx tsx scripts/_probe-phrase-kind.ts
 
 import { classifyPhrase } from "../src/lib/clients/phrase-kind";
-import { AEO_OWNER_OBJECTIONS } from "../src/config/objections/aeo-agency-owner";
+import { BELIEF_THEMES, SEED_OBJECTIONS } from "../src/config/objections/aeo-agency-owner";
 
 let failed = 0;
 function check(name: string, ok: boolean, detail = ""): void {
@@ -55,9 +55,17 @@ for (const p of OBJECTIONS) {
   check(`objection: ${p}`, r.kind === "objection" && r.speaker === "buyer", `${r.kind}/${r.speaker}: ${r.reason}`);
 }
 
-for (const o of AEO_OWNER_OBJECTIONS) {
-  const r = classifyPhrase(o.text, "seed");
-  check(`seed reads as an objection: ${o.text}`, r.kind === "objection", `${r.kind}: ${r.reason}`);
+// ‼️ EVERY SEED IN THE REGISTRY, NOT JUST THE FIRST VERTICAL'S. This iterated AEO_OWNER_OBJECTIONS
+// by name, so the day a second vertical was added its lines went unproven and the probe still said
+// all checks pass. SEED_OBJECTIONS is the registry, so walking it is what keeps this honest as the
+// list of verticals grows.
+for (const [vertical, seeds] of Object.entries(SEED_OBJECTIONS)) {
+  check(`${vertical} has a seed list`, seeds.length > 0, String(seeds.length));
+  for (const o of seeds) {
+    const r = classifyPhrase(o.text, "seed");
+    check(`${vertical} seed reads as an objection: ${o.text}`, r.kind === "objection", `${r.kind}: ${r.reason}`);
+    check(`${vertical} seed maps to a real belief: ${o.text}`, o.belief in BELIEF_THEMES, o.belief);
+  }
 }
 
 const QUESTIONS = ["What is answer engine optimization?", "How does ChatGPT pick which med spa to recommend?"];

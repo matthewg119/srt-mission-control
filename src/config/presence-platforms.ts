@@ -157,6 +157,22 @@ export const EXTENDED: PresencePlatform[] = [
   { key: "nextdoor", label: "Nextdoor", tier: "extended", api: false, aliases: ["next door"], domains: [{ host: "nextdoor.com" }], search: nameCity, url: "https://nextdoor.com", access: "Nextdoor Business Page admin", minutes: 15 },
   { key: "manta", label: "Manta", tier: "extended", api: false, domains: [{ host: "manta.com" }], search: nameCityState, url: "https://www.manta.com", access: "Manta claim, email verification", minutes: 15 },
   { key: "healthgrades", label: "Healthgrades", tier: "extended", api: false, aliases: ["health grades"], domains: [{ host: "healthgrades.com" }], search: nameCityState, url: "https://www.healthgrades.com", access: "Healthgrades provider claim, licence verification", minutes: 30 },
+  // Added for the dentist vertical. It is the booking surface patients actually search in dentistry,
+  // the way RealSelf is the research surface in aesthetics, and it is selected per audience through
+  // client_audiences.presence_platform_keys rather than shown to everybody.
+  {
+    key: "zocdoc",
+    aliases: ["zoc doc"],
+    domains: [{ host: "zocdoc.com" }],
+    label: "Zocdoc",
+    tier: "extended",
+    api: false,
+    search: nameCityState,
+    url: "https://www.zocdoc.com",
+    access: "Zocdoc provider account. A paid listing, so an unclaimed profile may not be fixable",
+    minutes: 25,
+    note: "‼️ Check whether the practice actually pays for Zocdoc before booking work here. An unpaid profile can still carry a stale address that patients see, but the fix is a correction request rather than an edit.",
+  },
   {
     key: "npi",
     aliases: ["npi registry", "nppes"],

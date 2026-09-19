@@ -75,6 +75,29 @@ const NO_OTHER_CLINIC = "Never name another clinic, and never compare this clini
 const NO_ALLERGEN_PROMISE =
   "Never promise a dish is free of an allergen. Tell them to ask the kitchen when they order.";
 
+/**
+ * Dentistry's four. They are NOT the clinical three with a noun swapped, and the differences are
+ * the whole reason these are rows rather than code.
+ *
+ * ‼️ THE INSURANCE GUARD IS THE ONE THAT MATTERS AND IT HAS NO MED SPA EQUIVALENT. "What will my
+ * insurance cover" is the single most common question a dental practice is asked, the answer
+ * depends on a plan the bot cannot see, and a wrong answer is one the patient acts on. A med spa
+ * sells cash procedures, so this question never came up and no existing hard line covers it.
+ *
+ * ‼️ THE PRICE GUARD IS SOFTER HERE, ALSO DELIBERATELY. A clinic's "never quote a price" exists
+ * because aesthetic pricing is a consultation outcome. Dental pricing is a published fee schedule
+ * for routine work, so a flat refusal would make the bot useless on exactly the questions it should
+ * be answering. It refuses to quote a TOTAL, which is the part insurance and diagnosis decide.
+ */
+const NOT_A_DENTIST =
+  "You are not a dentist and this is not dental advice. Never diagnose, never name a condition, and never tell them a treatment is what they need.";
+const NO_INSURANCE_PROMISE =
+  "Never tell them what their insurance will or will not cover, and never estimate what they will pay after insurance. The practice verifies benefits.";
+const NO_TOTAL_QUOTE =
+  "Never quote a total for treatment. You may repeat a published fee for a routine visit if you are given one, but anything that depends on an exam is something the practice confirms.";
+const NO_OTHER_PRACTICE =
+  "Never name another dental practice, and never compare this practice to one.";
+
 export const AUDIENCE_PRESETS: Readonly<Record<string, AudiencePreset>> = {
   // SRT itself, and anybody else selling AEO to clinics.
   aeo_agency_owner: {
@@ -109,6 +132,40 @@ export const AUDIENCE_PRESETS: Readonly<Record<string, AudiencePreset>> = {
     presence: ["google", "apple", "bing", "yelp", "realself", "facebook"],
     buyerMarket: "med-spa",
     questionSet: "universal_v1_med_spa",
+  },
+
+  // ‼️ VERTICAL #2, AND THE FIRST ONE ADDED AFTER THE SPINE EXISTED. Everything it needed was
+  // already a column: nouns, hard lines, presence keys, buyer market, question set. If a future
+  // vertical cannot be expressed as an entry here, that is the finding, not a reason to branch.
+  //
+  // Dentists because the med spa list is finite. Roughly 3,700 independent US med spas have a
+  // findable address, which is about five weeks of sending at 450/day; there are 179,584 dental
+  // practices. A dentist is also the closest structural match we have: local, appointment driven,
+  // review sensitive, real patients, and "who does ChatGPT name near me" is the same sale.
+  dentist_patient: {
+    stance: "patient",
+    buyer: ["patient", "patients"],
+    offer: ["treatment", "treatments"],
+    // ‼️ "practice", NOT "clinic". It is what dentists call themselves and what their patients
+    // call them, and the noun exists precisely so engine.ts does not have to know either.
+    business: "practice",
+    // "appointment", not "consultation". A consultation is a specific paid thing in dentistry
+    // (implants, ortho), so using it as the generic booking word would misdescribe a checkup.
+    visit: "appointment",
+    laneName: "AI Dental Concierge",
+    launcher: "Book an appointment",
+    hardLines: [NOT_A_DENTIST, NO_INSURANCE_PROMISE, NO_TOTAL_QUOTE, NO_OTHER_PRACTICE],
+    // realself is aesthetics research and means nothing here. zocdoc is the booking surface
+    // patients actually search in dentistry, and healthgrades and npi carry over because a dentist
+    // is a licensed provider.
+    presence: ["google", "apple", "bing", "yelp", "zocdoc", "healthgrades", "facebook"],
+    buyerMarket: "dentist",
+    // ‼️ NULL UNTIL THE SET EXISTS. question-sets.ts reads this to pick a shipped 20 question set,
+    // and the only one that exists is universal_v1_med_spa. Naming a set that is not there would
+    // not fail loudly: materializeSet falls through to deriving from the client's own audit and
+    // FREEZES that forever under a version string claiming to be a preset. A null derives the same
+    // way and does not lie about where the questions came from.
+    questionSet: null,
   },
 
   // la-casita-tacos-pupusas, when somebody onboards it. A diner and a patient are the SAME stance:
@@ -157,6 +214,21 @@ export const PRESET_BY_VERTICAL: Readonly<Record<string, string>> = {
   "med-spa-clinic": "med_spa_patient",
   "medical-spa": "med_spa_patient",
   "aesthetics-clinic": "med_spa_patient",
+
+  // Vertical #2. The same spelling problem applies and is handled the same cheap way here, but the
+  // real fix landed with this change: normalizeVerticalSlug() at adoptAuditClassification, the
+  // single writer, so this list no longer has to anticipate what a model will type.
+  dentist: "dentist_patient",
+  dentistry: "dentist_patient",
+  "dental-practice": "dentist_patient",
+  "dental-clinic": "dentist_patient",
+  "dental-office": "dentist_patient",
+  "family-dentistry": "dentist_patient",
+  "cosmetic-dentistry": "dentist_patient",
+  "general-dentistry": "dentist_patient",
+  orthodontist: "dentist_patient",
+  orthodontics: "dentist_patient",
+  "pediatric-dentistry": "dentist_patient",
 };
 
 /**
@@ -167,6 +239,14 @@ export const PRESET_BY_VERTICAL: Readonly<Record<string, string>> = {
  */
 const BUSINESS_TYPE_LADDER: ReadonlyArray<readonly [RegExp, string]> = [
   [/restaurant|taqueria|cater|venue|bakery|food truck|pupuser/i, "restaurant_diner"],
+  // ‼️ BEFORE the med spa row, and the order is load-bearing because the loop returns on the FIRST
+  // match. "cosmetic dentistry" carries no med spa word, but a practice calling itself a "cosmetic
+  // and aesthetic dental studio" does, and the aesthetics pattern would claim it. A dentist landing
+  // on med_spa_patient would be told it cannot quote a price for a treatment, and would never be
+  // told it cannot read an insurance plan, which is the one guard dentistry actually needs. The
+  // dental words are the more specific claim, so they answer first. Nothing here matches a med spa:
+  // an aesthetics business type contains none of these stems.
+  [/dentist|dental|orthodont|endodont|periodont|prosthodont|invisalign/i, "dentist_patient"],
   [/med ?spa|medical spa|aesthetic|injectable|dermatolog/i, "med_spa_patient"],
 ];
 

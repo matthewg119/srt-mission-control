@@ -107,12 +107,28 @@ export async function POST(req: NextRequest) {
   const cityHint = str(body.city, 120);
   const place = cityHint ? (parseCityCell(cityHint) ?? fromCityState(cityHint, null)) : null;
 
+  // ‼️ THE FIFTH ROUTE TO "THIS CLIENT IS A MED SPA", AND THE LAST LIVE ONE. This read
+  // `?? "medspa"`, so the opener of a non-clinical client's widget, the very first line a visitor
+  // ever sees, looked up med spa competitors in their city. engine.ts:242 closed the same default
+  // on the turn path by reading config.buyerMarket; this is the same lookup on the OPENER path and
+  // it was missed. The other four were closed on 2026-09-14: the column default, the read-time
+  // coalesce in config.ts, the provisioning seed in concierge-setup.ts, and engine.ts's ammo
+  // lookup. Whenever a non-clinical client reads as a med spa, look for a NEW default rather than
+  // assuming it is one of these; concierge-setup.ts's own header records removing such a literal
+  // once and finding it back twelve lines below.
+  //
+  // No fallback. buyerMarket null means nobody has said what market this buyer competes in, and
+  // conciergeAmmo with an empty service returns nothing, which is what marketKeys() already does
+  // for a blank. The opener then degrades to asking for the city, which openingFor handles, rather
+  // than naming a rival from the wrong industry as measured fact.
+  const buyerMarket = str(body.service, 60) ?? config.buyerMarket ?? "";
+
   const ammo =
-    config.audience === "owner" && place
+    config.audience === "owner" && place && buyerMarket
       ? await conciergeAmmo({
           audience: "owner",
           place,
-          service: str(body.service, 60) ?? "medspa",
+          service: buyerMarket,
           spent: session.ammoUsed,
         })
       : null;

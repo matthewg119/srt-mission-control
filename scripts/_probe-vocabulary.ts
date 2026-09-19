@@ -299,6 +299,41 @@ function presets(): void {
     )
   );
 
+  // Vertical #2. The point of these is not that dentists work: it is that adding a vertical was a
+  // preset object and an allowlist row, with no new branch anywhere.
+  const dentist = proposePreset("dentist");
+  check(
+    "a dentist has a preset, which is vertical #2 arriving as data",
+    dentist.unambiguous && dentist.presetKey === "dentist_patient"
+  );
+  check(
+    "and so does every dental spelling a classifier is likely to emit",
+    ["dentistry", "dental-practice", "dental-clinic", "cosmetic-dentistry", "orthodontist"].every(
+      (v) => proposePreset(v).presetKey === "dentist_patient"
+    )
+  );
+  check(
+    "a dentist speaks to patients about treatments at a practice, not a clinic",
+    dentist.preset?.business === "practice" && dentist.preset?.visit === "appointment"
+  );
+  // ‼️ THE ORDERING CHECK. BUSINESS_TYPE_LADDER returns on the FIRST match, and a practice calling
+  // itself an "aesthetic dental studio" matches the med spa pattern on "aesthetic". If the dental
+  // row were second, that dentist would inherit the clinical hard lines and would never get the
+  // insurance guard, which is the one dentistry actually needs.
+  check(
+    "a dental business_type beats the aesthetics pattern where both could match",
+    proposePreset(null, "cosmetic and aesthetic dental studio").presetKey === "dentist_patient"
+  );
+  check(
+    "and a real med spa is still unaffected by the dental row",
+    proposePreset(null, "medical spa and injectables clinic").presetKey === "med_spa_patient"
+  );
+  check(
+    "the insurance guard exists and is dentistry's alone",
+    (dentist.preset?.hardLines ?? []).some((l) => /insurance/i.test(l)) &&
+      !(proposePreset("med-spa").preset?.hardLines ?? []).some((l) => /insurance/i.test(l))
+  );
+
   const casita = proposePreset(null, "taco restaurant and pupuseria");
   check(
     "a business_type reaches the restaurant preset when no vertical is set",
@@ -323,6 +358,35 @@ function presets(): void {
     "seedClientAudience is the only thing that imports the presets outside config",
     !new RegExp("audience-presets").test(read("src/lib/clients/client-headlines.ts") ?? ""),
     "a request-time reader importing a preset is how this design becomes verticals.ts again"
+  );
+
+  console.log("\n6. One spelling, applied at the single writer");
+  const { normalizeVerticalSlug, normalizeBusinessType } =
+    require("../src/lib/clients/vertical-slug") as typeof import("../src/lib/clients/vertical-slug");
+
+  // ‼️ THE SPELLING THAT CAUSED THE ORIGINAL BUG. question-sets.ts tested `vertical === "med_spa"`,
+  // a snake_case literal classify.ts:58 is instructed never to emit, so every real med spa missed
+  // all three of its branches and both fidelity footers printed "not frozen" for every client.
+  check("an underscore spelling cannot survive the writer", normalizeVerticalSlug("med_spa") === "med-spa");
+  check("nor can case or spaces", normalizeVerticalSlug("  Med Spa ") === "med-spa");
+  check("nor can punctuation", normalizeVerticalSlug("med spa (clinic)") === "med-spa-clinic");
+  check("an already clean slug is untouched", normalizeVerticalSlug("dental-practice") === "dental-practice");
+  check("empty is null, never an empty string", normalizeVerticalSlug("   ") === null && normalizeVerticalSlug(null) === null);
+
+  // ‼️ A FACT ABOUT THE STRING, NEVER A CLAIM ABOUT THE BUSINESS. service.ts draws this exact line
+  // and it is why this is twenty lines rather than a synonym table: deciding `medspa` and
+  // `aesthetics-clinic` are one thing is a judgement somebody signs off on in PRESET_BY_VERTICAL.
+  check(
+    "genuinely different words are NOT collapsed here",
+    normalizeVerticalSlug("medspa") === "medspa" && normalizeVerticalSlug("aesthetics-clinic") === "aesthetics-clinic"
+  );
+
+  // business_type is prose the BUSINESS_TYPE_LADDER regexes read as prose. Hyphenating it would
+  // break every one of those patterns, which match words with spaces between them.
+  check("business_type keeps its spaces", normalizeBusinessType("  Family Dental   Practice ") === "family dental practice");
+  check(
+    "and still reaches the ladder after normalising",
+    proposePreset(null, normalizeBusinessType("Family Dental Practice")).presetKey === "dentist_patient"
   );
 }
 

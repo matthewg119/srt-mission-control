@@ -342,6 +342,15 @@ const BY_PRESET: Readonly<Record<string, readonly CategorySpec[]>> = {
   aeo_agency_owner: OWNER,
 };
 
+// ‼️ dentist_patient IS DELIBERATELY ABSENT, AND MAPPING IT TO `PATIENT` WOULD BE THE MISTAKE.
+// Both are patients buying a treatment, so the one-line entry looks obviously right and is not:
+// this file's own header calls PATIENT "honestly ten categories of lip filler", its price match is
+// /per syringe|per unit/ and its fear match is /dissolve[ds]?|botched/. Dentistry prices per crown
+// and per quadrant, and what its patients are afraid of is pain, the drill, and a bill their
+// insurance will not cover. Falling through to genericCategories() derives those four buying
+// questions from the audience's own nouns, which is what the fall-through is for. Write a DENTAL
+// table when somebody has read real dental questions, not before.
+
 /**
  * A category set built from an audience's OWN words, for an audience nobody has written a table
  * for yet.
