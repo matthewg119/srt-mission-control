@@ -62,7 +62,7 @@ export const GATED = ["POST /api/clients/[id]/hub  action=page_publish"] as cons
  *     Taking a page down is the remedy, not the harm. Same reasoning the Day 0 wall gives.
  *   the preview route
  *     Ours, noindex, no client DNS.
- *   the review tool
+ *   the AI Referral Engine
  *     Publishes nothing and is regulated separately. No model may go near it.
  */
 export const NOT_GATED = [
@@ -70,7 +70,7 @@ export const NOT_GATED = [
   "POST /api/clients/[id]/hub  action=page_unpublish",
   "hub/pages.ts startPageDraft / appendPageBody  (the page studio)",
   "the preview route",
-  "the review tool",
+  "the AI Referral Engine",
   // The site replica (client_replica_pages, /preview/{token}?kind=site). It is OUTSIDE this
   // gate rather than waived from it, and the distinction is structural: replica rows are not
   // client_pages, they have no status column, and there is no code path that could put one on a

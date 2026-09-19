@@ -93,7 +93,7 @@ Same class as the `clients.audit_report_id` bug already documented in CLAUDE.md.
 |---|---|---|
 | `clients.review_request_mode` | step 29 verifier, `call-sheet.ts` | **step 29 can NEVER be confirmed.** Its refusal says "Set it on the client board" and there is no such control |
 | `clients.review_owner_name` | step 30 verifier | the "the record says X" parenthetical never fires |
-| `clients.review_workflow.google_url` / `.realself_url` | `review-tool.tsx:18-29` `destinationsFor()` | **the "Post on Google" button has never appeared for any client.** Everyone gets the fallback hint text |
+| `clients.review_workflow.google_url` / `.realself_url` | `referral-engine.tsx:18-29` `destinationsFor()` | **the "Post on Google" button has never appeared for any client.** Everyone gets the fallback hint text |
 
 Intake step 4 collects `destinations` as a multiselect of NAMES ("Google", "RealSelf") but no URL
 field, and `save/route.ts` writes the bag verbatim, so the URL keys are never populated.
@@ -175,7 +175,7 @@ Done, so the evidence rule is untouched. Two things the card must say:
   and then FIVE businesses tied at 1, so the third pick is a coin toss. The card must not present
   a tie-break as a ranking.
 
-### E. The review tool
+### E. The AI Referral Engine
 
 Three changes, and one hard limit.
 
@@ -185,7 +185,7 @@ Three changes, and one hard limit.
 > 465, the Rytr fact pattern. `review-assemble.ts` imports nothing and must keep importing
 > nothing; `assembleLabelled` and `assemblePlain` stay separate functions and must not be derived
 > from each other. The same rule is restated in `api/hub/reviews/submit/route.ts`,
-> `review-preview.ts` and `review-client.tsx`. **He accepted this and chose the readability hint
+> `review-preview.ts` and `referral-engine-client.tsx`. **He accepted this and chose the readability hint
 > instead.** Do not reopen it.
 
 1. **Microphone, on-device only.** The browser's `SpeechRecognition` / `webkitSpeechRecognition`,
@@ -206,16 +206,16 @@ Three changes, and one hard limit.
    across the FTC line. Pure client-side arithmetic (syllables, words, sentences); no API call.
 
 3. **"Copy and go", with a real destination.** Rename the `Copy my words` button
-   (`review-client.tsx:151`) and make the second half work: `destinationsFor()` already renders
+   (`referral-engine-client.tsx:151`) and make the second half work: `destinationsFor()` already renders
    "Post on Google" / "Post on RealSelf" from `review_workflow.google_url` / `.realself_url`, and
    nothing writes those. **Capture them at step 29** along with `review_request_mode` (see bug 3),
    which is what makes step 29 confirmable at the same time. Keep the existing rule from
-   `review-tool.tsx:12-16`: absent beats wrong, never synthesise a link, because a guessed URL
+   `referral-engine.tsx:12-16`: absent beats wrong, never synthesise a link, because a guessed URL
    sends her to somebody else's business.
 
 **Do not confuse the three review steps.** Step 8 `review_audit` is the competitor review-COUNT
-grid and touches nothing a customer sees. Step 16 `review_tool_preview` owns whether the tool
-renders and is themed. Step 30 `review_tool_handed` owns the handover. Matthew conflated 8 and
+grid and touches nothing a customer sees. Step 16 `referral_engine_preview` owns whether the tool
+renders and is themed. Step 30 `referral_engine_handed` owns the handover. Matthew conflated 8 and
 16; the cards should make the difference obvious.
 
 **The preview URL cannot be handed to a client.** `reviewPreviewUrl()` returns a `/dashboard/`

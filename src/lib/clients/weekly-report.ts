@@ -21,7 +21,7 @@
 //     anywhere in this system, and printing "0 leads" reads as a RESULT rather than as an
 //     unwired question. The report says the question is not wired instead.
 //   • No Google review count. The only reviews we can see are the ones that came through our
-//     own review tool, so that line is worded as exactly that and never implies a review API.
+//     own AI Referral Engine, so that line is worded as exactly that and never implies a review API.
 //   • Crawler activity is never reported without the words "leading indicator" attached, and
 //     they live in ONE string so a refactor cannot separate them.
 
@@ -129,7 +129,7 @@ export async function buildWeeklyReport(
 
   lines.push(
     "",
-    `*Reviews through your review tool:* ${reviewCount ?? 0} this week.`,
+    `*Reviews through your AI Referral Engine:* ${reviewCount ?? 0} this week.`,
     "That counts submissions through the tool we gave you. It is not a count of everything " +
       "posted to Google, which we have no way to read.",
     "",

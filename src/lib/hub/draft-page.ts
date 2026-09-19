@@ -1,6 +1,6 @@
 // A first draft of a hub page, from the question the audit actually ran.
 //
-// ‼️ READ THIS BEFORE MOVING IT ANYWHERE NEAR THE REVIEW TOOL.
+// ‼️ READ THIS BEFORE MOVING IT ANYWHERE NEAR THE AI REFERRAL ENGINE.
 // `src/lib/hub/review-assemble.ts` imports nothing and must keep importing nothing: FTC 16 CFR
 // Part 465 regulates a tool that GENERATES review content its user did not write. That rule is
 // about somebody else's words. A hub page is the CLIENT's own marketing copy on the client's own

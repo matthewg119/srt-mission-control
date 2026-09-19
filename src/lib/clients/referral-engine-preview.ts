@@ -1,14 +1,14 @@
-// The review tool preview — delivery step 16, Runner v3 5f/5g.
+// The AI Referral Engine preview — delivery step 16, Runner v3 5f/5g.
 //
 // ‼️ THIS STEP GENERATES NOTHING, AND THAT IS THE FINDING.
 //
-// The themed review tool preview already exists and already works. It is rendered by
+// The themed AI Referral Engine preview already exists and already works. It is rendered by
 // src/app/dashboard/clients/[id]/preview/[[...slug]]/page.tsx at ?kind=reviews, inside a
 // .hub-root carrying themeStyle(client.theme), and that page's own header documents the
 // discard guarantee it inherits from middleware. There was never a document to build here.
 //
 // So this runner is a VERIFIER, and its entire value is REFUSING TO TICK when the things the
-// step claims are not true. "Review tool preview live, themed to match" is two assertions. The
+// step claims are not true. "AI Referral Engine preview live, themed to match" is two assertions. The
 // first is structural and always true once a client exists. The second is not: activeTheme()
 // returns null until a human confirms, and an unconfirmed theme renders as the SRT default —
 // at which point "themed to match" is a sentence on a checklist describing a page that is not
@@ -90,7 +90,7 @@ export function clientPreviewUrl(
     const { token } = signOnboardingToken(clientId, PREVIEW_TOKEN_TTL_DAYS, "preview");
     return `${appUrl()}/preview/${token}${kind === "hub" ? "" : `?kind=${kind}`}`;
   } catch (e) {
-    console.error("[clients/review-preview] preview link not minted:", (e as Error).message);
+    console.error("[clients/referral-engine-preview] preview link not minted:", (e as Error).message);
     return null;
   }
 }
@@ -116,20 +116,20 @@ export function previewLinkLine(
 }
 
 
-/** Whether the review tool can honestly be called themed, and what the card should say about it. */
-export type ReviewToolReadiness =
+/** Whether the AI Referral Engine can honestly be called themed, and what the card should say about it. */
+export type ReferralEngineReadiness =
   | { ok: true; name: string; themed: boolean; themeNote: string; hostWarning: string }
   | { ok: false; error: string };
 
 /**
  * The theme check and the QR host warning, with NO output_ref write and NO Slack post.
  *
- * ‼️ SPLIT OUT OF verifyReviewToolPreview BECAUSE THE VERIFIER CALLED THAT, AND THAT POSTS. Every
+ * ‼️ SPLIT OUT OF verifyReferralEnginePreview BECAUSE THE VERIFIER CALLED THAT, AND THAT POSTS. Every
  * Re-check on this step re-posted the whole preview card into the thread, one copy per press. The
- * runner still posts, once, through verifyReviewToolPreview below; the verifier calls this and
- * observeReviewTool, and both of those only read.
+ * runner still posts, once, through verifyReferralEnginePreview below; the verifier calls this and
+ * observeReferralEngine, and both of those only read.
  */
-export async function reviewToolPreviewReady(clientId: string): Promise<ReviewToolReadiness> {
+export async function referralEnginePreviewReady(clientId: string): Promise<ReferralEngineReadiness> {
   const { data: client } = await supabaseAdmin
     .from("clients")
     .select("id, legal_name, dba_name, theme, subdomain, domain")
@@ -151,7 +151,7 @@ export async function reviewToolPreviewReady(clientId: string): Promise<ReviewTo
     return {
       ok: false,
       error:
-        "The theme has not been confirmed, so the review tool would render in SRT's default " +
+        "The theme has not been confirmed, so the AI Referral Engine would render in SRT's default " +
         "colours rather than the client's. Confirm the theme on the client board (that is the " +
         "manual half of the hub preview step) and this runs itself. Confirming with nothing set " +
         "is allowed and means keeping SRT's defaults deliberately.",
@@ -160,7 +160,7 @@ export async function reviewToolPreviewReady(clientId: string): Promise<ReviewTo
   const theme = activeTheme(stored);
   const themeNote = theme
     ? ""
-    : " The theme is confirmed with no overrides, so the review tool renders SRT's defaults on " +
+    : " The theme is confirmed with no overrides, so the AI Referral Engine renders SRT's defaults on " +
       "the client's own domain. That is a recorded decision, not an unfinished step.";
 
   // ── The check that only warns ─────────────────────────────────────────────
@@ -201,8 +201,8 @@ export async function reviewToolPreviewReady(clientId: string): Promise<ReviewTo
   };
 }
 
-/** What a request for the review tool actually got back. */
-export type ReviewToolObservation =
+/** What a request for the AI Referral Engine actually got back. */
+export type ReferralEngineObservation =
   | { ok: true; url: string; status: number; via: "live" | "preview" }
   | { ok: false; url: string | null; detail: string; via: "live" | "preview" };
 
@@ -210,7 +210,7 @@ export type ReviewToolObservation =
 const PAGE_PROBE_TIMEOUT_MS = 10_000;
 
 /**
- * Request the review tool, now, and report what came back.
+ * Request the AI Referral Engine, now, and report what came back.
  *
  * ‼️ THIS EXISTS BECAUSE THE TICK SAID "`<host>` answered a live request" AND NO REQUEST WAS MADE.
  * The verifier checked a theme and a client_hosts row and then printed a sentence about the
@@ -224,11 +224,11 @@ const PAGE_PROBE_TIMEOUT_MS = 10_000;
  *
  * ‼️ A VERIFIED CNAME WITH NO ENABLED HOST ROW FALLS TO THE PREVIEW RATHER THAN GUESSING A
  * HOSTNAME. Middleware serves a hub host only from client_hosts, so a host composed from the
- * domain would 404 for a reason that is not the review tool's.
+ * domain would 404 for a reason that is not the AI Referral Engine's.
  *
  * Read only: no output_ref write, no Slack post, no row touched. Safe to call on every Re-check.
  */
-export async function observeReviewTool(clientId: string): Promise<ReviewToolObservation> {
+export async function observeReferralEngine(clientId: string): Promise<ReferralEngineObservation> {
   const [dns, hosts] = await Promise.all([
     supabaseAdmin
       .from("client_dns_records")
@@ -283,11 +283,11 @@ export async function observeReviewTool(clientId: string): Promise<ReviewToolObs
 /**
  * The RUNNER: the readiness check, then the durable pointer and the one card this step posts.
  *
- * Verifiers must not call this, because it posts. They call reviewToolPreviewReady and
- * observeReviewTool instead.
+ * Verifiers must not call this, because it posts. They call referralEnginePreviewReady and
+ * observeReferralEngine instead.
  */
-export async function verifyReviewToolPreview(clientId: string): Promise<AutoResult> {
-  const ready = await reviewToolPreviewReady(clientId);
+export async function verifyReferralEnginePreview(clientId: string): Promise<AutoResult> {
+  const ready = await referralEnginePreviewReady(clientId);
   if (!ready.ok) return { ok: false, error: ready.error };
 
   const url = reviewPreviewUrl(clientId);
@@ -298,12 +298,12 @@ export async function verifyReviewToolPreview(clientId: string): Promise<AutoRes
     .from("client_delivery_steps")
     .update({ output_ref: url, updated_at: new Date().toISOString() })
     .eq("client_id", clientId)
-    .eq("step_key", "review_tool_preview");
+    .eq("step_key", "referral_engine_preview");
 
   // ‼️ THE CARD SAYS WHAT A REQUEST GOT, NOT THAT THE TOOL IS LIVE. It used to print "Themed and
   // live" having requested nothing. The host is named without the token: the shareable link is
   // printed once, on its own line below, with its expiry.
-  const seen = await observeReviewTool(clientId);
+  const seen = await observeReferralEngine(clientId);
   const seenHost = seen.url ? new URL(seen.url).host : null;
   const seenLine = seen.ok
     ? `:white_check_mark: Requested just now: \`${seenHost}\` answered ${seen.status}` +
@@ -314,13 +314,13 @@ export async function verifyReviewToolPreview(clientId: string): Promise<AutoRes
 
   await notifyStep(
     clientId,
-    "review_tool_preview",
+    "referral_engine_preview",
     [
-      `*Review tool preview, ${ready.name}*`,
+      `*AI Referral Engine preview, ${ready.name}*`,
       ready.themed ? `Themed: ${url}` : `Internal preview: ${url}`,
       ":lock: That one is internal: it is a /dashboard/ path, so a logged-out visitor gets a 404.",
       "",
-      previewLinkLine(clientPreviewUrl(clientId, "reviews"), "The review tool"),
+      previewLinkLine(clientPreviewUrl(clientId, "reviews"), "The AI Referral Engine"),
       seenLine,
       "",
       `• ${PREVIEW_DEMO_RULE}`,

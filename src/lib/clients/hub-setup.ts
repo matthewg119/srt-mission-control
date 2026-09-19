@@ -9,7 +9,7 @@
 //
 // The consequence on the first real pilot: the step was ticked by hand, no domain was ever
 // attached, the DNS rows carried the `HUB_CNAME_TARGET` fallback rather than the true target,
-// `reviews.{domain}` answered NXDOMAIN, and `review_tool_preview` failed one line later for a
+// `reviews.{domain}` answered NXDOMAIN, and `referral_engine_preview` failed one line later for a
 // completely different reason (an unconfirmed theme) which made the real cause invisible.
 //
 // ‼️ ATTACHING BEFORE THE DNS RECORD EXISTS IS THE CORRECT ORDER and CLAUDE.md says so:
@@ -49,7 +49,7 @@ async function loadHubClient(clientId: string): Promise<ClientRow | null> {
 }
 
 /**
- * Has a person confirmed the theme? `hub_preview` and `review_tool_preview` refuse until they have.
+ * Has a person confirmed the theme? `hub_preview` and `referral_engine_preview` refuse until they have.
  *
  * ‼️ CONFIRMED AND HAS-OVERRIDES ARE TWO DIFFERENT QUESTIONS AND CONFLATING THEM WAS A DEADLOCK.
  *
@@ -100,7 +100,7 @@ export function themeLine(confirmed: boolean, overrides: string[]): string {
   }
   if (overrides.length === 0) {
     return (
-      ":white_check_mark: Theme confirmed with no overrides, so the hub and the review tool " +
+      ":white_check_mark: Theme confirmed with no overrides, so the hub and the AI Referral Engine " +
       "render SRT's defaults on the client's own domain. That is a recorded decision, not an " +
       "unfinished step. [Done] will go through."
     );
@@ -248,9 +248,9 @@ export async function registerHubAndSeedDns(clientId: string): Promise<{
   lines.push(...formatDnsRecords(rows, client.domain));
 
   // ‼️ THE THEME IS THE MANUAL HALF AND IT IS STATED HERE, not left to be discovered when
-  // review_tool_preview fails. That is exactly what happened on the pilot: hub_preview was
+  // referral_engine_preview fails. That is exactly what happened on the pilot: hub_preview was
   // ticked, and the very next step refused with "the theme has not been confirmed", which
-  // reads as a failure of the review tool rather than as the unfinished half of this step.
+  // reads as a failure of the AI Referral Engine rather than as the unfinished half of this step.
   // Same helper the step card uses, so the two cannot drift into saying different things
   // about the same client.
   const stored = readTheme(client.theme);

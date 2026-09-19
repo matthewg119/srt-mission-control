@@ -1,11 +1,11 @@
-# Build prompt: review tool, page-design picker, drafting workflow, per-client workspace
+# Build prompt: AI Referral Engine, page-design picker, drafting workflow, per-client workspace
 
 A build prompt for a fresh session. Everything in a **Ground truth** block was read in the repo on
 2026-09-07 and is quoted, not remembered. Line numbers may drift; symbol names are right.
 
 **Repo:** `Mission control 2.0/srt-mission-control`. Work in your own git worktree. Run
 `git branch --show-current` before every commit. Read `docs/lanes/CONTRACT.md`, `CLAUDE.md`, and
-`docs/specs/SRT-Review-Tool-BUILD-SPEC-v2.md` before writing code. `main` is at `d5a1443` or later.
+`docs/specs/SRT-Referral-Engine-BUILD-SPEC-v2.md` before writing code. `main` is at `d5a1443` or later.
 
 **Also read `docs/prompts/offers-pipeline.md`.** The offers half of requirement 5 is specced there
 in detail, including four structural problems. Do not re-derive it.
@@ -26,11 +26,11 @@ reversing it and why, or whether the reason still holds and Matthew needs to hea
 
 ---
 
-## 1. The review tool, rebuilt as a chat
+## 1. The AI Referral Engine, rebuilt as a chat
 
 Today it renders four stacked textareas in unstyled default CSS while the hub beside it is themed.
-Files: `src/app/hub/[host]/reviews/review-tool.tsx` (server) and `review-client.tsx` (client, 499
-lines). Read the whole header of `review-client.tsx` before touching it. It is the negotiated
+Files: `src/app/hub/[host]/reviews/referral-engine.tsx` (server) and `referral-engine-client.tsx` (client, 499
+lines). Read the whole header of `referral-engine-client.tsx` before touching it. It is the negotiated
 history of this exact feature.
 
 ### The flow, screen by screen
@@ -51,7 +51,7 @@ history of this exact feature.
 
 ### Ground truth: the mic, and why it is this API
 
-`review-client.tsx:62-81`, verbatim:
+`referral-engine-client.tsx:62-81`, verbatim:
 
 > ‼️ ON HER DEVICE, AND THAT IS THE WHOLE REASON IT IS THIS API AND NOT OUR TRANSCRIBER.
 > `src/lib/clients/voice-notes.ts` has a working `transcribeAudio()` that posts bytes to OpenAI
@@ -92,7 +92,7 @@ holds its copy, and records that the waiting state is three dots and never a sen
 the model is doing.
 
 **Reuse the look. Do not reuse the engine.** That component is driven by `runConversationWithTools`.
-The review tool has no model in it and must not gain one. Its "chatbot" is a scripted walk of the
+The AI Referral Engine has no model in it and must not gain one. Its "chatbot" is a scripted walk of the
 four fixed `REVIEW_QUESTIONS` in order: no generation, no branching on what she says, no network
 round trip per turn. That is what keeps it on the right side of the FTC line, and it also makes it
 instant, so there is no thinking delay to cover. The typing indicator is therefore a deliberate,
@@ -100,7 +100,7 @@ short, honest pause between scripted bubbles, not a wait for anything.
 
 ### Ground truth: nothing may branch on the rating
 
-`review-client.tsx:23-36`, verbatim:
+`referral-engine-client.tsx:23-36`, verbatim:
 
 > THE STARS ROUTE NOTHING. Gating is a rating that decides whether she sees the public review link.
 > Here every value 1 to 5 reaches the same questions, the same editable box and the same
@@ -122,7 +122,7 @@ The new priming screen and the new chat must be identical at 1 star and at 5. Ru
 > spelling... FTC 16 CFR Part 465 and the Rytr fact pattern: a tool that GENERATES review content
 > its user did not write is the thing being regulated. A tool that REFORMATS what she typed is not.
 
-And `review-client.tsx:11-21` records that Matthew already asked once for reviews rewritten to a
+And `referral-engine-client.tsx:11-21` records that Matthew already asked once for reviews rewritten to a
 sixth-grade reading level with an emotional hook, was told why not, and chose two things instead:
 the on-device microphone, and **"a READABILITY HINT that POINTS at long sentences and never supplies
 different ones."** Both already exist. "Neither may quietly become the thing that was declined."
@@ -161,7 +161,7 @@ good on its own**, because that is what everyone sees before anybody picks.
 ## 2. The review destination link
 
 **Ground truth.** `clients.review_destination_primary` exists, is written at
-`src/app/api/onboarding/save/route.ts:193`, and is read by `review-tool.tsx:31` and
+`src/app/api/onboarding/save/route.ts:193`, and is read by `referral-engine.tsx:31` and
 `artifacts/call-sheet.ts:557`. There is also a `review_workflow` jsonb bag.
 
 `src/lib/onboarding2/delivery.ts:200-202` says of it:
@@ -175,7 +175,7 @@ why in the migration header, or it still holds and you say so. Do not quietly ad
 `review_destination_url` beside a column whose own documentation forbids being one.
 
 Wherever it lands it needs a control on the client board, beside the Theme and Hub panels in
-`src/app/dashboard/clients/[id]/page.tsx`, and it must be readable by the review tool.
+`src/app/dashboard/clients/[id]/page.tsx`, and it must be readable by the AI Referral Engine.
 
 ## 3. The page-design picker: screenshot in, three variations out
 
@@ -217,7 +217,7 @@ template, adding one is a code change on purpose.
   and justify it.
 
 **Also do the small honest fix Matthew asked for first: make the default look better.** The current
-review tool default is unstyled. That is the baseline everyone sees before anybody picks anything.
+AI Referral Engine default is unstyled. That is the baseline everyone sees before anybody picks anything.
 
 ## 4. Keywords: the 99 most searched, from the offer and the avatar
 
@@ -366,7 +366,7 @@ Without `--env-file=.env.local` the probes return nothing at all. Not an error. 
 
 Then prove it on SRT, resolved **by slug** (`srt-agency-llc`, never a pinned id):
 
-- The review tool renders one question at a time, in the client's skin, stars first, mic permission
+- The AI Referral Engine renders one question at a time, in the client's skin, stars first, mic permission
   asked once before question one, keyboard always reachable, and nothing rendered on Firefox that
   cannot work there.
 - The end screen shows the assembled review with deterministic readability highlights, no suggested

@@ -66,7 +66,7 @@ import { loadNumberedEvidence, recordWebsiteSnapshot } from "@/lib/clients/page-
 import { magnetsForClient } from "@/lib/concierge/for-client";
 import { draftSection } from "@/lib/hub/draft-replica";
 import { saveReplicaPage, pruneReplica } from "@/lib/hub/replica-pages";
-import { clientPreviewUrl, previewLinkLine } from "@/lib/clients/review-preview";
+import { clientPreviewUrl, previewLinkLine } from "@/lib/clients/referral-engine-preview";
 import type { AutoResult } from "@/lib/clients/artifacts/registry";
 
 /**

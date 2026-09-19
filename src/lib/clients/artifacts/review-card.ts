@@ -1,10 +1,10 @@
-// The printed review card — delivery step 17, v4 section 8, SRT-Review-Tool-BUILD-SPEC-v2.
+// The printed review card — delivery step 17, v4 section 8, SRT-Referral-Engine-BUILD-SPEC-v2.
 //
 // A patient finishes her visit and is handed this. That evening, at home, on her own phone,
 // she scans it and answers four open questions in her own words.
 //
 // ‼️ VISUAL THEME PER CLIENT. COPY IDENTICAL FOR EVERY CLIENT. FOREVER.
-// The build spec is explicit: the review tool "takes the same theme object as the hub — logo,
+// The build spec is explicit: the AI Referral Engine "takes the same theme object as the hub — logo,
 // palette, fonts — so it reads as the clinic's page and not an agency page. The COPY, the four
 // questions, the flow, the bullet labels, the destination links and every rule in the build
 // spec are IDENTICAL for every clinic and are not themable."
@@ -16,7 +16,7 @@
 // is the one definition. A card whose questions have drifted from the ones the tool actually
 // asks is worse than no card: she reads one thing on paper and is asked another on screen.
 //
-// ‼️ NO MODEL IN THIS PATH, like everything else in the review tool. Nothing here generates,
+// ‼️ NO MODEL IN THIS PATH, like everything else in the AI Referral Engine. Nothing here generates,
 // rewrites or suggests review content. FTC 16 CFR Part 465 regulates a tool that GENERATES
 // review content its user did not write. This one prints four questions on card stock.
 //

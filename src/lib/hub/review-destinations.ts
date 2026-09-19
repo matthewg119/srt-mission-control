@@ -3,7 +3,7 @@
 // ‼️ THIS FILE EXISTS BECAUSE THE SAME SIX PLATFORMS WERE SPELLED OUT IN THREE PLACES AND THE
 // COMMENT WARNING ABOUT IT WAS THE ONLY THING HOLDING THEM TOGETHER.
 //
-// review-tool.tsx's PLATFORMS carried the note: "ADDING A PLATFORM HERE IS NOT ENOUGH ON ITS
+// referral-engine.tsx's PLATFORMS carried the note: "ADDING A PLATFORM HERE IS NOT ENOUGH ON ITS
 // OWN. The Review handover panel is the only writer of these URLs, and the onboarding2 question
 // offers the same six names. All three lists have to agree or a client picks a platform nobody
 // can paste a URL for."
@@ -11,13 +11,13 @@
 // That was exactly the live failure. The funnel offered six names and the handover panel had
 // two boxes, Google and RealSelf. SRT Agency's own record says `review_destination_primary =
 // 'trustpilot'`, so the one platform the client chose was the one platform with nowhere to put
-// its link, and the review tool rendered no button at all. Nothing errored. The panel looked
+// its link, and the AI Referral Engine rendered no button at all. Nothing errored. The panel looked
 // complete, the funnel looked complete, and the customer got the fallback hint telling her to
 // go and find the review page herself.
 //
 // So the list is data now, and the three surfaces read it:
 //
-//   src/app/hub/[host]/reviews/review-tool.tsx        which buttons render
+//   src/app/hub/[host]/reviews/referral-engine.tsx        which buttons render
 //   src/app/api/clients/[id]/review-workflow/route.ts which keys are accepted and validated
 //   src/app/dashboard/clients/[id]/review-workflow-form.tsx  which boxes are drawn
 //
@@ -38,7 +38,7 @@ export interface ReviewPlatform {
   key: string;
   /** The `review_workflow` jsonb key holding the URL a human pasted. */
   field: string;
-  /** The button on the review tool. */
+  /** The button on the AI Referral Engine. */
   label: string;
   /** The option in the onboarding2 funnel and the label intake step 4 stores. */
   name: string;
@@ -167,7 +167,7 @@ export function platformByKey(key: string | null | undefined): ReviewPlatform | 
 /**
  * Which platforms this client actually has a link for, and which they said they wanted.
  *
- * Pure, so the review tool, the board panel and a Slack card can all describe the same state in
+ * Pure, so the AI Referral Engine, the board panel and a Slack card can all describe the same state in
  * the same words without one of them working it out differently.
  */
 export interface DestinationState {
@@ -211,7 +211,7 @@ export function destinationState(
 /**
  * One sentence describing where a client's reviews can go, for a card or a panel header.
  *
- * Written once so the board, the review tool's step cards and anything else say the same thing.
+ * Written once so the board, the AI Referral Engine's step cards and anything else say the same thing.
  * It states what IS, never what was intended: "nothing set" and "set to the wrong platform" are
  * different sentences because they send you to different places.
  */

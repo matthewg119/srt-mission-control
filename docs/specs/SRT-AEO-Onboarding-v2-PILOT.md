@@ -1,9 +1,11 @@
 # SRT Agency — AEO Onboarding v2 · Pilot cohort
 ## The first clinics, delivered at no cost. No offers anywhere.
 
+> **Renamed 2026-09-19.** What this document calls the AI Referral Engine was written down as the "review tool", and the free plan as the "AI Visibility Review Engine". Both are the AI Referral Engine now, and the text below has been updated to say so. Nothing about the mechanism changed; only the name did. The `reviews.` host, the `/hub/[host]/reviews` route and the `review_workflow` table keep their old spelling on purpose, because clients have already typed that hostname into a registrar and printed QR codes resolve through it.
+
 **What this is:** the onboarding flow for the first clinics, who receive the full service free for a fixed pilot period so that real results, real patient reviews, and real delivery hours exist before the webinar and ads go live.
 **What this is not:** a sales document. There is no price, no tier pitch, no add-on, no "after the pilot you'll get…" anywhere in this flow — not in the invitation, the welcome email, the funnel, the call, the reports, or the close-out. Continuing after the pilot is a separate conversation with its own document.
-**Relationship to other docs:** `SRT-AEO-Onboarding-v1.2.md` + `med-spa-aeo_OPS_onboarding-x-webinar_BRIDGE_v1.md` govern the paid flow. This doc reuses their machinery (same funnel, same scan, same booking, same hub, same review tool) and changes only what "free" and "first" require. Where v1.2 mentions payment, pricing, implementation as a paid service, or `/freeaudit`, this doc overrides for pilot tenants.
+**Relationship to other docs:** `SRT-AEO-Onboarding-v1.2.md` + `med-spa-aeo_OPS_onboarding-x-webinar_BRIDGE_v1.md` govern the paid flow. This doc reuses their machinery (same funnel, same scan, same booking, same hub, same AI Referral Engine) and changes only what "free" and "first" require. Where v1.2 mentions payment, pricing, implementation as a paid service, or `/freeaudit`, this doc overrides for pilot tenants.
 **Owner:** Matthew (delivery) · Lina (proof, scripts, canon)
 **Status:** proposed locks, veto window open. Silence = ratified.
 
@@ -40,7 +42,7 @@ Still applies, because it's delivery truth, not selling:
 - one clinic per market — a pilot holds its market for the pilot's duration
 - six at a time — a pilot occupies a seat and is counted server-side like any client
 - Keep Everything — when the pilot ends, they keep every asset, live
-- every Integrity Law, every review-tool rule, "named" not "ranked," Reddit research-only, no posting as the client anywhere
+- every Integrity Law, every AI Referral Engine rule, "named" not "ranked," Reddit research-only, no posting as the client anywhere
 
 Internal-only vocabulary: **Core scope / Complete scope** describe delivery volume so hours can be measured. Never used with a pilot clinic.
 
@@ -56,7 +58,7 @@ Internal-only vocabulary: **Core scope / Complete scope** describe delivery volu
 | **Duration** | 90 days from Day 0. Matches "day thirty, day sixty, and the one I actually believe at day ninety." |
 | **Implementation track** | Citation cleanup, GBP buildout, orphaned-access recovery are done for pilots when the findings call for them — and **logged as a confound** in the case study ("with citation cleanup"). Hours logged separately from subscription hours. |
 | **Cost to the clinic** | Nothing, ever, including third-party listing fees we choose to recommend — those are disclosed and paid by the clinic only if the clinic decides to; we never front them and never take a cut. |
-| **What we ask** | The onboarding call, ~20 min/month after, approval of the custom question list once, access, a named person for the review tool, feedback at day 30/60/90, and permission (§2.1). |
+| **What we ask** | The onboarding call, ~20 min/month after, approval of the custom question list once, access, a named person for the AI Referral Engine, feedback at day 30/60/90, and permission (§2.1). |
 | **Timing log** | Mandatory. Every task, every clinic, every minute (§12). No log, no pilot. |
 | **Close-out** | Day 90: results package, timing report, permission confirmed, market decision. What comes next is not discussed before then. |
 
@@ -64,13 +66,13 @@ Internal-only vocabulary: **Core scope / Complete scope** describe delivery volu
 
 Two review streams. Different rules.
 
-**Patients reviewing the clinic** (the review tool): canon spec, verbatim, §10.3. This is the product working; nothing about the pilot changes it.
+**Patients reviewing the clinic** (the AI Referral Engine): canon spec, verbatim, §10.3. This is the product working; nothing about the pilot changes it.
 
 **The clinic talking about us:**
 - Permission to use results is asked once, at intake, as a checkbox with plain wording (§16.4). **Anonymized by default** — city-level, treatment-level, no clinic name. **Named use** needs a separate written yes. Revocable going forward; anything already recorded stays (the agreement says so).
 - Testimonials are **voluntary, never a condition** of the pilot, never requested in exchange for anything, and asked for once at day 90 — not before, not repeatedly.
 - Any testimonial used publicly carries a plain disclosure that the clinic took part in a no-cost pilot. That's the FTC endorsement posture and it's the same posture the product sells on camera; a hidden material connection would undercut Beat 19 in the mouth of the person saying it.
-- **We do not ask pilots for a review of SRT / Get Named on Google or anywhere else.** A free service in exchange for a review is an incentivized review — the thing the review tool exists to not do. What pilots produce for the webinar is **evidence and testimonials**, not "reviews of us."
+- **We do not ask pilots for a review of SRT / Get Named on Google or anywhere else.** A free service in exchange for a review is an incentivized review — the thing the AI Referral Engine exists to not do. What pilots produce for the webinar is **evidence and testimonials**, not "reviews of us."
 - Patient reviews are quoted only as already-public text, patient names removed, clinic named only with named-use permission.
 
 ---
@@ -84,7 +86,7 @@ A pilot is chosen, not sold. Criteria, in order of importance:
 3. **The owner will do the work the product asks:** ~1 hour call, ~20 min/month, one question-list approval, and will answer "what do you actually do differently in a treatment" when asked.
 4. **Reviews are asked for cleanly, or the owner is willing to stop what isn't.** No gating, no incentives, no lobby tablet, no staff-name prompts. Non-negotiable; it's on the intake form and it's confirmed on the call.
 5. **A booking / patient-messaging system exists** so the automated request can live in it. If not, card-only mode — acceptable, but at least two of the three pilots should have a system.
-6. **A named person for the review tool.** Not "the front desk." A name.
+6. **A named person for the AI Referral Engine.** Not "the front desk." A name.
 7. **A website we can point two CNAMEs at** and access that can be recovered (an ex-agency holding GBP is fine if the owner will start the recovery on the call).
 8. **Willing to have results used** at least anonymized. Named use is a bonus, never a requirement.
 
@@ -184,7 +186,7 @@ The full set — **40 (Core scope) or 80 (Complete scope) × the four engines** 
 ### 10.2 · Content
 Generated per scope, at exactly the counts that will be sold: **4 new + 4 refreshed (Core scope) or 8 + 8 (Complete scope) per month.** Answer-shaped: direct answer in the first 100 words, built from the questions the clinic is currently not named for, objections first. No GBP post calendar as a standing deliverable — GBP Q&A seeding and the first posts belong to the implementation track and are logged there. Nothing above the counts; extra pages would confound the case.
 
-### 10.3 · The patient review tool — the framework, as built
+### 10.3 · The patient AI Referral Engine — the framework, as built
 
 Standalone mobile page at `reviews.{clientdomain}`, reached by QR code on a physical card handed to the patient at the end of her visit. That evening, on her own phone, at home, she scans it and gets four open, sentiment-neutral questions:
 
@@ -230,7 +232,7 @@ Directory & list outreach from `citation_sources`: we pitch, they decide; one fo
 
 `time_log` — `tenant_id`, `task_category`, `minutes`, `logged_by`, `logged_at`, `note`.
 
-Categories (fixed list): `baseline_retest` · `pages_new` · `pages_refresh` · `review_tool_setup` · `review_responses` · `outreach` · `reporting_video` · `client_comms` · **`implementation`** (kept out of the subscription total).
+Categories (fixed list): `baseline_retest` · `pages_new` · `pages_refresh` · `referral_engine_setup` · `review_responses` · `outreach` · `reporting_video` · `client_comms` · **`implementation`** (kept out of the subscription total).
 
 At day 30, 60, 90: hours per clinic per category, subscription total vs implementation total. The on-camera arithmetic is "Complete runs about fifteen hours a month per clinic… Core's lighter, call it half." If the Complete-scope pilots run twenty, the cap is four and Beat 36 says four. The math works because it's real, so the log has to be honest — including the hours that were learning curve (mark them; month two is the number that counts).
 
@@ -240,7 +242,7 @@ At day 30, 60, 90: hours per clinic per category, subscription total vs implemen
 
 Six things, in this order, in one email and a short call if they want one:
 
-1. **Results package:** Day 0 vs day 30 / 60 / 90 on their questions, named/not-named, who is named instead, the review-tool numbers, hub traffic and attribution, the outreach log. Fidelity footer. Sample size on every number.
+1. **Results package:** Day 0 vs day 30 / 60 / 90 on their questions, named/not-named, who is named instead, the AI Referral Engine numbers, hub traffic and attribution, the outreach log. Fidelity footer. Sample size on every number.
 2. **Timing report** — how many hours their pilot took, in plain language. They're the first people who get to see the arithmetic.
 3. **Permission confirmed** — anonymized use stands unless revoked; named use asked plainly, once, with what "named" would mean (their clinic name, city, screenshots).
 4. **Testimonial** — asked once, optional, their words, and told upfront it will carry the no-cost-pilot disclosure if used.
@@ -270,7 +272,7 @@ Six things, in this order, in one email and a short call if they want one:
 - Call done: NAP confirmed, custom questions approved, access granted, all three DNS records live (two CNAMEs and one TXT), review mechanism + destination decided, named person recorded
 - Photograph II archived as Day 0 before any change
 - Hub live ≤ day 7; first answer pages ≤ day 14
-- Review tool live; cards printed and handed; automated request configured or `card_only` recorded
+- AI Referral Engine live; cards printed and handed; automated request configured or `card_only` recorded
 - Timing log has entries from day 0
 - Weekly Slack report firing; day-30 report date set
 
@@ -298,11 +300,11 @@ Six things, in this order, in one email and a short call if they want one:
 
 ### 16.3 · Pilot terms — one page, plain language
 
-> **What this is.** For 90 days we run our full service for [Clinic] at no cost. That includes: measuring where AI names clinics in [City] for the questions your patients ask; building and refreshing answer pages on `learn.[domain]`; the patient review tool and its cards; [Complete scope: written review responses and monthly outreach to the directories and lists AI reads]; and a monthly scorecard with a short video.
-> **What we ask.** About an hour for the onboarding call, roughly twenty minutes a month after that, approval of your question list once, access to your business profiles as a manager (never passwords), and one named person on your team for the review tool.
+> **What this is.** For 90 days we run our full service for [Clinic] at no cost. That includes: measuring where AI names clinics in [City] for the questions your patients ask; building and refreshing answer pages on `learn.[domain]`; the patient AI Referral Engine and its cards; [Complete scope: written review responses and monthly outreach to the directories and lists AI reads]; and a monthly scorecard with a short video.
+> **What we ask.** About an hour for the onboarding call, roughly twenty minutes a month after that, approval of your question list once, access to your business profiles as a manager (never passwords), and one named person on your team for the AI Referral Engine.
 > **Reviews.** Every patient gets the card. No incentives, no lobby tablets, no picking who gets asked, no asking anyone to name staff. If any of that happens today, it stops.
 > **Your results.** We may use anonymized results (city and treatment level, no clinic name). Using your name needs a separate yes from you. You can withdraw future use at any time; anything already recorded stays.
-> **What you keep.** Everything, live, when the 90 days end — the pages, the corrected listings, the review tool connection, every scorecard and video, the question list.
+> **What you keep.** Everything, live, when the 90 days end — the pages, the corrected listings, the AI Referral Engine connection, every scorecard and video, the question list.
 > **What we don't do.** Guarantee a result. Nobody can promise what an AI says. What we put a date on is the work.
 > **What this isn't.** A trial of anything for sale. There's nothing to buy during the pilot and we won't bring it up. After day 90 you'll have your results and we'll ask what you'd like to do.
 > **Costs.** None to you. If we ever recommend a listing that charges a fee, we'll say so and it's your call; we don't take anything from it.
@@ -313,7 +315,7 @@ Six things, in this order, in one email and a short call if they want one:
 > **Using what we measure.** We'd like to use your results to show other clinic owners what this looks like.
 > ☑ Anonymized — city and treatment, no clinic name, no screenshots that identify you *(default)*
 > ☐ Named — clinic name, city, screenshots. *(Optional. You can change this later for anything not yet recorded.)*
-> **Language for your patients' review tool:** ○ English ○ Spanish ○ Both
+> **Language for your patients' AI Referral Engine:** ○ English ○ Spanish ○ Both
 
 ### 16.5 · The card
 
@@ -326,7 +328,7 @@ Same card for every patient. No "if you loved your visit." No stars. No staff na
 
 > Thanks for coming in today. If you have ninety seconds tonight — four questions about your visit, in your own words: [link]. Nothing is posted unless you post it.
 
-### 16.7 · Review tool screen copy
+### 16.7 · AI Referral Engine screen copy
 
 > **Intro:** Four questions about your visit. Your answers, in your words. You'll see them laid out as notes you can change, copy, and post — only if you want to.
 > **After the four:** Here's what you said, laid out as notes. Change anything. Copy it. Then post it wherever you like — [Google] · [RealSelf].
@@ -353,7 +355,7 @@ Same card for every patient. No "if you loved your visit." No stars. No staff na
 | **D-P4** | Implementation track done for pilots when findings call for it; logged as a confound; hours logged separately. |
 | **D-P5** | Delivery volume = exactly what will be sold. No extra pages, no extra outreach, no extra engines on the scorecard. |
 | **D-P6** | Permission: anonymized by default, named by separate yes, revocable forward only. Testimonials voluntary, asked once at day 90, disclosed as no-cost pilot wherever used. No reviews of us solicited, ever. |
-| **D-P7** | Review tool = the framework in §10.3, no model in the path, no staff field, sentiment-blind owner-contact line, Google → RealSelf. |
+| **D-P7** | AI Referral Engine = the framework in §10.3, no model in the path, no staff field, sentiment-blind owner-contact line, Google → RealSelf. |
 | **D-P8** | Automated request lives in the clinic's booking software; we never hold patient contacts; `card_only` otherwise. |
 | **D-P9** | Timing log mandatory from day 0; month two is the number that goes on camera. |
 | **D-P10** | Close-out order as §13; seat released and market opened at day 90 unless a separate conversation says otherwise. |

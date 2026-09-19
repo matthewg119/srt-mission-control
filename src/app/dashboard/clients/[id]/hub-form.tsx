@@ -577,8 +577,8 @@ export function HubForm({
 
   // ‼️ FIVE THINGS HAVE TO BE TRUE AND THEY FAIL IN A FIXED ORDER, so the panel names the
   // FIRST unmet one rather than showing five independent ticks. On the pilot the hub was
-  // "built" with none of these true, and the only signal was review_tool_preview refusing two
-  // steps later for a reason that sounded like it belonged to the review tool.
+  // "built" with none of these true, and the only signal was referral_engine_preview refusing two
+  // steps later for a reason that sounded like it belonged to the AI Referral Engine.
   const attachedCount = hosts.filter((h) => h.attached).length;
   const steps: Array<{ label: string; ok: boolean; fix: string }> = [
     {
@@ -604,7 +604,7 @@ export function HubForm({
     {
       label: "Theme confirmed",
       ok: Boolean(themeConfirmedAt),
-      fix: "Identity and theme panel, extract or set the colours, then Confirm. Until then the hub and the review tool render in SRT's colours on the client's own domain.",
+      fix: "Identity and theme panel, extract or set the colours, then Confirm. Until then the hub and the AI Referral Engine render in SRT's colours on the client's own domain.",
     },
   ];
   const blocking = steps.find((x) => !x.ok) ?? null;
@@ -659,7 +659,7 @@ export function HubForm({
                 <div>
                   <div className="font-mono text-sm">{w.host}</div>
                   <div className="text-xs text-[rgba(255,255,255,0.4)]">
-                    {w.kind === "hub" ? "the answer hub" : "the review tool"}
+                    {w.kind === "hub" ? "the answer hub" : "the AI Referral Engine"}
                   </div>
                 </div>
                 <div className="text-right text-xs">
@@ -720,7 +720,7 @@ export function HubForm({
             rel="noreferrer"
             className="rounded border border-white/15 px-2 py-1 text-xs hover:border-white/40"
           >
-            Preview the review tool →
+            Preview the AI Referral Engine →
           </a>
         </div>
 

@@ -166,7 +166,7 @@ Split the two ideas, because they are two different facts:
   answers, and it should keep returning null for an empty theme so the hub renders its defaults.
 
 Then let Confirm be pressed with nothing set, and make the panel say which of the two states it
-is in. Check `review_tool_preview` and anything else calling `themeConfirmed()` still reads
+is in. Check `referral_engine_preview` and anything else calling `themeConfirmed()` still reads
 correctly after the split.
 
 ## 6. The AI assistant is posting into the channel at top level

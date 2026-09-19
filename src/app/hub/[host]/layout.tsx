@@ -47,7 +47,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
       default: client.displayName,
       template: `%s · ${client.displayName}`,
     },
-    // The review tool is a page for one customer, on her own phone, from a QR code. It is
+    // The AI Referral Engine is a page for one customer, on her own phone, from a QR code. It is
     // not a thing to be found, and it is the one host here that should stay out of an
     // index. The hub is the opposite.
     robots:
@@ -105,7 +105,7 @@ export default async function HubLayout({ children, params }: Props) {
         inside answer_md: neither rail was loosened to do this.
 
         The move also took the widget OFF the reviews host, which it should never have been on.
-        This layout wraps both kinds of host and the review tool is regulated separately, with
+        This layout wraps both kinds of host and the AI Referral Engine is regulated separately, with
         NOT_GATED in hub/page-gate.ts saying no model may go near it.
       */}
     </div>

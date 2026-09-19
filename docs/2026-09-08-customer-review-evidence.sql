@@ -41,7 +41,7 @@ alter table public.page_sources add constraint page_sources_type_check
   ));
 
 -- Two new ways a source arrives, both named so a quote can be traced back to how it was got:
--- read off a screenshot of a public listing, or read out of the client's own review tool.
+-- read off a screenshot of a public listing, or read out of the client's own AI Referral Engine.
 alter table public.page_sources drop constraint if exists page_sources_via_check;
 alter table public.page_sources add constraint page_sources_via_check
   check (collected_via is null or collected_via in (

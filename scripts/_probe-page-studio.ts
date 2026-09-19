@@ -104,7 +104,7 @@ async function main(): Promise<void> {
   const KEYWORDS_CMD = /^keywords?$/i;
   // ‼️ THE THIRD ONE, AND THE RISKIEST OF THE THREE. This lane is ABOUT reviews, so the word
   // shows up in ordinary dictation constantly: "reviews are up this month", "review the copy
-  // before it ships", "our review tool is live". Anchored at both ends and the plural is
+  // before it ships", "our AI Referral Engine is live". Anchored at both ends and the plural is
   // deliberately not a command, so all three of those reach the page untouched.
   const REVIEW_CMD = /^review(?:\s+(quotes?|quote\s+[0-9]{1,2}))?$/i;
   // ‼️ THE ROUND TRIP, ADDED 2026-09-14, AND `text` IS AS RISKY AS `review` WAS. It is an ordinary
@@ -140,7 +140,7 @@ async function main(): Promise<void> {
     // ‼️ DICTATION ABOUT REVIEWS, IN A LANE ABOUT REVIEWS. All of these must reach the page.
     ["reviews are up this month", "body"],
     ["review the copy before it ships", "body"],
-    ["our review tool is live", "body"],
+    ["our AI Referral Engine is live", "body"],
     ["reviewed it with her yesterday", "body"],
     ["review quotes from last month were better", "body"],
     // ── the round trip ──
