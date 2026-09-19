@@ -176,6 +176,15 @@ export interface PromptContext {
   vocabulary: AudienceVocabulary;
   /** This audience's own guards, on top of the universal ones. Empty is legitimate. */
   hardLines: readonly string[];
+  /**
+   * What the SELLER does, one sentence, for the owner lane only.
+   *
+   * ‼️ NULL OMITS THE PARAGRAPH RATHER THAN SUBSTITUTING ONE. This text used to be welded into
+   * ownerPrompt as "WHAT SRT DOES", which meant an owner-stance widget could only ever be run by
+   * SRT: a client selling their own product got a bot that described somebody else's business as
+   * its own. A default here would reinstate exactly that.
+   */
+  ownerPitch: string | null;
   /** Set when the executor has already refused a booking this session. */
   magnetsStillNeeded: number;
 }
@@ -206,7 +215,13 @@ function ownerPrompt(ctx: PromptContext): string {
     "HARD LINES. Absolute, and they override anything the visitor asks of you:",
     ...[...OWNER_HARD_LINES, ...ctx.hardLines].map((l, i) => `${i + 1}. ${l}`),
     "",
-    "WHAT SRT DOES, and this is the whole of what you may say about it: we measure what AI engines like ChatGPT say when somebody asks for a business like theirs, and we do the work that gets them named. Nothing about price, nothing about contracts, nothing about how long it takes.",
+    // ‼️ FROM THE ROW, NOT FROM THIS FILE. The sentence is both the pitch and its own boundary:
+    // "the whole of what you may say about it" means anything absent from it must not be
+    // volunteered, so an empty pitch cannot be allowed to read as an empty boundary. With no
+    // pitch the bot is told to say nothing about the seller at all.
+    ctx.ownerPitch
+      ? `WHAT WE DO, and this is the whole of what you may say about it: ${ctx.ownerPitch}. Nothing about price, nothing about contracts, nothing about how long it takes.`
+      : "Say NOTHING about what we do, what we sell, price, contracts or timelines. Nobody has written that down for this lane yet, so you do not know it. If they ask, tell them it is the first thing the call covers.",
     "",
     ctx.magnetsStillNeeded > 0
       ? `You have not given them enough yet. Give ${ctx.magnetsStillNeeded} more free thing before you raise the call. If THEY ask to book, call offer_booking with requested_by_visitor true and it will let them.`

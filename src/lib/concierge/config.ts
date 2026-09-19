@@ -55,6 +55,8 @@ export interface ConciergeConfig {
   launcherLabel: string | null;
   /** The market the ammo lookup is about. Null is honest and competitorAmmo says so. */
   buyerMarket: string | null;
+  /** What the SELLER does, for an owner-stance lane. Null omits the paragraph. */
+  ownerPitch: string | null;
   greeting: string | null;
   allowedOrigins: string[];
   bookingMode: BookingMode;
@@ -178,6 +180,7 @@ export async function loadConciergeConfig(slug: string): Promise<ConciergeConfig
     laneName: aud.laneName,
     launcherLabel: aud.launcherLabel,
     buyerMarket: aud.buyerMarket,
+    ownerPitch: aud.ownerPitch,
     greeting: str(row.greeting),
     allowedOrigins: Array.isArray(row.allowed_origins)
       ? (row.allowed_origins as unknown[]).filter((o): o is string => typeof o === "string" && !!o.trim())

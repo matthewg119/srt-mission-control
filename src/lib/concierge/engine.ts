@@ -549,6 +549,7 @@ export async function runConciergeTurn(args: RunTurnArgs): Promise<TurnResult> {
     // these: loadConciergeConfig refuses to serve a widget whose audience will not resolve.
     vocabulary: args.config.vocabulary,
     hardLines: args.config.hardLines,
+    ownerPitch: args.config.ownerPitch,
     tenantName: args.config.clientName,
     delivered: args.session.magnetsDelivered,
     spentDetails: args.session.ammoUsed.map((a) => a.detail),

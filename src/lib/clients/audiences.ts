@@ -68,6 +68,17 @@ export interface ResolvedAudience {
    */
   buyerMarket: string | null;
 
+  /**
+   * What the SELLER does, for an owner-stance audience, in one sentence the bot may repeat.
+   *
+   * ‼️ NULL IS A REAL ANSWER HERE TOO. ownerPrompt used to hardcode "WHAT SRT DOES ... we measure
+   * what AI engines like ChatGPT say", which silently assumed SRT is always the seller and made an
+   * owner-stance widget unusable for a client selling their own product. A null omits the
+   * paragraph and the bot says the question is a good one for the call, rather than inventing a
+   * pitch for a business it knows nothing about.
+   */
+  ownerPitch: string | null;
+
   seededFrom: string | null;
   confirmedAt: string | null;
 }
@@ -82,7 +93,7 @@ const COLUMNS =
   "buyer_noun_singular, buyer_noun_plural, offer_noun_singular, offer_noun_plural, " +
   "business_noun, visit_noun, vocabulary, vocabulary_source, vocabulary_confirmed_at, " +
   "lane_name, launcher_label, hard_lines, presence_platform_keys, question_set_preset, " +
-  "seeded_from, confirmed_at, buyer_market";
+  "seeded_from, confirmed_at, buyer_market, owner_pitch";
 
 type Row = Record<string, unknown>;
 
@@ -168,6 +179,7 @@ function resolve(row: Row): AudienceResult {
         : [],
       questionSetPreset: str(row.question_set_preset),
       buyerMarket: str(row.buyer_market),
+      ownerPitch: str(row.owner_pitch),
       seededFrom: str(row.seeded_from),
       confirmedAt: str(row.confirmed_at),
     },
@@ -303,6 +315,7 @@ export async function seedClientAudience(args: {
       presence_platform_keys: preset.presence,
       question_set_preset: preset.questionSet,
       buyer_market: preset.buyerMarket,
+      owner_pitch: preset.ownerPitch,
       vocabulary_source: "preset",
       seeded_from: args.presetKey,
       seeded_at: new Date().toISOString(),

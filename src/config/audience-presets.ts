@@ -62,6 +62,20 @@ export interface AudiencePreset {
   buyerMarket: string | null;
   /** Matched instead of `vertical === "med_spa"`, which classify.ts is told never to emit. */
   questionSet: string | null;
+  /**
+   * What the SELLER does, for an owner-stance audience, in one sentence the bot may repeat.
+   *
+   * ‼️ ONLY MEANINGFUL FOR stance "owner", AND NULL EVERYWHERE ELSE. A patient-stance widget
+   * speaks FOR the client to their customer, so there is no third party to describe. An
+   * owner-stance widget speaks for a seller to a buyer, and until now ownerPrompt hardcoded
+   * "WHAT SRT DOES ... we measure what AI engines like ChatGPT say", which quietly meant only SRT
+   * could ever run one. Moving it here is what lets a client run a sales bot for their own
+   * product without a code change.
+   *
+   * The sentence is a hard boundary as well as a pitch: the prompt says it is "the whole of what
+   * you may say about it", so anything absent from it is something the bot must not volunteer.
+   */
+  ownerPitch: string | null;
 }
 
 /** The three clinical guards, lifted verbatim from PATIENT_HARD_LINES in concierge/tools.ts. */
@@ -115,6 +129,10 @@ export const AUDIENCE_PRESETS: Readonly<Record<string, AudiencePreset>> = {
     // SRT is an agency; its BUYERS run med spas, and that is the market its content is about.
     buyerMarket: "med-spa",
     questionSet: null,
+    // ‼️ LIFTED VERBATIM FROM ownerPrompt, where it was welded in as "WHAT SRT DOES". Same words,
+    // so the live owner lane says exactly what it said before this change.
+    ownerPitch:
+      "we measure what AI engines like ChatGPT say when somebody asks for a business like theirs, and we do the work that gets them named",
   },
 
   // ‼️ THE INTENDED MAJORITY, AND UNTIL NOW IT HAD NO PRESET AT ALL. CLIENT_VERTICAL_AVATARS maps
@@ -132,6 +150,8 @@ export const AUDIENCE_PRESETS: Readonly<Record<string, AudiencePreset>> = {
     presence: ["google", "apple", "bing", "yelp", "realself", "facebook"],
     buyerMarket: "med-spa",
     questionSet: "universal_v1_med_spa",
+    // A patient-stance widget speaks FOR the clinic to its own patient. There is no third party.
+    ownerPitch: null,
   },
 
   // ‼️ VERTICAL #2, AND THE FIRST ONE ADDED AFTER THE SPINE EXISTED. Everything it needed was
@@ -160,6 +180,7 @@ export const AUDIENCE_PRESETS: Readonly<Record<string, AudiencePreset>> = {
     // is a licensed provider.
     presence: ["google", "apple", "bing", "yelp", "zocdoc", "healthgrades", "facebook"],
     buyerMarket: "dentist",
+    ownerPitch: null,
     // ‼️ NULL UNTIL THE SET EXISTS. question-sets.ts reads this to pick a shipped 20 question set,
     // and the only one that exists is universal_v1_med_spa. Naming a set that is not there would
     // not fail loudly: materializeSet falls through to deriving from the client's own audit and
@@ -183,6 +204,7 @@ export const AUDIENCE_PRESETS: Readonly<Record<string, AudiencePreset>> = {
     // A diner shops the restaurant market. market_mentions already holds mexican-restaurant.
     buyerMarket: "restaurant",
     questionSet: null,
+    ownerPitch: null,
   },
 };
 

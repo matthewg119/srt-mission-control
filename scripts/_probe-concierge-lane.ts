@@ -292,8 +292,39 @@ function promptIsEmpty(): void {
     tenantName: "SRT Agency LLC",
     delivered: [],
     spentDetails: [],
+    // SRT's own pitch, which until now was welded into ownerPrompt as "WHAT SRT DOES" and meant
+    // only SRT could ever run an owner-stance widget.
+    ownerPitch:
+      "we measure what AI engines like ChatGPT say when somebody asks for a business like theirs, and we do the work that gets them named",
     magnetsStillNeeded: 2,
   });
+
+  check("the owner prompt carries the pitch from the row", prompt.includes("WHAT WE DO"));
+  check("and the pitch is the row's words", prompt.includes("we do the work that gets them named"));
+  check("and SRT is not named in the prompt's own text", !/WHAT SRT DOES/.test(prompt));
+
+  // ‼️ THE CASE THAT MADE THIS A COLUMN. An owner lane with no pitch on its row must say NOTHING
+  // about the seller, not fall back to describing SRT to somebody else's buyer.
+  const noPitch = systemPrompt({
+    audience: "owner",
+    vocabulary: {
+      buyerSingular: "practice owner", buyerPlural: "practice owners",
+      offerSingular: "service", offerPlural: "services",
+      business: "agency", visit: "call",
+    },
+    hardLines: [],
+    tenantName: "Some Other Seller",
+    delivered: [],
+    spentDetails: [],
+    ownerPitch: null,
+    magnetsStillNeeded: 2,
+  });
+  check("an owner lane with no pitch describes nobody", !noPitch.includes("WHAT WE DO"));
+  check("and says so rather than going quiet", /Say NOTHING about what we do/.test(noPitch));
+  check(
+    "and never leaks SRT's pitch into another seller's widget",
+    !/AI engines like ChatGPT say/.test(noPitch)
+  );
 
   // Digits appear only in the rule numbering and the word count, never as a claim.
   //
@@ -333,6 +364,7 @@ function promptIsEmpty(): void {
     tenantName: "A Clinic",
     delivered: [],
     spentDetails: [],
+    ownerPitch: null,
     magnetsStillNeeded: 2,
   });
   check("the patient prompt carries no banned dash", !hasBannedDash(patient));
@@ -357,6 +389,7 @@ function promptIsEmpty(): void {
     tenantName: "La Casita",
     delivered: [],
     spentDetails: [],
+    ownerPitch: null,
     magnetsStillNeeded: 2,
   });
   check("a diner is never told the widget is not a doctor", !/not a doctor/i.test(diner));
@@ -630,6 +663,7 @@ async function booking(): Promise<void> {
     clientName: "SRT Agency LLC", clientCity: null, clientState: null, clientWebsite: null,
     addonStatus: "included", quickActions: null, mascot: "wizard-cat",
     mascotCandidates: [], launcherCorner: "bottom-right",
+    ownerPitch: "we measure what AI engines like ChatGPT say when somebody asks for a business like theirs, and we do the work that gets them named",
     // The audience row SRT backfilled to. business is "agency" and NOT "clinic": SRT sells to
     // clinics and is not one, which is the whole reason the noun lives on a row.
     vocabulary: {
