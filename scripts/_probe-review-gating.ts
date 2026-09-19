@@ -2,7 +2,7 @@
 //
 //   npx tsx scripts/_probe-review-gating.ts
 //
-// The review tool opens on a five-star rating. The single fact that keeps that legal is that
+// The AI Referral Engine opens on a five-star rating. The single fact that keeps that legal is that
 // THE RATING ROUTES NOTHING: a customer who taps one star reaches the same questions, the same
 // assembly and the same public review link as one who taps five.
 //
@@ -20,8 +20,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const CLIENT = "src/app/hub/[host]/reviews/review-client.tsx";
-const TOOL = "src/app/hub/[host]/reviews/review-tool.tsx";
+const CLIENT = "src/app/hub/[host]/reviews/referral-engine-client.tsx";
+const TOOL = "src/app/hub/[host]/reviews/referral-engine.tsx";
 const SUBMIT = "src/app/api/hub/reviews/submit/route.ts";
 const ASSEMBLE = "src/lib/hub/review-assemble.ts";
 const CARD = "src/lib/clients/artifacts/review-card.ts";
@@ -67,7 +67,7 @@ check(
   strayRating === 0,
   "`rating` is set, rendered on its own stars, and posted -- and read nowhere else",
   strayRating === 0
-    ? "no branch in review-client.tsx behaves differently for a 1 than for a 5"
+    ? "no branch in referral-engine-client.tsx behaves differently for a 1 than for a 5"
     : `${strayRating} unaccounted use(s) of \`rating\`. A new read of it is a new router.`
 );
 

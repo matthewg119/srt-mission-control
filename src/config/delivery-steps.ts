@@ -241,7 +241,7 @@ const STEP_LIST = [
   // and seed the three DNS rows. The half that stays manual is the THEME, which is why this is
   // auto_then_manual and why [Done] refuses until somebody has confirmed it.
   { key: "hub_preview", phase: PHASE_BEFORE, label: "Hub built, themed, preview live, theme confirmed by me", auto: true, mode: "auto_then_manual", blockedBy: ["intake_received"] },
-  { key: "review_tool_preview", phase: PHASE_BEFORE, label: "Review tool preview live, themed to match", auto: true, mode: "auto", blockedBy: ["hub_preview"] },
+  { key: "referral_engine_preview", phase: PHASE_BEFORE, label: "AI Referral Engine preview live, themed to match", auto: true, mode: "auto", blockedBy: ["hub_preview"] },
   // The conversion engine, staged the same way the hub is: a working preview BEFORE the call,
   // and a separate human decision to go live AFTER it. Auto because the system really does
   // create the config row and seed the embed allowlist; auto_then_manual because the half that
@@ -358,7 +358,7 @@ const STEP_LIST = [
   { key: "first_page", phase: PHASE_AFTER, label: "First pages published, measured track first", mode: "manual", blockedBy: [DAY_ZERO_STEP_KEY, "subdomain_live"] },
   { key: "cards_printed", phase: PHASE_AFTER, label: "Cards printed and handed to the clinic", mode: "manual", blockedBy: ["review_card_pdf"] },
   { key: "review_request_configured", phase: PHASE_AFTER, label: "Automated request configured in their booking system, or card_only recorded", mode: "manual", blockedBy: ["call_held"] },
-  { key: "review_tool_handed", phase: PHASE_AFTER, label: "Review tool handed to the named person", mode: "manual", blockedBy: ["subdomain_live"] },
+  { key: "referral_engine_handed", phase: PHASE_AFTER, label: "AI Referral Engine handed to the named person", mode: "manual", blockedBy: ["subdomain_live"] },
   // ‼️ MANUAL, AND IT MUST NOT BECOME AUTO. This is the step that puts a camera in front of a
   // clinic's patients and starts storing photographs of their faces for 24 hours. Nothing about
   // that should happen because a sweep decided the prerequisites looked satisfied. blockedBy
@@ -398,6 +398,38 @@ export const DELIVERY_STEPS: readonly DeliveryStep[] = STEP_LIST;
  * it and the config comments above say so twice. This is a compile-time shape only.
  */
 export type StepKey = (typeof STEP_LIST)[number]["key"];
+
+/**
+ * THE ONE TIME A KEY WAS RENAMED, AND WHAT PAID FOR IT (2026-09-19).
+ *
+ * Every comment above says keys are not free, and they are right. The AI Referral Engine became the AI
+ * Referral Engine across the whole product, and two step keys still said `review_tool`. The
+ * stored rows were moved by hand in the same pass, so nothing is orphaned:
+ * `client_delivery_steps.step_key`, `client_events.step_key`, `client_docs.step_key` and
+ * `time_log.kind` were all updated before the deploy.
+ *
+ * ‼️ WHAT A MIGRATION CANNOT REACH IS A SLACK BUTTON. A step button freezes
+ * `${clientId}:${stepKey}` into its value at post time (see the note in slack/actions/route.ts),
+ * so every card already sitting in a channel still carries the old key and will keep carrying it
+ * for as long as the channel has scrollback. This map is what stops those buttons becoming dead
+ * taps. It is not a migration aid to be deleted next month, it is permanent: old cards do not
+ * expire.
+ *
+ * ‼️ NEW ENTRIES GO HERE ONLY FOR A RENAME THAT ALREADY HAPPENED. It is not a licence to rename.
+ */
+const LEGACY_STEP_KEYS: Readonly<Record<string, StepKey>> = {
+  review_tool_preview: "referral_engine_preview",
+  review_tool_handed: "referral_engine_handed",
+};
+
+/**
+ * The current key for a key that arrived from outside, which may be an old one off a Slack
+ * button posted before a rename. Returns the input unchanged when it is not a retired key, so
+ * this is safe to wrap around any key of unknown age.
+ */
+export function currentStepKey(key: string): string {
+  return LEGACY_STEP_KEYS[key] ?? key;
+}
 
 /** Runtime companion to `StepKey`, for narrowing a key that arrived as text. */
 export function isStepKey(key: string): key is StepKey {

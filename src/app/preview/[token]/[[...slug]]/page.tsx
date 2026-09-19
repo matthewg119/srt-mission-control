@@ -10,7 +10,7 @@
 // already said out loud that it could not be handed to a client. This is that link.
 //
 // ‼️ NOT A THIRD HUB. It renders the same components the live route and the dashboard preview
-// both render (src/components/hub/hub-bodies.tsx, ReviewTool). Three renderers of one page is
+// both render (src/components/hub/hub-bodies.tsx, ReferralEngine). Three renderers of one page is
 // three places for a theme to drift.
 //
 // ‼️ ONE DIFFERENCE FROM THE DASHBOARD PREVIEW, AND IT IS DELIBERATE: DRAFTS ARE HIDDEN HERE.
@@ -48,7 +48,7 @@ import { listReplica } from "@/lib/hub/replica-pages";
 import { ConciergeEmbed } from "@/lib/concierge/embed";
 import { themeStyle } from "@/lib/hub/theme";
 import { skinStyle, hubRootClass } from "@/lib/hub/skin";
-import { ReviewTool } from "@/app/hub/[host]/reviews/review-tool";
+import { ReferralEngine } from "@/app/hub/[host]/reviews/referral-engine";
 import { GHOST_BELOW, GHOST_NOTICE, GHOST_PAGES, ghostAnswerPage } from "@/lib/hub/ghost-content";
 import { universeFontClass } from "@/components/hub/universe-fonts";
 import { UniverseBand, UniverseTop } from "@/components/hub/universe-chrome";
@@ -210,7 +210,7 @@ export default async function TokenPreview({ params, searchParams }: Props) {
       <UniverseTop universe={kind === "reviews" ? null : client.skin?.universe} name={client.displayName} where={[client.city, client.state].filter(Boolean).join(", ") || null} pages={-1} />
       <div className="hub-wrap">
         {kind === "reviews" ? (
-          <ReviewTool client={client} />
+          <ReferralEngine client={client} />
         ) : slug ? (
           <PreviewAnswer clientId={verified.clientId} host={host} slug={slug} client={client} />
         ) : (

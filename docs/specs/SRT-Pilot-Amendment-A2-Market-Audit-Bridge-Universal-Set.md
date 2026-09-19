@@ -3,7 +3,7 @@
 
 **Amends:** `SRT-AEO-Onboarding-v2-PILOT.md` — closes the standing "how is a market defined" open item and adds the tenant-record fields in §6 below. `SRT-Question-Sets-v1.md` — the universal set is no longer a fallback. `SRT-Artifact-Templates-v1.md` §3 — fidelity footer form. Build Prompt v4 §5 (avatar), §6 (engines) as build consequences.
 **Also records:** Amendment A1 ratified.
-**Does not touch:** the review tool spec, any Integrity Law, page volume (A1 stands), the Reddit posting ban.
+**Does not touch:** the AI Referral Engine spec, any Integrity Law, page volume (A1 stands), the Reddit posting ban.
 **Status:** `D-P13` and `D-P14` were confirmed in writing on 18 Aug 2026 ("10 miles is fine"; the avatar is the subject's, per audit). `D-P15` and `D-P16` are proposed locks, veto window open. Silence = ratified.
 
 ---

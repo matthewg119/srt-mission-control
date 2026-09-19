@@ -14,7 +14,7 @@ const CATEGORIES: Array<{ key: string; label: string }> = [
   { key: "baseline_retest", label: "Baseline retest" },
   { key: "pages_new", label: "Pages, new" },
   { key: "pages_refresh", label: "Pages, refresh" },
-  { key: "review_tool_setup", label: "Review tool setup" },
+  { key: "referral_engine_setup", label: "AI Referral Engine setup" },
   { key: "review_responses", label: "Review responses" },
   { key: "outreach", label: "Outreach" },
   { key: "reporting_video", label: "Reporting video" },

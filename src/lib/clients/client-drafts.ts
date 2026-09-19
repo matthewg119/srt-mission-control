@@ -582,7 +582,7 @@ export function dnsCallChecklist(client: ClientRow): string {
     `· Most registrars want the SUBDOMAIN ONLY in the host box, not the full name.`,
     `  If it saves as ${hub}.${domain} they typed too much, delete and redo`,
     ``,
-    `*Record 2, CNAME, the review tool*`,
+    `*Record 2, CNAME, the AI Referral Engine*`,
     `· Host: reviews`,
     `· Points to: the same Vercel target`,
     `· They will ask why, since there is nothing there yet. The honest answer is that`,

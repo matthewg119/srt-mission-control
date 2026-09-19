@@ -1,6 +1,6 @@
-// The review tool's four questions, and the only transformation applied to an answer.
+// The AI Referral Engine's four questions, and the only transformation applied to an answer.
 //
-// SRT-Review-Tool-BUILD-SPEC-v2.md. THERE IS NO MODEL IN THIS PATH. Not for drafting, not
+// SRT-Referral-Engine-BUILD-SPEC-v2.md. THERE IS NO MODEL IN THIS PATH. Not for drafting, not
 // for cleanup, not for tone, not for spelling. That is the single most important line in
 // the spec and the reason this file is pure string work with no imports.
 //

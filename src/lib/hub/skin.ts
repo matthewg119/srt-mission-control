@@ -189,7 +189,7 @@ export interface HubSkin {
   headingScale: HeadingScale | null;
   headingWeight: HeadingWeight | null;
   headingTracking: HeadingTracking | null;
-  /** px. Corner radius for cards, inputs and buttons across the hub AND the review tool. */
+  /** px. Corner radius for cards, inputs and buttons across the hub AND the AI Referral Engine. */
   radius: number | null;
   /** rem. The measure: how wide the column is allowed to get. */
   measure: number | null;

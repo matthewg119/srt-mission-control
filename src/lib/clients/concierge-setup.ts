@@ -36,7 +36,7 @@ import { conciergeLaneName } from "@/lib/concierge/lane-name";
 import { audienceFor } from "./audiences";
 import { verticalFor } from "./harvest";
 import { signOnboardingToken } from "./token";
-import { PREVIEW_TOKEN_TTL_DAYS, previewLinkLine } from "./review-preview";
+import { PREVIEW_TOKEN_TTL_DAYS, previewLinkLine } from "./referral-engine-preview";
 import { previewOrigin } from "@/lib/concierge/origin";
 import { probeUrl } from "@/lib/concierge/host-check";
 import { PREVIEW_TOKEN_PARAM } from "@/lib/concierge/preview-grant";
@@ -67,7 +67,7 @@ const DEMO_PROBE_TIMEOUT_MS = 10_000;
  * See src/lib/concierge/preview-grant.ts.
  *
  * ‼️ NULL RATHER THAN A LINK THAT WILL NOT OPEN. Signing throws when CLIENT_LINK_SECRET is unset,
- * the same tri-state clientPreviewUrl() in review-preview.ts keeps.
+ * the same tri-state clientPreviewUrl() in referral-engine-preview.ts keeps.
  *
  * The token lives fourteen days, so a card should call this (or conciergePreviewUrlFor) when it
  * is drawn rather than reprint a stored copy.
@@ -256,7 +256,7 @@ export async function provisionConcierge(clientId: string): Promise<AutoResult> 
   const demoWhere = `${new URL(previewOrigin()).host}/w/${slug}`;
 
   // output_ref is free text by design (the step-engine migration calls it "a PDF, a report id,
-  // a URL"), so the demo URL is a first-class value here, the same as review_tool_preview.
+  // a URL"), so the demo URL is a first-class value here, the same as referral_engine_preview.
   //
   // ‼️ NULL WHEN IT DID NOT ANSWER, WHICH ALSO CLEARS THE OLD DEAD LINK. Rows written before
   // 2026-09-11 hold the tokenless concierge-host URL, and leaving it there would keep a card

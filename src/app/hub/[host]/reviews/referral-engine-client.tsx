@@ -1,9 +1,9 @@
 "use client";
 
-// The review tool, as she sees it.
+// The AI Referral Engine, as she sees it.
 //
 // A mirror, not a ghostwriter. Every constraint here follows from that one sentence.
-// SRT-Review-Tool-BUILD-SPEC-v2.md.
+// SRT-Referral-Engine-BUILD-SPEC-v2.md.
 //
 // NOTHING IS EVER POSTED FOR HER. She copies, she taps a link, she posts from her own
 // account. There is no submit-to-Google path in this file and there must not be one.
@@ -173,7 +173,7 @@ interface Bubble {
   text: string;
 }
 
-export function ReviewClient({
+export function ReferralEngineClient({
   businessName,
   clientId,
   destinations,

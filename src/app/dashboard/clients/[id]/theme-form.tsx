@@ -4,7 +4,7 @@
 //
 // It sits above Hub because it is upstream of everything the Hub panel does — the name is
 // the <h1>, the <title> and the LocalBusiness schema, and the theme is what makes the
-// review tool read as the clinic's page rather than an agency's.
+// AI Referral Engine read as the clinic's page rather than an agency's.
 //
 // ‼️ VISUAL ONLY. There is no field here for copy, a headline, a button label or a review
 // destination, and there is deliberately nowhere to add one: the theme object has four
@@ -163,7 +163,7 @@ export function ThemeForm({
       */}
       <div className="space-y-2">
         <p className="text-xs text-[rgba(255,255,255,0.4)]">
-          The layout the hub and the review tool are built on. Picking one un-confirms the
+          The layout the hub and the AI Referral Engine are built on. Picking one un-confirms the
           theme, so look at the preview before confirming again. To go further than these four,
           paste a screenshot of a reference into this client&apos;s step{" "}
           {stepNumber("hub_preview")} thread in Slack and
@@ -320,8 +320,8 @@ export function ThemeForm({
               Confirmed by {theme.confirmedBy ?? "someone"} on{" "}
               {new Date(theme.confirmedAt as string).toLocaleDateString()}.{" "}
               {hasOverrides
-                ? "It is live on the hub and the review tool."
-                : "No overrides are set, so the hub and the review tool render SRT's defaults on their domain. That is a recorded decision, not an unfinished step."}
+                ? "It is live on the hub and the AI Referral Engine."
+                : "No overrides are set, so the hub and the AI Referral Engine render SRT's defaults on their domain. That is a recorded decision, not an unfinished step."}
             </span>
             <button
               type="button"
@@ -337,7 +337,7 @@ export function ThemeForm({
             <span className="text-xs text-[rgba(255,255,255,0.5)]">
               {hasOverrides
                 ? "Not confirmed, so the hub still renders the default. Look at the preview first."
-                : "Nothing is overridden. Confirming now records a decision to keep SRT's defaults on their domain, which unblocks the hub and review tool steps. Set a colour first if you would rather not."}
+                : "Nothing is overridden. Confirming now records a decision to keep SRT's defaults on their domain, which unblocks the hub and AI Referral Engine steps. Set a colour first if you would rather not."}
             </span>
             <span className="flex gap-2">
               <a

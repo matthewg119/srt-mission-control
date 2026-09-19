@@ -1,4 +1,6 @@
-# SRT — Patient Review Tool · Build Spec v2
+# SRT — Patient AI Referral Engine · Build Spec v2
+
+> **Renamed 2026-09-19.** What this document calls the AI Referral Engine was written down as the "review tool", and the free plan as the "AI Visibility Review Engine". Both are the AI Referral Engine now, and the text below has been updated to say so. Nothing about the mechanism changed; only the name did. The `reviews.` host, the `/hub/[host]/reviews` route and the `review_workflow` table keep their old spelling on purpose, because clients have already typed that hostname into a registrar and printed QR codes resolve through it.
 
 **Replaces:** `SRT-Review-Funnel-Spec.md` — **retired, delete it.** That spec put a generation model in the path and asked for a staff name. Both are prohibited here.
 **Governed by:** `SRT-AEO-Onboarding-v2-PILOT.md` §10.3 and §16.5–16.7, which are canon. This document is the build translation, not a new decision.
