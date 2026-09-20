@@ -116,19 +116,63 @@ A lock that counts to twenty against the PLAN, not against the pre-call seven.
   lock is not an exemption from the validators, and `client-headlines.ts:105` refuses any figure of
   two or more digits not present in `numberHaystack`.
 
-### The idea, the belief and the problem, per headline
+### ‼️ The idea, the narrative, the indoctrination and the problem. FOUR things, and the code
+### currently models three of them wrongly.
 
-‼️ **Two of the three already exist and are already stored.** `page_angles` carries, per page:
-`idea`, `promise`, `narrative`, `indoctrination`, `awareness_entry`, `awareness_target`,
-`proof_needed`, `rationale`, `post_format`. So:
+**Matthew's model, stated 2026-09-20 and authoritative:**
 
-- "a main idea" is `page_angles.idea` ✓
-- "what beliefs it wants to install" is `page_angles.indoctrination` ✓, and `page-angles.ts` already
-  states it is ONE belief, written as a sentence she would have to accept
-- **"what problem the page is focused on" has no column.** The nearest is `narrative`. Decide
-  whether that IS the problem statement or whether a `problem` column is owed, and say which. Do not
-  add a column with no reader: that is the mistake this repo has recorded six times, most recently
-  `client_offers.guarantee`, which had a writer, a reader and no declared field until 2026-09-19.
+> *"narrative and indoctrination are 2 different things, narrative comes from the whole angle we are
+> using to actually install the beliefs so indoctrination is the stories we use to indoctrinate based
+> on the angle of the narrative of the problem and how the problem is corelated with our offer and or
+> our services"*
+
+So, in his terms:
+
+| thing | what it is |
+|---|---|
+| `idea` | the main idea the page argues |
+| **`narrative`** | **the whole ANGLE used to install the beliefs.** It comes from the problem |
+| **`indoctrination`** | **the STORIES used to indoctrinate**, written from that narrative angle, and they are what correlate the problem to the offer or the service |
+| **`problem`** | **what problem this page is focused on.** Its own thing, and the narrative is an angle ON it |
+
+**What the code says today, and it does not match:**
+
+- `page-angles.ts:270` tells the model `"narrative": "the story spine the page runs on"`
+- `page-angles.ts:271` tells it `"indoctrination": "the one belief this page has to install to move
+  her a stage"`, and `RULES` item 6 repeats that it is **ONE belief, one sentence**
+- `angleFaults` enforces `BELIEF_MAX` on it, which is a length that assumes one sentence
+
+‼️ **So the code has the two roughly INVERTED against Matthew's model.** Its `narrative` is the
+story (his indoctrination) and its `indoctrination` is a single belief (which in his model is the
+OUTCOME of the stories, not the stories). And there is no `problem` anywhere.
+
+### ‼️ DO NOT SILENTLY REPURPOSE THE STORED COLUMNS
+
+`page_angles` rows already exist carrying the OLD meanings, and `capturePage` has snapshotted
+them into `page_dataset`. Changing what a stored column means, in place, re-files every existing
+answer under a new definition, silently and permanently. That is the same hazard
+`RESEARCH_SECTION_KEYS` carries and the reason the emotional section was appended rather than
+inserted.
+
+**Three options. Pick one and say which:**
+
+1. **Add `problem` and leave the other two alone.** Smallest, honest, and the prompt wording for
+   `narrative` and `indoctrination` stays wrong.
+2. **Add `problem`, and re-word the PROMPT for the other two without renaming the columns**, so new
+   rows carry Matthew's meaning while old rows keep theirs. ‼️ Then a reader cannot tell which
+   meaning a row holds, which is worse than either meaning being wrong.
+3. **Add `problem`, add `stories`, and retire `indoctrination` to "the one belief"**, which is what
+   the code already enforces and what `RULES` item 6 describes. Matthew's "stories" become their own
+   field, his "narrative" stays the angle, and nothing stored changes meaning.
+
+**Recommendation: option 3.** It is the only one where no existing row changes meaning, it keeps
+`BELIEF_MAX` meaningful, and it gives the stories the length they actually need. It costs one
+migration and a wider `DraftedAngle`.
+
+Whatever is chosen, `problem` needs a reader before it needs a column: the drafter and the headline
+brief are the two candidates. Do not add a column with no reader. That is the mistake this repo has
+recorded six times, most recently `client_offers.guarantee`, which had a writer, a reader and no
+declared field until 2026-09-19.
 
 ### The what, the why and the how, per shape
 
@@ -145,15 +189,107 @@ nothing reads `format_dataset.missing` back to the person BEFORE the draft. `pag
 
 ---
 
-## W2. One research prompt for the twenty
+## W2. ONE research prompt for all twenty, and ONE file back
+
+Matthew, 2026-09-20:
+
+> *"the deep research is for all of the posts we are going to create so im sure this can be bundled
+> up into one so i Can just drop one file with all the results of all of the main questions we need
+> for X specific post, also one answer from another question, might help another question or post
+> that has nothing to do with that."*
 
 `batch approve` already "builds the one research prompt" (`page-batch.ts:285`) for a BATCH, which is
-a pillar and six supports. Twenty pages is three batches.
+a pillar and six supports. Twenty pages is three batches, so today it is three prompts and three
+files. He wants one of each.
 
-Decide, and say which: does the twenty-page research prompt replace the per-batch one, or sit above
-it? ‼️ **`buildGapPrompt` keeps each section's ORIGINAL number** and says in the prompt that the
-numbers are deliberately non-sequential, because a subset renumbered from 1 files section twelve's
-answer under section one, silently and permanently. Whatever this emits must keep that discipline.
+### ‼️ THE POOLING CONSTRAINT IS THE DESIGN, NOT A NICE-TO-HAVE
+
+*"one answer from another question might help another question or post that has nothing to do with
+that."* That sentence rules out the obvious implementation.
+
+**The obvious wrong build** is a prompt sectioned per page, whose answers are filed against the page
+whose section they appeared under. That silos every answer to one page, and the answer that would
+have carried a different page is unreachable from it. Per-page sections are fine as a way to ASK;
+they must not be how the answers are STORED.
+
+**So: the answers are a POOL for the client, and a page draws from the pool.** One file in, many
+pages out. The same answer can back page 3 and page 17 and must not be duplicated into both, because
+two copies drift and `numberEvidence` would give the same fact two different refs.
+
+‼️ **`page_sources` already has exactly this shape and it is already in use.** A row with
+`page_id IS NULL` is the CLIENT LIBRARY, and `page-gate.ts` records that those rows "ground every
+later page" and that nothing may clean them up. Measured on `srt-agency-llc`: all seven of its
+sources are library rows. **The pool is the client library. It exists. Use it.**
+
+### Numbering, and the trap under it
+
+‼️ **`buildGapPrompt` keeps each section's ORIGINAL number** and tells the reader the numbers are
+deliberately non-sequential, because a subset renumbered from 1 files section twelve's answer under
+section one, silently and permanently. A twenty-page bundle multiplies that risk: it will want to
+number questions per page. **Whatever numbering it emits, the parser that reads the file back must
+map every answer to the same key the asker used**, and the probe should prove one round trip.
+
+Decide and say which: does the twenty-page prompt REPLACE the per-batch one, or sit above it? A
+second research lane that files to a different place is the thing to avoid.
+
+---
+
+## W2b. ‼️ THE RESEARCH IS INVISIBLE TO THE GATE, AND THAT IS THE REAL BUG
+
+Matthew, 2026-09-20:
+
+> *"this is why we do the deep research prompt to make sure we can verify the data we have but If I
+> want to approve the data without gating let me bypass this"*
+
+He is right about what the research is FOR, and the system does not currently let it do that job.
+
+**Measured 2026-09-20: `src/lib/clients/research-intake.ts` contains ZERO references to
+`page_sources` or `recordSource`.** A pasted deep-research report is written to
+`audience_documents` (the client's own copy) and to `avatar_briefs.research_text` (the shared bank),
+and **nowhere that the page gate reads.**
+
+Meanwhile `page-evidence.ts:37` already declares `EXTERNAL_RESEARCH` as a `SourceType`, and
+`:99` says in writing: *"EXTERNAL_RESEARCH is real evidence and may support a claim, but it is not
+the business's own"* voice. **The slot exists, it is documented, and nothing fills it.**
+
+So today: you run the research precisely to verify what you are about to publish, you paste it back,
+and then `unsupported` and `experience_claims` block the page because the gate never saw it. The
+seven-sources-against-twenty-pages problem is not really about volume. It is this.
+
+### What to build
+
+**File research answers into `page_sources` as `EXTERNAL_RESEARCH`, `page_id IS NULL`** (the client
+library pool from W2), with the `source_url` the research cited.
+
+- ‼️ **`isFirstParty()` deliberately EXCLUDES `EXTERNAL_RESEARCH`, and that must not be "fixed".**
+  Research about the buyer is evidence; it is not the client's own voice. `first_party_ratio` is a
+  WARN check and is allowed to notice a page leaning on research. What changes is that
+  `no_evidence`, `unsupported` and `experience_claims` can finally SEE it.
+- ‼️ **A real customer quote with a URL is `CUSTOMER_REVIEW`, not `EXTERNAL_RESEARCH`.** The analysis
+  around it is not. The 2026-09-21 prompt states this and it is the line that keeps
+  `first_party_ratio` meaningful.
+- ‼️ **A claim with no `source_url` is not evidence.** Do not file a model's unsourced assertion as a
+  source: that launders an invention into a citation, which is the exact failure a dangling `S9` ref
+  is refused for.
+
+### And the bypass he asked for
+
+`waive: <reason>` already exists (shipped 2026-09-22): it records a verdict row carrying the hash of
+the text being waived, appends one `waived` check, posts to `#alerts-infra`, and goes stale the
+moment the page is edited. **One press waives every block-tier check.** That IS the bypass, and it
+is the right shape: a door with a signature on it, not a switch.
+
+What is missing is that **nothing tells him it exists at the moment he needs it**, and that it is
+per page. Two options, and W2b's real fix makes both less necessary:
+
+1. Say so on the refusal (partly done: `page_approve` already offers it when `waivable`).
+2. A **client-level "I have approved this data"** stamp, so twenty pages do not need twenty waivers.
+   ‼️ Think hard before building this. A blanket per-client bypass is a rail everybody steps over,
+   which `page-gate.ts` says is worse than no rail. If it is built, it must carry a reason, a person,
+   a timestamp, and it must EXPIRE or go stale on new evidence, exactly as a waiver does.
+
+**Recommendation: build W2b properly first.** If the research reaches the gate, most of the twenty
+pages stop blocking because they are genuinely backed, which is better than any bypass.
 
 ---
 
@@ -265,8 +401,10 @@ bun  run --env-file=.env.local scripts/_probe-page-datasets.ts
 **The new probe** asserts offline: that `skin` and `template` typed in a page thread are commands
 while "skin tightening" and "template for the intake form" are body text; that the preview line is
 emitted once per body change and not once per message; that a locked headline still passes
-`isQueryShaped` and `unbackedNumbers`; and that twenty locked headlines do not change
-`PRE_CALL_PAGES` or `PRE_CALL_HEADLINES`.
+`isQueryShaped` and `unbackedNumbers`; that twenty locked headlines do not change `PRE_CALL_PAGES`
+or `PRE_CALL_HEADLINES`; that a research answer with no `source_url` is REFUSED as a source; that a
+research answer files as `EXTERNAL_RESEARCH` and is therefore NOT counted by `isFirstParty()`; and
+that one answer in the pool can back two different pages without being duplicated.
 
 **The end-to-end test** is `srt-agency-llc` once step 11 is cleared: `plan` proposes twenty with
 awareness stages, `plan swap 4` changes a subject, `plan approve` locks them, headlines are written
@@ -279,6 +417,10 @@ in the thread without being asked.
 
 - **A field is declared in `dataset-spec.ts` or it does not exist.** `guarantee` had a column, a
   command and a reader and could not be asked for.
+- **A stored column's MEANING is as load-bearing as its name.** Repurposing `narrative` or
+  `indoctrination` in place re-files every existing row under a new definition, silently.
+- **Research that the gate cannot see cannot verify anything.** `EXTERNAL_RESEARCH` exists as a
+  source type and nothing fills it, which is why backed pages still block.
 - **Never add a column with no reader**, and never a reader with no writer. Six instances recorded.
 - One unknown column fails the WHOLE PostgREST select, and supabase-js RETURNS the error. Every new
   read is its own tolerant select.
