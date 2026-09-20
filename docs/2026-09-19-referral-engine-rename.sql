@@ -45,13 +45,17 @@ update public.client_events
    set step_key = 'referral_engine_handed'
  where step_key = 'review_tool_handed';
 
+-- ‼️ client_docs's COLUMN IS `delivery_step_key`, NOT `step_key`. It has a `step_id` uuid as
+-- well, pointing at client_onboarding_steps, which is the eight pilot STAGES and not this list.
+-- Writing `step_key` here is what made the first run of this file fail with 42703 and roll the
+-- whole transaction back.
 update public.client_docs
-   set step_key = 'referral_engine_preview'
- where step_key = 'review_tool_preview';
+   set delivery_step_key = 'referral_engine_preview'
+ where delivery_step_key = 'review_tool_preview';
 
 update public.client_docs
-   set step_key = 'referral_engine_handed'
- where step_key = 'review_tool_handed';
+   set delivery_step_key = 'referral_engine_handed'
+ where delivery_step_key = 'review_tool_handed';
 
 -- ── time log ─────────────────────────────────────────────────────────────────
 -- ‼️ UNLIKE step_key, THIS COLUMN IS FENCED BY A CHECK CONSTRAINT, so the constraint has
@@ -82,6 +86,11 @@ commit;
 
 -- ── verify ───────────────────────────────────────────────────────────────────
 -- Both should return only referral_engine* rows, and no review_tool* rows at all.
+--
+-- Applied to production 2026-09-20: 2 rows in client_delivery_steps, 3 in client_events,
+-- 0 in client_docs and 0 in time_log. The time_log constraint still had to be rebuilt even
+-- with no rows to move, because it was the thing that would have rejected the first write
+-- the renamed code made.
 --
 --   select step_key, count(*) from public.client_delivery_steps
 --    where step_key like 'review\_tool\_%' or step_key like 'referral\_engine\_%'
