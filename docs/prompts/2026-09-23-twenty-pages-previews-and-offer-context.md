@@ -53,6 +53,11 @@ plan new      re-propose everything not yet approved
 So "breakdowns per stage of awareness" and "pick between the subject options" are **built**. What is
 missing is everything downstream of the pick.
 
+‼️ **BUILD ORDER: W0 FIRST, THEN W2b, THEN THE REST.** W0 is what makes the research mean anything,
+W2b is what lets the gate see it, and together they are the reason twenty pages stop blocking. The
+previews and the skin routing are the smallest and can land any time; the headline lock depends on
+nothing here. W5 is already mostly done.
+
 ---
 
 ## ‼️ What is measured, on `srt-agency-llc`, 2026-09-19
@@ -234,6 +239,99 @@ second research lane that files to a different place is the thing to avoid.
 
 ---
 
+## W0. ‼️ THE RESEARCH ARRIVES AND DIES AS A BLOB. This is the most valuable thing in this prompt.
+
+Matthew, 2026-09-20:
+
+> *"once we paste the deep research the intelligence from my onboarding should read the data and fill
+> all of the datasets it has missing as much as possible and for what is not sure simply ask the
+> question, before locking it in, it should give me the datasets that is looking to save so i can
+> confirm the fears are ok, the offer etc ... allow it to tell me what we are going to fill and if it
+> has any suggestion for understanding avatar or the business better to add a new dataset, all of this
+> after we paste the deep research prompt to lock in the missing fields"*
+
+### ‼️ What "present" means today, measured
+
+`dataset-spec.ts`'s `section()` resolves a research field to:
+
+```ts
+return n > 0 && sectionAnswered(ctx.sections.get(n));
+```
+
+and `avatar-profile.ts:169`:
+
+```ts
+export function sectionAnswered(section) {
+  const body = section.body.replace(/could not verify\.?/gi, "").replace(/\s+/g, " ").trim();
+  return body.length >= SECTION_MIN_CHARS;
+}
+```
+
+**So a research-filled field is "present" when enough CHARACTERS sit under its heading. Nothing
+extracts a value, and no value is ever stored per field.**
+
+The consequence is the whole of W0: **the completeness card can report `fears` as filled while
+nobody, human or machine, can say what the fears ARE.** Measured on `srt-agency-llc`: one
+`deep_research` document, 16,272 characters, `parsed {"answered": 9}`. Nine sections "answered", zero
+field values anywhere. `buildFinalPrompt` works around it by pasting whole documents back.
+
+This is why the research feels like it does nothing: it is a character count wearing a dataset's name.
+
+### What to build: propose, confirm, then commit
+
+A paste-time extraction pass, and **nothing writes until a person confirms**. D7 is not decoration
+here: this writes into the avatar and offer datasets that every later page argues from.
+
+1. **Extract.** After `research:` parses into sections, run ONE model call that maps sections to the
+   declared fields in `DATASET_FIELDS`, returning, per field: the proposed value, the section number
+   it came from, and a confidence.
+   - ‼️ **ONE call, and the extraction is live code, never stored.** Same rule `harvest.ts` states:
+     "What the page SAID is a fact and keeps; what we make of it is recomputed every run." The
+     document is already kept in `audience_documents`; re-extracting is cheap and a stored extraction
+     freezes the answers to whichever ruleset was current that day.
+   - ‼️ **Only fields that are MISSING.** `step-gaps.ts:150`'s "if we already hold it, do not ask for
+     it" is the contract, and it applies to filling as much as to asking.
+
+2. **Propose, in a card, before writing anything.** One line per field: the field's label, the value
+   it wants to save, and which section it read. Grouped by dataset so he can confirm "the fears are
+   ok, the offer is ok" the way he described.
+   - ‼️ **A card body over 3,000 characters fails the WHOLE message.** Twenty-plus proposed fields
+     will exceed it. Split under 2,900 on line boundaries, the way `rerun-gaps.ts` does.
+
+3. **Ask about what it is not sure of, rather than filling it.** A low-confidence extraction becomes
+   a QUESTION on the card, never a value in the proposal.
+   - ‼️ **AN ABSENCE AND A GUESS ARE DIFFERENT FACTS, and this is the one place the whole system
+     could be poisoned in a single paste.** A field filled with a plausible invention is worse than
+     an empty one, because every later page argues from it and nothing downstream can tell it was
+     never really answered. When in doubt the answer is the question, not the value.
+
+4. **Commit on confirm.** A button or a typed verb. Only then are the field values written.
+   - Per-client values go to the client's own rows. ‼️ **Nothing extracted from one client's research
+     may be written into `question_bank` or `avatar_briefs` under a key every other client in the
+     vertical reads.** That is the poisoned-corpus failure those tables have no `client_id` to unpick.
+   - The same confirm files the research as evidence: see W2b.
+
+5. **Suggest new fields.** He asked for it explicitly, and the mechanism shipped 2026-09-22:
+   `dataset_suggestions` proposes a field, argued from a count, and never declares one. When the
+   extraction sees something recurring that no `FieldSpec` covers, file a proposal and show it on the
+   same card. `dataset-spec.ts` stays the only authority on what exists.
+
+### Where the values live
+
+‼️ **This is the decision W0 turns on, and it must be made before any of it is built.** Today there
+is no per-field storage for research answers at all: the document is the storage and `present()` is a
+character count.
+
+- **Do NOT add 43 columns to a table.** The registry is a registry; the storage should be one
+  append-only place keyed by `(client_id, audience_id, field_key)` carrying the value, the section it
+  came from, who confirmed it and when.
+- Then `present()` for a research field becomes "a confirmed value exists", which is a real answer,
+  and the character count can stay as the weaker fallback for documents pasted before this existed.
+- ‼️ **Do not silently change what `present()` means for rows that predate it**, for the same reason
+  W1 refuses to repurpose `narrative`: every stored report would be re-read under a new definition.
+
+---
+
 ## W2b. ‼️ THE RESEARCH IS INVISIBLE TO THE GATE, AND THAT IS THE REAL BUG
 
 Matthew, 2026-09-20:
@@ -260,6 +358,12 @@ seven-sources-against-twenty-pages problem is not really about volume. It is thi
 
 **File research answers into `page_sources` as `EXTERNAL_RESEARCH`, `page_id IS NULL`** (the client
 library pool from W2), with the `source_url` the research cited.
+
+‼️ **ON CONFIRM, NOT ON PASTE. W0 changes this and the order matters.** An earlier draft of this
+prompt had the paste file evidence automatically. That contradicts what W0 is for: if a paste writes
+evidence before a person has confirmed it, the gate is then verifying pages against text nobody
+approved, and the confirmation card is theatre. The same press that commits the field values in W0
+step 4 files the evidence. One confirmation, both writes.
 
 - ‼️ **`isFirstParty()` deliberately EXCLUDES `EXTERNAL_RESEARCH`, and that must not be "fixed".**
   Research about the buyer is evidence; it is not the client's own voice. `first_party_ratio` is a
@@ -404,7 +508,10 @@ emitted once per body change and not once per message; that a locked headline st
 `isQueryShaped` and `unbackedNumbers`; that twenty locked headlines do not change `PRE_CALL_PAGES`
 or `PRE_CALL_HEADLINES`; that a research answer with no `source_url` is REFUSED as a source; that a
 research answer files as `EXTERNAL_RESEARCH` and is therefore NOT counted by `isFirstParty()`; and
-that one answer in the pool can back two different pages without being duplicated.
+that one answer in the pool can back two different pages without being duplicated; that a
+low-confidence extraction is rendered as a QUESTION and never as a proposed value; that nothing is
+written before the confirm; and that no extracted per-client value reaches `question_bank` or
+`avatar_briefs`.
 
 **The end-to-end test** is `srt-agency-llc` once step 11 is cleared: `plan` proposes twenty with
 awareness stages, `plan swap 4` changes a subject, `plan approve` locks them, headlines are written
@@ -421,6 +528,12 @@ in the thread without being asked.
   `indoctrination` in place re-files every existing row under a new definition, silently.
 - **Research that the gate cannot see cannot verify anything.** `EXTERNAL_RESEARCH` exists as a
   source type and nothing fills it, which is why backed pages still block.
+- **"Present" for a research field is a CHARACTER COUNT**, not a value. A field can read filled
+  while nobody can say what is in it.
+- **An absence and a guess are different facts.** A field filled with a plausible invention is worse
+  than an empty one: every later page argues from it and nothing can tell it was never answered.
+- **Nothing extracted from one client's research may reach `question_bank` or `avatar_briefs`.**
+  Those have no `client_id` and a wrong write there is not correctable.
 - **Never add a column with no reader**, and never a reader with no writer. Six instances recorded.
 - One unknown column fails the WHOLE PostgREST select, and supabase-js RETURNS the error. Every new
   read is its own tolerant select.
