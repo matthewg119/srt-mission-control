@@ -218,6 +218,17 @@ export async function POST(request: NextRequest) {
         });
         if (guardianHandled) return NextResponse.json({ ok: true });
 
+        // W0: ✅ on a dataset proposal card commits the extracted values and files the research
+        // as evidence. Keyed on the card's own ts, like the guardian above, so a check mark
+        // anywhere else in the thread is not a confirmation.
+        const proposalHandled = await handleFieldProposalReaction({
+          reaction: event.reaction as string,
+          slackTs: event.item.ts as string,
+          channel: event.item.channel as string,
+          userId: event.user as string,
+        });
+        if (proposalHandled) return NextResponse.json({ ok: true });
+
         // Unified content pipeline (Content Engine v2): ✅/🚫 ideate gate + 1️⃣/2️⃣/3️⃣ shot pick
         // for ANY registry format (attic B-roll, jumpscare, ...). Self-routes by the
         // content_jobs table; returns false for non-pipeline messages so legacy handlers still run.
@@ -938,7 +949,12 @@ export async function POST(request: NextRequest) {
               : [];
             // The whole answer onto the avatar, and what the avatar is still missing.
             const { afterResearchPaste } = await import("@/lib/clients/research-intake");
-            const extra = result.ok ? await afterResearchPaste(client.id, userText) : [];
+            // ‼️ THE THREAD IS PASSED SO THE PROPOSAL CARD CAN POST ITSELF. Everything else here
+            // is joined into ONE message below, and a Slack body over 3,000 characters fails the
+            // whole message; a card listing twenty extracted values exceeds that alone.
+            const extra = result.ok
+              ? await afterResearchPaste(client.id, userText, { channel, threadTs: parentThreadTs })
+              : [];
 
             const posted = await slack.postThreadReply(
               channel,
@@ -3032,6 +3048,60 @@ async function handleMessageReply(args: {
     status: "pending",
     slack_thread_ts: args.threadTs,
   });
+}
+
+// ─── W0: the dataset proposal card ───────────────────────────────────────────
+
+/**
+ * ✅ on a proposal card: commit the values a person just read, and file the research as evidence.
+ *
+ * ‼️ KEYED ON THE CARD'S OWN slack_ts, NOT ON THE THREAD. A research paste posts a reply and then
+ * the card; a check mark on the reply is somebody acknowledging the paste, not approving twenty
+ * extracted values. Only the message that lists them can confirm them.
+ *
+ * ‼️ RETURNS FALSE FOR ANYTHING THAT IS NOT A PROPOSAL CARD, so every handler below still runs.
+ */
+async function handleFieldProposalReaction(args: {
+  reaction: string;
+  slackTs: string;
+  channel: string;
+  userId: string;
+}): Promise<boolean> {
+  if (args.reaction !== "white_check_mark") return false;
+
+  const { data: row } = await supabaseAdmin
+    .from("client_field_proposals")
+    .select("id, client_id, status")
+    .eq("slack_ts", args.slackTs)
+    .maybeSingle();
+
+  if (!row) return false;
+
+  // Already decided. Say so rather than committing twice: the values are live, and a second
+  // commit would supersede each one with an identical copy and lose nothing except the audit
+  // trail's meaning.
+  if (row.status !== "open") {
+    await slack.postThreadReply(
+      args.channel,
+      args.slackTs,
+      `:information_source: These were already ${row.status as string}.`
+    );
+    return true;
+  }
+
+  const { confirmProposal } = await import("@/lib/clients/field-proposal");
+  const res = await confirmProposal({
+    clientId: String(row.client_id),
+    // The Slack user id, which is what every other gate in this codebase records as a person.
+    confirmedBy: args.userId,
+  });
+
+  await slack.postThreadReply(
+    args.channel,
+    args.slackTs,
+    res.ok ? res.lines.join("\n") : `:warning: Nothing was saved: ${res.error}`
+  );
+  return true;
 }
 
 // ─── Code Guardian ───────────────────────────────────────────────────────────

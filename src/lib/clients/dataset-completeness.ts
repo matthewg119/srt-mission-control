@@ -9,6 +9,7 @@ import { audiencesFor, sharedBankFor, type ResolvedAudience } from "./audiences"
 import { avatarBriefFor } from "./avatars";
 import { EMPTY_OFFER, loadOffer, loadOfferForAudience } from "./offers";
 import { RESEARCH_SECTION_KEYS } from "./artifacts/deep-research-run";
+import { liveValues } from "./field-values";
 import {
   evaluateDatasets,
   formatDatasetReport,
@@ -190,6 +191,13 @@ export async function completenessFor(
   }
 
   const targets: ReadonlyArray<ResolvedAudience | null> = audiences.length ? audiences : [null];
+
+  // ‼️ ONE READ FOR THE WHOLE CLIENT, OUTSIDE THE LOOP. A per-audience query inside it would be
+  // N round trips for a card that is already several, and it would have to union the null-audience
+  // rows back in every time. Degrades to [] on error, which the card then shows as "backed by a
+  // character count" rather than as an outage.
+  const allValues = await liveValues(clientId);
+
   const out: AudienceCompleteness[] = [];
   for (const audience of targets) {
     // ‼️ OFFERS LIVE UNDER AUDIENCES SINCE 2026-09-15 (client_offers). Each audience reads its OWN
@@ -232,6 +240,12 @@ export async function completenessFor(
       },
       audit,
       reviews,
+      // ‼️ SCOPED TO THE CLIENT, THEN FILTERED TO THIS AUDIENCE PLUS THE CLIENT-WIDE ONES. A null
+      // audience_id means "true whichever buyer is in front of them" (compliance, market), so an
+      // audience-only filter would drop exactly the fields that apply to every audience.
+      fieldValues: allValues
+        .filter((v) => v.audienceId === null || v.audienceId === audience?.id)
+        .map((v) => v.fieldKey),
     };
     out.push({ audience, snapshot, reports: evaluateDatasets(snapshot, RESEARCH_SECTION_KEYS) });
   }

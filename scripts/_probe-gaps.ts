@@ -93,6 +93,7 @@ function reportsMissing(refs: readonly FieldRef[]): DatasetReport[] {
       dataset,
       total: DATASET_FIELDS.filter((f) => f.dataset === dataset).length,
       present: 0,
+      backedByValue: 0,
       gaps: mine.map((field) => ({ field, reason: `\`${field.key}:\` in this thread`, blocking: false })),
     };
   });

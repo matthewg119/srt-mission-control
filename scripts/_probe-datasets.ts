@@ -130,6 +130,9 @@ const snap: DatasetSnapshot = {
   documents: { avatarSheet: null, shortOffer: null, beliefs: 0, letterApproved: false },
   audit: { linked: false, pickedAvatar: false, buyerMap: false },
   reviews: 0,
+  // No confirmed values: this fixture is a client whose research has never been extracted,
+  // which is every client before 2026-09-24 and is the case present() must still handle.
+  fieldValues: [],
 };
 const reports = evaluateDatasets(snap, RESEARCH_SECTION_KEYS);
 const avatar = reports.find((r) => r.dataset === "avatar")!;

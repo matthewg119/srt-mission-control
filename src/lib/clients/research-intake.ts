@@ -381,7 +381,21 @@ export async function ingestResearch(args: {
  *
  * Never throws: the phrases have already landed by the time this runs.
  */
-export async function afterResearchPaste(clientId: string, rawText: string): Promise<string[]> {
+export async function afterResearchPaste(
+  clientId: string,
+  rawText: string,
+  /**
+   * Where to post the proposal card, if there is one.
+   *
+   * ‼️ THE CARD IS POSTED HERE RATHER THAN RETURNED WITH THE OTHER LINES, and that is the whole
+   * reason this parameter exists. The caller joins everything it gets back into ONE Slack message,
+   * and a body over 3,000 characters fails the whole message. Twenty proposed fields with their
+   * values will exceed that on their own, so the card goes out as its own message or messages,
+   * split on line boundaries. Absent means "no Slack here", used by probes and by any caller that
+   * only wants the report lines.
+   */
+  slackCtx?: { channel: string; threadTs: string }
+): Promise<string[]> {
   try {
     const body = cleanResearchForStorage(rawText);
     const [{ audienceFor }, { avatarBriefFor, storeAvatarResearch }, profile] = await Promise.all([
@@ -486,6 +500,115 @@ export async function afterResearchPaste(clientId: string, rawText: string): Pro
         ...formatDatasetReport(primary.audience.label, true, primary.reports, primary.snapshot.offer.applies)
       );
     }
+
+    // ── W0: read the report and PROPOSE values for what is still missing. ───────────────────
+    //
+    // ‼️ THIS IS THE WHOLE POINT OF THE PASTE AND IT RUNS LAST, AFTER EVERYTHING DURABLE. The
+    // phrases, the client's own copy and the shared bank are already written by here. If the
+    // extraction throws or the model times out, the paste still landed and the card above still
+    // prints; the operator loses the proposal, not the research. Reversing that order would make
+    // one model call the thing standing between a pasted report and it being stored at all.
+    //
+    // ‼️ MISSING FIELDS ONLY, taken from the report just computed. step-gaps.ts's "if we already
+    // hold it, do not ask for it" applies to filling as much as to asking, and a field that already
+    // has a confirmed value must not be re-proposed: that would put a model's reading up against a
+    // person's decision with no good way to choose.
+    if (answered >= profile.FULL_RESEARCH_MIN_SECTIONS && primary?.audience) {
+      try {
+        const missing = primary.reports.flatMap((r) => r.gaps.map((g) => g.field.key));
+        if (missing.length) {
+          const { extractFieldValues } = await import("./field-extraction");
+          const { openProposal, openProposalFor, formatProposalCard } = await import("./field-proposal");
+
+          const found = await extractFieldValues({
+            sections: profile.parseResearchSections(body),
+            missingKeys: missing,
+          });
+
+          if (found.proposed.length || found.questions.length) {
+            const { currentDocument } = await import("./audience-documents");
+            const doc = await currentDocument({
+              audienceId: primary.audience.id,
+              offerId: null,
+              kind: "deep_research",
+            });
+
+            const opened = await openProposal({
+              clientId,
+              audienceId: primary.audience.id,
+              sourceDocumentId: doc.ok ? (doc.doc?.id ?? null) : null,
+              proposed: found.proposed,
+              questions: found.questions,
+              unanswered: found.unanswered,
+              citations: found.citations,
+            });
+
+            if (!opened.ok) {
+              lines.push("", `:warning: The values were read but not offered: ${opened.error}`);
+            } else if (!slackCtx) {
+              lines.push(
+                "",
+                `:card_index_dividers: ${found.proposed.length} values are ready to confirm.`
+              );
+            } else {
+              const p = await openProposalFor(clientId);
+              if (p) {
+                if (opened.replaced) {
+                  lines.push(
+                    "",
+                    ":arrows_counterclockwise: An earlier unconfirmed proposal for this client was discarded. " +
+                      "Only the one below can be confirmed."
+                  );
+                }
+                const { slack } = await import("@/lib/slack-bot");
+                let firstTs: string | null = null;
+                for (const chunk of formatProposalCard(p)) {
+                  const res = await slack.postThreadReply(slackCtx.channel, slackCtx.threadTs, chunk);
+                  // ‼️ THE FIRST CHUNK'S TS IS THE ONE THE REACTION IS KEYED ON. A long card is
+                  // several messages and only one of them may carry the button, or a second
+                  // check mark on the second chunk would look like a second confirmation.
+                  const ts = (res as { ts?: string } | null)?.ts ?? null;
+                  if (!firstTs && ts) firstTs = ts;
+                }
+                if (firstTs) {
+                  await supabaseAdmin
+                    .from("client_field_proposals")
+                    .update({ slack_channel: slackCtx.channel, slack_ts: firstTs })
+                    .eq("id", p.id);
+                }
+
+                // ‼️ FILED AS AN ARGUMENT, NOT ADDED TO THE REGISTRY. dataset_suggestions is the
+                // door the 2026-09-22 migration built for exactly this, and its own comment says
+                // a row there "is an argument, never a declaration". The unique index on an open
+                // proposed_key means a second paste suggesting the same field is ignored rather
+                // than filed twice, so this can run on every paste without the card becoming a
+                // list of duplicates.
+                for (const g of found.suggestions) {
+                  const { error } = await supabaseAdmin.from("dataset_suggestions").insert({
+                    proposed_key: g.proposedKey,
+                    label: g.label,
+                    dataset: g.dataset,
+                    basis: g.basis,
+                    client_id: clientId,
+                  });
+                  if (!error) {
+                    lines.push(
+                      `:bulb: Suggested a new field, *${g.label}* (\`${g.proposedKey}\`, ${g.dataset}): ${g.basis}`
+                    );
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {
+        lines.push(
+          "",
+          `:warning: The research is saved, but reading values out of it failed: ${(e as Error).message}`
+        );
+      }
+    }
+
     return lines;
   } catch (e) {
     return [`:warning: The phrases landed, but saving the research on the avatar failed: ${(e as Error).message}`];

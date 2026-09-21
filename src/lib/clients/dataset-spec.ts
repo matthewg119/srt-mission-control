@@ -103,6 +103,19 @@ export interface DatasetSnapshot {
     buyerMap: boolean;
   };
   reviews: number;
+  /**
+   * The field keys that have a CONFIRMED value in `client_field_values`.
+   *
+   * ‼️ THIS IS WHAT "PRESENT" WAS ALWAYS SUPPOSED TO MEAN. Until 2026-09-24 a research field was
+   * present when 150 characters sat under its heading (`sectionAnswered`, avatar-profile.ts:169).
+   * Nothing extracted a value and nothing stored one, so the card could report `fears` as filled
+   * while nobody, human or machine, could say what the fears were. Measured on srt-agency-llc: a
+   * 16,272 character document, `{"answered": 9}`, and zero values anywhere.
+   *
+   * ‼️ FIELD KEYS, NOT SECTION KEYS. `who_buys` is filled by the research section `demographics`,
+   * and the two vocabularies are deliberately separate. This list is the former.
+   */
+  fieldValues: readonly string[];
 }
 
 interface EvalContext {
@@ -110,6 +123,8 @@ interface EvalContext {
   /** Section number -> parsed section, from the avatar's research text. */
   sections: Map<number, ResearchSection>;
   sectionKeys: readonly string[];
+  /** `snap.fieldValues` as a set, for the precedence check in evaluateDatasets. */
+  values: ReadonlySet<string>;
 }
 
 export interface FieldSpec {
@@ -392,6 +407,15 @@ export interface DatasetReport {
   total: number;
   present: number;
   gaps: FieldGap[];
+  /**
+   * How many of `present` are backed by a confirmed value rather than by a character count.
+   *
+   * ‼️ REPORTED SEPARATELY RATHER THAN FOLDED INTO `present`, because the difference is the whole
+   * point. "11/11 present" said nothing about whether anyone could name a single fear. "11/11, 4
+   * backed by a confirmed value" says exactly where this client actually stands, and the gap
+   * between the two numbers is the work W0 exists to close.
+   */
+  backedByValue: number;
 }
 
 function reasonFor(field: FieldSpec, snap: DatasetSnapshot): string {
@@ -448,21 +472,42 @@ export const NOTHING_ON_FILE: DatasetSnapshot = {
   documents: { avatarSheet: null, shortOffer: null, beliefs: 0, letterApproved: false },
   audit: { linked: true, pickedAvatar: false, buyerMap: false },
   reviews: 0,
+  fieldValues: [],
 };
 
 /** Evaluate every declared field against one audience's snapshot. */
 export function evaluateDatasets(snap: DatasetSnapshot, sectionKeys: readonly string[]): DatasetReport[] {
   const parsed = parseResearchSections(snap.avatar.researchText ?? "");
-  const ctx: EvalContext = { snap, sections: new Map(parsed.map((s) => [s.number, s])), sectionKeys };
+  const values = new Set(snap.fieldValues);
+  const ctx: EvalContext = { snap, sections: new Map(parsed.map((s) => [s.number, s])), sectionKeys, values };
 
   return (["avatar", "audience", "offer"] as const).map((dataset) => {
     const fields = DATASET_FIELDS.filter((f) => f.dataset === dataset && (dataset !== "offer" || snap.offer.applies));
     const gaps: FieldGap[] = [];
+    let backedByValue = 0;
+
     for (const field of fields) {
+      // ‼️ A CONFIRMED VALUE OUTRANKS EVERY OTHER TEST, AND IT IS CHECKED HERE RATHER THAN INSIDE
+      // present(). Each field's present() is a closure over its SECTION key (`demographics`) and
+      // has no idea what its own FIELD key (`who_buys`) is, so it could not do this lookup. Doing
+      // it in the loop also means it applies to every filler kind, not only research: a confirmed
+      // value for an offer field is just as real as one extracted from a report.
+      if (values.has(field.key)) {
+        backedByValue++;
+        continue;
+      }
+
+      // ‼️ THE CHARACTER COUNT SURVIVES AS THE WEAKER FALLBACK, DELIBERATELY. Every document
+      // pasted before 2026-09-24 has no extracted values, and flipping present() to require one
+      // would re-read every stored report under a new definition and mark a year of work missing
+      // overnight. Same refusal W1 makes about repurposing `narrative`: do not silently change
+      // what a stored row means. The two are told apart by `backedByValue`, not hidden.
       if (field.present(ctx)) continue;
+
       gaps.push({ field, reason: reasonFor(field, snap), blocking: Boolean(field.blocks?.length) });
     }
-    return { dataset, total: fields.length, present: fields.length - gaps.length, gaps };
+
+    return { dataset, total: fields.length, present: fields.length - gaps.length, gaps, backedByValue };
   });
 }
 
@@ -472,6 +517,23 @@ const DATASET_LABEL: Record<DatasetKey, string> = { avatar: "Avatar", audience: 
  * The card lines for one audience. Gaps are grouped by reason, so "the research prompt does not ask
  * for this yet" is said once for five fields instead of five times.
  */
+/**
+ * How much of "present" is backed by a value somebody confirmed.
+ *
+ * ‼️ IT DOES NOT SAY "BY A CHARACTER COUNT", AND THE FIRST VERSION OF THIS DID. That phrasing is
+ * only true of RESEARCH-filled fields, whose present() is sectionAnswered(). A field filled by the
+ * audit, by a board step or by a pasted framework document is present for a perfectly good reason
+ * that has nothing to do with counting characters, and calling it one would be a card that lies in
+ * the other direction. The honest split is confirmed value against everything else.
+ *
+ * ‼️ SILENT WHEN THEY AGREE. A card that appends "0 backed" to every dataset on every client who
+ * has not pasted research yet is noise, and noise is how a real warning gets skimmed past.
+ */
+function backing(r: DatasetReport): string {
+  if (r.present === 0 || r.backedByValue === r.present) return "";
+  return ` (${r.backedByValue} of ${r.present} backed by a confirmed value)`;
+}
+
 export function formatDatasetReport(label: string, isPrimary: boolean, reports: DatasetReport[], offerApplies: boolean): string[] {
   const lines = [`*${label}*${isPrimary ? " (primary)" : " (option)"}`];
   for (const r of reports) {
@@ -480,7 +542,7 @@ export function formatDatasetReport(label: string, isPrimary: boolean, reports: 
       continue;
     }
     if (!r.gaps.length) {
-      lines.push(`  • *${DATASET_LABEL[r.dataset]}* ${r.present}/${r.total} :white_check_mark:`);
+      lines.push(`  • *${DATASET_LABEL[r.dataset]}* ${r.present}/${r.total}${backing(r)} :white_check_mark:`);
       continue;
     }
     const byReason = new Map<string, FieldGap[]>();
@@ -489,7 +551,7 @@ export function formatDatasetReport(label: string, isPrimary: boolean, reports: 
       const names = gaps.map((g) => (g.blocking ? `:no_entry: ${g.field.label}` : g.field.label)).join(", ");
       return `${names} _(${reason})_`;
     });
-    lines.push(`  • *${DATASET_LABEL[r.dataset]}* ${r.present}/${r.total}, missing: ${parts.join("; ")}`);
+    lines.push(`  • *${DATASET_LABEL[r.dataset]}* ${r.present}/${r.total}${backing(r)}, missing: ${parts.join("; ")}`);
   }
   return lines;
 }

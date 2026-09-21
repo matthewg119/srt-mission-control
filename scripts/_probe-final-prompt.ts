@@ -50,6 +50,7 @@ function report(gaps: FieldSpec[], total = 10, present = 4): DatasetReport {
     dataset: "avatar",
     total,
     present,
+    backedByValue: 0,
     gaps: gaps.map((f) => ({ field: f, reason: "the probe said so", blocking: true })),
   };
 }
