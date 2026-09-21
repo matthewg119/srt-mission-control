@@ -103,7 +103,13 @@ RULES, and the third one is the one that matters most.
 Confidence:
   high    the report states this directly
   medium  the report clearly implies it and one reading is much better than the others
-  low     you would be guessing, or two readings are equally good. This becomes a question.`;
+  low     you would be guessing, or two readings are equally good. This becomes a question.
+
+‼️ EACH FIELD SAYS WHERE IT NORMALLY COMES FROM. For a field whose source is "THIS REPORT", answer
+it if the report answers it. For a field normally filled from a DIFFERENT document or from a board
+step, answer it ONLY if this report genuinely and directly answers it; otherwise return
+"unanswered". Those fields mean something specific in a document you have not seen, and a
+near-enough answer confirmed from this one displaces the real one permanently.`;
 
 interface RawCite {
   claim?: unknown;
@@ -158,8 +164,34 @@ export async function extractFieldValues(args: {
     .map((s) => `## ${s.number}. ${s.title}\n${s.body}`)
     .join("\n\n");
 
+  // ‼️ EACH FIELD SAYS WHERE IT WAS SUPPOSED TO COME FROM, AND THAT CHANGES THE ANSWERS.
+  // Measured on srt-agency-llc: 54 missing fields, and MOST ARE NOT RESEARCH-FILLED. They are
+  // declared as coming from a pasted avatar sheet, a pasted short offer, a Loom on the audit, or
+  // from nothing at all yet. Handing all 54 over with no provenance invites the model to stretch a
+  // research paragraph into an answer for a field that means something specific in a document it
+  // has never seen, and a confirmed near-enough answer displaces the real one permanently.
+  // Matthew's ask is still "fill as much as possible", so every missing field is still offered.
+  // The model is simply told which ones this report is actually expected to answer.
+  const sourceOf = (f: (typeof wanted)[number]): string => {
+    switch (f.filledBy.kind) {
+      case "research":
+        return f.filledBy.asked ? "THIS REPORT" : "nothing asks for it yet";
+      case "document":
+        return `a pasted ${f.filledBy.doc.replace(/_/g, " ")}, not this report`;
+      case "step":
+        return `the board step ${f.filledBy.step}, not this report`;
+      case "audit":
+        return "the AI visibility audit, not this report";
+      case "derived":
+        return "another field, not this report";
+    }
+  };
+
   const fieldList = wanted
-    .map((f) => `- ${f.key} (${f.dataset}): ${f.label}. Used for: ${f.usedFor}`)
+    .map(
+      (f) =>
+        `- ${f.key} (${f.dataset}): ${f.label}. Used for: ${f.usedFor}. Normally from: ${sourceOf(f)}`
+    )
     .join("\n");
 
   const res = await callClaudeJSON<{
@@ -170,7 +202,10 @@ export async function extractFieldValues(args: {
     model: "claude-sonnet-4-6",
     system: SYSTEM,
     user: `FIELDS TO FILL:\n${fieldList}\n\nTHE REPORT:\n\n${doc}`,
-    maxTokens: 8000,
+    // Fifty-plus fields each with a value, plus questions, citations and suggestions. SRT needs
+    // ~54; 8000 risks truncating the tail, and a truncated JSON response fails the whole parse
+    // rather than quietly losing the last field.
+    maxTokens: 16000,
     temperature: 0,
     schemaHint:
       '{ "fields": [ { "field_key": "who_buys", "status": "answered", "value": "...", ' +
