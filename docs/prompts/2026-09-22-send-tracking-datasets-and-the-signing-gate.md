@@ -11,6 +11,26 @@ The fourth of four prompts. Read the other three first; nothing here replaces an
 
 This adds five things Matthew asked for on 2026-09-21 after the first of those was written.
 
+## Decisions Matthew took 2026-09-21, so they do not get re-litigated
+
+Three of these close questions the 2026-09-23 prompt explicitly left open. They are recorded here
+rather than only in that prompt, because that prompt is where they were asked and this is where the
+order of work lives.
+
+| Question | Decision |
+|---|---|
+| **Scope of the W pass** | **W0 + W2b ship as ONE deploy with its migration.** W3 + W4 (previews, skin routing) are a second small deploy. W1 + W2 are a third. Each gets its own commit and its own SQL. |
+| **W1 angle fields** | **Add `problem` and `stories`; keep `indoctrination` as the one belief field.** No existing `page_angles` row changes meaning, `BELIEF_MAX` stays meaningful, and the stories get the length they need. Costs one migration and a wider `DraftedAngle`. |
+| **W2 research prompt** | **The twenty-page prompt REPLACES the per-batch one.** `batch approve` builds the twenty-page prompt instead of a seven-page one. One asker, one parser, one place answers get filed. |
+
+‼️ **THE W2 DECISION IS THE ONE WITH A TRAP UNDER IT**, and the 2026-09-23 prompt names it: a
+subset renumbered from 1 files section twelve's answer under section one, silently and permanently.
+Replacing the per-batch prompt means the asker's numbering changes wholesale, so "append to
+`SECTIONS`, never insert" is no longer the whole rule. The rule that survives is stricter: **the
+parser that reads the file back must map every answer to the same key the asker used, and a probe
+must prove one round trip.** Deciding to replace rather than stack is what makes that provable at
+all, because there is only ever one numbering scheme in play.
+
 ## Where the work is
 
 Two branches, both pushed, both on top of `origin/main` as of 2026-09-21:
@@ -220,9 +240,12 @@ research, then promote what both of them needed.
   or mark it `built: false` and let the card say so.
 - ‼️ **A widened field is only real once `present()` means "a confirmed value exists".** Until W0
   lands that is not what it means, which is the whole argument of this section.
-- ‼️ **APPEND to `SECTIONS` in `deep-research-run.ts`, NEVER INSERT.** Section N maps to
-  `RESEARCH_SECTION_KEYS[N-1]`, so inserting re-files every stored report's answers under new keys.
-  Every research-filled field added here means a section appended at the end.
+- ‼️ **THE ASKER AND THE PARSER MUST AGREE ON ONE KEY PER ANSWER, AND A PROBE MUST PROVE THE ROUND
+  TRIP.** The old form of this rule was "append to `SECTIONS` in `deep-research-run.ts`, never
+  insert", because section N maps to `RESEARCH_SECTION_KEYS[N-1]` and inserting re-files every
+  stored report's answers under new keys. W2 replacing the per-batch prompt changes the asker's
+  numbering wholesale, so appending is no longer sufficient on its own. Whatever numbering the
+  twenty-page prompt emits, a widened field is only safe once its key survives the round trip.
 - **Widen rather than narrow**, per Matthew's standing rule already written into the other prompt:
   a field nobody uses yet is context for later and the cost of carrying it is a column.
 - **Missing, empty, and "asked and nothing was there" are three states**, not two. The lane has
@@ -366,26 +389,36 @@ whichever order the week demands, but keep each one's internal order.
    mailed".
 4. Spend recording, then `scripts/pull-maps.ts` (§2 then §1 of the 2026-09-21 prompt).
 
-**Delivery track:**
+**Delivery track, in three deploys, per Matthew's scope decision above.** Each gets its own commit
+and its own SQL, so a bad one reverts without taking the others with it.
 
-5. **W0.** Everything else in this track is worth less until the research produces values instead
-   of character counts. It is also Matthew's immediate unblock: step 11 prompts in that thread,
-   then the three pastes, and W0 is what makes the third paste worth something.
-6. **W2b**, which lets the gate see what W0 confirmed. Together those two are why twenty pages
-   stop blocking.
-7. §4 here: run the existing `review` command once, on a real screenshot. It is the cheapest way
-   to get the first `CUSTOMER_REVIEW` row into a table that has none, and it may need no building
-   at all.
-8. §3 here: widen the dataset, through `dataset_suggestions`, **after W0 and not before**.
-9. §2 here: the magnet audience axis, and the duplicate-spelling migration.
+**Deploy 1: W0 + W2b, together, one migration.** This is the pass that matters. W0 makes the
+research produce values instead of character counts; W2b lets the gate see what W0 confirmed.
+Together they are why twenty pages stop refusing, and W0 is Matthew's immediate unblock: step 11
+prompts in that thread, then the three pastes, and W0 is what makes the third paste worth anything.
 
-**Alone, last:**
+‼️ **THEY SHIP TOGETHER BECAUSE SHIPPING W2b ALONE IS WORSE THAN SHIPPING NEITHER.** The
+correction W0 already forced on the earlier plan was that a paste must not file evidence before the
+values are confirmed. W2b without W0 is exactly that: a gate verifying pages against text nobody
+approved, with a confirmation card that is theatre.
 
-10. §5 here: the ID step. It touches a signed document and a new class of personal data, so it goes
-    by itself with its retention decision written down before the upload is built.
+**Deploy 2: W3 + W4.** Previews after every body write, and the skin grammar routed into the
+drafting thread. W3 is small. W4 needs the hub-skin matchers extracted into exported constants
+first, which touches a file with its own convention rule, so read that rule before moving anything.
 
-W1, W3 and W4 land whenever; the 2026-09-23 prompt says the previews and skin routing are small and
-the headline lock depends on neither W0 nor W2b.
+**Deploy 3: W1 + W2.** Twenty locked headlines with the `problem` and `stories` angle fields, and
+the one research prompt that replaces the per-batch one. Largest surface, and the longest window
+where nothing is verifiable end to end, which is why it is last rather than first.
+
+**Between the deploys, from this prompt, cheapest first:**
+
+- §4: run the existing `review` command once, on a real screenshot. It is the cheapest way to get
+  the first `CUSTOMER_REVIEW` row into a table that has none, and it may need no building at all.
+- §3: widen the dataset, through `dataset_suggestions`, **after deploy 1 and not before**.
+- §2: the magnet audience axis, and the duplicate-spelling migration.
+
+**Alone, last:** §5, the ID step. It touches a signed document and a new class of personal data, so
+it goes by itself with its retention decision written down before the upload is built.
 
 Run `bun run`, never `bunx tsx`: Bun auto-loads `.env.local` and Node does not. No em dashes in
 anything that reaches a model or a client.
