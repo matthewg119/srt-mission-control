@@ -84,11 +84,11 @@ so a confirmed value belongs to one audience of one client and a wrong one is co
 
 **What is not.** Three shared tables key on `(vertical, avatar_slug)` with no client:
 
-- `question_bank` — no `client_id`, and three migration comments defend that. 321 rows under this
+- `question_bank`: no `client_id`, and three migration comments defend that. 321 rows under this
   avatar.
-- `avatar_briefs` — `voc_quotes`, `approved_numbers`, `research_text`, `avatar_sheet`, shared by
+- `avatar_briefs`: `voc_quotes`, `approved_numbers`, `research_text`, `avatar_sheet`, shared by
   every client in the vertical.
-- `niche_briefs` — per niche.
+- `niche_briefs`: per niche.
 
 That sharing is deliberate and it is the feature: two med spas aiming at the same buyer should not
 each pay for the same research. ‼️ **Do not add `client_id` to `question_bank` as the fix.** The
