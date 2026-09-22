@@ -827,7 +827,23 @@ export async function ingestResearchPdf(args: {
   } catch (e) {
     return { ok: false, error: `that file could not be read: ${(e as Error).message}`, filename };
   }
-  if (!text.trim()) return { ok: false, error: "that file has no text in it", filename };
+  // ‼️ "NO TEXT" READS AS "THE FILE IS EMPTY", AND IT USUALLY IS NOT. Measured on srt-agency-llc
+  // 2026-09-22: a 14 page, 6.7MB research PDF that reads perfectly on screen extracted zero
+  // characters, because every page was exported with the type converted to vector outlines: 2,107
+  // path operations on page one and not one text item. A scan does the same thing with images.
+  // Either way the words are a picture, nothing in this stack can read them, and the person who
+  // dropped it can see the text right there, so the message has to say which of the two it is.
+  if (!text.trim()) {
+    const kind = /\.pdf$/i.test(filename) || contentType === "application/pdf" ? "pdf" : "file";
+    return {
+      ok: false,
+      error:
+        kind === "pdf"
+          ? "no text could be read out of that PDF. The pages are a picture of the words, either a scan or an export that turned the type into outlines, so there is nothing in the file to read. Save the research as .md, .docx or .txt and drop that in instead, or paste it here after `research:`."
+          : "that file has no text in it",
+      filename,
+    };
+  }
 
   // The prefix is added HERE rather than relaxing the trigger, so ingestResearch keeps exactly
   // one rule about what counts as research and there is no second, looser door into it.

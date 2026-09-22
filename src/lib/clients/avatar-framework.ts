@@ -205,27 +205,66 @@ export function readTemplateDocument(text: string, template: readonly TemplateSe
 export const readAvatarSheet = (text: string) => readTemplateDocument(text, AVATAR_SHEET, "avatar sheet");
 export const readShortOffer = (text: string) => readTemplateDocument(text, SHORT_OFFER, "short offer");
 
+/** "Belief 3 — The Mechanism Displaces Her Mental Model": the heading a WRITTEN belief chain puts
+ * above each statement. Its presence is what separates the two shapes readBeliefs accepts. */
+const BELIEF_HEADING = /^belief\s*\d+\b/i;
+/** "I believe ..." opens a statement. The prompt asks for "I believe that", and five of the six
+ * beliefs in the 2026-09-22 document dropped the "that". It is the same statement. */
+const BELIEF_START = /^i\s+believe\b/i;
+/** The statement has closed. A closing quote or bracket may follow the full stop. */
+const SENTENCE_END = /[.!?]["'”’)\]]?$/;
+
 /**
  * The necessary beliefs: 1 to 6 statements, each beginning "I believe that".
  *
  * A list marker, a number or bold around a line is formatting and is removed. A line ending in a colon
  * is a heading the chat added and is skipped. Anything else that is not a belief is refused by name,
  * because a sentence of commentary stored as belief 4 would be installed in every page.
+ *
+ * ‼️ TWO SHAPES, AND THE DOCUMENT DECIDES WHICH. The rule above is the shape of a list pasted into
+ * Slack. A belief chain WRITTEN as a document is a title, an intro, and then per belief a heading, the
+ * statement wrapped over two or three lines, and commentary about it. Measured on srt-agency-llc
+ * 2026-09-22: AI_Referral_Engine_Belief_Chain.pdf is the second shape, 116 lines of which 6 are
+ * beliefs, and the list rule refused it on its own title. It could not be stored at all.
+ *
+ * `Belief N` headings switch the reading. With them, only the statements are read and the prose
+ * between them is ignored. Without them nothing changes, so the shape that already worked is
+ * untouched and a commentary sentence still cannot be stored as a belief.
+ *
+ * ‼️ THE HEADINGS ARE ALSO THE COUNT, WHICH IS WHAT MAKES IGNORING PROSE SAFE. A document saying
+ * "Belief 5" whose fifth statement was written "She must believe ..." would otherwise store four and
+ * say nothing about the one it dropped. The two counts have to agree or nothing is stored.
  */
 export function readBeliefs(text: string): { ok: true; beliefs: string[] } | { ok: false; error: string } {
   const opening = alnum(BELIEF_OPENING);
+  const lines = text.split(/\r?\n/).map(cleanLine);
+  const headings = lines.filter((line) => BELIEF_HEADING.test(line)).length;
   const beliefs: string[] = [];
   const stray: string[] = [];
-  for (const raw of text.split(/\r?\n/)) {
-    const line = cleanLine(raw);
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
     if (!line) continue;
-    if (alnum(line).startsWith(opening)) {
-      beliefs.push(line.replace(/\s+/g, " "));
+    if (headings && BELIEF_HEADING.test(line)) continue;
+
+    if (!(headings ? BELIEF_START.test(line) : alnum(line).startsWith(opening))) {
+      if (!headings && !/:$/.test(line)) stray.push(line);
       continue;
     }
-    if (/:$/.test(line)) continue;
-    stray.push(line);
+
+    // A statement is ONE sentence and a PDF wraps it over two or three lines, so join forward until
+    // it closes. The cap and the two stop conditions mean a statement written without a full stop
+    // takes its own line and nothing else, rather than swallowing the commentary underneath it.
+    const parts = [line];
+    while (headings && !SENTENCE_END.test(parts[parts.length - 1]) && parts.length < 5) {
+      const next = lines[i + 1];
+      if (!next || BELIEF_START.test(next) || BELIEF_HEADING.test(next)) break;
+      parts.push(next);
+      i += 1;
+    }
+    beliefs.push(parts.join(" ").replace(/\s+/g, " ").trim());
   }
+
   if (stray.length) {
     return {
       ok: false,
@@ -236,6 +275,14 @@ export function readBeliefs(text: string): { ok: true; beliefs: string[] } | { o
     };
   }
   if (!beliefs.length) return { ok: false, error: `no line starts "${BELIEF_OPENING}", so there were no beliefs to store.` };
+  if (headings && headings !== beliefs.length) {
+    return {
+      ok: false,
+      error:
+        `this document has ${headings} belief heading${headings === 1 ? "" : "s"} but ${beliefs.length} statement${beliefs.length === 1 ? "" : "s"} starting "I believe". ` +
+        "One belief is written some other way, and storing the rest would drop it without saying so. Nothing was stored.",
+    };
+  }
   if (beliefs.length > MAX_NECESSARY_BELIEFS) {
     return {
       ok: false,

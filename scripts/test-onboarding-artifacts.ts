@@ -3703,7 +3703,15 @@ import * as visionT from "../src/lib/hub/skin-vision";
   ok("the research and the avatar sheet belong to the audience", !kindBelongsToOffer("deep_research") && !kindBelongsToOffer("avatar_sheet"));
 
   const letterSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "sales-letter.ts"), "utf8");
-  ok("a drafted letter's faults block approval", /doc\.source === "drafted" && doc\.faults\.length/.test(letterSrc));
+  ok("a drafted letter's faults block approval", /doc\.source === "drafted" && fresh\.length/.test(letterSrc));
+  // ‼️ AND THEY ARE THE FAULTS OF TODAY'S CHECKER. doc.faults is the verdict written when the letter
+  // was stored. Gating on it meant a fixed copy rule could not reach a letter already written, and on
+  // 2026-09-22 a correct letter stayed unapprovable on two faults that no longer existed in the code.
+  ok(
+    "and they are recomputed at approval, not read off the row",
+    /const fresh = await letterFaults\(doc\.content, await evidenceFor\(/.test(letterSrc)
+  );
+  ok("the refreshed verdict is written back, so the thread stops showing a fault that is gone", /setDocumentFaults\(doc\.id, fresh\)/.test(letterSrc));
   ok("the letter is filed without touching output_ref", /storeGeneratedDoc/.test(letterSrc) && !/deliverArtifact/.test(letterSrc));
   ok("the drafting prompt itself forbids em dashes", /No em dashes, no en dashes, no double hyphens/.test(letterSrc));
 }
@@ -3769,6 +3777,41 @@ import * as visionT from "../src/lib/hub/skin-vision";
   const stray = fw.readBeliefs("I believe that pages work\nThis one matters most because it drives the rest.");
   ok("a line of commentary is refused by name", !stray.ok && /This one matters most/.test(stray.error));
   ok("no belief at all is refused", !fw.readBeliefs("Here you go:").ok);
+
+  // ‼️ A BELIEF CHAIN WRITTEN AS A DOCUMENT, WHICH IS WHAT MESSAGE 7 ACTUALLY COMES BACK AS. Measured
+  // on srt-agency-llc 2026-09-22: AI_Referral_Engine_Belief_Chain.pdf, 116 lines of which 6 are
+  // beliefs, refused on its own title. `Belief N` headings switch the reading; the statement wraps
+  // over two or three lines and the commentary between statements is ignored rather than refused.
+  const chain = [
+    "The Belief Chain",
+    "AI Referral Engine · US Med Spa Owners",
+    "The six beliefs the prospect must adopt, in strict order, before the sale can close.",
+    "Belief 1 — The Problem Exists In Her World",
+    "I believe my next patient is checking an AI answer engine — ChatGPT, Perplexity, or",
+    "Google's AI Overview — before deciding whether to book me.",
+    "What this belief does",
+    "Without this, everything else is irrelevant.",
+    "How to install it",
+    "The brunch scene, then the direct challenge.",
+    "Belief 2 — Asymmetry Of Risk",
+    "I believe that saying yes costs me nothing meaningful, and saying no costs me a",
+    "compounding gap I can't recover later.",
+    "What this belief does",
+    "This is the closer.",
+  ].join("\n");
+  const written = fw.readBeliefs(chain);
+  ok("a written belief chain is read, and its prose is not", written.ok && written.beliefs.length === 2);
+  ok(
+    "a statement wrapped over two lines is rejoined, with or without the \"that\"",
+    written.ok &&
+      written.beliefs[0] === "I believe my next patient is checking an AI answer engine — ChatGPT, Perplexity, or Google's AI Overview — before deciding whether to book me." &&
+      /^I believe that saying yes costs me nothing meaningful, and saying no costs me a compounding gap/.test(written.beliefs[1])
+  );
+  ok("commentary under a belief is not swallowed into it", written.ok && !written.beliefs.some((b) => /What this belief does|How to install it/.test(b)));
+  // ‼️ THE HEADINGS ARE THE COUNT. Ignoring prose is only safe if a belief written some other way is
+  // noticed, rather than quietly dropped and the remaining five stored as the whole chain.
+  const miscount = fw.readBeliefs("Belief 1 - A\nI believe that one is true.\nBelief 2 - B\nShe must believe that two is true.");
+  ok("a heading with no \"I believe\" statement under it refuses the document", !miscount.ok && /2 belief headings but 1 statement/.test(miscount.error));
 
   // ‼️ THE RESEARCH SECTIONS ARE APPENDED, AND THE SCRIPT-ONLY ONES ARE A TAIL. The heading contract numbers
   // every section as RESEARCH_SECTION_KEYS does, and the compact prompt still asks for the first nine only.
