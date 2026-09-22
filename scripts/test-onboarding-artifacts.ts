@@ -3623,6 +3623,56 @@ import * as visionT from "../src/lib/hub/skin-vision";
   ok("an invented quotation is a fault", rules.includes("invented_quote"));
   ok("a double hyphen is a fault", rules.includes("dash"));
 
+  // ‼️ THE REGRESSION THIS BLOCKED A REAL LETTER ON. Measured on srt-agency-llc 2026-09-22: the
+  // shared bank holds "spent $1500 last month", the drafter wrote "Spent $1,500 last month", and
+  // squash turned the comma into a space so "1 500" never matched "1500". A verbatim quote was
+  // reported as invented and the letter could not be approved. Re-running letterFaults over that
+  // exact stored letter afterwards dropped invented_quote and kept dash, which is the real fault.
+  const banked = { numberHaystack: "1500", quotes: ["honestly feeling a bit burnt out. spent $1500 last month on FB/IG ads for my med spa."] };
+  const regrouped = await letterFaults(
+    '## Lead\n"Honestly feeling a bit burnt out. Spent $1,500 last month on FB/IG ads for my med spa."',
+    banked
+  );
+  eq("a quote is not invented just because the writer added a thousands separator", regrouped, []);
+
+  // ‼️ THE FOLD IS NARROW ON PURPOSE. It fires only between a digit and three more digits, so it
+  // cannot reach across words. A quote reworded by even one WORD must still fail, or the rule
+  // stops meaning "somebody's real words" and starts meaning "roughly this".
+  const reworded = await letterFaults(
+    '## Lead\n"Honestly feeling quite burnt out. Spent $1,500 last month on FB/IG ads for my med spa."',
+    banked
+  );
+  ok("but a quote reworded by even one word still fails", reworded.some((f) => f.rule === "invented_quote"));
+
+  // And two separate numbers in one sentence stay two numbers.
+  const twoNumbers = await letterFaults('## Lead\n"I waited 30, then 500 more, and nobody called"', {
+    numberHaystack: "",
+    quotes: ["i waited 30500 more and nobody called"],
+  });
+  ok("two numbers separated by a comma are not folded into one", twoNumbers.some((f) => f.rule === "invented_quote"));
+
+  // The fault has to say WHICH it is. "not in any real review" is an accusation of invention, and
+  // it is wrong when the model copied a real quote and tidied it.
+  const edited = await letterFaults('## Lead\n"Honestly feeling a bit BURNT OUT. Spent nine hundred dollars last month on ads for my med spa."', banked);
+  const detail = edited.find((f) => f.rule === "invented_quote")?.detail ?? "";
+  ok("an edited quote is reported as edited, with what is on file", /was edited\. On file it reads/.test(detail));
+  ok("and a genuinely invented one still says it matches nothing", /matches nothing on file/.test(
+    (await letterFaults('## Lead\n"My wife left me after the botched filler appointment"', banked)).find((f) => f.rule === "invented_quote")?.detail ?? ""
+  ));
+
+  // ‼️ DEDUPED. LETTER_SHAPE asks for the buyer's own words in the LEAD and real reviews in PROOF,
+  // so a model doing what it was told quotes the same line twice; matchAll returns both and the
+  // old fault printed the identical string two and three times.
+  const twice = await letterFaults('## Lead\n"My wife left me after the botched filler appointment"\n## Proof\n"My wife left me after the botched filler appointment"', banked);
+  const once = twice.find((f) => f.rule === "invented_quote")?.detail ?? "";
+  eq("the same quote used twice is reported once", once.split("matches nothing on file").length - 1, 1);
+
+  // The old fault did `q.slice(0, 80)`, which cut "med spa" to "me" and read like corrupted data.
+  const longDetail =
+    (await letterFaults('## Lead\n"' + "a".repeat(40) + ' burnt out and spent far too much last month on ads for my med spa and it hurt"', banked))
+      .find((f) => f.rule === "invented_quote")?.detail ?? "";
+  ok("a long quote in a fault is cut on a word boundary and says it was cut", longDetail.includes("..."));
+
   // ‼️ AN APPROVAL IS PINNED TO THE TREATMENT AND THE OUTCOME, NOT TO POSITIONING OR TERMS.
   const base = documentFingerprint({ treatment: "Lip filler", outcomePromise: "more appointments" });
   eq("the same offer spelled differently is the same fingerprint", documentFingerprint({ treatment: "lip filler.", outcomePromise: "More appointments" }), base);

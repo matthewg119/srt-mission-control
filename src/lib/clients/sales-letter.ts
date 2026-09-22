@@ -225,7 +225,55 @@ export interface LetterEvidence {
   quotes: string[];
 }
 
-const squash = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+/**
+ * A quotation reduced to what it SAYS, so two renderings of the same sentence compare equal.
+ *
+ * ‼️ DIGIT GROUPING IS STRIPPED BEFORE PUNCTUATION, AND THAT ORDER IS THE WHOLE FIX. Measured on
+ * srt-agency-llc 2026-09-22: the shared bank holds `spent $1500 last month on FB/IG ads`, the
+ * drafter wrote `Spent $1,500 last month`, and the old squash turned the comma into a space. So
+ * `1 500` never matched `1500`, a verbatim quote was reported as invented, and a letter that had
+ * quoted the corpus correctly could not be approved. Case and punctuation were already folded;
+ * the separator inside a number was the one difference left standing.
+ *
+ * ‼️ THIS MUST NOT BECOME A FUZZY MATCHER. The rule it serves is that a quotation is somebody's
+ * real words. Folding a thousands separator is a fact about how a number is written. Folding
+ * stemming, synonyms or word order would be a claim that two different sentences are the same
+ * sentence, and it would let a model paraphrase a buyer and pass.
+ */
+const squash = (s: string) =>
+  s
+    .toLowerCase()
+    // A separator only counts as one BETWEEN digits: "1,500" and "1 500" are one number, while
+    // "spa, 30" is two things and must stay two things.
+    .replace(/(\d)[,   .](?=\d{3}\b)/g, "$1")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+/** How much of a quote to show in a fault, cut on a word boundary rather than mid-word. */
+function clip(s: string, max = 80): string {
+  const t = s.trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max);
+  const space = cut.lastIndexOf(" ");
+  return (space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd() + "...";
+}
+
+/**
+ * The stored quote a failing one most nearly matches, if any.
+ *
+ * ‼️ THIS EXISTS BECAUSE THE FAULT WAS AN ACCUSATION. "quotations that are not in any real review
+ * or research quote" is correct when a model invented a testimonial and badly wrong when it
+ * copied one and tidied it, and the reader cannot tell which from the message. Naming the near
+ * match turns "you made this up" into "you changed this", which is a different instruction.
+ */
+function nearestQuote(q: string, quotes: readonly string[]): string | null {
+  const needle = squash(q);
+  if (!needle) return null;
+  // The first 30 squashed characters are enough to identify a quote and short enough to survive
+  // the edit that broke the exact match.
+  const head = needle.slice(0, 30);
+  return quotes.find((source) => squash(source).includes(head)) ?? null;
+}
 
 /**
  * What is wrong with a letter, in words. Pure, so the probe can test it.
@@ -253,14 +301,30 @@ export async function letterFaults(letter: string, evidence: LetterEvidence): Pr
 
   const corpus = evidence.quotes.map(squash).join(" | ");
   const quoted = [...letter.matchAll(/["“]([^"”\n]{20,400})["”]/g)].map((m) => m[1]);
-  const invented = quoted.filter((q) => !corpus.includes(squash(q)));
+
+  // ‼️ DEDUPED, BECAUSE LETTER_SHAPE ASKS FOR THE SAME QUOTE TWICE. The LEAD opens "in their own
+  // words" and PROOF quotes reviews "word for word", so a model doing exactly what it was told
+  // uses one quote in both places. matchAll returns one entry per occurrence, so the old list
+  // printed the identical string two and three times and read like corrupted output. Its sibling
+  // rule has always done this: `return [...new Set(out)]` in client-headlines.ts.
+  const invented = [...new Set(quoted.filter((q) => !corpus.includes(squash(q))))];
+
   if (invented.length) {
+    // A quote that nearly matches something on file was EDITED, not invented, and saying so is
+    // the difference between a fixable instruction and an accusation.
+    const lines = invented.slice(0, 3).map((q) => {
+      const near = nearestQuote(q, evidence.quotes);
+      return near
+        ? `"${clip(q)}" was edited. On file it reads: "${clip(near)}"`
+        : `"${clip(q)}" matches nothing on file`;
+    });
+    const edited = invented.some((q) => nearestQuote(q, evidence.quotes));
     faults.push({
       rule: "invented_quote",
-      detail: `quotations that are not in any real review or research quote: ${invented
-        .slice(0, 3)
-        .map((q) => `"${q.slice(0, 80)}"`)
-        .join("; ")}`,
+      detail:
+        (edited
+          ? "quotations that do not match the words on file, so they cannot be published as quotes: "
+          : "quotations that are not in any real review or research quote: ") + lines.join("; "),
     });
   }
   return faults;
@@ -296,6 +360,12 @@ const LETTER_RULES = [
   "No number that is not in the approved numbers, a review or the intake answers. Where specificity would help and no real number exists, be specific in words instead.",
   "No guarantee of any kind, and no 'risk free' or 'money back' unless the facts say the business offers one.",
   "No invented testimonial, review, quote, customer, credential or discovery story. Quote only reviews given below, word for word. Where proof is missing, write the literal token [PROOF].",
+  // ‼️ SPELLED OUT BECAUSE "WORD FOR WORD" WAS NOT ENOUGH. The rule above already said it, and the
+  // 2026-09-22 draft still copied a real quote and wrote $1,500 where the bank says $1500. A model
+  // asked for publishable prose tidies as it goes, so the thing it must NOT tidy has to be named.
+  // The checker now folds digit separators, so this is belt and braces; the point is that a quote
+  // reaching a reader should be what the person actually typed, misspellings included.
+  "A quotation is copied character for character, including its spelling, capitalisation, slang and the way its numbers are written. Do not add a thousands separator, fix a typo, capitalise a sentence or change punctuation inside quotation marks.",
   "No competitor named.",
   "No em dashes, no en dashes, no double hyphens. Use commas, periods or colons.",
   "Use ## for each section heading, in the order given. Plain text otherwise.",
