@@ -17,7 +17,7 @@ import { supabaseAdmin } from "@/lib/db";
 import { DATASET_FIELDS, type DatasetKey } from "./dataset-spec";
 import { commitValues, type ProposedValue } from "./field-values";
 import type { FieldQuestion, ResearchCitation } from "./field-extraction";
-import { recordSource } from "./page-evidence";
+import { recordSource, type RecordSourceInput } from "./page-evidence";
 
 const DATASET_LABEL: Record<DatasetKey, string> = {
   avatar: "Avatar",
@@ -90,15 +90,44 @@ export async function openProposal(args: {
   return { ok: true, id: String(data.id), replaced: (stale?.length ?? 0) > 0 };
 }
 
+const PROPOSAL_COLUMNS =
+  "id, client_id, audience_id, source_document_id, proposed, questions, unanswered, citations";
+
 export async function openProposalFor(clientId: string): Promise<OpenProposal | null> {
   const { data, error } = await supabaseAdmin
     .from("client_field_proposals")
-    .select("id, client_id, audience_id, source_document_id, proposed, questions, unanswered, citations")
+    .select(PROPOSAL_COLUMNS)
     .eq("client_id", clientId)
     .eq("status", "open")
     .maybeSingle();
 
   if (error || !data) return null;
+  return toProposal(data);
+}
+
+/**
+ * The proposal with this id, open or not.
+ *
+ * ‼️ THIS IS WHAT THE REACTION HANDLER MUST USE, AND THE REASON IS A RACE IT CANNOT SEE. The handler
+ * finds the card by its Slack message ts, which identifies one specific proposal. Passing only the
+ * client id onward and re-resolving through openProposalFor would let a paste landing in between
+ * swap the open row, so the confirm would commit values nobody read: the open-per-client unique
+ * index guarantees one open proposal, not that it is the SAME one. Loading by id closes that, and
+ * the .eq("status", "open") on the decide below closes the other half, so a lost race writes
+ * nothing rather than writing twice.
+ */
+export async function proposalById(id: string): Promise<OpenProposal | null> {
+  const { data, error } = await supabaseAdmin
+    .from("client_field_proposals")
+    .select(PROPOSAL_COLUMNS)
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error || !data) return null;
+  return toProposal(data);
+}
+
+function toProposal(data: Record<string, unknown>): OpenProposal {
   return {
     id: String(data.id),
     clientId: String(data.client_id),
@@ -113,16 +142,29 @@ export async function openProposalFor(clientId: string): Promise<OpenProposal | 
 
 const LABELS = new Map(DATASET_FIELDS.map((f) => [f.key, f.label]));
 
-/** How long one Slack message body may be before the WHOLE message is rejected. */
+/**
+ * How long one chunk of the card may be.
+ *
+ * ‼️ 3,000 IS THE BLOCK KIT `section` CEILING, NOT THE ceiling for THIS message. These chunks go
+ * out through slack.postThreadReply, which is chat.postMessage with a plain `text` body and no
+ * blocks, where the limit is nearer 40,000. So a single long value posts today rather than failing.
+ * The split is kept anyway for two reasons: a card nobody can scroll is a card nobody reads, and
+ * the day this card grows buttons it becomes blocks and the real 3,000 ceiling arrives with them.
+ * Stated plainly because the old comment here claimed the whole message already failed, which sent
+ * the next reader looking for a bug that was not there.
+ */
 const CARD_LIMIT = 2900;
+
+/** Room for the continuation indent, so a wrapped bullet still fits once indented. */
+const WRAP_INDENT = "    ";
 
 /**
  * The proposal card, grouped by dataset.
  *
- * ‼️ RETURNS SEVERAL MESSAGES, NOT ONE LONG ONE. A card body over 3,000 characters fails the whole
- * message, and twenty-plus proposed fields with their values will exceed it. Split on line
- * boundaries under 2,900, the way rerun-gaps.ts does. A truncated card is worse than two cards:
- * the fields that fell off the end are the ones nobody confirms.
+ * ‼️ RETURNS SEVERAL MESSAGES, NOT ONE LONG ONE. Twenty-plus proposed fields with their values will
+ * run past any sensible message length. Split on line boundaries under 2,900, the way rerun-gaps.ts
+ * does. A truncated card is worse than two cards: the fields that fell off the end are the ones
+ * nobody confirms.
  */
 export function formatProposalCard(p: OpenProposal): string[] {
   const lines: string[] = [
@@ -169,11 +211,43 @@ export function formatProposalCard(p: OpenProposal): string[] {
   return splitLines(lines);
 }
 
-/** Split on line boundaries so no message exceeds the cap. Never mid-line: a cut value is a lie. */
-function splitLines(lines: readonly string[]): string[] {
+/**
+ * Wrap one over-long line onto several, at whitespace.
+ *
+ * ‼️ WRAP, NEVER TRUNCATE. A cut value on a confirmation card is the exact failure the whole
+ * proposal table exists to refuse: somebody approves what they read and something else is written.
+ * Every character of the value survives; only its line breaks change. A single WORD longer than the
+ * limit is cut, because at that point there is no whitespace to break on and no real field value
+ * looks like that.
+ */
+export function wrapLine(line: string, limit: number): string[] {
+  if (line.length <= limit || limit <= WRAP_INDENT.length) return [line];
+  const out: string[] = [];
+  let rest = line;
+  let width = limit;
+  while (rest.length > width) {
+    let cut = rest.lastIndexOf(" ", width);
+    if (cut <= 0) cut = width;
+    out.push(rest.slice(0, cut));
+    rest = WRAP_INDENT + rest.slice(cut).trimStart();
+    width = limit;
+  }
+  if (rest.trim()) out.push(rest);
+  return out;
+}
+
+/**
+ * Split on line boundaries so no message exceeds the cap. Never mid-line: a cut value is a lie.
+ *
+ * ‼️ THE WRAP HAS TO HAPPEN FIRST, AND THAT IS NOT COSMETIC. The `&& buf` below is what lets the
+ * first line of a chunk be over-long: without it, a single line longer than the limit would loop
+ * forever emitting empty chunks. So the guard is right and the input has to be made safe before it
+ * runs. Once no member of `lines` can exceed CARD_LIMIT, no chunk can either.
+ */
+export function splitLines(lines: readonly string[]): string[] {
   const out: string[] = [];
   let buf = "";
-  for (const line of lines) {
+  for (const line of lines.flatMap((l) => wrapLine(l, CARD_LIMIT))) {
     const next = buf ? buf + "\n" + line : line;
     if (next.length > CARD_LIMIT && buf) {
       out.push(buf);
@@ -187,6 +261,44 @@ function splitLines(lines: readonly string[]): string[] {
 }
 
 /**
+ * The evidence rows one confirmed proposal produces, and how many citations were refused.
+ *
+ * ‼️ PURE, AND IT TAKES THE PROPOSAL AND NOTHING ELSE. The two arguments are the whole point: the
+ * citations come from the row that was shown on the card, so a caller cannot file evidence drawn
+ * from some other document alongside values drawn from this one. A probe can assert that by reading
+ * the arity, which a comment saying the same thing cannot.
+ *
+ * ‼️ A CLAIM WITH NO source_url IS NOT EVIDENCE. Filing a model's unsourced assertion as a source
+ * launders an invention into a citation. Refused here and counted, so the card can say so out loud
+ * rather than quietly filing fewer rows than the card promised.
+ */
+export function evidenceRowsFor(
+  p: OpenProposal,
+  confirmedBy: string
+): { rows: RecordSourceInput[]; dropped: number } {
+  const cites = p.citations.filter((c) => c.sourceUrl?.trim() && c.content?.trim());
+  return {
+    dropped: p.citations.length - cites.length,
+    rows: cites.map((c) => ({
+      clientId: p.clientId,
+      // ‼️ page_id NULL: the client library pool, not one page. The research backs whichever page
+      // ends up making the claim, and pinning it to one would hide it from the other nineteen.
+      pageId: null,
+      // ‼️ EXTERNAL_RESEARCH, NOT CUSTOMER_REVIEW OR CLIENT_VOICE. isFirstParty() deliberately
+      // excludes this type and that must not be "fixed": research about the buyer is evidence, and
+      // it is not the business's own voice. What changes is that no_evidence, unsupported and
+      // experience_claims can finally SEE it. A real customer quote with a URL is CUSTOMER_REVIEW
+      // and comes in through the page studio's `review` command instead.
+      sourceType: "EXTERNAL_RESEARCH" as const,
+      sourceContent: c.content.trim(),
+      sourceUrl: c.sourceUrl.trim(),
+      collectedVia: "board" as const,
+      collectedBy: confirmedBy,
+    })),
+  };
+}
+
+/**
  * The confirm. Commits the values AND files the evidence, in that order.
  *
  * ‼️ VALUES FIRST, EVIDENCE SECOND, AND A FAILURE TO FILE EVIDENCE DOES NOT UNDO THE VALUES. The
@@ -195,16 +307,17 @@ function splitLines(lines: readonly string[]): string[] {
  * insert would throw away the decision rather than the side effect.
  */
 export async function confirmProposal(args: {
-  clientId: string;
+  /**
+   * ‼️ THE PROPOSAL ITSELF, NOT A CLIENT ID TO LOOK ONE UP BY. The caller already identified one
+   * specific proposal, by the ts of the message somebody reacted to. Handing over an id to
+   * re-resolve would reopen the window in which a newer paste replaces the open row, and this
+   * function would then commit values that were never on screen. Taking the object makes that
+   * impossible rather than unlikely.
+   */
+  proposal: OpenProposal;
   confirmedBy: string;
 }): Promise<{ ok: true; lines: string[] } | { ok: false; error: string }> {
-  const p = await openProposalFor(args.clientId);
-  if (!p) {
-    return {
-      ok: false,
-      error: "there is no open proposal for this client. Paste the research again to make one.",
-    };
-  }
+  const p = args.proposal;
 
   const committed = await commitValues({
     clientId: p.clientId,
@@ -215,10 +328,15 @@ export async function confirmProposal(args: {
   });
   if (!committed.ok) return { ok: false, error: committed.error };
 
+  // ‼️ .eq("status", "open") IS THE SECOND HALF OF THE RACE FIX. Two reactions arriving together
+  // would otherwise both commit and both stamp the row. The values are written by then either way,
+  // but only one press can move the row out of `open`, so the second sees zero rows updated rather
+  // than silently agreeing that it was the one that did it.
   await supabaseAdmin
     .from("client_field_proposals")
     .update({ status: "committed", decided_at: new Date().toISOString(), decided_by: args.confirmedBy })
-    .eq("id", p.id);
+    .eq("id", p.id)
+    .eq("status", "open");
 
   const lines = [
     `:white_check_mark: Saved ${committed.written} value${committed.written === 1 ? "" : "s"}` +
@@ -235,27 +353,11 @@ export async function confirmProposal(args: {
   // ‼️ FROM THE PROPOSAL ROW, NOT FROM THE CALLER. The citations were read out of the same paste
   // that produced the values and were shown on the same card. Taking them from an argument would
   // let a confirm file evidence from a different document than the one that was approved.
-  const cites = p.citations.filter((c) => c.sourceUrl?.trim() && c.content?.trim());
-  const dropped = p.citations.length - cites.length;
+  const { rows, dropped } = evidenceRowsFor(p, args.confirmedBy);
 
   let filed = 0;
-  for (const c of cites) {
-    const res = await recordSource({
-      clientId: p.clientId,
-      // ‼️ page_id NULL: the client library pool, not one page. The research backs whichever page
-      // ends up making the claim, and pinning it to one would hide it from the other nineteen.
-      pageId: null,
-      // ‼️ EXTERNAL_RESEARCH, NOT CUSTOMER_REVIEW OR CLIENT_VOICE. isFirstParty() deliberately
-      // excludes this type and that must not be "fixed": research about the buyer is evidence, and
-      // it is not the business's own voice. What changes is that no_evidence, unsupported and
-      // experience_claims can finally SEE it. A real customer quote with a URL is CUSTOMER_REVIEW
-      // and comes in through the page studio's `review` command instead.
-      sourceType: "EXTERNAL_RESEARCH",
-      sourceContent: c.content.trim(),
-      sourceUrl: c.sourceUrl.trim(),
-      collectedVia: "board",
-      collectedBy: args.confirmedBy,
-    });
+  for (const row of rows) {
+    const res = await recordSource(row);
     if (res.ok) filed++;
   }
 

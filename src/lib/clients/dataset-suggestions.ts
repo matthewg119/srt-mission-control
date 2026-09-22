@@ -31,7 +31,18 @@ export interface DatasetProposal {
   label: string;
   dataset: "avatar" | "audience" | "offer";
   basis: string;
-  observedCount: number;
+  /**
+   * ‼️ WHICH CLIENT THIS ARGUMENT IS ABOUT, OR NULL FOR "A VERTICAL AND A SHAPE".
+   *
+   * Required rather than optional on purpose. The corpus scan's observation is about a shape in a
+   * vertical and must stay null; the research extraction's is about ONE client's report and must
+   * carry an id. Both are legal (the column is nullable and exists for exactly this), and writing
+   * one as the other is the failure: a per-client reading filed as null reads on the card as if
+   * the whole vertical had been measured. Making the field required means the compiler asks every
+   * construction site which one it is, instead of letting a default decide.
+   */
+  clientId: string | null;
+  observedCount: number | null;
   verticalSlug: string | null;
   postFormat: string;
 }
@@ -91,6 +102,10 @@ export function proposalsFromShape(
       dataset: "avatar" as const,
       basis: `page_dataset: ${m.count} of ${shape.pages} ${spec?.label.toLowerCase() ?? shape.postFormat} page(s) in ${verticalSlug ?? "this vertical"} recorded format_dataset.missing.${m.field}`,
       observedCount: m.count,
+      // ‼️ NULL, EXPLICITLY. This observation counted pages across a vertical, not one client's
+      // report, and the header above is the doctrine: a per-client measurement must never be
+      // written into a shared argument.
+      clientId: null,
       verticalSlug,
       postFormat: shape.postFormat,
     }));
@@ -115,7 +130,7 @@ export async function recordProposals(proposals: DatasetProposal[]): Promise<{ f
       dataset: p.dataset,
       basis: p.basis,
       observed_count: p.observedCount,
-      client_id: null,
+      client_id: p.clientId,
       vertical_slug: p.verticalSlug,
       post_format: p.postFormat,
     });
@@ -223,7 +238,7 @@ export async function runWeeklyCorpusScan(opts?: {
 export async function openProposals(limit = 5): Promise<DatasetProposal[]> {
   const { data, error } = await supabaseAdmin
     .from("dataset_suggestions")
-    .select("proposed_key, label, dataset, basis, observed_count, vertical_slug, post_format")
+    .select("proposed_key, label, dataset, basis, client_id, observed_count, vertical_slug, post_format")
     .eq("status", "open")
     .order("created_at", { ascending: false })
     .limit(limit);
@@ -238,7 +253,11 @@ export async function openProposals(limit = 5): Promise<DatasetProposal[]> {
     label: String(r.label),
     dataset: r.dataset as DatasetProposal["dataset"],
     basis: String(r.basis),
-    observedCount: Number(r.observed_count ?? 0),
+    clientId: (r.client_id as string | null) ?? null,
+    // ‼️ NULL STAYS NULL RATHER THAN BECOMING ZERO. A research-derived suggestion counted nothing,
+    // which is not the same as having counted none, and a card reading "0 of 0 pages" would be an
+    // invented measurement in a table whose whole point is that a claim names what it counted.
+    observedCount: r.observed_count === null || r.observed_count === undefined ? null : Number(r.observed_count),
     verticalSlug: (r.vertical_slug as string | null) ?? null,
     postFormat: String(r.post_format ?? ""),
   }));

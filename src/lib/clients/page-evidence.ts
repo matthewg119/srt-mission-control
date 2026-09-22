@@ -432,7 +432,27 @@ export async function loadEvidenceFor(
     return [];
   }
 
-  const all = (data ?? []).map((r) => toSource(r as unknown as Record<string, unknown>));
+  return evidenceForPage(
+    (data ?? []).map((r) => toSource(r as unknown as Record<string, unknown>)),
+    pageId
+  );
+}
+
+/**
+ * Which of a client's sources this page may be written from.
+ *
+ * ‼️ PURE, AND IT IS WHAT MAKES ONE RESEARCH ANSWER BACK TWENTY PAGES. A library row (page_id null)
+ * is returned for EVERY page, exactly once each: that is the whole reason W2b files research with a
+ * null page id instead of pinning it to whichever page happened to be open. A probe can drive this
+ * with three fixtures and prove both halves, which a comment cannot.
+ *
+ * Page-scoped first, because they are about the question actually being answered and the drafter
+ * numbers them in the order it receives them.
+ */
+export function evidenceForPage(
+  all: readonly PageSource[],
+  pageId: string | null
+): PageSource[] {
   const mine = pageId ? all.filter((s) => s.pageId === pageId) : [];
   const library = all.filter((s) => s.pageId === null);
   return [...mine, ...library];

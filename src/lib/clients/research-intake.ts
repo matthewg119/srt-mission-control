@@ -516,16 +516,26 @@ export async function afterResearchPaste(
     if (answered >= profile.FULL_RESEARCH_MIN_SECTIONS && primary?.audience) {
       try {
         const missing = primary.reports.flatMap((r) => r.gaps.map((g) => g.field.key));
-        if (missing.length) {
+        {
           const { extractFieldValues } = await import("./field-extraction");
           const { openProposal, openProposalFor, formatProposalCard } = await import("./field-proposal");
 
+          // ‼️ NO MISSING FIELDS IS NOT A REASON TO SKIP THE PASTE. This used to return early on
+          // `missing.length === 0`, and that re-introduced the exact bug W2b exists to fix, for the
+          // best-case client: somebody runs the research precisely to back the pages they are about
+          // to publish, pastes it, every dataset is already full, and NOTHING is filed as evidence.
+          // The gate then blocks those pages on `unsupported` while the report that answers them
+          // sits in audience_documents where the gate cannot see it. With no gaps the extraction
+          // still runs, `wanted` is empty so proposed/questions/unanswered come back empty by
+          // construction, and only the citations are populated. One model call either way.
           const found = await extractFieldValues({
             sections: profile.parseResearchSections(body),
             missingKeys: missing,
           });
 
-          if (found.proposed.length || found.questions.length) {
+          // A proposal worth opening is one with anything on it: values to confirm, questions to
+          // answer, OR cited claims to file. The third is what makes the complete-datasets case work.
+          if (found.proposed.length || found.questions.length || found.citations.length) {
             const { currentDocument } = await import("./audience-documents");
             const doc = await currentDocument({
               audienceId: primary.audience.id,
@@ -583,17 +593,38 @@ export async function afterResearchPaste(
                 // proposed_key means a second paste suggesting the same field is ignored rather
                 // than filed twice, so this can run on every paste without the card becoming a
                 // list of duplicates.
-                for (const g of found.suggestions) {
-                  const { error } = await supabaseAdmin.from("dataset_suggestions").insert({
-                    proposed_key: g.proposedKey,
-                    label: g.label,
-                    dataset: g.dataset,
-                    basis: g.basis,
-                    client_id: clientId,
-                  });
-                  if (!error) {
+                //
+                // ‼️ THROUGH recordProposals, NOT A DIRECT INSERT. That function owns the one
+                // thing a direct insert here got wrong: a 23505 is the EXPECTED outcome of a key
+                // somebody already argued for, and everything else is a real failure worth
+                // logging. Inserting inline swallowed both alike, so a broken column read as
+                // "nothing to suggest". clientId is set because this argument is about THIS
+                // client's report, unlike the Thursday corpus scan which is about a vertical.
+                if (found.suggestions.length) {
+                  const { recordProposals } = await import("./dataset-suggestions");
+                  const { filed, already } = await recordProposals(
+                    found.suggestions.map((g) => ({
+                      proposedKey: g.proposedKey,
+                      label: g.label,
+                      dataset: g.dataset,
+                      basis: g.basis,
+                      clientId,
+                      observedCount: null,
+                      verticalSlug: null,
+                      postFormat: "",
+                    }))
+                  );
+                  for (const g of found.suggestions.slice(0, filed)) {
                     lines.push(
                       `:bulb: Suggested a new field, *${g.label}* (\`${g.proposedKey}\`, ${g.dataset}): ${g.basis}`
+                    );
+                  }
+                  // Said out loud rather than silently dropped: an open suggestion for that key
+                  // already exists, so the card would otherwise just print fewer bulbs than the
+                  // research produced and nobody would know why.
+                  if (already) {
+                    lines.push(
+                      `:heavy_minus_sign: ${already} other field suggestion${already === 1 ? " was" : "s were"} already open from an earlier argument.`
                     );
                   }
                 }

@@ -17,9 +17,23 @@
 // version of that card where the right answer is obvious.
 //
 // ‼️ NOTHING HERE WRITES. It proposes. The only writer is commitValues(), behind a confirmation.
+//
+// ‼️ A RESEARCH REPORT DECLARES ITS OWN UNVERIFIED CLAIMS, AND THAT DECLARATION IS THE POINT.
+// Matthew's AI Referral Engine research ends with a numbered SIN VERIFICAR list, and his avatar
+// sheet marks items [INFERRED] and [UNVERIFIED] with the instruction that they must not be used as
+// fact. One of them is the 84 to 89 percent citation figure, which is currently live in SRT's own
+// copy. That is the same distinction the page gate blocks on: `unsupported` and `experience_claims`
+// refuse a claim no source carries, and a claim the research itself says it could not verify is
+// exactly that. So the research is telling us, in advance, which claims will block.
+//
+// An item marked unverified must therefore NEVER become a confirmed value and NEVER be filed as
+// EXTERNAL_RESEARCH evidence. It becomes a question, which is the same place low confidence goes,
+// for a different reason: low confidence is the model unsure of its reading, unverified is the
+// REPORT sure that it could not check. Both are an absence rather than a fact, and the whole of W0
+// turns on an absence and a guess being different things.
 
 import { callClaudeJSON } from "@/lib/claude-calls";
-import { DATASET_FIELDS, type DatasetKey } from "./dataset-spec";
+import { DATASET_FIELDS, type DatasetKey, type FieldSpec } from "./dataset-spec";
 import type { ProposedValue } from "./field-values";
 import type { ResearchSection } from "./avatar-profile";
 
@@ -94,6 +108,13 @@ RULES, and the third one is the one that matters most.
    source URL for. ‼️ Only ones with a real URL from the report. Never invent a URL, never attach
    one you think is probably right, and never list a claim the report asserted without citing. An
    unsourced assertion filed as a source turns an invention into a citation.
+6a. ‼️ RESPECT WHAT THE REPORT SAYS IT COULD NOT VERIFY. Reports mark their own weak claims:
+   a "SIN VERIFICAR" or "unverified" or "could not verify" list, or inline tags like [UNVERIFIED]
+   and [INFERRED]. If the report marks something that way, set "verified": false on any field you
+   drew from it and do NOT list it as a cited claim, even if a URL sits next to it. The report is
+   telling you in advance that this one does not hold up, and saving it anyway is how a figure
+   nobody checked ends up in published copy. When the report says nothing either way, set
+   "verified": true.
 7. Finally, if the report keeps returning to something important that none of the fields above
    covers, suggest it as a new field: a key, a label, which dataset it belongs to, and WHAT YOU
    COUNTED that justifies it. Suggest at most three, and only for things the report actually
@@ -125,7 +146,45 @@ interface RawItem {
   question?: unknown;
   because?: unknown;
   status?: unknown;
+  /** False when the report marks this claim as one it could not verify. See rule 6a. */
+  verified?: unknown;
 }
+
+/**
+ * Does this text carry the report's own "I could not check this" marker?
+ *
+ * ‼️ PURE, AND THE SECOND OF TWO GUARDS, NOT THE ONLY ONE. The model is asked to set
+ * `verified: false` (rule 6a), which is the guard that can see a claim listed under a SIN VERIFICAR
+ * heading three sections away from where it was stated. This one reads only the text in front of
+ * it, so it catches the inline tags the model may have copied through and missed. Neither is
+ * sufficient alone and both are cheap.
+ *
+ * ‼️ DELIBERATELY NOT A GENERAL HEDGE DETECTOR. It matches declarations a document makes ABOUT its
+ * own reliability, not ordinary uncertain prose. "Owners are probably price sensitive" is a
+ * research finding with a hedge in it and must stay a value; "[UNVERIFIED] owners are price
+ * sensitive" is the report refusing to stand behind it. Widening this to "probably", "may" or
+ * "appears" would turn most of a good report into questions and teach people to ignore the card.
+ *
+ * Spanish is here because the research that prompted this build is written in it.
+ */
+export function looksUnverified(text: string): boolean {
+  if (!text) return false;
+  return UNVERIFIED_MARKERS.some((re) => re.test(text));
+}
+
+const UNVERIFIED_MARKERS: readonly RegExp[] = [
+  // Bracketed or parenthesised tags: [UNVERIFIED], (INFERRED), [SIN VERIFICAR], [NO VERIFICADO].
+  /[[(]\s*(?:un)?verified\s*[\])]/i,
+  /[[(]\s*inferred\s*[\])]/i,
+  /[[(]\s*sin\s+verificar\s*[\])]/i,
+  /[[(]\s*no\s+verificad[oa]s?\s*[\])]/i,
+  // Bare headings and sentences, which is how a SIN VERIFICAR list names its own items.
+  /\bsin\s+verificar\b/i,
+  /\bno\s+verificad[oa]s?\b/i,
+  /\bcould\s+not\s+(?:be\s+)?verif(?:y|ied)\b/i,
+  /\b(?:un|not\s+)verified\b/i,
+  /\bunconfirmed\b/i,
+];
 
 interface RawSuggestion {
   proposed_key?: unknown;
@@ -151,7 +210,12 @@ export async function extractFieldValues(args: {
   missingKeys: readonly string[];
 }): Promise<ExtractionResult> {
   const wanted = DATASET_FIELDS.filter((f) => args.missingKeys.includes(f.key));
-  if (!wanted.length || !args.sections.length) {
+  // ‼️ AN EMPTY `wanted` IS A REAL CASE AND STILL RUNS, because the citations matter on their own.
+  // A client whose datasets are already full is precisely the one whose pages are ready to publish
+  // and therefore the one that most needs the research filed where the gate can read it. With no
+  // fields to fill the prompt reduces to rule 6, and proposed/questions/unanswered come back empty
+  // by construction rather than by a special case. Only a document with no sections is nothing.
+  if (!args.sections.length) {
     return { proposed: [], questions: [], unanswered: [], citations: [], suggestions: [] };
   }
 
@@ -209,7 +273,8 @@ export async function extractFieldValues(args: {
     temperature: 0,
     schemaHint:
       '{ "fields": [ { "field_key": "who_buys", "status": "answered", "value": "...", ' +
-      '"section": 1, "confidence": "high" }, { "field_key": "beliefs", "status": "unsure", ' +
+      '"section": 1, "confidence": "high", "verified": true }, ' +
+      '{ "field_key": "beliefs", "status": "unsure", ' +
       '"question": "...", "because": "..." }, { "field_key": "price", "status": "unanswered" } ], ' +
       '"citations": [ { "claim": "...", "source_url": "https://...", "section": 3 } ], ' +
       '"suggestions": [ { "proposed_key": "budget_band", "label": "what they can spend", ' +
@@ -220,13 +285,29 @@ export async function extractFieldValues(args: {
     timeoutMs: 180_000,
   });
 
+  return readExtraction(res.data, wanted);
+}
+
+/**
+ * Turn what the model returned into the three lists, refusing everything that must not be saved.
+ *
+ * ‼️ PURE, AND EXTRACTED SO THE PROBE CAN DRIVE IT. Every refusal that keeps the corpus clean lives
+ * in here: an unasked key, a low-confidence reading, an unverified claim, a citation with no URL, a
+ * suggestion for a field that already exists. A probe that asserts those by grepping this file for
+ * a string proves only that the string is present, and would pass just as happily if it sat in a
+ * comment. Same reason proposalsFromShape and splitTaggedResearch are pure.
+ */
+export function readExtraction(
+  raw: { fields: RawItem[]; citations?: RawCite[]; suggestions?: RawSuggestion[] },
+  wanted: readonly FieldSpec[]
+): ExtractionResult {
   const byKey = new Map(wanted.map((f) => [f.key, f]));
   const proposed: ProposedValue[] = [];
   const questions: FieldQuestion[] = [];
   const unanswered: string[] = [];
   const seen = new Set<string>();
 
-  for (const item of res.data.fields) {
+  for (const item of raw.fields) {
     const key = typeof item.field_key === "string" ? item.field_key.trim() : "";
     const spec = byKey.get(key);
     // ‼️ A KEY WE DID NOT ASK FOR IS DROPPED, NOT STORED. The model can invent a field name as
@@ -241,6 +322,27 @@ export async function extractFieldValues(args: {
 
     if (status === "unanswered" || (!value && status !== "unsure")) {
       unanswered.push(key);
+      continue;
+    }
+
+    // ‼️ THE REPORT SAID IT COULD NOT VERIFY THIS, SO IT IS A QUESTION AND NOT A VALUE. Checked
+    // separately from confidence because it is a different fact: low confidence is the model unsure
+    // of its reading, unverified is the report certain it could not check. A model can be perfectly
+    // confident about what an [UNVERIFIED] line says, and that confidence is about the reading, not
+    // about the claim. The `because` names the report rather than the model, so the person reading
+    // the card knows the research already flagged it and can go and settle it.
+    const unverified = item.verified === false || looksUnverified(value);
+    if (unverified && status !== "unanswered") {
+      questions.push({
+        fieldKey: key,
+        dataset: spec.dataset,
+        question:
+          typeof item.question === "string" && item.question.trim()
+            ? item.question.trim()
+            : `What should ${spec.label} be? The report gave an answer it could not verify.`,
+        because:
+          "the report marks this as something it could not verify, so it is not saved as a fact",
+      });
       continue;
     }
 
@@ -282,11 +384,19 @@ export async function extractFieldValues(args: {
   // ‼️ NO URL, NOT A CITATION. Dropped here rather than filtered at filing time, so the count on
   // the card is the count of things that could actually be filed. recordSource would happily store
   // a null source_url and the gate would then be reading an unsourced assertion as evidence.
+  //
+  // ‼️ AND AN UNVERIFIED CLAIM IS NOT EVIDENCE EITHER, URL OR NO URL. This is the half that would
+  // be easy to miss: a claim can carry a perfectly real source URL and still sit on the report's
+  // own SIN VERIFICAR list, because the URL is where the figure was seen rather than proof that it
+  // holds. Filing it as EXTERNAL_RESEARCH would hand the page gate a source for exactly the claim
+  // the research was warning about, and the gate would then pass the 84 to 89 percent figure on
+  // the strength of the document that said it could not be verified.
   const citations: ResearchCitation[] = [];
-  for (const c of res.data.citations ?? []) {
+  for (const c of raw.citations ?? []) {
     const content = typeof c.claim === "string" ? c.claim.trim() : "";
     const url = typeof c.source_url === "string" ? c.source_url.trim() : "";
     if (!content || !/^https?:\/\//i.test(url)) continue;
+    if (looksUnverified(content)) continue;
     const n = Number(c.section);
     citations.push({ content, sourceUrl: url, section: Number.isFinite(n) && n > 0 ? n : null });
   }
@@ -294,7 +404,7 @@ export async function extractFieldValues(args: {
   const DATASETS: readonly DatasetKey[] = ["avatar", "audience", "offer"];
   const declared = new Set(DATASET_FIELDS.map((f) => f.key));
   const suggestions: FieldSuggestion[] = [];
-  for (const g of (res.data.suggestions ?? []).slice(0, 3)) {
+  for (const g of (raw.suggestions ?? []).slice(0, 3)) {
     const key = typeof g.proposed_key === "string" ? g.proposed_key.trim().toLowerCase() : "";
     const label = typeof g.label === "string" ? g.label.trim() : "";
     const basis = typeof g.basis === "string" ? g.basis.trim() : "";

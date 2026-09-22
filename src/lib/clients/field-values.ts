@@ -88,9 +88,39 @@ export async function liveValues(clientId: string): Promise<FieldValue[]> {
   return (data ?? []).map((r) => toValue(r as unknown as Record<string, unknown>));
 }
 
-/** Just the keys, which is what `DatasetSnapshot.fieldValues` and `evaluateDatasets` want. */
-export async function liveValueKeys(clientId: string): Promise<string[]> {
-  return (await liveValues(clientId)).map((v) => v.fieldKey);
+/**
+ * Why this set of values must not be written, or null if it may be.
+ *
+ * ‼️ PURE, AND EXTRACTED SO THE PROBE CAN FAIL IT RATHER THAN GREP FOR IT. These two refusals are
+ * the last guard before the one write in this system that can poison every page a client ever
+ * publishes. A probe that checks this file contains the string `confidence === "low"` proves the
+ * string is present, not that an undeclared key or a guess is actually turned away.
+ *
+ * Returns the message the caller shows, so the two refusals read the same wherever they fire.
+ */
+export function refuseValues(values: readonly ProposedValue[]): string | null {
+  const known = new Map(DATASET_FIELDS.map((f) => [f.key, f.dataset]));
+  const unknown = values.filter((v) => !known.has(v.fieldKey));
+  if (unknown.length) {
+    return (
+      "these are not declared fields, so nothing was written: " +
+      unknown.map((v) => "`" + v.fieldKey + "`").join(", ") +
+      ". Declare them in src/lib/clients/dataset-spec.ts, or file them through dataset_suggestions."
+    );
+  }
+
+  // ‼️ LOW CONFIDENCE NEVER REACHES THIS FUNCTION, AND IT IS REFUSED HERE TOO. The card is supposed
+  // to have turned those into questions. A second guard costs nothing and this is the one write in
+  // the system that can poison every page a client ever publishes.
+  const guessed = values.filter((v) => v.confidence === "low");
+  if (guessed.length) {
+    return (
+      "these came back low confidence and must be answered rather than saved: " +
+      guessed.map((v) => "`" + v.fieldKey + "`").join(", ")
+    );
+  }
+
+  return null;
 }
 
 /**
@@ -111,32 +141,14 @@ export async function commitValues(args: {
   sourceDocumentId: string | null;
   confirmedBy: string;
 }): Promise<{ ok: true; written: number; superseded: number } | { ok: false; error: string }> {
-  const known = new Map(DATASET_FIELDS.map((f) => [f.key, f.dataset]));
-  const unknown = args.values.filter((v) => !known.has(v.fieldKey));
-  if (unknown.length) {
-    return {
-      ok: false,
-      error:
-        "these are not declared fields, so nothing was written: " +
-        unknown.map((v) => "`" + v.fieldKey + "`").join(", ") +
-        ". Declare them in src/lib/clients/dataset-spec.ts, or file them through dataset_suggestions.",
-    };
-  }
-
-  // ‼️ LOW CONFIDENCE NEVER REACHES THIS FUNCTION, AND IT IS REFUSED HERE TOO. The card is supposed
-  // to have turned those into questions. A second guard costs nothing and this is the one write in
-  // the system that can poison every page a client ever publishes.
-  const guessed = args.values.filter((v) => v.confidence === "low");
-  if (guessed.length) {
-    return {
-      ok: false,
-      error:
-        "these came back low confidence and must be answered rather than saved: " +
-        guessed.map((v) => "`" + v.fieldKey + "`").join(", "),
-    };
-  }
+  const refused = refuseValues(args.values);
+  if (refused) return { ok: false, error: refused };
 
   if (!args.values.length) return { ok: true, written: 0, superseded: 0 };
+
+  // The dataset each field belongs to, from the registry rather than from whatever the caller
+  // thought. refuseValues has already established that every key is in here.
+  const known = new Map(DATASET_FIELDS.map((f) => [f.key, f.dataset]));
 
   // ‼️ THROUGH AN RPC, BECAUSE A CONFIRMATION IS TWO STATEMENTS AND MUST BE ONE TRANSACTION.
   // `client_field_values_live_idx` is unique over the live rows, so replacing a value means

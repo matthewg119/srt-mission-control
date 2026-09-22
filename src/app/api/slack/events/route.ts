@@ -3089,9 +3089,23 @@ async function handleFieldProposalReaction(args: {
     return true;
   }
 
-  const { confirmProposal } = await import("@/lib/clients/field-proposal");
+  // ‼️ BY ID, NOT BY CLIENT. The row above is the proposal this reaction is actually on, found by
+  // the ts of the message somebody reacted to. Handing the client id onward and letting the
+  // confirm look the open proposal up again would let a paste arriving in between swap it, and the
+  // confirm would then save values that were never on the card that was pressed.
+  const { confirmProposal, proposalById } = await import("@/lib/clients/field-proposal");
+  const proposal = await proposalById(String(row.id));
+  if (!proposal) {
+    await slack.postThreadReply(
+      args.channel,
+      args.slackTs,
+      ":warning: Nothing was saved: that proposal could not be read back."
+    );
+    return true;
+  }
+
   const res = await confirmProposal({
-    clientId: String(row.client_id),
+    proposal,
     // The Slack user id, which is what every other gate in this codebase records as a person.
     confirmedBy: args.userId,
   });
