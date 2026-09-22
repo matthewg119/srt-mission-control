@@ -224,13 +224,18 @@ export function wrapLine(line: string, limit: number): string[] {
   if (line.length <= limit || limit <= WRAP_INDENT.length) return [line];
   const out: string[] = [];
   let rest = line;
-  let width = limit;
-  while (rest.length > width) {
-    let cut = rest.lastIndexOf(" ", width);
-    if (cut <= 0) cut = width;
+  while (rest.length > limit) {
+    // ‼️ THE CUT MUST BE PAST THE INDENT OR THIS LOOP DOES NOT TERMINATE, and the failing input is
+    // an ordinary one: a bullet whose label is followed by one very long unbroken value. The next
+    // line begins with WRAP_INDENT, so a cut at or before its width puts back as many characters as
+    // it removed and `rest` stops shrinking. Measured: a 5,000 character value spun until the
+    // process died at 10GB. Falling back to a hard cut at the limit costs a word break in the one
+    // case where there is no whitespace to break on, and guarantees every pass removes at least
+    // one character.
+    let cut = rest.lastIndexOf(" ", limit);
+    if (cut <= WRAP_INDENT.length) cut = limit;
     out.push(rest.slice(0, cut));
     rest = WRAP_INDENT + rest.slice(cut).trimStart();
-    width = limit;
   }
   if (rest.trim()) out.push(rest);
   return out;
