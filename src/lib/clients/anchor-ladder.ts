@@ -510,7 +510,14 @@ export async function proposeWhenPicked(clientId: string): Promise<string | null
 
 const LADDER = /^ladder$/i;
 const PILLAR = /^pillar\s*:\s*(auto|#?\d{1,4})$/i;
-const SUPPORTS = /^supports\s*:\s*(auto|[#\d,\s]+)$/i;
+/**
+ * ‼️ THE COLON IS OPTIONAL, FOR THE REASON THE RUNG DOCSTRING BELOW GIVES. Measured 2026-09-22:
+ * this step's card says "`supports auto` takes the top six" and the ladder this file renders says
+ * `supports auto` too, while the regex demanded `supports: auto`. Somebody typing the words off the
+ * card matched nothing, fell through to the assistant and got an essay, which is `anchor at 4`
+ * happening a second time. The card is not wrong; the grammar was too narrow.
+ */
+const SUPPORTS = /^supports\s*(?::\s*|\s+)(auto|[#\d,\s]+)$/i;
 
 /**
  * Every way a person has actually tried to anchor a rung.
