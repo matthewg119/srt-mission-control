@@ -1704,6 +1704,22 @@ async function draft(session: Session): Promise<void> {
     return;
   }
 
+  // ‼️ THE AVATAR, THE OFFER AND THE FOUR DOCUMENTS, BEFORE A SINGLE TOKEN IS SPENT. This is the
+  // only command in the studio that is gated, and it is gated because it is the only one that
+  // invents: `ask`, `add:`, `replace:` and dictation all write down something a person said, which
+  // is never worth blocking. Checked before the evidence read below, because "you have no offer"
+  // is a more useful answer than "there is nothing on file for this page" when both are true.
+  const { draftReadiness, refusalLines } = await import("./draft-gate");
+  const ready = await draftReadiness(session.clientId);
+  if (!ready.ok) {
+    await say(session.threadTs, `:warning: Could not check what this client has: ${ready.error}`);
+    return;
+  }
+  if (ready.missing.length) {
+    await say(session.threadTs, refusalLines(ready.missing).join("\n"));
+    return;
+  }
+
   const { data: page } = await supabaseAdmin
     .from("client_pages")
     .select("question, slug, lead_magnet_key")
