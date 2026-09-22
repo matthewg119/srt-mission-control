@@ -1050,7 +1050,26 @@ export async function POST(request: NextRequest) {
         // ‼️ ABOVE pastedListPointer, WHICH WOULD SWALLOW A BELIEFS LIST: six short "I believe that" lines
         // under a `beliefs:` line match its shape, and it answers "nothing was saved". And above the
         // assistant, because a pasted avatar sheet answered as a chat message is a sheet lost.
-        if (client && parentThreadTs && client.stepKey === "avatar_harvest" && userText.trim().length > 0) {
+        // ‼️ AND IT STANDS DOWN FOR A PREFIX TYPED WITH A FILE, WHICH IT USED TO SWALLOW.
+        // `readFrameworkPaste("avatar sheet:")` returns a kind with an EMPTY body rather than null,
+        // so a bare prefix sent with the document attached was claimed here, parsed as an empty
+        // paste, and answered ":warning: Not stored". storeFrameworkFile's "or the prefix typed
+        // with it" branch (framework-thread.ts:419-421) was therefore unreachable, and step 11 only
+        // ever accepted a file dropped with NO message text, which is not what its own card says:
+        // "each as its own message (or a file with the prefix on its first line)".
+        //
+        // Letting it fall through sends the message to captureOnboardingUploads at :1489, which is
+        // where step 11's files are already read properly.
+        const framePrefixOnly =
+          attachedFiles.length > 0 && /^\s*(avatar\s+sheet|short\s+offer|beliefs)\s*:\s*$/i.test(userText.trim());
+
+        if (
+          client &&
+          parentThreadTs &&
+          client.stepKey === "avatar_harvest" &&
+          userText.trim().length > 0 &&
+          !framePrefixOnly
+        ) {
           const { handleFrameworkThreadReply } = await import("@/lib/clients/framework-thread");
           const framed = await handleFrameworkThreadReply({
             clientId: client.id,
@@ -1142,11 +1161,37 @@ export async function POST(request: NextRequest) {
         // never read as anything else; the offer handler already returns null for it either way.
         if (client && parentThreadTs && userText.trim().length > 0) {
           const { handleLetterThreadReply } = await import("@/lib/clients/sales-letter");
+
+          // ‼️ THE FILE IS READ HERE, BECAUSE THIS BRANCH RETURNS BEFORE THE UPLOAD CAPTURE. A
+          // sales letter is longer than a Slack message, so `letter replace:` arrives with the
+          // letter attached and no text under it. captureOnboardingUploads at :1489 is where files
+          // get their text extracted, and it is never reached from here; it has no `offer_locked`
+          // branch in any case. Only read for `letter replace:`, so a stray screenshot on a
+          // `letter draft` costs nothing.
+          let attachedText: string | null = null;
+          if (attachedFiles.length && /^\s*letter\s+replace\s*:/i.test(userText)) {
+            const { extractFileText } = await import("@/lib/deck/extract");
+            for (const f of attachedFiles) {
+              const url = f.url_private_download ?? f.url_private;
+              if (!url) continue;
+              try {
+                const buf = await slack.downloadFile(url);
+                const text = await extractFileText(buf, f.name ?? "", f.mimetype ?? "");
+                if (text && text.trim().length > (attachedText?.length ?? 0)) attachedText = text;
+              } catch (e) {
+                // downloadFile is the one Slack helper that throws. A failed read must not take
+                // the message down: the refusal below says what was found, which is nothing.
+                console.error("[slack/events] letter attachment read failed:", (e as Error).message);
+              }
+            }
+          }
+
           const lettered = await handleLetterThreadReply({
             clientId: client.id,
             stepKey: client.stepKey,
             text: userText,
             by: event.user ? `<@${event.user as string}>` : "someone in Slack",
+            attachedText,
           });
           if (lettered) {
             const posted = await slack.postThreadReply(channel, parentThreadTs, lettered.message);

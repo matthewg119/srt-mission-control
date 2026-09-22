@@ -3595,6 +3595,27 @@ import * as visionT from "../src/lib/hub/skin-vision";
   eq("and a message not starting with letter is not a command", letter("we should draft a letter").kind, "none");
   ok("a one-line command with more under it is refused", letter("letter draft\noffer: yes").kind === "refused");
 
+  // ‼️ THE ATTACHMENT. Measured 2026-09-22: `letter replace:` with a .md attached refused with
+  // "that was too short to be one", the file was never read, and the deadlock was total, because
+  // faults block approval only for a letter WE drafted. The pasted one that would have been
+  // approvable could not get in.
+  const LONG = "x".repeat(300);
+  eq("a letter attached to letter replace: is the letter", letter("letter replace:", LONG), { kind: "replace", body: LONG });
+  ok("and with no file and nothing typed it still refuses, naming the file as an option",
+    /file attached to the same message/.test((letter("letter replace:") as { message: string }).message));
+
+  // Typed text wins, so a stray file cannot silently replace what was actually read and approved.
+  const TYPED = "y".repeat(300);
+  eq("typed text beats an attachment", letter("letter replace:\n" + TYPED, LONG), { kind: "replace", body: TYPED });
+
+  // A scanned PDF extracts to nothing. Saying how little was found is the difference between
+  // "your letter is too short" and "there is no text in that file".
+  ok("an attachment with no readable text says so",
+    /no text in it to read/.test((letter("letter replace:", "tiny") as { message: string }).message));
+
+  // An attachment on any OTHER letter command is ignored, not silently treated as a letter.
+  eq("a file on letter draft is not a letter", letter("letter draft", LONG), { kind: "draft" });
+
   // ‼️ `letter replace:` CARRIES A DOCUMENT, and a letter is full of lines a command parser would grab.
   const pasted = "letter replace:\n## Stop Losing Patients To Guesswork\n" + "Real body text for the letter. ".repeat(10) + "\nPrice: $399\nTerms: financing\nOffer: 3 sessions";
   const read = letter(pasted);

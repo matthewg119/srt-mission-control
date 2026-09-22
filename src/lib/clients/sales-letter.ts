@@ -57,7 +57,7 @@ export type LetterCommand =
  * command that exists to take a document unable to take one. Every other letter command is one line, and a
  * second line refuses it.
  */
-export function readLetterCommand(text: string): LetterCommand {
+export function readLetterCommand(text: string, attachedText?: string | null): LetterCommand {
   const raw = text.replace(/^\s+/, "");
   const firstBreak = raw.search(/\r?\n/);
   const first = (firstBreak < 0 ? raw : raw.slice(0, firstBreak)).trim();
@@ -65,9 +65,27 @@ export function readLetterCommand(text: string): LetterCommand {
 
   const replace = /^letter\s+replace\s*:\s*/i.exec(first);
   if (replace) {
-    const body = stripWrappingFence((first.slice(replace[0].length) + (firstBreak < 0 ? "" : raw.slice(firstBreak))).trim());
+    const typed = stripWrappingFence((first.slice(replace[0].length) + (firstBreak < 0 ? "" : raw.slice(firstBreak))).trim());
+
+    // ‼️ THE FILE IS THE LETTER WHEN NOTHING WAS TYPED UNDER THE COMMAND. A real sales letter is
+    // longer than a Slack message, which is the whole reason this arrives as an attachment.
+    // Measured 2026-09-22: `letter replace:` with a .md attached refused with "that was too short
+    // to be one", the file was never read, and the deadlock that followed was total, because
+    // faults block approval ONLY for a letter we drafted. The pasted one that would have been
+    // approvable could not get in.
+    //
+    // Typed text wins when there is any, so a file dropped alongside a pasted letter cannot
+    // silently replace what was actually read and approved.
+    const body = typed.length >= 200 ? typed : stripWrappingFence((attachedText ?? "").trim());
     if (body.length < 200) {
-      return { kind: "refused", message: ":warning: Nothing saved. `letter replace:` needs the whole letter after it, and that was too short to be one." };
+      return {
+        kind: "refused",
+        message: attachedText
+          ? ":warning: Nothing saved. The attached file held " +
+            attachedText.trim().length +
+            " characters of text, and a letter needs at least 200. If it is a PDF of scanned pages there is no text in it to read."
+          : ":warning: Nothing saved. `letter replace:` needs the whole letter after it, or a file attached to the same message.",
+      };
     }
     return { kind: "replace", body };
   }
@@ -590,9 +608,19 @@ export async function handleLetterThreadReply(input: {
   stepKey: string | null;
   text: string;
   by: string;
+  /**
+   * Text extracted from a file attached to the same message, for `letter replace:`.
+   *
+   * ‼️ READ HERE RATHER THAN BY captureOnboardingUploads, AND THAT IS FORCED. This handler runs at
+   * route.ts:1143 and returns, well before the upload capture at :1489, so a file on a letter
+   * command never reaches it. The capture has no `offer_locked` branch anyway: it covers
+   * avatar_harvest, review_audit and presence_sweep_manual and then returns, which is why a file
+   * dropped in step 10's thread got no reply at all.
+   */
+  attachedText?: string | null;
 }): Promise<LetterReply | null> {
   if (input.stepKey !== "offer_locked") return null;
-  const cmd = readLetterCommand(input.text);
+  const cmd = readLetterCommand(input.text, input.attachedText);
   if (cmd.kind === "none") return null;
   if (cmd.kind === "refused") return { message: cmd.message };
 
