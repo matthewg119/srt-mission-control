@@ -180,19 +180,36 @@ interface Session {
   candidates: MenuItem[];
   mode: StudioMode;
   evidenceTopic: string | null;
+  /** Which buyer pages claimed in this thread are for. Null is "not picked", never "the primary". */
+  audienceId: string | null;
 }
 
+const SESSION_COLUMNS = "thread_ts, client_id, page_id, candidates, studio_mode, evidence_topic";
+
 async function readSession(threadTs: string): Promise<Session | null> {
-  const { data, error } = await supabaseAdmin
+  // ‼️ THE COLUMN IS `studio_mode`, NOT `mode`, AND THAT IS NOT A STYLE CHOICE.
+  // `mode` is a built-in ordered-set aggregate in Postgres, and a PostgREST select naming a
+  // bare `mode` resolves to the aggregate whenever the column is not there, failing with
+  // "WITHIN GROUP is required for ordered-set aggregate mode". That error names neither this
+  // table nor the missing column, and it would take down `readSession` for every thread.
+  let { data, error } = await supabaseAdmin
     .from("page_studio_sessions")
-    // ‼️ THE COLUMN IS `studio_mode`, NOT `mode`, AND THAT IS NOT A STYLE CHOICE.
-    // `mode` is a built-in ordered-set aggregate in Postgres, and a PostgREST select naming a
-    // bare `mode` resolves to the aggregate whenever the column is not there, failing with
-    // "WITHIN GROUP is required for ordered-set aggregate mode". That error names neither this
-    // table nor the missing column, and it would take down `readSession` for every thread.
-    .select("thread_ts, client_id, page_id, candidates, studio_mode, evidence_topic")
+    .select(`${SESSION_COLUMNS}, audience_id`)
     .eq("thread_ts", threadTs)
     .maybeSingle();
+
+  // ‼️ THE READ DEGRADES RATHER THAN DISAPPEARING, WHICH IS THE confirmedAvatarFor PRECEDENT.
+  // PostgREST fails the WHOLE select on one unknown column, and this select going down takes every
+  // thread in the channel with it. So deploying this file before
+  // docs/2026-09-24-audience-on-pages.sql has run costs the audience pick and nothing else. The
+  // migration still goes first; this is the net, not the plan.
+  if (error && /audience_id/.test(error.message)) {
+    ({ data, error } = await supabaseAdmin
+      .from("page_studio_sessions")
+      .select(SESSION_COLUMNS)
+      .eq("thread_ts", threadTs)
+      .maybeSingle());
+  }
 
   // ‼️ A READ FAILURE AND AN UNKNOWN THREAD ARE THE SAME RETURN VALUE AND VERY DIFFERENT EVENTS,
   // so the failure is logged rather than swallowed. The caller treats null as "not one of ours"
@@ -218,6 +235,8 @@ async function readSession(threadTs: string): Promise<Session | null> {
     // body is correct: everything this lane did before that migration was body mode.
     mode: ((data.studio_mode as string | null) ?? "body") === "evidence" ? "evidence" : "body",
     evidenceTopic: (data.evidence_topic as string | null) ?? null,
+    // Absent on the degraded read above, and on every row written before the migration.
+    audienceId: ((data as Record<string, unknown>).audience_id as string | null) ?? null,
   };
 }
 
@@ -562,9 +581,16 @@ async function claim(session: Session, n: number): Promise<void> {
     clientId: session.clientId,
     question: item.question,
     title: item.workingTitle ?? null,
+    // The buyer picked in this thread. Null lets startPageDraft decide: one audience resolves
+    // itself, several is a refusal that names them, and the message below tells you the command.
+    audienceId: session.audienceId,
   });
   if (!opened.ok) {
-    await say(session.threadTs, `:warning: ${opened.error}`);
+    await say(
+      session.threadTs,
+      `:warning: ${opened.error}` +
+        (/audiences and nothing said which one/.test(opened.error) ? "\n`audience` lists them and picks one for this thread." : "")
+    );
     return;
   }
 
@@ -1205,7 +1231,7 @@ async function skeletonCommand(session: Session, page: number | null): Promise<v
     `Writing ${targets.length} skeleton${targets.length === 1 ? "" : "s"}. This takes a moment.`
   );
 
-  const res = await writeSkeletonsFor(session.clientId, targets);
+  const res = await writeSkeletonsFor(session.clientId, targets, session.audienceId);
   for (const f of res.failures) await say(session.threadTs, `:warning: ${f}`);
 
   const after = await readBatch(session.clientId);
@@ -2765,6 +2791,143 @@ async function avatarCommand(session: Session, arg: string): Promise<void> {
   ].join("\n"));
 }
 
+/**
+ * `audience`, `audience: <slug>`, `audience borrow <slug>` in a studio thread.
+ *
+ * ‼️ THIS IS NOT `avatar:`, AND CONFLATING THEM WOULD UNDO THE SEPARATION IT EXISTS FOR.
+ * `avatar:` CONFIRMS the client's primary buyer: it writes clients.primary_avatar_slug and
+ * re-aims everything. This one says which of the client's EXISTING audiences the pages claimed in
+ * THIS THREAD are for, and it changes nothing outside the thread. One is client state, the other
+ * is the pick a page is written under.
+ *
+ * ‼️ BORROWING ADDS AN OPTION AND NEVER PROMOTES. See borrowAvatar: the research is shared by
+ * (vertical, avatar_slug) and follows the new row automatically, so nothing is copied but the
+ * vocabulary, and the client's primary audience is untouched.
+ */
+async function audienceCommand(session: Session, arg: string): Promise<void> {
+  const { audiencesFor, avatarLibrary, borrowAvatar, audienceById } = await import("./audiences");
+  const body = arg.trim();
+
+  const setThreadAudience = async (id: string): Promise<boolean> => {
+    const { error } = await supabaseAdmin
+      .from("page_studio_sessions")
+      .update({ audience_id: id, updated_at: new Date().toISOString() })
+      .eq("thread_ts", session.threadTs);
+    if (error) {
+      console.error("[page-studio] audience pick write failed:", error.message);
+      await say(
+        session.threadTs,
+        `:warning: That audience was not stored on this thread (${error.message}). ` +
+          "If that names `audience_id`, docs/2026-09-24-audience-on-pages.sql has not been run on this database."
+      );
+      return false;
+    }
+    return true;
+  };
+
+  // ── Borrow ────────────────────────────────────────────────────────────────
+  const borrow = /^borrow\s+(.+)$/i.exec(body);
+  if (borrow) {
+    const slug = borrow[1].trim().toLowerCase();
+    const mine = await audiencesFor(session.clientId);
+    const vertical = mine[0]?.researchVertical ?? null;
+    const library = await avatarLibrary({ clientId: session.clientId, vertical: null });
+    const hit = library.find((a) => a.avatarSlug === slug && (!vertical || a.vertical === vertical))
+      ?? library.find((a) => a.avatarSlug === slug);
+
+    if (!hit) {
+      await say(
+        session.threadTs,
+        `:warning: Nothing in the database aims at \`${slug}\` that this client does not already have. ` +
+          "`audience` lists what can be borrowed."
+      );
+      return;
+    }
+
+    const got = await borrowAvatar({ clientId: session.clientId, vertical: hit.vertical, avatarSlug: hit.avatarSlug, by: "someone in Slack" });
+    if (!got.ok || !got.audienceId) {
+      await say(session.threadTs, `:warning: Not borrowed: ${got.error}`);
+      return;
+    }
+    if (!(await setThreadAudience(got.audienceId))) return;
+
+    await say(session.threadTs, [
+      `:handshake: Borrowed *${hit.label}* as \`${hit.avatarSlug}\`, and this thread is now writing for it.`,
+      hit.phrases
+        ? `It comes with *${hit.phrases} phrases* already in the shared bank for \`${hit.vertical}\`, because ` +
+          "that bank is keyed on the vertical and the avatar rather than on a client."
+        : "The shared bank holds no phrases for it yet, so this brings the words a buyer is called and nothing else.",
+      "",
+      "‼️ *It is an option, not the primary.* Nothing else this client has was re-aimed. Its vocabulary was " +
+        "copied from another client's audience, so check it before a card tells this client what their own buyers are called.",
+      hit.hasResearch ? "`avatar: " + hit.label + "` would make it primary and pull the stored research in." : "",
+    ].filter(Boolean).join("\n"));
+    return;
+  }
+
+  // ── Pick ──────────────────────────────────────────────────────────────────
+  if (body) {
+    const mine = await audiencesFor(session.clientId);
+    const hit = mine.find((a) => a.slug === body.toLowerCase() || a.label.toLowerCase() === body.toLowerCase());
+    if (!hit) {
+      await say(
+        session.threadTs,
+        `:warning: This client has no audience called \`${body}\`. ` +
+          (mine.length ? `It has: ${mine.map((a) => `\`${a.slug}\``).join(", ")}.` : "It has none yet.") +
+          " `audience borrow <slug>` takes one from another client."
+      );
+      return;
+    }
+    if (!(await setThreadAudience(hit.id))) return;
+    await say(
+      session.threadTs,
+      `:dart: This thread is writing for *${hit.label}*${hit.isPrimary ? " (the primary audience)" : ""}. ` +
+        "Every page claimed here is filed against it."
+    );
+    return;
+  }
+
+  // ── List ──────────────────────────────────────────────────────────────────
+  const mine = await audiencesFor(session.clientId);
+  const current = session.audienceId ? await audienceById(session.audienceId) : null;
+  const vertical = mine[0]?.researchVertical ?? null;
+  const library = await avatarLibrary({ clientId: session.clientId, vertical });
+
+  const lines: string[] = [];
+  lines.push(
+    current?.ok
+      ? `This thread is writing for *${current.audience.label}*.`
+      : mine.length > 1
+        ? ":warning: *No audience picked for this thread*, and this client has more than one. A page claimed now is refused rather than aimed at a guess."
+        : "*This client's audiences*"
+  );
+
+  if (mine.length) {
+    lines.push("", ...mine.map((a) =>
+      `\`audience: ${a.slug}\`  ${a.label}${a.isPrimary ? "  _(primary)_" : ""}` +
+      (a.vocabularySource === "borrowed" ? "  _(borrowed words)_" : "")
+    ));
+  } else {
+    lines.push("", "_None yet. Confirm an avatar first with `avatar: <who buys it>`._");
+  }
+
+  if (library.length) {
+    lines.push(
+      "",
+      `*Borrow one from the database* ${vertical ? `(\`${vertical}\`)` : ""}:`,
+      ...library.slice(0, 8).map((a) =>
+        `\`audience borrow ${a.avatarSlug}\`  ${a.label}  _${a.phrases} phrases` +
+        `${a.hasResearch ? ", research on file" : ""}, used by ${a.otherClients} other client${a.otherClients === 1 ? "" : "s"}_`
+      ),
+      "",
+      "_Borrowing adds an option and re-aims nothing. The research is shared by vertical and avatar, " +
+        "so it follows the borrowed row without being copied._"
+    );
+  }
+
+  await say(session.threadTs, lines.join("\n"));
+}
+
 /** `keywords` in a studio thread. The 99, ranked, aimed at whatever offer is set. */
 async function keywordsCommand(session: Session): Promise<void> {
   const { buildKeywordSet, formatKeywordSet } = await import("./keyword-set");
@@ -2896,6 +3059,15 @@ export async function handlePageStudioEvent(args: {
   const avatarCmd = /^avatar(?:\s*:\s*(.+)|\s+(new\s+.+))?$/i.exec(command);
   if (avatarCmd) {
     await avatarCommand(session, avatarCmd[1] ?? avatarCmd[2] ?? "");
+    return true;
+  }
+
+  // Same exactness rule and the same shape as `avatar` above, for the same reason: "audience
+  // research is thin" must reach the page as dictation, not capture "research is thin". A colon
+  // for the argument, `borrow` as the one named keyword.
+  const audienceCmd = /^audience(?:\s*:\s*(.+)|\s+(borrow\s+.+))?$/i.exec(command);
+  if (audienceCmd) {
+    await audienceCommand(session, audienceCmd[1] ?? audienceCmd[2] ?? "");
     return true;
   }
 

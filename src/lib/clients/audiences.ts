@@ -51,7 +51,13 @@ export interface ResolvedAudience {
   researchAvatarSlug: string | null;
 
   vocabulary: AudienceVocabulary;
-  vocabularySource: "preset" | "legacy_default" | "typed" | null;
+  /**
+   * Where the six nouns came from. ‼️ 'borrowed' is the weakest of the four and is kept distinct
+   * from 'preset' on purpose: those words were copied off ANOTHER client's audience for the same
+   * avatar slug, so it is the one a person should check before a card tells this client what their
+   * own buyers are called.
+   */
+  vocabularySource: "preset" | "legacy_default" | "typed" | "borrowed" | null;
   vocabularyConfirmedAt: string | null;
 
   laneName: string | null;
@@ -312,6 +318,265 @@ export async function seedClientAudience(args: {
 
   if (error) return { ok: false, error: error.message };
   return { ok: true, audienceId: data.id as string };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Borrowing an avatar that some other client already aims at
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * One avatar this client could borrow, as the library knows it.
+ *
+ * ‼️ THE LIBRARY IS (vertical, avatar_slug) AND IT IS NOT A NEW TABLE. question_bank and
+ * avatar_briefs are keyed that way with NO client_id, on purpose: "the whole value is that the
+ * second med spa aiming at laser hair removal gets the first one's research". So borrowing is not
+ * moving rows anywhere. It is one client_audiences row carrying that slug, after which the shared
+ * research follows BY KEY, and audience_documents stay per client because they key on audience_id.
+ */
+export interface LibraryAvatar {
+  vertical: string;
+  avatarSlug: string;
+  label: string;
+  stance: Audience;
+  /** The row its vocabulary would be copied from. See borrowAvatar for why a copy is needed. */
+  sourceAudienceId: string;
+  /** How many OTHER clients already aim at this avatar. */
+  otherClients: number;
+  /** Whether the shared bank actually holds research, which is most of why borrowing is worth it. */
+  hasResearch: boolean;
+  phrases: number;
+}
+
+/**
+ * Every avatar in the database this client does not already have, newest evidence first.
+ *
+ * ‼️ IT EXCLUDES WHAT THE CLIENT ALREADY HAS, rather than listing it and letting the borrow fail.
+ * client_audiences_client_slug is unique on (client_id, slug), so an already-held avatar cannot be
+ * borrowed twice and offering it would be offering an action that can only error.
+ *
+ * `vertical` narrows to the client's own vertical, which is the sane default: an avatar from
+ * another vertical shares no question_bank rows with this client, so borrowing it brings nothing
+ * but its vocabulary. Passing null searches everything, which is the "select from the database"
+ * case and is deliberately available.
+ */
+export async function avatarLibrary(args: {
+  clientId: string;
+  vertical?: string | null;
+}): Promise<LibraryAvatar[]> {
+  const { data: mine } = await supabaseAdmin
+    .from("client_audiences")
+    .select("slug")
+    .eq("client_id", args.clientId);
+  const held = new Set((mine ?? []).map((r) => String((r as Row).slug ?? "")));
+
+  let q = supabaseAdmin
+    .from("client_audiences")
+    .select(COLUMNS)
+    .neq("client_id", args.clientId)
+    .not("research_avatar_slug", "is", null);
+  if (args.vertical) q = q.eq("research_vertical", args.vertical);
+
+  const { data, error } = await q;
+  if (error || !data) return [];
+
+  // One entry per (vertical, slug). Several clients can aim at the same avatar, and the first
+  // RESOLVABLE row is the one whose vocabulary would be copied: resolve() refuses a row missing
+  // any of the six nouns, and copying from a refused row would produce a second refused row.
+  const byKey = new Map<string, LibraryAvatar>();
+  for (const row of data as unknown as Row[]) {
+    const r = resolve(row);
+    if (!r.ok) continue;
+    const a = r.audience;
+    const slug = a.researchAvatarSlug;
+    if (!slug || held.has(slug)) continue;
+
+    const key = `${a.researchVertical}::${slug}`;
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.otherClients += 1;
+      continue;
+    }
+    byKey.set(key, {
+      vertical: a.researchVertical,
+      avatarSlug: slug,
+      label: a.label,
+      stance: a.stance,
+      sourceAudienceId: a.id,
+      otherClients: 1,
+      hasResearch: false,
+      phrases: 0,
+    });
+  }
+
+  const out = [...byKey.values()];
+  if (!out.length) return out;
+
+  // What the shared bank actually holds for each, because "borrow this one" is only worth pressing
+  // when something comes with it. Counted rather than assumed: avatar_briefs can hold a prompt and
+  // no research at all, which is exactly what reuseAvatarResearch refuses on.
+  const slugs = out.map((a) => a.avatarSlug);
+  const [{ data: briefs }, { data: phrases }] = await Promise.all([
+    supabaseAdmin.from("avatar_briefs").select("vertical, avatar_slug, research_text").in("avatar_slug", slugs),
+    supabaseAdmin.from("question_bank").select("vertical, avatar").in("avatar", slugs),
+  ]);
+
+  for (const b of (briefs ?? []) as unknown as Row[]) {
+    const hit = out.find((a) => a.vertical === b.vertical && a.avatarSlug === b.avatar_slug);
+    if (hit) hit.hasResearch = Boolean(str(b.research_text));
+  }
+  for (const p of (phrases ?? []) as unknown as Row[]) {
+    const hit = out.find((a) => a.vertical === p.vertical && a.avatarSlug === p.avatar);
+    if (hit) hit.phrases += 1;
+  }
+
+  return out.sort((a, b) => b.phrases - a.phrases || a.label.localeCompare(b.label));
+}
+
+/**
+ * Give this client an audience for an avatar another client already aims at.
+ *
+ * ‼️ seedClientAudience CANNOT DO THIS, AND THAT IS THE WHOLE REASON THIS FUNCTION EXISTS.
+ * It is the PRESET door: it needs an AUDIENCE_PRESETS key, and resolve() refuses a row missing any
+ * of the six vocabulary nouns. An avatar borrowed out of a vertical with no preset would produce a
+ * row every reader refuses, which reads as the borrow having silently failed. So the nouns and the
+ * stance are copied from the source audience and the row says so with vocabulary_source
+ * 'borrowed'. Copying vocabulary is not copying client data: the nouns are what a buyer of that
+ * kind is CALLED, which is the same word in both clients' mouths.
+ *
+ * ‼️ IT LANDS AS AN OPTION, NEVER AS THE PRIMARY. Promotion is a separate, deliberate act with an
+ * ordering rule of its own (insert non-primary, demote, promote, because
+ * client_audiences_one_primary is a partial unique index). Borrowing an avatar must not silently
+ * re-aim everything the client already has.
+ *
+ * ‼️ IT COPIES NO RESEARCH. The research is already reachable: it is keyed on
+ * (vertical, avatar_slug) and this row now carries both. reuseAvatarResearch remains the one door
+ * that puts text through the extractor, and the caller runs it if it wants the phrases too.
+ */
+export async function borrowAvatar(args: {
+  clientId: string;
+  vertical: string;
+  avatarSlug: string;
+  by: string;
+}): Promise<SeedResult> {
+  const { data: clash } = await supabaseAdmin
+    .from("client_audiences")
+    .select("id")
+    .eq("client_id", args.clientId)
+    .eq("slug", args.avatarSlug)
+    .maybeSingle();
+  if (clash) {
+    return {
+      ok: false,
+      error: `This client already has an audience for "${args.avatarSlug}". Pick it rather than borrowing it again.`,
+    };
+  }
+
+  const { data: sources, error: readError } = await supabaseAdmin
+    .from("client_audiences")
+    .select(COLUMNS)
+    .eq("research_vertical", args.vertical)
+    .eq("research_avatar_slug", args.avatarSlug)
+    .neq("client_id", args.clientId);
+  if (readError) return { ok: false, error: `client_audiences is unreadable (${readError.message}).` };
+
+  const usable = (sources ?? [])
+    .map((row) => resolve(row as unknown as Row))
+    .find((r): r is { ok: true; audience: ResolvedAudience } => r.ok);
+
+  if (!usable) {
+    return {
+      ok: false,
+      error:
+        `Nothing in the database aims at "${args.avatarSlug}" in ${args.vertical} with a complete ` +
+        "set of vocabulary nouns, so there is nothing to copy. Confirm the avatar on this client " +
+        "instead, which seeds the words from a preset.",
+    };
+  }
+
+  const src = usable.audience;
+  const { data, error } = await supabaseAdmin
+    .from("client_audiences")
+    .insert({
+      client_id: args.clientId,
+      slug: args.avatarSlug,
+      label: src.label,
+      stance: src.stance,
+      research_vertical: args.vertical,
+      research_avatar_slug: args.avatarSlug,
+      is_primary: false,
+      buyer_noun_singular: src.vocabulary.buyerSingular,
+      buyer_noun_plural: src.vocabulary.buyerPlural,
+      offer_noun_singular: src.vocabulary.offerSingular,
+      offer_noun_plural: src.vocabulary.offerPlural,
+      business_noun: src.vocabulary.business,
+      visit_noun: src.vocabulary.visit,
+      lane_name: src.laneName,
+      launcher_label: src.launcherLabel,
+      hard_lines: src.hardLines,
+      presence_platform_keys: src.presencePlatformKeys,
+      question_set_preset: src.questionSetPreset,
+      buyer_market: src.buyerMarket,
+      // ‼️ NOT 'preset'. These nouns came from another client's row, which is a weaker claim than a
+      // preset, and it is the one somebody should check before a card tells this client what their
+      // own buyers are called.
+      vocabulary_source: "borrowed",
+      seeded_from: `borrowed:${src.id}`,
+      seeded_at: new Date().toISOString(),
+    })
+    .select("id")
+    .single();
+
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, audienceId: data.id as string };
+}
+
+/**
+ * Which audience a page is being written for, or a refusal naming the choice nobody made.
+ *
+ * ‼️ ONE AUDIENCE IS NOT A CHOICE, AND REFUSING THERE WOULD BE THEATRE. Every client today has
+ * exactly one, so a gate that always asked would add a press to every page on the board and answer
+ * nothing. The ambiguity this exists for begins at the SECOND audience, which borrowing an avatar
+ * is designed to create.
+ *
+ * ‼️ AND AT TWO IT REFUSES RATHER THAN TAKING THE PRIMARY. Defaulting to
+ * clients.primary_avatar_slug is the failure mode this whole lane keeps relearning: verticalFor,
+ * runHarvest, buildContext and ingestResearch all refuse rather than guess, because work filed
+ * against a buyer nobody chose cannot be told apart afterwards from work somebody aimed. A page is
+ * the most expensive thing in the product to write against the wrong buyer.
+ *
+ * Zero audiences returns null rather than refusing: that client cannot write a page for other
+ * reasons already (frameContext refuses "aimed at nobody"), and duplicating that refusal here
+ * would report the wrong cause.
+ */
+export async function audienceForWrite(args: {
+  clientId: string;
+  audienceId?: string | null;
+}): Promise<{ ok: true; audienceId: string | null } | { ok: false; error: string }> {
+  if (args.audienceId) {
+    const picked = await audienceById(args.audienceId);
+    if (!picked.ok) return { ok: false, error: picked.error };
+    if (picked.audience.clientId !== args.clientId) {
+      // The composite foreign key would refuse this at the database too. Saying it here names the
+      // mistake instead of surfacing a constraint violation.
+      return {
+        ok: false,
+        error: "That audience belongs to a different client. A page can only be aimed at one of this client's own.",
+      };
+    }
+    return { ok: true, audienceId: picked.audience.id };
+  }
+
+  const all = await audiencesFor(args.clientId);
+  if (all.length <= 1) return { ok: true, audienceId: all[0]?.id ?? null };
+
+  const list = all.map((a) => `\`${a.slug}\`${a.isPrimary ? " (primary)" : ""} ${a.label}`).join("\n");
+  return {
+    ok: false,
+    error:
+      `This client has ${all.length} audiences and nothing said which one this page is for. ` +
+      "A page written for the wrong buyer cannot be told apart afterwards from one written for " +
+      `the right one, so pick before writing:\n${list}`,
+  };
 }
 
 /** What confirming an avatar did to the client's audiences, said in words for the card. */

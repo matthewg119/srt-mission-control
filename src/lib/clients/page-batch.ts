@@ -419,7 +419,13 @@ export async function pickHeadlineFor(
  */
 export async function writeSkeletonsFor(
   clientId: string,
-  rows: readonly PlanRow[]
+  rows: readonly PlanRow[],
+  /**
+   * Which buyer these pages are for, when the caller knows. Null lets startPageDraft decide: a
+   * client with one audience resolves to it, and a client with several REFUSES rather than
+   * picking, which lands in `failures` naming the audiences.
+   */
+  audienceId: string | null = null
 ): Promise<{ written: number; failures: string[] }> {
   const { draftOutline } = await import("@/lib/hub/draft-page");
   const { setPageOutline, startPageDraft } = await import("@/lib/hub/pages");
@@ -440,6 +446,7 @@ export async function writeSkeletonsFor(
         clientId,
         question: row.question,
         title: row.workingTitle,
+        audienceId,
       });
       if (!started.ok) {
         failures.push(`page ${row.rank}: ${started.error}`);

@@ -212,6 +212,12 @@ export interface SavePageInput {
    * would then read the page as hand-written and skip the check that matters most.
    */
   evidenceMap?: unknown[] | null;
+  /**
+   * Which of the client's audiences a NEW page argues to. Ignored on an update, for the reason
+   * given at the gate: every page that predates the column has a null audience_id, and refusing
+   * to save an edit to one would make the board unusable.
+   */
+  audienceId?: string | null;
 }
 
 /**
@@ -261,6 +267,20 @@ export async function savePage(input: SavePageInput): Promise<{ ok: true; id: st
   // Only when the caller actually said something about it. See SavePageInput.leadMagnetKey.
   if (input.leadMagnetKey !== undefined) {
     row.lead_magnet_key = input.leadMagnetKey?.trim() || null;
+  }
+
+  // ‼️ THE GATE IS ON CREATION ONLY, AND THAT ASYMMETRY IS DELIBERATE.
+  // An UPDATE of a page written before anybody picked buyers would otherwise become unsaveable the
+  // day a client gains a second audience: every existing page has a null audience_id, and refusing
+  // to save an edit to one would make the board unusable to fix exactly the pages that need it.
+  // A new page has no such history and is held to the rule.
+  if (!input.id) {
+    const { audienceForWrite } = await import("@/lib/clients/audiences");
+    const aimed = await audienceForWrite({ clientId: input.clientId, audienceId: input.audienceId });
+    if (!aimed.ok) return { ok: false, error: aimed.error };
+    // Written only when there is one, so this still works against a database where
+    // 2026-09-24-audience-on-pages.sql has not been applied.
+    if (aimed.audienceId) row.audience_id = aimed.audienceId;
   }
 
   // Only when the caller actually said something about it. See SavePageInput.evidenceMap.
@@ -383,6 +403,13 @@ export async function startPageDraft(input: {
    * question is the working title, as before.
    */
   title?: string | null;
+  /**
+   * Which of the client's audiences this page argues to.
+   *
+   * ‼️ OMITTING IT IS NOT "THE PRIMARY ONE". With a single audience it resolves to that one
+   * because there is nothing to choose; with several it is a REFUSAL, named by audienceForWrite.
+   */
+  audienceId?: string | null;
 }): Promise<{ ok: true; id: string; slug: string; resumed: boolean } | { ok: false; error: string }> {
   const question = input.question.trim();
   if (!question) return { ok: false, error: "There is no question to open a page for." };
@@ -406,6 +433,14 @@ export async function startPageDraft(input: {
     return { ok: true, id: existing.id as string, slug: existing.slug as string, resumed: true };
   }
 
+  // ‼️ WHICH BUYER THIS PAGE IS FOR, DECIDED BEFORE THE ROW EXISTS RATHER THAN INFERRED LATER.
+  // With one audience there is nothing to choose and this resolves it; with two and no pick it
+  // REFUSES, because a page written for the wrong buyer cannot be told apart afterwards from one
+  // written for the right one. A resumed page above keeps whatever it was already aimed at.
+  const { audienceForWrite } = await import("@/lib/clients/audiences");
+  const aimed = await audienceForWrite({ clientId: input.clientId, audienceId: input.audienceId });
+  if (!aimed.ok) return { ok: false, error: aimed.error };
+
   const now = new Date().toISOString();
   const { data, error } = await supabaseAdmin
     .from("client_pages")
@@ -418,6 +453,9 @@ export async function startPageDraft(input: {
       question,
       answer_md: "",
       source_report_id: input.sourceReportId ?? null,
+      // Written only when there is one, so this insert still works against a database where
+      // 2026-09-24-audience-on-pages.sql has not been applied.
+      ...(aimed.audienceId ? { audience_id: aimed.audienceId } : {}),
       updated_at: now,
     })
     .select("id, slug")

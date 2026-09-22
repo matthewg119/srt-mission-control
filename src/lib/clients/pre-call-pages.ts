@@ -448,7 +448,10 @@ async function draftOne(
     .update({ draft_lease_at: new Date().toISOString(), draft_lease_id: env.leaseId })
     .eq("id", row.id)
     .or(`draft_lease_at.is.null,draft_lease_at.lt."${cutoff}"`)
-    .select("id");
+    // audience_id comes back with the lease rather than in a second read: the plan row is the
+    // authority on which buyer this page was planned for (written at offerPool time), and the page
+    // opened below has to carry the same answer or the two would disagree about the same page.
+    .select("id, audience_id");
   if (leaseError) return { status: "failed", rank: row.rank, detail: `the lease could not be taken: ${leaseError.message}` };
   if (!leased?.length) return { status: "skipped", rank: row.rank, detail: "another pass is drafting it" };
 
@@ -471,7 +474,12 @@ async function draftOne(
 
     if (!page) {
       const { startPageDraft } = await import("@/lib/hub/pages");
-      const started = await startPageDraft({ clientId, question: row.question, title: row.workingTitle });
+      const started = await startPageDraft({
+        clientId,
+        question: row.question,
+        title: row.workingTitle,
+        audienceId: (leased[0]?.audience_id as string | null) ?? null,
+      });
       if (!started.ok) {
         await release(started.error);
         return { status: "failed", rank: row.rank, detail: started.error };
