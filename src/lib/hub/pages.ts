@@ -274,13 +274,13 @@ export async function savePage(input: SavePageInput): Promise<{ ok: true; id: st
   // day a client gains a second audience: every existing page has a null audience_id, and refusing
   // to save an edit to one would make the board unusable to fix exactly the pages that need it.
   // A new page has no such history and is held to the rule.
+  let aimedAudienceId: string | null = null;
   if (!input.id) {
     const { audienceForWrite } = await import("@/lib/clients/audiences");
     const aimed = await audienceForWrite({ clientId: input.clientId, audienceId: input.audienceId });
     if (!aimed.ok) return { ok: false, error: aimed.error };
-    // Written only when there is one, so this still works against a database where
-    // 2026-09-24-audience-on-pages.sql has not been applied.
-    if (aimed.audienceId) row.audience_id = aimed.audienceId;
+    aimedAudienceId = aimed.audienceId;
+    if (aimedAudienceId) row.audience_id = aimedAudienceId;
   }
 
   // Only when the caller actually said something about it. See SavePageInput.evidenceMap.
@@ -307,11 +307,28 @@ export async function savePage(input: SavePageInput): Promise<{ ok: true; id: st
     if (previous && previous !== input.answerMd.trim()) row.evidence_map = null;
   }
 
-  const query = input.id
-    ? supabaseAdmin.from("client_pages").update(row).eq("id", input.id).eq("client_id", input.clientId)
-    : supabaseAdmin.from("client_pages").insert(row);
+  const run = () =>
+    (input.id
+      ? supabaseAdmin.from("client_pages").update(row).eq("id", input.id).eq("client_id", input.clientId)
+      : supabaseAdmin.from("client_pages").insert(row)
+    )
+      .select("id")
+      .maybeSingle();
 
-  const { data, error } = await query.select("id").maybeSingle();
+  let { data, error } = await run();
+
+  // ‼️ SAME DEGRADE AS startPageDraft, AND FOR THE SAME REASON. A client with one audience always
+  // resolves to it, so before docs/2026-09-24-audience-on-pages.sql has run this would send
+  // audience_id on every create and fail all of them. The retry names the column, so a genuine
+  // constraint violation still surfaces.
+  if (error && aimedAudienceId && /audience_id/.test(error.message)) {
+    console.error(
+      "[hub/pages] client_pages.audience_id is missing, so this page was saved without a buyer on it. " +
+        "Run docs/2026-09-24-audience-on-pages.sql."
+    );
+    delete row.audience_id;
+    ({ data, error } = await run());
+  }
 
   if (error) {
     // 23505 on (client_id, lower(slug)). Worth naming: two pages sharing a slug is the one
@@ -442,24 +459,36 @@ export async function startPageDraft(input: {
   if (!aimed.ok) return { ok: false, error: aimed.error };
 
   const now = new Date().toISOString();
-  const { data, error } = await supabaseAdmin
+  const base: Record<string, unknown> = {
+    client_id: input.clientId,
+    slug,
+    // The plan's working title, or the question when there is no plan. A page whose title is
+    // still its question is a page nobody has finished, which beats a blank on the board.
+    title: workingTitle.slice(0, 200),
+    question,
+    answer_md: "",
+    source_report_id: input.sourceReportId ?? null,
+    updated_at: now,
+  };
+
+  // ‼️ THE WRITE DEGRADES ON A MISSING COLUMN, AND LEAVING IT OUT WOULD BREAK EVERY PAGE.
+  // `aimed.audienceId` is non-null exactly when the client has ONE audience, which is every
+  // client today, so a build deployed before docs/2026-09-24-audience-on-pages.sql runs would
+  // send audience_id on every insert and fail all of them. Naming the column in the retry rather
+  // than catching any error keeps a real constraint violation loud.
+  let { data, error } = await supabaseAdmin
     .from("client_pages")
-    .insert({
-      client_id: input.clientId,
-      slug,
-      // The plan's working title, or the question when there is no plan. A page whose title is
-      // still its question is a page nobody has finished, which beats a blank on the board.
-      title: workingTitle.slice(0, 200),
-      question,
-      answer_md: "",
-      source_report_id: input.sourceReportId ?? null,
-      // Written only when there is one, so this insert still works against a database where
-      // 2026-09-24-audience-on-pages.sql has not been applied.
-      ...(aimed.audienceId ? { audience_id: aimed.audienceId } : {}),
-      updated_at: now,
-    })
+    .insert(aimed.audienceId ? { ...base, audience_id: aimed.audienceId } : base)
     .select("id, slug")
     .maybeSingle();
+
+  if (error && aimed.audienceId && /audience_id/.test(error.message)) {
+    console.error(
+      "[hub/pages] client_pages.audience_id is missing, so this page was opened without a buyer on it. " +
+        "Run docs/2026-09-24-audience-on-pages.sql."
+    );
+    ({ data, error } = await supabaseAdmin.from("client_pages").insert(base).select("id, slug").maybeSingle());
+  }
 
   if (error) {
     // A slug collision here means a PUBLISHED page already answers this question, since an
