@@ -21,6 +21,7 @@
 // and what the card said; it never says what the board currently IS.
 
 import { supabaseAdmin } from "@/lib/db";
+import type { SlackBlock } from "@/lib/slack-bot";
 
 /** Where it happened. */
 export type EventSource = "slack" | "dashboard" | "system";
@@ -130,9 +131,18 @@ export async function postClientReply(args: {
   channel: string;
   threadTs: string;
   text: string;
+  /**
+   * Block Kit for the same message, when the reply carries buttons.
+   *
+   * ‼️ `text` IS STILL REQUIRED AND IS WHAT GETS LOGGED. Slack stops rendering it once blocks are
+   * present, but it is the notification line and it is the readable record: a client_events row
+   * holding "[object Object]" would make the log useless exactly where somebody is trying to work
+   * out what the board said to them.
+   */
+  blocks?: SlackBlock[];
 }): Promise<{ ok?: boolean; ts?: string; error?: string }> {
   const { slack } = await import("@/lib/slack-bot");
-  const res = (await slack.postThreadReply(args.channel, args.threadTs, args.text)) as {
+  const res = (await slack.postThreadReply(args.channel, args.threadTs, args.text, args.blocks)) as {
     ok?: boolean;
     ts?: string;
     error?: string;

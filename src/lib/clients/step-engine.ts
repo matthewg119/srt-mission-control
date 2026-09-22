@@ -1742,7 +1742,27 @@ function blocks(
     out.push(...bodySections(body));
   }
 
-  out.push({
+  out.push(actionsBlock(step, c.id, extra));
+
+  return out;
+}
+
+/**
+ * The three buttons every step card carries, plus whatever that step adds.
+ *
+ * ‼️ THIS IS THE ONLY PLACE step_done / step_skip / step_problem ARE WRITTEN, AND THAT IS NOW LOAD
+ * BEARING. lead-brief.ts tells the assistant that these three are the only buttons that exist and
+ * that it may not invent a fourth, because on 2026-09-22 it invented an "Approve button on the
+ * delivery board" and sent somebody hunting for a control that is not there. That rule is written
+ * against this function, so a fourth standard button has to be added here and named there together.
+ *
+ * ‼️ THE VALUE IS `<clientId>:<stepKey>` AND NOTHING MAY PUT ANYTHING ELSE IN IT. deliveryStepAction
+ * splits on the colon, and resolveStepCard then re-reads slack_message_ts from the database rather
+ * than from the message the button was pressed on. That is what lets these buttons be re-posted
+ * lower down a thread and still resolve the real card.
+ */
+function actionsBlock(step: DeliveryStep, clientId: string, extra: StepAction[]): SlackBlock {
+  return {
     type: "actions",
     elements: [
       {
@@ -1750,19 +1770,19 @@ function blocks(
         text: { type: "plain_text", text: "Done" },
         style: "primary",
         action_id: "step_done",
-        value: `${c.id}:${step.key}`,
+        value: `${clientId}:${step.key}`,
       },
       {
         type: "button",
         text: { type: "plain_text", text: "Skip — not applicable" },
         action_id: "step_skip",
-        value: `${c.id}:${step.key}`,
+        value: `${clientId}:${step.key}`,
       },
       {
         type: "button",
         text: { type: "plain_text", text: "I hit a problem" },
         action_id: "step_problem",
-        value: `${c.id}:${step.key}`,
+        value: `${clientId}:${step.key}`,
       },
       ...extra.map((e) => ({
         type: "button",
@@ -1771,9 +1791,7 @@ function blocks(
         value: e.value,
       })),
     ],
-  } as SlackBlock);
-
-  return out;
+  } as SlackBlock;
 }
 
 /**
@@ -1962,6 +1980,56 @@ async function loadFacts(clientId: string): Promise<ClientFacts | null> {
  * "one message per tenant, updated in place" applied per step — a step that posts twice is
  * a step nobody trusts.
  */
+/**
+ * A step's card rebuilt as a FRESH message: the same header, a body you supply, the same buttons.
+ *
+ * ‼️ NOT postStep, AND THE TWO MUST NEVER BE CONFUSED. postStep EDITS the card at slack_message_ts
+ * and returns early on a finished step; it owns what the card says. This owns what a reply lower
+ * down the thread says, and editing the card from here would overwrite a step's own instructions
+ * with a refusal. The backstop, the wrong-thread pointer and the pasted-list pointer all use this.
+ *
+ * ‼️ NULL RATHER THAN BUTTONS ON A FINISHED STEP. resolveStepCard strips the buttons on purpose when
+ * a step closes, so handing somebody [Done] on a done step is the same lie from the other side. The
+ * caller posts its text without a kit and the message still says what it came to say.
+ *
+ * ‼️ THE WHOLE KIT, NOT A BARE actions BLOCK. Slack stops rendering `text` the moment `blocks` is
+ * present, so a buttons-only kit would silently drop the words. Going through blocks() also means
+ * the body is split by bodySections and the client's name is in the header, which is what
+ * staleCardSuccessor matches on when it has to work out whose orphaned card it is looking at.
+ */
+export async function stepActionBlocks(
+  clientId: string,
+  stepKey: string | null,
+  body: string[]
+): Promise<SlackBlock[] | null> {
+  if (!stepKey) return null;
+  const step = stepByKey(stepKey);
+  if (!step) return null;
+
+  const { data: row } = await supabaseAdmin
+    .from("client_delivery_steps")
+    .select("status")
+    .eq("client_id", clientId)
+    .eq("step_key", stepKey)
+    .maybeSingle();
+
+  const status = (row as { status?: string } | null)?.status;
+  if (!status || status === "complete" || status === "skipped") return null;
+
+  const facts = await loadFacts(clientId);
+  if (!facts) return null;
+
+  // ‼️ AN EXTRA BUTTON THAT CANNOT BE COMPUTED COSTS THE EXTRAS, NOT THE MESSAGE. extraActionsFor
+  // reads the database and, for one step, resolves a vertical. A reply that throws because a fifth
+  // button could not be worked out is worse than a reply with the standard three.
+  const extra = await extraActionsFor(step, facts).catch((e: Error) => {
+    console.error(`[step-engine] extra actions failed for ${stepKey}: ${e.message}`);
+    return [] as StepAction[];
+  });
+
+  return blocks(step, facts, body, extra);
+}
+
 export async function postStep(clientId: string, stepKey: string): Promise<void> {
   const { channelFor } = await import("./step-board");
   const channel = await channelFor(clientId);

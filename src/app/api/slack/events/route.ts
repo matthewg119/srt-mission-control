@@ -1342,24 +1342,18 @@ export async function POST(request: NextRequest) {
           const { misroutedCommand } = await import("@/lib/clients/step-commands");
           const pointer = await misroutedCommand({ clientId: client.id, stepKey: client.stepKey, text: userText });
           if (pointer) {
-            const { markEventKind, postClientReply } = await import("@/lib/clients/client-events");
             // A command in the wrong thread IS a command: it is recorded as one, with where it
             // went, because "nothing was saved" is precisely the thing worth being able to read
-            // back later.
-            await markEventKind({
-              slackChannel: channel,
-              slackTs: event.ts as string,
-              kind: "command",
-              handler: "misrouted",
-            });
-            const posted = await postClientReply({
-              clientId: client.id,
-              stepKey: client.stepKey,
+            // back later. It now also carries THIS step's buttons, so somebody who came here by a
+            // stale card number is one click from finishing the step they are actually standing in.
+            await sayInStepThread({
+              client,
               channel,
               threadTs: parentThreadTs,
-              text: pointer,
+              eventTs: event.ts as string,
+              handler: "misrouted",
+              lines: [pointer],
             });
-            if (!slackOk(posted)) console.error("[slack/events] misrouted-command pointer failed");
             return NextResponse.json({ ok: true });
           }
 
@@ -1373,21 +1367,14 @@ export async function POST(request: NextRequest) {
             text: userText,
           });
           if (listHint) {
-            const { markEventKind, postClientReply } = await import("@/lib/clients/client-events");
-            await markEventKind({
-              slackChannel: channel,
-              slackTs: event.ts as string,
-              kind: "command",
-              handler: "pasted-list",
-            });
-            const posted = await postClientReply({
-              clientId: client.id,
-              stepKey: client.stepKey,
+            await sayInStepThread({
+              client,
               channel,
               threadTs: parentThreadTs,
-              text: listHint,
+              eventTs: event.ts as string,
+              handler: "pasted-list",
+              lines: [listHint],
             });
-            if (!slackOk(posted)) console.error("[slack/events] pasted-list pointer failed");
             return NextResponse.json({ ok: true });
           }
         }
@@ -1540,6 +1527,50 @@ export async function POST(request: NextRequest) {
             text: userText,
           });
           return NextResponse.json({ ok: true });
+        }
+
+        // 2b. COMMAND-SHAPED, AND NOTHING TOOK IT. It never reaches the model, and it always
+        //     comes back with something to press.
+        //
+        // ‼️ MEASURED 2026-09-22. Somebody at step 11 typed `letter approve`. It is a real command,
+        // hard-gated to offer_locked at sales-letter.ts, so every handler above returned null, the
+        // message fell to the assistant below, and the assistant invented "the Approve button on
+        // the delivery board at step offer_locked". No such button exists: actionsBlock() gives
+        // every card [Done], [Skip] and [I hit a problem]. The step could not be finished.
+        //
+        // Matthew: "whenever we finish a step in onboarding and we type something that is not
+        // right, make sure it resends the message we need to click to move forward or to give us
+        // the next steps. FOR ALL STEPS."
+        //
+        // ‼️ BELOW EVERY HANDLER, INCLUDING audience AND avatar, AND BELOW THE FILE BRANCHES. Put
+        // beside the other two pointers it would have eaten `audience: dentist` and `avatar: laser
+        // hair removal` before their own handlers, which run further down, ever saw them.
+        //
+        // ‼️ ABOVE isAIConfigured() AND OUTSIDE IT. With no model key a step-thread message used to
+        // fall past the tail below to the top-level branch, which answers "Ask inside a step's
+        // thread and I will answer there" to somebody who is standing in one.
+        //
+        // ‼️ IT ONLY CLAIMS WHAT IS UNMISTAKABLY ADDRESSED TO THE BOARD. Same standard as
+        // looksLikePastedList: a false positive answers a real question with a command list, which
+        // is worse than the essay this exists to prevent. commandish() holds that line.
+        if (client && parentThreadTs && userText.trim().length > 0) {
+          const { unclaimedReply } = await import("@/lib/clients/step-commands");
+          const stuck = await unclaimedReply({
+            clientId: client.id,
+            stepKey: client.stepKey,
+            text: userText,
+          });
+          if (stuck) {
+            await sayInStepThread({
+              client,
+              channel,
+              threadTs: parentThreadTs,
+              eventTs: event.ts as string,
+              handler: "backstop",
+              lines: stuck.lines,
+            });
+            return NextResponse.json({ ok: true });
+          }
         }
 
         // 3. A question in a STEP's thread. The answer goes in that step's thread, through
@@ -2441,6 +2472,52 @@ function slackOk(res: Record<string, unknown> | null | undefined): boolean {
  * end. Errors keep their own per-file reply, because a file that failed to save is a different
  * problem from one that saved unattributed and the two must not merge into one confusing line.
  */
+/**
+ * Say something into a step's thread, log it as a command that landed nowhere, and hand back the
+ * buttons that step is waiting on.
+ *
+ * ‼️ ONE DOOR FOR ALL THREE POINTERS. The wrong-thread pointer, the pasted-list pointer and the
+ * backstop were three near-identical twenty-line blocks, and only one of them would have grown
+ * buttons if they had stayed apart. Matthew's ask was that every one of these "that did not work"
+ * replies ends with the thing to press, which is a property of the door, not of each caller.
+ *
+ * ‼️ THE BUTTONS ARE BEST EFFORT AND THE WORDS ARE NOT. stepActionBlocks returns null on a finished
+ * step and throws on nothing, but a failure to build a kit must never swallow the reply: being told
+ * nothing was saved matters more than being handed a button.
+ */
+async function sayInStepThread(a: {
+  client: { id: string; stepKey: string | null };
+  channel: string;
+  threadTs: string;
+  eventTs: string;
+  handler: "misrouted" | "pasted-list" | "backstop";
+  lines: string[];
+}): Promise<void> {
+  const { markEventKind, postClientReply } = await import("@/lib/clients/client-events");
+  await markEventKind({
+    slackChannel: a.channel,
+    slackTs: a.eventTs,
+    kind: "command",
+    handler: a.handler,
+  });
+
+  const { stepActionBlocks } = await import("@/lib/clients/step-engine");
+  const kit = await stepActionBlocks(a.client.id, a.client.stepKey, a.lines).catch((e: Error) => {
+    console.error(`[slack/events] ${a.handler} buttons failed: ${e.message}`);
+    return null;
+  });
+
+  const posted = await postClientReply({
+    clientId: a.client.id,
+    stepKey: a.client.stepKey,
+    channel: a.channel,
+    threadTs: a.threadTs,
+    text: a.lines.join("\n"),
+    blocks: kit ?? undefined,
+  });
+  if (!slackOk(posted)) console.error(`[slack/events] ${a.handler} reply failed`);
+}
+
 async function captureOnboardingUploads(args: {
   channel: string;
   threadTs: string;

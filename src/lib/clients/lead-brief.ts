@@ -23,6 +23,7 @@ import type { StepKey } from "@/config/delivery-steps";
 import { stepNumber } from "@/config/delivery-steps";
 import { isHeld, type Held, type LeadContext } from "./lead-context";
 import { gapsFrom, gapLines } from "./step-gaps";
+import { grammarLine } from "./step-grammar";
 
 /** Long enough to carry the board, short enough to leave room for the conversation. */
 const MAX_CHARS = 6000;
@@ -153,6 +154,22 @@ export function leadBrief(ctx: LeadContext, stepKey: StepKey | null): string {
     for (const e of ctx.readErrors.slice(0, 5)) out.push(`- ${e}`);
   }
 
+  // ── What this thread actually accepts ──
+  //
+  // ‼️ MEASURED 2026-09-22. Somebody typed `letter approve` in step 11's thread. Nothing claimed it,
+  // it reached this assistant, and the answer was "press the Approve button on the delivery board at
+  // step offer_locked". There is no Approve button on any card, and the rule below saying "only name
+  // a command that appears above" had nothing above it to name: the brief carried the gaps but never
+  // the grammar. Now it carries both, and the buttons are stated so a fourth cannot be imagined.
+  out.push("");
+  out.push("## What this thread accepts");
+  out.push("");
+  out.push(`- Typed commands, one per message: ${grammarLine(stepKey)}`);
+  out.push(
+    "- Buttons on this step's card: [Done], [Skip - not applicable], [I hit a problem]. A few steps " +
+      "carry one or two extras, which are visible on the card itself."
+  );
+
   // ── The rules, last, because the last thing read is the thing followed ──
   out.push("");
   out.push("## How to use this");
@@ -162,6 +179,15 @@ export function leadBrief(ctx: LeadContext, stepKey: StepKey | null): string {
   out.push("- Never state a number that is not above. There is no traffic, ranking or lead data in this system at all.");
   out.push("- Suggest, never decide. A person presses the button.");
   out.push("- Only name a command that appears above. Inventing one sends somebody to type something that does not exist.");
+  out.push(
+    "- The buttons are exactly the three named above. There is no Approve button, no Submit and no " +
+      "Continue, on any card or any dashboard. Naming one sends somebody hunting for a control that " +
+      "is not there, which is worse than saying you cannot help."
+  );
+  out.push(
+    "- A command that belongs to another step belongs to another step's THREAD. Name that step and " +
+      "its number and stop there. Never answer as though it had worked here."
+  );
 
   const text = out.join("\n");
   return text.length > MAX_CHARS ? `${text.slice(0, MAX_CHARS)}\n(brief truncated)` : text;

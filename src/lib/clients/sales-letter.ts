@@ -40,6 +40,18 @@ import {
  */
 const LETTER_PREFIX = /^\s*letter\s+(use|draft|text|approve|replace)\b/i;
 
+/**
+ * The threads these commands work in.
+ *
+ * ‼️ STEP 11 WAS ADDED ON 2026-09-22 AND IT IS NOT A CONVENIENCE. Step 11's framework script cannot
+ * be written until the letter is approved, and step 11's own waiting note is what sends somebody off
+ * to approve it. Typing `letter approve` there matched nothing, fell through to the assistant, and
+ * came back as an invented Approve button on a board that has no such button. Every arm below reads
+ * the audience and the offer and never once looks at which thread it was typed in, so the hop bought
+ * nothing and cost a person their step.
+ */
+const LETTER_STEPS = new Set(["offer_locked", "avatar_harvest"]);
+
 export type LetterCommand =
   | { kind: "none" }
   | { kind: "use"; url: string | null }
@@ -629,7 +641,13 @@ export async function handleLetterThreadReply(input: {
    */
   attachedText?: string | null;
 }): Promise<LetterReply | null> {
-  if (input.stepKey !== "offer_locked") return null;
+  if (!input.stepKey || !LETTER_STEPS.has(input.stepKey)) return null;
+
+  // ‼️ WHERE THE DEFERRED POSTS GO. A `letter draft` typed in step 11's thread acks there and then
+  // takes about a minute; without this the finished letter landed in step 10's thread and the
+  // person who asked for it watched an empty one. The DOCUMENT is still filed against step 10 by
+  // fileCopy: which step owns the data did not change, only where you may type.
+  const here = input.stepKey === "avatar_harvest" ? "avatar_harvest" : "offer_locked";
   const cmd = readLetterCommand(input.text, input.attachedText);
   if (cmd.kind === "none") return null;
   if (cmd.kind === "refused") return { message: cmd.message };
@@ -670,7 +688,7 @@ export async function handleLetterThreadReply(input: {
           const { notifyStep } = await import("./step-board");
           const drafted = await draftLetterText(input.clientId, target.offer);
           if (!drafted.ok) {
-            await notifyStep(input.clientId, "offer_locked", `:warning: The letter was not drafted: ${drafted.error}`).catch(() => {});
+            await notifyStep(input.clientId, here, `:warning: The letter was not drafted: ${drafted.error}`).catch(() => {});
             return;
           }
           const saved = await store({
@@ -682,13 +700,13 @@ export async function handleLetterThreadReply(input: {
             by: input.by,
           });
           if (!saved.ok) {
-            await notifyStep(input.clientId, "offer_locked", `:warning: The draft was written but not saved: ${saved.error}`).catch(() => {});
+            await notifyStep(input.clientId, here, `:warning: The draft was written but not saved: ${saved.error}`).catch(() => {});
             return;
           }
-          await uploadLetter(input.clientId, saved.doc);
+          await uploadLetter(input.clientId, saved.doc, here);
           await notifyStep(
             input.clientId,
-            "offer_locked",
+            here,
             [
               `:white_check_mark: Drafted: ${describe(saved.doc)}.`,
               ...faultLines(saved.doc),
@@ -789,11 +807,15 @@ export async function handleLetterThreadReply(input: {
   }
 }
 
-async function uploadLetter(clientId: string, doc: AudienceDocument): Promise<boolean> {
+async function uploadLetter(
+  clientId: string,
+  doc: AudienceDocument,
+  stepKey: string = "offer_locked"
+): Promise<boolean> {
   const { channelFor, anchorTsFor } = await import("./step-board");
   const { slack } = await import("@/lib/slack-bot");
   const channel = await channelFor(clientId);
-  const thread = channel ? await anchorTsFor(clientId, "offer_locked") : null;
+  const thread = channel ? await anchorTsFor(clientId, stepKey) : null;
   if (!channel || !thread) return false;
   await slack.joinChannel(channel).catch(() => {});
   const res = (await slack.uploadFile(

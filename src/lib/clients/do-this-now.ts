@@ -25,7 +25,7 @@
 // baseline and the verdict is folded in only where one is already in hand, which is a refusal.
 
 import type { StepKey } from "@/config/delivery-steps";
-import { DELIVERY_STEPS } from "@/config/delivery-steps";
+import { DELIVERY_STEPS, stepNumber } from "@/config/delivery-steps";
 
 /**
  * What kind of act finishes this step. Rendered as the label beside the heading, so somebody
@@ -134,6 +134,8 @@ export const STEP_ACTIONS: Record<StepKey, StepAction> = {
       "One command per message. A message with two in it saves neither.",
       "`offer: <what they sell>` first. Then `terms: <what their customers call it>, <another>`.",
       "Then `outcome:`, `price:` and `guarantee:` as separate messages.",
+      "`letter draft` writes the sales letter from that, `letter approve` locks it. Step " +
+        `${stepNumber("avatar_harvest")} waits on it.`,
       "Then press Done. Every page, keyword and magnet downstream is written from this.",
     ],
   },
@@ -276,7 +278,7 @@ export const STEP_ACTIONS: Record<StepKey, StepAction> = {
   first_page: {
     verb: "confirm",
     bullets: [
-      "`draft` writes it, `check` runs the quality gate, `polish` tidies the body.",
+      "In the page studio channel, not here: `page <client>`, then `draft`, `check` and `polish`.",
       "The gate blocks on evidence and only warns on style. A block means a claim has no source.",
       "Then press Done.",
     ],
