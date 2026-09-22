@@ -739,7 +739,22 @@ export async function handleLetterThreadReply(input: {
           message: `:warning: Not approved. The current letter is \`${shortId(doc.id)}\`, not \`${cmd.id}\`: it was replaced after the version you meant. \`letter text\` shows it.`,
         };
       }
-      if (doc.source === "drafted" && doc.faults.length) {
+      // ‼️ THE FAULTS ARE RECOMPUTED HERE, NOT READ OFF THE ROW. doc.faults is the verdict the checker
+      // gave when the letter was STORED, and the checker is code that gets fixed. Measured on
+      // srt-agency-llc 2026-09-22: the drafted letter carried a `dash` fault raised by the `---` section
+      // breaks the drafter emits itself, and an `invented_quote` fault raised by a comma in `$1,500`. Both
+      // were fixed in the checker hours later, and `letter approve` went on refusing the stored verdict
+      // with the fixed code deployed. Nothing else reprices that row, so a copy-rule fix could not reach a
+      // letter already written, and the only way out was to redraft or repaste a letter already correct.
+      //
+      // The row is refreshed with what is true now, so `letter text` stops showing a fault that is gone.
+      const fresh = await letterFaults(doc.content, await evidenceFor(input.clientId, target.offer));
+      if (JSON.stringify(fresh) !== JSON.stringify(doc.faults)) {
+        const { setDocumentFaults } = await import("./audience-documents");
+        await setDocumentFaults(doc.id, fresh);
+        doc.faults = fresh;
+      }
+      if (doc.source === "drafted" && fresh.length) {
         return { message: [":no_entry: Not approved.", ...faultLines(doc)].join("\n") };
       }
       const fingerprint = documentFingerprint(target.offer);

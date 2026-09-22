@@ -204,6 +204,28 @@ export async function storeDocument(args: DocumentAddress & {
 }
 
 /**
+ * Record a freshly computed fault list on a document that is already stored.
+ *
+ * ‼️ BECAUSE A FAULT LIST IS A JUDGEMENT MADE BY CODE, AND CODE CHANGES UNDER IT. The faults written
+ * when a document was stored are the verdict of whatever the checker said THAT DAY. Measured on
+ * srt-agency-llc 2026-09-22: a drafted letter carried two faults from the pre-fix checker, both of them
+ * since fixed in the checker and neither of them true of the letter, and `letter approve` kept refusing
+ * on the stored copy. A fix to a copy rule that cannot reach a document already written is not a fix.
+ *
+ * Empty is stored as NULL, which is what supersede_audience_document() writes for no faults, so a
+ * refreshed clean document is indistinguishable from one that was clean when it was stored.
+ */
+export async function setDocumentFaults(id: string, faults: DocumentFault[]): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from("audience_documents")
+    .update({ faults: faults.length ? faults : null })
+    .eq("id", id);
+  // Not fatal: the caller already holds the fresh list and is about to act on it. Losing the write
+  // means the next reader recomputes again, not that a faulty document slips through.
+  if (error) console.error("[audience-documents] faults not refreshed:", error.message);
+}
+
+/**
  * Approve one exact version.
  *
  * ‼️ BY ID, NEVER "WHATEVER IS LIVE NOW". A `letter replace:` landing between the reply that showed a
