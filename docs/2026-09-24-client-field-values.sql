@@ -114,7 +114,13 @@ comment on table public.client_field_values is
 
 comment on column public.client_field_values.audience_id is
   'NULL means the value is true of the client whichever buyer is in front of them (compliance, '
-  'market). The live unique index uses NULLS NOT DISTINCT so two nulls are the same key.';
+  'market). The live unique index uses NULLS NOT DISTINCT so two nulls are the same key. '
+  'NOTHING PRODUCES NULL YET, as of 2026-09-22: no FieldSpec in dataset-spec.ts marks a field '
+  'client-wide, and the one writer (commit_field_values, via field-values.ts) always passes the '
+  'primary audience. So the NULLS NOT DISTINCT half of client_field_values_live_idx and the '
+  'audienceId === null arm of dataset-completeness.ts describe a case that cannot yet arise. '
+  'Both are correct and both are unexercised. Do not delete either to tidy up: the alternative '
+  'is discovering, on the first client-wide field, that two nulls were separate keys all along.';
 
 comment on column public.client_field_values.source_section is
   'The section number THE ASKER USED, not a position in the file. A subset renumbered from 1 '

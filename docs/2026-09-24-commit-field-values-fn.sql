@@ -41,11 +41,26 @@ begin
   -- and the caller sees no partial confirmation.
   for v_item in select * from jsonb_array_elements(p_values)
   loop
+    -- ‼️ THIS PREDICATE AND client_field_values_live_idx ARE ONE DECISION, NOT TWO. That index is
+    -- unique on (client_id, audience_id, field_key) nulls not distinct where superseded_at is null.
+    -- Whatever it treats as one live row, this lookup must find, and nothing else. Leaving
+    -- audience_id out was the original bug: it retired an ARBITRARY live row for the field, so
+    -- confirming `fears` for one audience could retire another audience's `fears` and report it as
+    -- superseded, with nothing on either row saying so. dataset-completeness.ts expects per-audience
+    -- rows to coexist, so that is silent cross-audience data loss. `is not distinct from` is the SQL
+    -- spelling of the index's `nulls not distinct`, which is exactly why it is used here rather than
+    -- `=`. If either the index or this WHERE gains or loses a column, change both in the same edit.
+    --
+    -- The order by cannot matter while the index exists, because the index guarantees at most one
+    -- live row per key. It is here for the database that somehow has the function without the index:
+    -- there the choice becomes deterministic instead of arbitrary.
     select id into v_old_id
       from public.client_field_values
      where client_id = p_client_id
+       and audience_id is not distinct from p_audience_id
        and field_key = v_item->>'field_key'
        and superseded_at is null
+     order by confirmed_at desc, id desc
      limit 1;
 
     -- ‼️ RETIRE BEFORE INSERT, AND THE SELF-POINTER IS DELIBERATE. The unique index is PARTIAL
