@@ -15,7 +15,7 @@ import { DATASET_FIELDS, NOTHING_ON_FILE, evaluateDatasets, formatDatasetReport 
 import { RESEARCH_SECTION_KEYS } from "../src/lib/clients/artifacts/deep-research-run";
 import { evidenceRowsFor, formatProposalCard, type OpenProposal } from "../src/lib/clients/field-proposal";
 import { readExtraction, looksUnverified } from "../src/lib/clients/field-extraction";
-import { refuseValues } from "../src/lib/clients/field-values";
+import { refuseValues, formatValuesCard } from "../src/lib/clients/field-values";
 import { evidenceForPage, isFirstParty, type PageSource, type SourceType } from "../src/lib/clients/page-evidence";
 import { readFileSync } from "fs";
 
@@ -383,6 +383,31 @@ check(
   huge.join("\n").replace(/\s+/g, "").includes(HUGE),
   "the value was truncated rather than wrapped"
 );
+
+// ─── 6. The confirmed value has a reader ──────────────────────────────────────
+//
+// ‼️ THE COUNT WAS NEVER THE COMPLAINT. field-values.ts states it: the card could report `fears` as
+// filled while nobody could say what the fears were. A value stored and never shown leaves that
+// exactly as true, with one more table.
+console.log("\n6. the card says what the fields actually say");
+
+const stored = [
+  { id: "v1", fieldKey: DATASET_FIELDS[0].key, audienceId: "a1", dataset: DATASET_FIELDS[0].dataset, value: "  they fear   looking done  ", sourceSection: 4, sourceDocumentId: "d1", confirmedBy: "U1", confirmedAt: "2026-09-22T00:00:00Z" },
+  { id: "v2", fieldKey: DATASET_FIELDS[1].key, audienceId: "a1", dataset: DATASET_FIELDS[1].dataset, value: "L".repeat(400), sourceSection: null, sourceDocumentId: null, confirmedBy: "U1", confirmedAt: "2026-09-22T00:00:00Z" },
+];
+const valueCard = formatValuesCard(stored);
+
+check("it prints the value, not a tick", valueCard.some((l) => /they fear looking done/.test(l)));
+check(
+  "whitespace is collapsed so a pasted value reads as one line",
+  valueCard.some((l) => l.includes("they fear looking done")) && !valueCard.some((l) => l.includes("  they")),
+  valueCard.join(" | ")
+);
+check("a long value is clipped rather than flooding the card", valueCard.some((l) => /L{200}\.\.\./.test(l)));
+check("it says where each value came from", valueCard.some((l) => /section 4/.test(l)));
+check("and says so honestly when the section was not cited", valueCard.some((l) => /section not cited/.test(l)));
+check("no values means no card at all, rather than an empty heading", formatValuesCard([]).length === 0);
+check("no em dash", !valueCard.join("\n").includes("—"));
 
 console.log(failed === 0 ? "\nAll checks passed.\n" : `\n${failed} FAILED\n`);
 process.exit(failed === 0 ? 0 : 1);

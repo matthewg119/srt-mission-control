@@ -88,6 +88,48 @@ export async function liveValues(clientId: string): Promise<FieldValue[]> {
   return (data ?? []).map((r) => toValue(r as unknown as Record<string, unknown>));
 }
 
+/** How much of a value the card prints before it is clipped. Long enough to recognise it. */
+const CARD_VALUE_CHARS = 200;
+
+const CARD_DATASET_LABEL: Record<DatasetKey, string> = {
+  avatar: "Avatar",
+  audience: "Audience",
+  offer: "Offer",
+};
+
+/**
+ * What we actually believe, in words, for the fields somebody has confirmed.
+ *
+ * ‼️ THIS IS MATTHEW'S ORIGINAL COMPLAINT AND WITHOUT IT W0 ONLY FIXES THE COUNT. The header of
+ * this file states it: "the completeness card could report `fears` as filled while nobody could say
+ * what the fears were." Storing the value and then showing a tick beside the field name leaves that
+ * exactly as true as it was, with an extra table. A confirmed value that nothing ever reads is also
+ * the mistake this repo has now recorded six times, most recently client_offers.guarantee.
+ *
+ * ‼️ PURE. It takes the rows and returns lines, so the probe can drive it and the caller decides
+ * where they go.
+ */
+export function formatValuesCard(values: readonly FieldValue[]): string[] {
+  if (!values.length) return [];
+
+  const labels = new Map(DATASET_FIELDS.map((f) => [f.key, f.label]));
+  const lines: string[] = [":white_check_mark: *Confirmed, and this is what they say*"];
+
+  for (const dataset of ["avatar", "audience", "offer"] as const) {
+    const mine = values.filter((v) => v.dataset === dataset);
+    if (!mine.length) continue;
+    lines.push(`*${CARD_DATASET_LABEL[dataset]}*`);
+    for (const v of [...mine].sort((a, b) => a.fieldKey.localeCompare(b.fieldKey))) {
+      const body = v.value.replace(/\s+/g, " ").trim();
+      const shown = body.length > CARD_VALUE_CHARS ? body.slice(0, CARD_VALUE_CHARS).trimEnd() + "..." : body;
+      const where = v.sourceSection ? `section ${v.sourceSection}` : "section not cited";
+      lines.push(`  • *${labels.get(v.fieldKey) ?? v.fieldKey}:* ${shown} _(${where})_`);
+    }
+  }
+
+  return lines;
+}
+
 /**
  * Why this set of values must not be written, or null if it may be.
  *

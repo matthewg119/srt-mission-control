@@ -9,7 +9,7 @@ import { audiencesFor, sharedBankFor, type ResolvedAudience } from "./audiences"
 import { avatarBriefFor } from "./avatars";
 import { EMPTY_OFFER, loadOffer, loadOfferForAudience } from "./offers";
 import { RESEARCH_SECTION_KEYS } from "./artifacts/deep-research-run";
-import { liveValues } from "./field-values";
+import { liveValues, formatValuesCard } from "./field-values";
 import {
   evaluateDatasets,
   formatDatasetReport,
@@ -268,5 +268,19 @@ export async function completenessCardLines(clientId: string): Promise<string[]>
   lines.push(
     "_:no_entry: marks a field a later step cannot run without. Everything else is a warning; nothing here stops a step on its own._"
   );
+
+  // ‼️ WHAT THE CONFIRMED FIELDS ACTUALLY SAY, not just that they are filled. The report above
+  // counts; this reads. Without it a person looking at the card still cannot answer "so what ARE
+  // the fears", which is the complaint W0 was built for, and a stored value nothing ever shows is
+  // indistinguishable from one that was never stored.
+  //
+  // Its own read, and its own failure: liveValues already degrades to [] on error, and an empty
+  // list here prints nothing rather than an outage. The card above is the part that must survive.
+  const values = await liveValues(clientId);
+  if (values.length) {
+    lines.push("");
+    lines.push(...formatValuesCard(values));
+  }
+
   return lines;
 }
