@@ -76,7 +76,18 @@ export interface KeywordContext extends ExpansionContext {
   categories: readonly CategorySpec[];
 }
 
-export function offerFingerprint(treatment: string, terms: readonly string[], audience: Audience): string {
+/**
+ * What a keyword expansion is pinned to: the treatment, the customer's own words, and the audience.
+ *
+ * ‼️ THE SIBLING IS `documentFingerprint` IN audience-documents.ts, AND THE DIFFERENCE IS DELIBERATE.
+ * That one covers treatment + outcome, because it answers "is this written copy still about this
+ * offer". This one adds `terms` and the audience because it answers a different question: "are
+ * these still the right phrases to rank for". `terms` is "the words their CUSTOMERS use for it"
+ * (offers.ts), so it is exactly what an expansion is built from, and the audience decides which
+ * phrase table applies at all. Both were called `offerFingerprint` until 2026-09-22, which read as
+ * an inconsistency to settle; it was really two questions sharing one name. ‼️ Do not add a third.
+ */
+export function keywordFingerprint(treatment: string, terms: readonly string[], audience: Audience): string {
   return [normalizePhrase(treatment), [...terms].map(normalizePhrase).sort().join(","), audience].join("|");
 }
 
@@ -190,7 +201,7 @@ export async function keywordContext(
       audienceConfirmed: aud.confirmed,
       vertical: aud.vertical,
       website: ((client.website as string | null) || (client.domain as string | null)) ?? null,
-      fingerprint: offerFingerprint(offer.treatment, offer.terms, aud.audience),
+      fingerprint: keywordFingerprint(offer.treatment, offer.terms, aud.audience),
       categories: categoriesForAudience(aud),
     },
   };

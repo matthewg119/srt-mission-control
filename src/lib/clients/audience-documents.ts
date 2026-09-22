@@ -68,13 +68,31 @@ export function shortId(id: string): string {
 }
 
 /**
- * What an approval is pinned to: the treatment and the outcome, normalised.
+ * What a written document's approval is pinned to: the treatment and the outcome, normalised.
  *
  * ‼️ NOT POSITIONING OR TERMS. lockOffer treats a positioning-only re-lock as unchanged, and new terms
  * add vocabulary without changing what the letter claims. A new treatment or a new outcome is a different
  * offer to write a letter about, so either one makes an approval stale.
+ *
+ * ‼️ THERE ARE TWO FINGERPRINTS AND THEY COVER DIFFERENT FIELDS ON PURPOSE. The other is
+ * `keywordFingerprint` in client-keywords.ts, which adds `terms` and the audience. Both used to be
+ * called `offerFingerprint`, which read as an inconsistency to settle; it is not one. They answer
+ * two different questions:
+ *
+ *   documentFingerprint   is this copy still about this offer?     treatment + outcome
+ *   keywordFingerprint    are these still the right search terms?  treatment + terms + audience
+ *
+ * Merging them is worse in both directions, which is why neither was ever changed to match the
+ * other. Fold `terms` in here and every terms change invalidates an approved sales letter that is
+ * still perfectly accurate, because the letter never claimed the terms. Drop `terms` from the
+ * keyword one and a terms change stops resetting the keyword proposals that were expanded FROM
+ * those terms. `terms` is "the words their CUSTOMERS use for it" (offers.ts), so it is vocabulary,
+ * not a claim.
+ *
+ * The names are the ones lead-context.ts already chose: it is the one file that needs both, and it
+ * had to rename them at the import to tell them apart. ‼️ Do not add a third.
  */
-export function offerFingerprint(offer: Pick<StoredOffer, "treatment" | "outcomePromise">): string {
+export function documentFingerprint(offer: Pick<StoredOffer, "treatment" | "outcomePromise">): string {
   return `${normalizePhrase(offer.treatment ?? "")}|${normalizePhrase(offer.outcomePromise ?? "")}`;
 }
 

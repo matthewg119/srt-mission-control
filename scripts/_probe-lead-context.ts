@@ -155,15 +155,27 @@ async function main() {
   hits = [];
   const card = await leadContext(clientId);
   const cardReads = hits.length;
-  // ‼️ MEASURED 2026-09-17 AT 14, AND THE CEILING IS THE MEASUREMENT PLUS ONE. Not an aspiration: a
-  // budget nobody can meet gets raised until it means nothing. Six of the fourteen are known
-  // duplicates, and they are owed work rather than accidents:
-  //   client_audiences twice - loadOffer resolves the primary audience itself
-  //   client_offers    twice - loadOffer, then loadOfferForAudience for the same audience
-  //   avatar_briefs    three - lead-context reads the brief, completenessFor's avatarState reads it again
-  // Removing them means teaching loadOffer and avatarState to take what they need as parameters, the
-  // same lever CompletenessInputs already is. Until then this holds the line at fourteen.
-  check("a card context stays within its budget", cardReads <= 15, `${cardReads} selects: ${hits.join(", ")}`);
+  // ‼️ RE-MEASURED 2026-09-22 AT 16, AND THE CEILING IS NOW THE MEASUREMENT EXACTLY. Not an
+  // aspiration: a budget nobody can meet gets raised until it means nothing.
+  //
+  // ‼️ AND THE PLUS ONE IS GONE ON PURPOSE, BECAUSE IT WAS SPENT SILENTLY. The old ceiling was the
+  // 2026-09-17 measurement of 14 plus one spare, and W0 took the spare without anyone noticing: it
+  // added `liveValues` to completenessFor, which is the right read in the right place, and the
+  // probe went green at 15 and said nothing. The next commit put it at 16 and only then did anyone
+  // find out, by which point both were on main. A ceiling with headroom cannot tell you the moment
+  // the work grew. At the measurement exactly, the NEXT read fails here and somebody decides on
+  // purpose whether to pay for it. That is the whole job of this check.
+  //
+  // What the sixteen are. Six are duplicates, and they are owed work rather than accidents:
+  //   client_audiences twice  - loadOffer resolves the primary audience itself
+  //   client_offers    twice  - loadOffer, then loadOfferForAudience for the same audience
+  //   avatar_briefs    three  - lead-context reads the brief, completenessFor's avatarState again
+  //   question_bank    three  - avatarState counts keywords, keywords-with-url and objections
+  //   client_field_values one - W0's confirmed values. NOT a duplicate and not removable: it is the
+  //                             read that makes `present` mean a person confirmed something.
+  // Removing the duplicates means teaching loadOffer and avatarState to take what they need as
+  // parameters, the same lever CompletenessInputs already is.
+  check("a card context stays within its budget", cardReads <= 16, `${cardReads} selects: ${hits.join(", ")}`);
   console.log(`        card slices read ${cardReads} times`);
 
   hits = [];

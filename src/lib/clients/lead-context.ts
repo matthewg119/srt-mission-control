@@ -25,11 +25,11 @@ import { EMPTY_OFFER, loadOffer, loadOfferForAudience, type StoredOffer } from "
 import {
   documentKey,
   documentsFor,
-  offerFingerprint as documentFingerprint,
+  documentFingerprint,
   type AudienceDocument,
   type DocumentKind,
 } from "./audience-documents";
-import { loadKeywords, offerFingerprint as keywordFingerprint } from "./client-keywords";
+import { loadKeywords, keywordFingerprint } from "./client-keywords";
 import { avatarBriefFor } from "./avatars";
 import { readClientEvents, type ClientEventRow } from "./client-events";
 import { completenessFor, type CompletenessInputs } from "./dataset-completeness";

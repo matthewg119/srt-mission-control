@@ -27,7 +27,7 @@ import { isLocked, loadOffer, type StoredOffer } from "./offers";
 import {
   approveDocument,
   currentDocument,
-  offerFingerprint,
+  documentFingerprint,
   shortId,
   storeDocument,
   type AudienceDocument,
@@ -499,7 +499,7 @@ export async function approvedLetterFor(clientId: string): Promise<
   if (!cur.ok) return { ok: false, reason: "unreadable", message: cur.error };
   if (!cur.doc) return { ok: false, reason: "none", message: "there is no sales letter yet" };
   if (cur.doc.status !== "approved") return { ok: false, reason: "not_approved", message: `the sales letter (${shortId(cur.doc.id)}) is not approved yet` };
-  if (cur.doc.offerFingerprint !== offerFingerprint(offer)) {
+  if (cur.doc.offerFingerprint !== documentFingerprint(offer)) {
     return { ok: false, reason: "stale", message: "the sales letter was approved for a different treatment or outcome, so it needs approving again" };
   }
   return { ok: true, doc: cur.doc };
@@ -634,7 +634,7 @@ export async function handleLetterThreadReply(input: {
       if (doc.source === "drafted" && doc.faults.length) {
         return { message: [":no_entry: Not approved.", ...faultLines(doc)].join("\n") };
       }
-      const fingerprint = offerFingerprint(target.offer);
+      const fingerprint = documentFingerprint(target.offer);
       if (doc.status === "approved" && doc.offerFingerprint === fingerprint) {
         return { message: `:white_check_mark: ${describe(doc)} is already approved for this offer.` };
       }

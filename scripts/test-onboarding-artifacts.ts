@@ -3581,7 +3581,7 @@ import * as visionT from "../src/lib/hub/skin-vision";
 {
   const { readLetterCommand: letter, pageToLetterText, slackUrl, letterFaults } =
     require("../src/lib/clients/sales-letter") as typeof import("../src/lib/clients/sales-letter");
-  const { offerFingerprint, kindBelongsToOffer } =
+  const { documentFingerprint, kindBelongsToOffer } =
     require("../src/lib/clients/audience-documents") as typeof import("../src/lib/clients/audience-documents");
 
   eq("letter use", letter("letter use"), { kind: "use", url: null });
@@ -3624,10 +3624,10 @@ import * as visionT from "../src/lib/hub/skin-vision";
   ok("a double hyphen is a fault", rules.includes("dash"));
 
   // ‼️ AN APPROVAL IS PINNED TO THE TREATMENT AND THE OUTCOME, NOT TO POSITIONING OR TERMS.
-  const base = offerFingerprint({ treatment: "Lip filler", outcomePromise: "more appointments" });
-  eq("the same offer spelled differently is the same fingerprint", offerFingerprint({ treatment: "lip filler.", outcomePromise: "More appointments" }), base);
-  ok("a new treatment makes an approval stale", offerFingerprint({ treatment: "Botox", outcomePromise: "more appointments" }) !== base);
-  ok("a new outcome makes an approval stale", offerFingerprint({ treatment: "Lip filler", outcomePromise: "more bookings" }) !== base);
+  const base = documentFingerprint({ treatment: "Lip filler", outcomePromise: "more appointments" });
+  eq("the same offer spelled differently is the same fingerprint", documentFingerprint({ treatment: "lip filler.", outcomePromise: "More appointments" }), base);
+  ok("a new treatment makes an approval stale", documentFingerprint({ treatment: "Botox", outcomePromise: "more appointments" }) !== base);
+  ok("a new outcome makes an approval stale", documentFingerprint({ treatment: "Lip filler", outcomePromise: "more bookings" }) !== base);
   ok("the letter, short offer and beliefs belong to an offer", kindBelongsToOffer("sales_letter") && kindBelongsToOffer("short_offer") && kindBelongsToOffer("necessary_beliefs"));
   ok("the research and the avatar sheet belong to the audience", !kindBelongsToOffer("deep_research") && !kindBelongsToOffer("avatar_sheet"));
 

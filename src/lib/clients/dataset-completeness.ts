@@ -179,7 +179,7 @@ export async function completenessFor(
       ),
   ]);
 
-  const { documentsFor, documentKey, offerFingerprint } = await import("./audience-documents");
+  const { documentsFor, documentKey, documentFingerprint } = await import("./audience-documents");
   // One select for every document this client holds, replacing five per audience.
   let docs: ReadonlyMap<string, AudienceDocument> = given.documents ?? new Map();
   if (!given.documents) {
@@ -211,7 +211,7 @@ export async function completenessFor(
       : null;
     const offer = audience && !audience.isPrimary ? (own ?? EMPTY_OFFER) : (own ?? primaryOffer);
     const offerApplies = audience === null || audience.isPrimary || own !== null;
-    const { documents, ownResearch } = documentsState(audience, offer, docs, offerFingerprint, documentKey);
+    const { documents, ownResearch } = documentsState(audience, offer, docs, documentFingerprint, documentKey);
     const avatar = await avatarState(audience);
     const snapshot: DatasetSnapshot = {
       audience: audience

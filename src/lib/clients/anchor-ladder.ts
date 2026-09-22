@@ -173,9 +173,9 @@ export async function pickRung(clientId: string, stage: number, by: string): Pro
   const s = await setAnchorStage({ clientId, stage: rung.stage });
   if (!s.ok) return s;
 
-  const { approveDocument, offerFingerprint } = await import("./audience-documents");
+  const { approveDocument, documentFingerprint } = await import("./audience-documents");
   const offer = await loadOffer(clientId);
-  await approveDocument({ id: state.docId, by, fingerprint: offerFingerprint(offer) });
+  await approveDocument({ id: state.docId, by, fingerprint: documentFingerprint(offer) });
 
   return {
     ok: true,
