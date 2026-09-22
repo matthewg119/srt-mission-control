@@ -167,6 +167,70 @@ faults are warnings rather than blocks.
 
 ---
 
+## 5. What IS already scoped, and the three things that are not
+
+Matthew: *"these are the 4 documents I want for each customer for whenever I'm going to create a
+new avatar for a new customer."*
+
+**The four documents are already scoped exactly that way, and nothing needs building for it.**
+`audience_documents` enforces it with two partial unique indexes, measured 2026-09-22:
+
+```
+audience_documents_live_avatar_doc  UNIQUE (audience_id, kind) WHERE offer_id IS NULL
+audience_documents_live_offer_doc   UNIQUE (offer_id, kind)   WHERE offer_id IS NOT NULL
+```
+
+An audience IS a client plus an avatar, and an offer lives under an audience. So a second avatar
+for the same client gets its own research and its own avatar sheet, and its offer gets its own
+short offer, beliefs and sales letter. `kindBelongsToOffer` decides which index a kind falls under.
+**Once §1 lands, the four documents file correctly per customer per avatar with no further work.**
+
+‼️ **AND NOTHING IS MIXED UP IN THERE TODAY, BECAUSE NOTHING IS IN THERE.** The only pollution is
+the 321 `question_bank` phrases in §1.4, and they are all under ONE avatar, so this is
+document-type pollution rather than avatar pollution. Say that plainly rather than implying a
+cross-avatar cleanup that is not needed.
+
+**Three surfaces are NOT scoped, and they bite the day a second avatar exists:**
+
+| Table | `audience_id` | `offer_id` | Consequence |
+|---|---|---|---|
+| `client_pages` | no | no | Pages are not separated per avatar. Two avatars write into one page set. |
+| `page_sources` | no | no | Evidence, reviews and interview answers are client-wide. A quote from one buyer backs a page aimed at another. |
+| `client_field_values` | yes | **no** | Offer fields key on the audience only. Safe while one offer is primary per audience; a second offer under one audience would collide on the live index. |
+
+‼️ **DO NOT ADD THE COLUMNS SPECULATIVELY.** `page_sources` being client-wide is deliberate for
+some kinds: pricing dictated once in the interview is filed with `pageId: null` precisely so it
+"shows up as evidence on every page this client ever gets" (`page-studio.ts:732-795`). Decide per
+kind which are client-wide facts and which belong to one buyer, and only then add the column.
+Measure how many avatars actually exist before spending anything here: today it is one.
+
+---
+
+## 6. Posts are not built, and this prompt does not build them
+
+Matthew asked whether this also saves the posts. **It does not, and nothing does.** Measured
+2026-09-22:
+
+- `content_examples` and `content_jobs` have **no `client_id` and no `audience_id`**. They are
+  SRT's own content lane, the drop studio and the reel formats. Nothing in them is per client.
+- `client_pages` exists and is not scoped by audience or offer, per §5.
+- There is no per-client post table at all.
+
+So a per-client, per-avatar post store is a new build and it is out of scope here. What it would
+need, stated so the next session does not have to rediscover it:
+
+1. A table carrying `client_id`, `audience_id` and the format, so a post belongs to one buyer.
+2. A decision about what a post IS relative to a page: `page_dataset` already carries both
+   `audience_id` and `offer_id`, so the post lane may be a format axis over the same dataset rather
+   than a second store. ‼️ Read `format-dataset.ts` and `post-formats.ts` before designing a new
+   table; the 2026-09-22 compliance prompt records that the post formats axis is already built and
+   deliberately generic, "shapes, not subjects".
+3. The headline lane feeds it. `client-headlines.ts` writes per client off `clientVocQuotes`, which
+   is what §2 of the 2026-09-22 prompt fills. **Posts are downstream of the emotional quotes, so
+   the quotes come first either way.**
+
+---
+
 ## Still owed from the approved plan
 
 Sections 2, 3 and 4 of `2026-09-22-send-tracking-datasets-and-the-signing-gate.md`, unchanged:
