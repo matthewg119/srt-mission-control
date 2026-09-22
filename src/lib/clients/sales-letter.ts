@@ -304,7 +304,17 @@ export async function letterFaults(letter: string, evidence: LetterEvidence): Pr
   const { promiseFault, unbackedNumbers } = await import("./client-headlines");
   const faults: DocumentFault[] = [];
 
-  if (hasBannedDash(letter)) faults.push({ rule: "dash", detail: "an em dash, an en dash or a double hyphen" });
+  // ‼️ A MARKDOWN THEMATIC BREAK IS STRUCTURE, NOT PUNCTUATION, AND IT IS NOT AN EM DASH.
+  // The copy rule bans em dashes, en dashes and the two-hyphen form because of how they read in a
+  // SENTENCE. A line that is nothing but `---` renders as a horizontal rule, and the drafter emits
+  // one between sections of every letter it writes, so the rule as written blocked its own output:
+  // measured on srt-agency-llc 2026-09-22, six `---` separators and not one dash in the prose.
+  // Only a line that is ENTIRELY a break is exempt. A `---` with words beside it is still a fault.
+  const proseOnly = letter
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line))
+    .join("\n");
+  if (hasBannedDash(proseOnly)) faults.push({ rule: "dash", detail: "an em dash, an en dash or a double hyphen" });
 
   const promise = letter
     .split(/\n+/)
