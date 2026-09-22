@@ -32,6 +32,10 @@ import {
   type HarvestedPhrase,
 } from "./harvest";
 import { filterPhrases, droppedLine, DEBRIS_FAULTS } from "./phrase-quality";
+// Static, not dynamic: avatar-profile.ts imports nothing at all, so there is no cycle to avoid.
+// The dynamic import at afterResearchPaste() is a Promise.all convenience next to two modules
+// that DO close cycles, and it is not a precedent for this one.
+import { FULL_RESEARCH_MIN_SECTIONS, looksLikeFullResearch } from "./avatar-profile";
 
 /** What a message has to start with to be treated as research. Case-insensitive. */
 export const RESEARCH_PREFIX = /^\s*research\s*:/i;
@@ -209,6 +213,38 @@ export async function ingestResearch(args: {
   // only the six faults that mean OUR extraction broke, which apply whatever shape the phrase is.
   const keywordFilter = filterPhrases(rawKeywords, (k) => k.phrase, DEBRIS_FAULTS);
   const keywords = keywordFilter.kept;
+
+  // ‼️ THE DOCUMENT IS JUDGED BEFORE ITS CONTENTS ARE FILED, NOT AFTER. THIS IS THE WHOLE FIX.
+  //
+  // Measured 2026-09-22: four files went into step 11's thread, three of them framework documents
+  // rather than research, and all four answered ":books: Research filed." 321 deep_research rows
+  // landed under med-spa-owner. question_bank has no client_id, so a wrong write there cannot be
+  // unpicked by client afterwards.
+  //
+  // The test that would have caught it existed, in afterResearchPaste(), which runs AFTER this
+  // function has returned ok and the upsert below has already committed. An avatar sheet is prose
+  // with a title, it yields question-shaped sentences, and so it reached the write every time.
+  //
+  // ‼️ IT IS A DISJUNCTION, AND MAKING IT `!looksLikeFullResearch` ALONE WOULD BREAK A DOCUMENTED
+  // PATH. A KEYWORDS block pasted on its own is legitimate and afterResearchPaste's own reply
+  // tells people to send one: "That is expected for a KEYWORDS block pasted on its own." So a
+  // paste is refused only when it is NEITHER a full research answer NOR carrying a keyword block.
+  //
+  // rawKeywords rather than the filtered `keywords`: the question is whether the document HAS a
+  // keywords block, not whether its rows survived. A malformed block still means the paste was
+  // meant as keywords, and it should reach the refusal below that says so.
+  if (!looksLikeFullResearch(body) && !rawKeywords.length) {
+    return {
+      ok: false,
+      error:
+        `that is not research, so nothing was filed against *${avatar.label}*. It answers fewer ` +
+        `than ${FULL_RESEARCH_MIN_SECTIONS} numbered sections and carries no KEYWORDS block. ` +
+        "If it is one of the framework documents, send it again with its prefix on the first " +
+        "line or typed with the file: `avatar sheet:`, `short offer:` or `beliefs:`. " +
+        "A full research answer goes in as `research:` or as a dropped file, and a KEYWORDS " +
+        "block can be pasted on its own.",
+    };
+  }
 
   // ‼️ TWO DIFFERENT EMPTIES AND THEY MUST NOT READ THE SAME.
   //

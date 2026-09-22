@@ -19,6 +19,7 @@ import {
   buildFrameworkScript,
   readAvatarSheet,
   readBeliefs,
+  kindFromFilename,
   readFrameworkPaste,
   readShortOffer,
   type FrameworkDocumentKind,
@@ -416,10 +417,36 @@ export async function storeFrameworkFile(args: {
   const text = await extractFileText(Buffer.from(await dl.data.arrayBuffer()), String(doc.filename ?? ""), String(doc.content_type ?? ""));
   if (!text?.trim()) return null;
 
-  // The prefix may be typed with the file, or be the file's own first line.
+  // ‼️ THREE SIGNALS, STRICTLY WEAKENING, AND THE ORDER IS THE WHOLE POINT.
+  //
+  // A typed prefix is a person saying what the file is. A first line is the document saying so
+  // itself. A filename is only the name somebody saved it under, so it is consulted last and only
+  // when both others miss. It was added because on 2026-09-22 four files whose first line is a
+  // TITLE ("# AI Referral Engine Avatar Sheet") matched neither of the first two, fell through to
+  // ingestResearchFile, and were shredded into a shared corpus as research.
   const typed = readFrameworkPaste(args.messageText);
-  const paste = typed ? { kind: typed.kind, body: text } : readFrameworkPaste(text);
+  const firstLine = typed ? null : readFrameworkPaste(text);
+  const named = typed || firstLine ? null : kindFromFilename(String(doc.filename ?? ""), text);
+
+  const paste = typed ? { kind: typed.kind, body: text } : (firstLine ?? named);
   if (!paste) return null;
+
   const reply = await storeFrameworkDocument({ clientId: args.clientId, kind: paste.kind, body: paste.body, by: args.by });
-  return { message: `*${doc.filename}*\n${reply.message}` };
+
+  // ‼️ SAY WHICH SIGNAL CHOSE THE KIND, SO A GUESS READS AS A GUESS.
+  //
+  // The stored-reply already names the kind ("Avatar sheet stored for..."), but it names it the
+  // same confident way whether a person typed the prefix or this function inferred it off a
+  // filename. On 2026-09-22 the misfiling was invisible in the thread and surfaced three cards
+  // later on the completeness count. A route taken off the weakest signal says so, and says how to
+  // correct it, in the message that announces it.
+  const lines = [`*${doc.filename}*`, reply.message];
+  if (named) {
+    lines.push(
+      "_Read as that from the filename, because no prefix was typed and the first line is a title._ " +
+        "If that is wrong, send it again with `avatar sheet:`, `short offer:` or `beliefs:` on the " +
+        "first line or typed with the file."
+    );
+  }
+  return { message: lines.join("\n") };
 }

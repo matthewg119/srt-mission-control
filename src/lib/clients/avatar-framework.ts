@@ -354,6 +354,54 @@ export function readFrameworkPaste(text: string): { kind: FrameworkDocumentKind;
   return null;
 }
 
+/**
+ * The names these three documents actually arrive under, for the FILENAME signal only.
+ *
+ * ‼️ NOT DERIVED FROM PASTE_PREFIXES, AND THE BELIEF CHAIN IS WHY. The typed prefix is `beliefs:`,
+ * but the file Matthew dropped on 2026-09-22 was a BELIEF CHAIN pdf, which is also what the draft
+ * gate calls it ("the belief chain"). Matching filenames against the prefix table alone would miss
+ * the exact document that caused the misfiling this exists to stop.
+ *
+ * ‼️ COMPOUND PHRASES ONLY, NEVER A BARE GENERIC WORD. `offer.pdf`, `avatar.docx` and `belief.txt`
+ * must fall through. This is the weakest of the three routing signals, and a confident wrong route
+ * files a document as a kind nobody chose, which is worse than not routing it at all.
+ */
+const FILENAME_ALIASES: ReadonlyArray<readonly [FrameworkDocumentKind, readonly string[]]> = [
+  ["avatar_sheet", ["avatarsheet"]],
+  ["short_offer", ["shortoffer", "offersummary"]],
+  ["necessary_beliefs", ["beliefchain", "necessarybeliefs", "beliefs"]],
+];
+
+/**
+ * Which document a dropped FILE is, by its filename. The WEAKEST of the three signals, and the last
+ * one consulted: a typed prefix is a person saying what the file is, a first line is the document
+ * saying so itself, and a filename is only the name somebody saved it under.
+ *
+ * ‼️ IT CANNOT RETURN `deep_research`, AND THAT IS FREE RATHER THAN A RULE TO ENFORCE.
+ * FrameworkDocumentKind is exactly the three framework documents, so a file called `research.pdf`
+ * cannot match anything here and keeps the fall-through to ingestResearchFile it already has.
+ * test-onboarding-artifacts.ts asserts that `research:` is not a framework document.
+ */
+export function kindFromFilename(
+  filename: string,
+  body: string
+): { kind: FrameworkDocumentKind; body: string } | null {
+  const stem = alnum(filename.replace(/\.[a-z0-9]{1,8}$/i, ""));
+  if (!stem) return null;
+
+  const hits = new Set<FrameworkDocumentKind>();
+  for (const [kind, aliases] of FILENAME_ALIASES) {
+    if (aliases.some((alias) => stem.includes(alias))) hits.add(kind);
+  }
+
+  // ‼️ TWO KINDS IN ONE NAME IS A REFUSAL, NOT FIRST-MATCH-WINS. "short offer and beliefs.pdf"
+  // names two documents, and on the weakest signal there is nothing to break the tie with. Falling
+  // through asks the person which it is; guessing files it as the one that happened to be listed
+  // first, and nothing downstream could tell that had happened.
+  if (hits.size !== 1) return null;
+  return { kind: [...hits][0], body };
+}
+
 function stripFence(text: string): string {
   const m = /^```[a-z]*\n?([\s\S]*?)\n?```\s*$/i.exec(text.trim());
   return m ? m[1] : text;
