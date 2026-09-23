@@ -562,7 +562,7 @@ AI Referral Engine preview live, themed to match
 | Reads | `client_dns_records`, `client_hosts`, `clients` |
 | [Done] reads | no table |
 | Dataset fields | none: the AI Referral Engine mirrors listings that already exist and asks for no dataset field |
-| Downstream | `client_delivery_steps` is selected in 28 other file(s), e.g. `src/app/api/clients/[id]/time-log/route.ts`, `src/app/api/internal/board-kick/route.ts`, `src/app/api/internal/run-step/route.ts` |
+| Downstream | `client_delivery_steps` is selected in 29 other file(s), e.g. `src/app/api/clients/[id]/time-log/route.ts`, `src/app/api/internal/board-kick/route.ts`, `src/app/api/internal/run-step/route.ts` |
 
 **[Done] refuses on:**
 
@@ -587,7 +587,7 @@ AI Concierge preview live, ready to demo on the call
 | Reads | `client_hosts`, `clients` |
 | [Done] reads | `concierge_configs` |
 | Dataset fields | 1 needed, 2 wanted |
-| Downstream | steps 19 `site_replica`, 21 `pre_call_pages` declare they wait on this; `client_delivery_steps` is selected in 28 other file(s), e.g. `src/app/api/clients/[id]/time-log/route.ts`, `src/app/api/internal/board-kick/route.ts`, `src/app/api/internal/run-step/route.ts`; `concierge_configs` is selected in 11 other file(s), e.g. `src/lib/clients/concierge-addon.ts`, `src/lib/clients/concierge-audience.ts`, `src/lib/clients/concierge-enabled.ts` |
+| Downstream | steps 19 `site_replica`, 21 `pre_call_pages` declare they wait on this; `client_delivery_steps` is selected in 29 other file(s), e.g. `src/app/api/clients/[id]/time-log/route.ts`, `src/app/api/internal/board-kick/route.ts`, `src/app/api/internal/run-step/route.ts`; `concierge_configs` is selected in 11 other file(s), e.g. `src/lib/clients/concierge-addon.ts`, `src/lib/clients/concierge-audience.ts`, `src/lib/clients/concierge-enabled.ts` |
 
 **[Done] refuses on:**
 
@@ -670,7 +670,7 @@ Seven pages drafted before the call: one pillar for the offer, six supports
 | Reads | `clients` |
 | [Done] reads | no table |
 | Dataset fields | 3 needed, 7 wanted |
-| Downstream | step 22 `call_sheet` declares it waits on this; `client_pages` is selected in 15 other file(s), e.g. `src/app/api/clients/[id]/hub/route.ts`, `src/app/dashboard/clients/[id]/page.tsx`, `src/lib/clients/client-reads.ts`; `page_plan` is selected in 14 other file(s), e.g. `src/lib/clients/artifacts/call-sheet.ts`, `src/lib/clients/batch-research.ts`, `src/lib/clients/client-headlines.ts` |
+| Downstream | step 22 `call_sheet` declares it waits on this; `client_pages` is selected in 15 other file(s), e.g. `src/app/api/clients/[id]/hub/route.ts`, `src/app/dashboard/clients/[id]/page.tsx`, `src/lib/clients/client-reads.ts`; `page_plan` is selected in 15 other file(s), e.g. `src/lib/clients/artifacts/call-sheet.ts`, `src/lib/clients/batch-research.ts`, `src/lib/clients/client-headlines.ts` |
 
 **[Done] refuses on:**
 

@@ -2978,13 +2978,51 @@ export async function runOneStep(
  * outstanding. These two are different: an error will never resolve itself, and a step that
  * has been waiting two days has been forgotten rather than deferred.
  */
-export async function stepDigest(): Promise<string | null> {
-  const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+/** One delivery step, anywhere, that is waiting on a person. */
+export interface OpenStepRow {
+  clientId: string;
+  clientName: string;
+  stepKey: string;
+  status: "awaiting_me" | "error";
+  updatedAt: string;
+  errorDetail: string | null;
+  slackMessageTs: string | null;
+  slackChannelId: string | null;
+}
 
-  const { data } = await supabaseAdmin
+/**
+ * Every step across every client that is waiting on a HUMAN.
+ *
+ * ‼️ ONE DEFINITION OF "OUTSTANDING", READ BY TWO SURFACES, AND THE STALENESS IS A PARAMETER RATHER
+ * THAN A SECOND COPY. stepDigest wants 48 hours, because a daily digest that lists everything
+ * outstanding is a digest nobody reads by week three. The Today plan wants all of it, because it is
+ * the list of what to do now. Two copies of this predicate would disagree within a month, and then
+ * the morning Slack post and the Today page would be telling somebody different things about the
+ * same board.
+ *
+ * ‼️ error AND awaiting_me, AND NOT THE OTHER SIX. `ready` and `running` are the machine's work;
+ * `pending` and `blocked` are the future. isOwnerWork() in config/roles.ts says the same in one
+ * place so a caller cannot widen it by accident.
+ *
+ * The partial index client_delivery_steps_awaiting_idx covers exactly this predicate.
+ */
+export async function openStepWork(opts: { staleHours?: number } = {}): Promise<OpenStepRow[]> {
+  const cutoff =
+    typeof opts.staleHours === "number" && opts.staleHours > 0
+      ? new Date(Date.now() - opts.staleHours * 60 * 60 * 1000).toISOString()
+      : null;
+
+  const { data, error } = await supabaseAdmin
     .from("client_delivery_steps")
-    .select("client_id, step_key, status, updated_at, error_detail, clients!inner(legal_name, dba_name)")
+    .select(
+      "client_id, step_key, status, updated_at, error_detail, slack_message_ts, clients!inner(legal_name, dba_name, slack_channel_id)"
+    )
     .in("status", ["error", "awaiting_me"]);
+
+  if (error) {
+    console.error("[clients/step-engine] openStepWork failed:", error.message);
+    return [];
+  }
 
   const rows = (data ?? []) as unknown as Array<{
     client_id: string;
@@ -2992,11 +3030,42 @@ export async function stepDigest(): Promise<string | null> {
     status: string;
     updated_at: string;
     error_detail: string | null;
-    clients: { legal_name: string; dba_name: string | null };
+    slack_message_ts: string | null;
+    clients: { legal_name: string; dba_name: string | null; slack_channel_id: string | null };
   }>;
 
+  return rows
+    // ‼️ THE CUTOFF APPLIES TO awaiting_me ONLY. An errored step is never stale: it is broken now,
+    // however long it has been broken, and hiding a fresh error for two days is the opposite of what
+    // a digest is for.
+    .filter((r) => r.status === "error" || !cutoff || r.updated_at < cutoff)
+    .map((r) => ({
+      clientId: r.client_id,
+      clientName: r.clients.dba_name || r.clients.legal_name,
+      stepKey: r.step_key,
+      status: r.status as "awaiting_me" | "error",
+      updatedAt: r.updated_at,
+      errorDetail: r.error_detail,
+      slackMessageTs: r.slack_message_ts,
+      slackChannelId: r.clients.slack_channel_id,
+    }));
+}
+
+export async function stepDigest(): Promise<string | null> {
+  // 48 hours, for the reason above: a digest that lists everything outstanding stops being read.
+  const open = await openStepWork({ staleHours: 48 });
+
+  const rows = open.map((r) => ({
+    client_id: r.clientId,
+    step_key: r.stepKey,
+    status: r.status,
+    updated_at: r.updatedAt,
+    error_detail: r.errorDetail,
+    clients: { legal_name: r.clientName, dba_name: null as string | null },
+  }));
+
   const errors = rows.filter((r) => r.status === "error");
-  const stale = rows.filter((r) => r.status === "awaiting_me" && r.updated_at < cutoff);
+  const stale = rows.filter((r) => r.status === "awaiting_me");
 
   if (!errors.length && !stale.length) return null;
 
