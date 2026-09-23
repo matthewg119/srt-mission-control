@@ -16,48 +16,24 @@
 import { supabaseAdmin } from "@/lib/db";
 import { slackThreadLink } from "@/lib/slack-bot";
 import { DELIVERY_STEPS, isStepKey, stepNumber, type StepKey } from "@/config/delivery-steps";
+import { commandish, grammarLine, ownersOf, stepPhrase, type CommandVerdict } from "./step-grammar";
 
-const OWNERS: ReadonlyArray<{ test: RegExp; step: StepKey; what: string }> = [
-  { test: /^\s*[`*_]*(offer|terms)\s*:/i, step: "offer_locked", what: "The offer and the words customers use for it" },
-  {
-    // `check` is deliberately absent: `keywords check` was removed on 2026-09-12 and is dictation
-    // now, so pointing somebody at another thread for it would send them to a command that is not
-    // there any more.
-    test: /^\s*[`*_]*keywords\s+(approve\b|drop\s+\d|add\s*:|more\s+\S)/i,
-    step: "keyword_set",
-    what: "Keyword commands",
-  },
-  {
-    test: /^\s*[`*_]*objection\s*:/i,
-    step: "custom_question_set",
-    what: "Objections heard on a sales call",
-  },
-  {
-    test: /^\s*[`*_]*review\s+(link|platform)\s*:/i,
-    step: "review_card_pdf",
-    what: "Review links",
-  },
-  {
-    test: /^\s*[`*_]*(plan(\s+(new|approve|(drop|swap)\s+\d{1,2}|edit\s+\d{1,2}\s*:.+))?|anchor(\s*:\s*\S+)?|ladder(\s+(pick\s+)?[1-5])?|(anchor\s+at|rung)\s+#?[1-5]|pillar\s*:\s*(auto|#?\d{1,4})|supports\s*:\s*(auto|[#\d,\s]+)|guarantee\s*:.+)\s*[`*_]*\s*$/i,
-    step: "pre_call_pages",
-    what: "Plan commands",
-  },
-  {
-    // ‼️ THE BARE WORD IS IN AND A BARE KEY IS NOT. `mascot` and `mascot concepts` are unambiguous
-    // anywhere, so pointing at step 18 is right for them. `mascot spa-otter` is a key this table cannot
-    // check the existence of, and claiming a sentence like "mascot ideas please" is a command would send
-    // somebody to another thread instead of answering them. mascot-studio.ts owns the real grammar; this
-    // only has to be right about the forms nothing else could be.
-    test: /^\s*[`*_]*mascots?(\s+(concepts?|skip|default|pick\s+\S.*|corner\s+\S+))?\s*[`*_]*\s*$/i,
-    step: "concierge_preview",
-    what: "Character commands",
-  },
-];
-
-/** Which step a command belongs to, or null when the text is not one. Pure, for the probe. */
+/**
+ * Which step a command belongs to, or null when the text is not one. Pure, for the probe.
+ *
+ * ‼️ THE TABLE MOVED TO step-grammar.ts ON 2026-09-22, AND THE SHAPE OF THIS DID NOT. Five probes
+ * assert `commandOwner(x)?.step` directly (_probe-headline-first, _probe-keywords, _probe-mascot,
+ * _probe-review-link, _probe-gaps), so it still answers with exactly one step even where several
+ * accept the command. `pointAt` is which one it names; `ownersOf` knows all of them.
+ *
+ * The OWNERS array this replaced listed six command families by hand out of the sixteen handlers
+ * that gate on a step. `letter ...` was one of the ten it did not list, which is why `letter approve`
+ * typed in step 11 got no pointer, reached the assistant, and came back as an invented button.
+ */
 export function commandOwner(text: string): { step: StepKey; what: string } | null {
-  const hit = OWNERS.find((o) => o.test.test(text.trim()));
-  return hit ? { step: hit.step, what: hit.what } : null;
+  const hit = ownersOf(text);
+  if (!hit) return null;
+  return { step: hit.spec.pointAt ?? hit.steps[0], what: hit.spec.what };
 }
 
 /** Where a step's thread is, in words a person can click. Shared by both pointers below. */
@@ -84,9 +60,16 @@ export async function misroutedCommand(input: {
   stepKey: string | null;
   text: string;
 }): Promise<string | null> {
-  const owner = commandOwner(input.text);
-  if (!owner || input.stepKey === owner.step) return null;
+  const hit = ownersOf(input.text);
+  if (!hit) return null;
 
+  // ‼️ EVERY STEP THAT ACCEPTS IT, NOT JUST THE ONE THE POINTER NAMES. Four families are shared:
+  // `review link:` is taken by four steps, the offer details by two, `avatar:` by two and the skin
+  // commands by three. Comparing against the named step alone told somebody typing `review link:`
+  // in step 35's thread, which takes it, that nothing was saved.
+  if (input.stepKey && hit.steps.includes(input.stepKey as StepKey)) return null;
+
+  const owner = { step: hit.spec.pointAt ?? hit.steps[0], what: hit.spec.what };
   const label = DELIVERY_STEPS.find((s) => s.key === owner.step)?.label ?? owner.step;
   const here = input.stepKey && isStepKey(input.stepKey) ? ` This thread is step ${stepNumber(input.stepKey)}.` : "";
 
@@ -204,4 +187,102 @@ export async function pastedListPointer(input: {
       `*step ${stepNumber("keyword_set")}, ${label}*, with \`keywords add:\` in front of them.${here}`,
     await whereStepLives(input.clientId, "keyword_set"),
   ].join("\n");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Anything else typed at a step, which used to reach the assistant with no guard rail
+//
+// ‼️ MEASURED 2026-09-22. `letter approve` in step 11's thread matched no handler, matched no entry
+// in the table above, and reached the general assistant, which answered with "press the Approve
+// button on the delivery board at step offer_locked". There is no Approve button on any card. The
+// person was stuck, and the reply looked like the system working.
+//
+// Matthew: "whenever we finish a step in onboarding and we type something that is not right, make
+// sure it resends the message we need to click to move forward or to give us the next steps."
+//
+// ‼️ IT DOES NOT CLAIM QUESTIONS, AND THAT IS THE WHOLE DIFFICULTY. A step thread takes real
+// questions for the assistant, and answering one of those with a command list is worse than the
+// essay this exists to prevent. commandish() in step-grammar.ts holds that line: three of its four
+// arms are exact table matches and the fourth refuses six times before it claims anything.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The step the board is actually waiting at, for a message that belongs to no step. */
+async function waitingStep(clientId: string): Promise<StepKey | null> {
+  const { data } = await supabaseAdmin
+    .from("client_delivery_steps")
+    .select("step_key, status")
+    .eq("client_id", clientId)
+    .in("status", ["awaiting_me", "ready", "error"]);
+
+  const open = new Set((data ?? []).map((r) => (r as { step_key: string }).step_key));
+  const hit = DELIVERY_STEPS.find((s) => open.has(s.key));
+  return hit ? (hit.key as StepKey) : null;
+}
+
+/**
+ * What to say when nothing took the message, or null to let the assistant answer it.
+ *
+ * ‼️ IT RETURNS LINES, NOT A POST. The route builds the buttons and posts, so this pointer, the
+ * misrouted one and the pasted-list one all go out through one door and all three carry the same
+ * three buttons. Three posting paths would eventually disagree about which of them gets them.
+ */
+export async function unclaimedReply(input: {
+  clientId: string;
+  stepKey: string | null;
+  text: string;
+}): Promise<{ lines: string[]; reason: CommandVerdict["kind"] } | null> {
+  const key = input.stepKey && isStepKey(input.stepKey) ? (input.stepKey as StepKey) : null;
+  const verdict = commandish(input.text, key);
+  if (!verdict) return null;
+
+  const typed = input.text.trim().replace(/\s+/g, " ").slice(0, 60);
+  const lines: string[] = [];
+
+  if (verdict.kind === "move_on") {
+    lines.push(
+      ":point_right: *Nothing here is waiting on a word from me.* A step closes on the buttons on " +
+        "its card, and they are on this message."
+    );
+  } else if (verdict.kind === "this_thread") {
+    lines.push(
+      `:point_right: *Nothing happened.* \`${typed}\` is one of this thread's own commands and ` +
+        "nothing took it, so either the argument is wrong or this step is not ready for it yet."
+    );
+  } else {
+    lines.push(`:point_right: *Nothing happened, and nothing was saved.* \`${typed}\` is not a command here.`);
+  }
+
+  // The pinned header thread belongs to the CLIENT, not to any step, so it has no grammar and no
+  // buttons to offer. The useful answer is where the board actually is.
+  if (!key) {
+    lines.push(
+      "This is the client's own thread rather than a step's, and every command belongs to a step's thread."
+    );
+    const next = await waitingStep(input.clientId);
+    if (next) {
+      lines.push(`The board is waiting at *${stepPhrase(next)}*.`, await whereStepLives(input.clientId, next));
+    }
+    return { lines, reason: verdict.kind };
+  }
+
+  lines.push(`This thread is ${stepPhrase(key)}.`);
+  lines.push(`*It takes:* ${grammarLine(key)}`);
+
+  // ‼️ THE CARD'S OWN BULLETS, NOT A PARAPHRASE. doThisNowLines is what the step card prints, so a
+  // person reading this message and a person reading the card are told the same thing in the same
+  // words. A failure here costs the bullets and never the reply: being told nothing happened
+  // matters more than being told what to do about it.
+  try {
+    const { withLeadScope } = await import("./lead-scope");
+    await withLeadScope(async () => {
+      const { doThisNowLines, readinessFor } = await import("./do-this-now");
+      const readiness = await readinessFor(input.clientId, key);
+      const todo = doThisNowLines(key, { readiness });
+      if (todo.length) lines.push("", ...todo);
+    });
+  } catch (e) {
+    console.error(`[step-commands] backstop bullets failed for ${key}: ${(e as Error).message}`);
+  }
+
+  return { lines, reason: verdict.kind };
 }

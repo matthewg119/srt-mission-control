@@ -46,10 +46,15 @@ export async function postFrameworkScript(clientId: string): Promise<{ ok: true;
 
   const letter = await approvedLetterFor(clientId);
   if (!letter.ok) {
+    // ‼️ "RIGHT HERE", NOT "AT STEP 10", SINCE 2026-09-22. This note used to send somebody to
+    // another thread to type one word, and typing it here instead matched nothing and reached the
+    // assistant, which invented an Approve button. sales-letter.ts now takes these in this thread.
     const note =
       `:hourglass: The framework script waits for an approved sales letter, and ${letter.message}. ` +
-      `At step ${stepNumber("offer_locked")}: \`letter use\`, \`letter draft\` or \`letter replace:\`, then \`letter approve\`, ` +
-      "and the script lands here. `prompt short` gives the short research prompt now, if you want to start without it.";
+      "Right here, or in step " +
+      `${stepNumber("offer_locked")}'s thread: \`letter use\`, \`letter draft\` or \`letter replace:\`, ` +
+      "then `letter approve`, and the script lands here. `prompt short` gives the short research " +
+      "prompt now, if you want to start without it.";
     await notifyStep(clientId, "avatar_harvest", note).catch(() => {});
     return { ok: true, posted: false, note };
   }
