@@ -114,9 +114,12 @@ comment on column public.page_plan.secondary_keywords is
 -- `outline` in the studio, and a plan row that was never drafted has none.
 --
 -- Shape: [{ "heading": "...", "keyword": "..." }], in the page's own section order. That order is
--- what keyword-placement.ts checks the primary keyword against.
+-- the long-tail each H2 is the answer to. (Corrected 2026-09-25: an earlier version of this line
+-- said keyword-placement.ts checks the primary keyword against these. It does not and never did;
+-- that file derives its H2s from the body text. These reach the BODY PROMPT instead.)
 alter table public.client_pages add column if not exists section_keywords jsonb;
 
 comment on column public.client_pages.section_keywords is
-  'Per-H2 long-tail keywords, as [{heading, keyword}] in section order. Written by the drafter '
-  'alongside the outline and read by src/lib/hub/keyword-placement.ts.';
+  'Per-H2 long-tail keywords, as [{heading, keyword}] in section order. Written by setPageOutline '
+  'in src/lib/hub/pages.ts. Read by the page_dataset corpus snapshot; the per-section phrase also '
+  'reaches the body prompt as "what the reader typed to get here". NOT read by keyword-placement.ts.';

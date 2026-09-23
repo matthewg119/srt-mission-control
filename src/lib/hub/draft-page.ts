@@ -802,6 +802,16 @@ export async function draftPage(
 export interface OutlineContext {
   workingTitle: string | null;
   targetKeyword: string | null;
+  /**
+   * Approved phrases that mean the same thing as targetKeyword, from page_plan.secondary_keywords.
+   *
+   * ‼️ GIVEN AS PERMISSION, NEVER AS A TARGET, and the wording in the prompt is the whole care here.
+   * A model handed a list of phrases to include welds every one of them in, which is exactly what
+   * keyword_shaped fails a page for and what the note at the section-keyword line below refuses to
+   * do. What this buys is the opposite: the writer is told it may say the thing in whichever of
+   * these ways reads best, because the gate now accepts any of them.
+   */
+  secondaryKeywords?: readonly string[];
   angle: string | null;
   /**
    * The page's picked direct-response headline, which every story starts from (F2). Optional: a page
@@ -1133,9 +1143,15 @@ export function outlineFaults(
     else headings.push(heading);
 
     // ‼️ THE PER-SECTION KEYWORD IS CHECKED, NOT ASKED FOR, same doctrine as the dash rule. It is
-    // written to client_pages.section_keywords and read back by keyword-placement.ts weeks later,
-    // so a missing one is not a cosmetic gap: it is a placement check that silently measures
-    // nothing.
+    // written to client_pages.section_keywords by setPageOutline.
+    //
+    // ‼️ CORRECTED 2026-09-25: THIS COMMENT USED TO SAY keyword-placement.ts READS IT BACK. It does
+    // not, and never has. That file takes a PlacementInput and derives its H2s from answerMd via
+    // h2Headings(); the only reader of section_keywords is the page_dataset corpus snapshot. The
+    // column's own SQL comment made the same claim and is corrected in
+    // docs/2026-09-12-client-headlines.sql. What the per-section keyword actually does is reach the
+    // BODY prompt as "what the reader typed to get here", which is worth keeping and is not a
+    // placement check.
     const keyword = typeof section?.keyword === "string" ? section.keyword.trim() : "";
     if (!keyword) {
       out.push(`section ${i + 1} has no keyword. Give it the long-tail phrase that section answers.`);
@@ -1277,6 +1293,13 @@ export async function draftOutline(
   if (g.buyerPersona) lines.push(`Who buys and what hurts: ${g.buyerPersona}`);
   if (ctx?.workingTitle) lines.push(`Working title: ${ctx.workingTitle}`);
   if (ctx?.targetKeyword) lines.push(`The phrase this page is aimed at: ${ctx.targetKeyword}`);
+  if (ctx?.secondaryKeywords?.length) {
+    lines.push(
+      `Phrases that mean the same thing to a search engine: ${ctx.secondaryKeywords.join("; ")}.`,
+      "Use whichever of them reads best in a heading. Do not force any of them in, and do not use " +
+        "them all: one page written plainly for the reader already answers every one of them."
+    );
+  }
   if (ctx?.angle) lines.push(`What this page gives the reader: ${ctx.angle}`);
   // ‼️ THE NARRATIVE AND THE BELIEF REACH THE DRAFTER, AND UNTIL NOW THEY NEVER DID. page_angles
   // stored both, page_dataset copied both, and the word "narrative" appeared nowhere in this file:

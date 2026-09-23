@@ -387,6 +387,20 @@ export interface FramedRow {
   workingTitle: string;
   angle: string;
   targetKeyword: string;
+  /**
+   * Approved phrases that mean the same thing as targetKeyword.
+   *
+   * ‼️ CHOSEN FROM THE APPROVED LIST, NOT INVENTED, and that is what makes them usable. The model
+   * is picking, exactly as it already picks targetKeyword, and frameFaults refuses anything not in
+   * the KEYWORDS set. A model free to invent a synonym would be asserting that two phrases mean the
+   * same thing, which is the claim sales-letter.ts refuses to let a model make.
+   *
+   * They are what lets a page rank for more than the one phrase it was named for: checkPlacement
+   * accepts any of them in the title, the H1, the meta, the first sentence and the subheads, so a
+   * naturally written page is not reported as faulty for saying the same thing in better words.
+   * The slug stays the primary keyword's alone.
+   */
+  secondaryKeywords: string[];
   frame: PlannedFrame;
 }
 
@@ -405,14 +419,21 @@ export interface FrameContext {
 }
 
 const FRAME_SYSTEM = `You plan the pages on one business's website. The pages have already been chosen: each one
-answers a question the business's buyers actually ask. You write, for each page, four things.
+answers a question the business's buyers actually ask. You write, for each page, five things.
 
 1. workingTitle. How a person would say the question, under 70 characters. Not the raw phrase.
 2. angle. One sentence on what the reader walks away with. Useful, specific, no promise of results.
 3. targetKeyword. The one phrase this page is aimed at, COPIED EXACTLY from the KEYWORDS list.
    Usually the page's own question if it is in the list; otherwise the closest phrase in the list.
    A phrase that is not in the list is rejected.
-4. frame. How the business's ANCHOR OFFER is presented on this page. Every page on this site offers
+4. secondaryKeywords. Three to five OTHER phrases from the KEYWORDS list that a search engine
+   would treat as meaning the same thing as targetKeyword, COPIED EXACTLY from the list. "Get more
+   reviews", "increase patient reviews" and "review generation" are one subject said three ways, so
+   a page aimed at any of them is aimed at all of them. Return [] rather than reaching: a phrase
+   about a DIFFERENT subject is worse than none, because the page will be judged as though it were
+   about that too. Never the targetKeyword itself, never a duplicate, never a phrase not in the list.
+
+5. frame. How the business's ANCHOR OFFER is presented on this page. Every page on this site offers
    the same one free thing, the anchor, and the frame is the door into it that fits what the reader
    of THIS page is thinking about:
      - title: what the offer is called on this page
@@ -438,6 +459,7 @@ const FRAME_SCHEMA = `{
       "workingTitle": string,
       "angle": string,
       "targetKeyword": string,
+      "secondaryKeywords": string[],
       "frame": { "title": string, "ctaLabel": string, "conciergeEntry": string }
     }
   ]
@@ -488,6 +510,35 @@ export function frameFaults(
     if (!keyword) out.push(`${where} has no targetKeyword.`);
     else if (!keywordSet.has(normalizePhrase(keyword))) {
       out.push(`${where}'s targetKeyword "${keyword}" is not in the KEYWORDS list. Copy one exactly.`);
+    }
+
+    // ‼️ THE SAME BAR AS targetKeyword, AND FOR THE SAME REASON. These phrases widen what the page
+    // is judged against at the gate, so a model free to invent one would be widening the target by
+    // assertion. An empty array is a legitimate, and common, answer.
+    //
+    // ‼️ MISSING IS NOT A FAULT. Every row written before 2026-09-25 has no secondaryKeywords, and
+    // a batch is validated whole: making absence a fault would reject the entire batch on a field
+    // the model may simply have omitted, and throw away four good rows to punish one.
+    const secondary = Array.isArray(row?.secondaryKeywords) ? row.secondaryKeywords : [];
+    if (secondary.length > 5) {
+      out.push(`${where} returned ${secondary.length} secondaryKeywords. Five at most.`);
+    }
+    const seenSecondary = new Set<string>();
+    for (const raw of secondary) {
+      const phrase = typeof raw === "string" ? raw.trim() : "";
+      if (!phrase) {
+        out.push(`${where} has an empty entry in secondaryKeywords.`);
+        continue;
+      }
+      const norm = normalizePhrase(phrase);
+      if (!keywordSet.has(norm)) {
+        out.push(`${where}'s secondaryKeyword "${phrase}" is not in the KEYWORDS list. Copy one exactly.`);
+      }
+      if (keyword && norm === normalizePhrase(keyword)) {
+        out.push(`${where}'s secondaryKeywords repeat the targetKeyword. They are the OTHER ways of saying it.`);
+      }
+      if (seenSecondary.has(norm)) out.push(`${where} lists "${phrase}" twice.`);
+      seenSecondary.add(norm);
     }
 
     if (!frame) {
@@ -570,6 +621,15 @@ export async function framePages(pages: readonly PoolItem[], ctx: FrameContext):
     workingTitle: r.workingTitle.trim(),
     angle: r.angle.trim(),
     targetKeyword: r.targetKeyword.trim(),
+    // Trimmed and de-duplicated here rather than trusted: frameFaults has already refused anything
+    // not in the approved set, so what survives is the model's picks in their stored spelling.
+    secondaryKeywords: [
+      ...new Set(
+        (Array.isArray(r.secondaryKeywords) ? r.secondaryKeywords : [])
+          .map((k) => (typeof k === "string" ? k.trim() : ""))
+          .filter((k) => k.length > 0)
+      ),
+    ],
     frame: readFrame(r.frame) as PlannedFrame,
   }));
 }
@@ -870,6 +930,11 @@ export async function proposePlan(
         rank: kept.length + i + 1,
         question: c.question,
         target_keyword: framed[i].targetKeyword,
+        // ‼️ CONDITIONAL SPREAD, the pattern this file already uses for role, headline, awareness
+        // and post_format. The column shipped in docs/2026-09-12-client-headlines.sql and has never
+        // had a writer, so on a database where that migration ran it is present and empty; naming it
+        // unconditionally would still be safe, and this stays consistent with its five neighbours.
+        ...(framed[i].secondaryKeywords?.length ? { secondary_keywords: framed[i].secondaryKeywords } : {}),
         working_title: framed[i].workingTitle,
         angle: framed[i].angle,
         theme: c.theme,
@@ -988,6 +1053,9 @@ export async function swapPlanRow(
     .update({
       question: next.question,
       target_keyword: framed.targetKeyword,
+      // A swap replaces the subject, so the old family must not survive onto the new one. Written
+      // as null rather than omitted, or row 4 would keep row 4's previous page's variations.
+      secondary_keywords: framed.secondaryKeywords?.length ? framed.secondaryKeywords : null,
       working_title: framed.workingTitle,
       angle: framed.angle,
       theme: next.theme,
