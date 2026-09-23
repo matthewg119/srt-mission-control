@@ -143,19 +143,41 @@ async function offerPool(clientId: string): Promise<
 
   const naming = pk.ctx.categories.find((c) => c.naming)?.key ?? null;
   const labels = (key: string) => categoryLabel(pk.ctx.categories, key);
-  const pool: OfferPoolItem[] = pk.rows.map((r) => ({
-    question: r.phrase,
-    score: r.score,
-    category: r.category,
-    categoryLabel: labels(r.category),
-    tier: tierOf(r.origin),
-    naming: r.category === naming,
-    focus: pk.ctx.categories.find((c) => c.key === r.category)?.focus === true,
-    // A picked keyword is relevant by decision: a person chose it for this offer.
-    relevant: r.role ? true : isRelevantKeyword(r, pk.vocab),
-    keywordId: r.id,
-    role: r.role ?? null,
+  // ‼️ THE STRATEGY IS A FILTER AND A PRE-SET ROLE, NEVER A SELECTOR, AND THAT IS THE WHOLE DESIGN.
+  // There are already two page pickers in this repo (selectPlan for the studio's twenty here,
+  // selectOfferPlan for the pre-call seven) and both are probe-pinned. A third would have to agree
+  // with both forever. Instead the approved strategy REMOVES the keywords it decided are merged or
+  // are a service page, and marks its pillars, and selectOfferPlan's existing preference for `role`
+  // over every score does the rest. Not one line of the selector changes.
+  //
+  // ‼️ NO STRATEGY IS A NO-OP, ITEM FOR ITEM. strategyView returns an empty view when the tables are
+  // absent, when nothing is approved, or on any read error, so this is safe to deploy before the SQL
+  // and behaves exactly as it did before on every client who has not locked one.
+  const { strategyView } = await import("./keyword-strategy");
+  const strategy = await strategyView(clientId).catch(() => ({
+    locked: false,
+    excludeIds: new Set<string>(),
+    pillarIds: [] as string[],
   }));
+  const pillarSet = new Set(strategy.pillarIds);
+
+  const pool: OfferPoolItem[] = pk.rows
+    .filter((r) => !strategy.excludeIds.has(r.id))
+    .map((r) => ({
+      question: r.phrase,
+      score: r.score,
+      category: r.category,
+      categoryLabel: labels(r.category),
+      tier: tierOf(r.origin),
+      naming: r.category === naming,
+      focus: pk.ctx.categories.find((c) => c.key === r.category)?.focus === true,
+      // A picked keyword is relevant by decision: a person chose it for this offer.
+      relevant: r.role || pillarSet.has(r.id) ? true : isRelevantKeyword(r, pk.vocab),
+      keywordId: r.id,
+      // ‼️ A ROLE ALREADY SET ON THE KEYWORD ROW WINS. `pillar:` at step 21 is a person pointing at
+      // one phrase, and a strategy locked days earlier must not silently overrule it.
+      role: r.role ?? (pillarSet.has(r.id) ? ("pillar" as const) : null),
+    }));
   const idByPhrase = new Map(pk.rows.map((r) => [normalizePhrase(r.phrase), r.id]));
   return {
     pool,
@@ -478,6 +500,9 @@ async function draftOne(
         clientId,
         question: row.question,
         title: row.workingTitle,
+        // keywordSlug()'s first production caller, eleven days after it was written. Creation only:
+        // startPageDraft's resume branch returns the existing slug before this is looked at.
+        slug: row.slug ?? undefined,
         audienceId: (leased[0]?.audience_id as string | null) ?? null,
       });
       if (!started.ok) {

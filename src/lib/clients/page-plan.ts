@@ -129,6 +129,14 @@ export interface PlanRow {
   /** 3 to 5 approved variations of targetKeyword, each verbatim from client_keywords. */
   secondaryKeywords: string[] | null;
   /**
+   * The URL this page will take, built from the target keyword rather than the working title.
+   *
+   * Null on every row written before docs/2026-09-26-keyword-strategy.sql, and on any row whose
+   * slug could not be made unique; both mean "derive it from the working title at draft time",
+   * which is what every row did before. Merged by withStrategy.
+   */
+  slug: string | null;
+  /**
    * Where the reader is when they arrive, 5 (unaware) to 1 (most aware), and where the page leaves
    * them. LOWER IS CLOSER TO BUYING. Null on a row from before docs/2026-09-15-awareness-stages.sql.
    */
@@ -665,6 +673,7 @@ function toPlanRow(r: Record<string, unknown>): PlanRow {
     // Merged on afterwards by withHeadlines, for the blast-radius reason it documents.
     headline: null,
     secondaryKeywords: null,
+    slug: null,
     // Merged on afterwards by withAwareness.
     awarenessEntry: null,
     awarenessTarget: null,
@@ -755,6 +764,30 @@ async function withAwareness(rows: PlanRow[]): Promise<PlanRow[]> {
  * database that has the earlier columns but not this one. A missing column reads as a plan whose
  * pages have no shape yet, which is what it is.
  */
+/**
+ * The strategy columns, merged on tolerantly.
+ *
+ * ‼️ THE SIXTH INSTANCE OF THIS PATTERN IN THIS FILE, and the reason is the same every time: one
+ * unknown column fails the WHOLE PostgREST select and supabase-js RETURNS the error rather than
+ * throwing, so naming a column that may not exist yet would turn the entire plan into "no plan".
+ * A database without docs/2026-09-26-keyword-strategy.sql reads as "no slug", which is what it is.
+ */
+async function withStrategy(rows: PlanRow[]): Promise<PlanRow[]> {
+  if (rows.length === 0) return rows;
+  const { data, error } = await supabaseAdmin
+    .from("page_plan")
+    .select("id, slug")
+    .in("id", rows.map((r) => r.id));
+  if (error) return rows;
+  const byId = new Map(((data ?? []) as Array<Record<string, unknown>>).map((r) => [String(r.id), r]));
+  for (const row of rows) {
+    const extra = byId.get(row.id);
+    if (!extra) continue;
+    row.slug = typeof extra.slug === "string" && extra.slug.trim() ? extra.slug.trim() : null;
+  }
+  return rows;
+}
+
 async function withPostFormat(rows: PlanRow[]): Promise<PlanRow[]> {
   if (rows.length === 0) return rows;
   const { data, error } = await supabaseAdmin
@@ -878,6 +911,43 @@ async function existingPageQuestions(clientId: string): Promise<Set<string>> {
  * different suggestions", not "forget what I decided". A claimed row has a page being written
  * against it, and deleting it would orphan that page from the plan it came from.
  */
+/**
+ * The URL each planned page will take, built from its target keyword.
+ *
+ * ‼️ TWO KEYWORDS CAN PRODUCE ONE SLUG, AND THE ANSWER IS TO LEAVE THE SECOND ONE NULL. keywordSlug
+ * strips stopwords, so "how much does botox cost" and "botox cost" both become "botox-cost", and
+ * client_pages is unique on (client_id, lower(slug)). A silent numeric suffix would put
+ * "botox-cost-2" on a client's live site, which is a URL nobody chose. A null means "derive it from
+ * the working title at draft time", which is exactly what every row did before this existed, so the
+ * collision costs the second page its keyword-shaped URL and nothing else.
+ *
+ * ‼️ AGAINST THE SLUGS ALREADY TAKEN, NOT ONLY AGAINST THIS BATCH. A plan proposed in two goes would
+ * otherwise hand the same slug to a row in each.
+ */
+async function slugsFor(clientId: string, keywords: readonly string[]): Promise<Array<string | null>> {
+  const { keywordSlug } = await import("@/lib/hub/keyword-placement");
+  const taken = new Set<string>();
+
+  try {
+    const [pages, plan] = await Promise.all([
+      supabaseAdmin.from("client_pages").select("slug").eq("client_id", clientId),
+      supabaseAdmin.from("page_plan").select("slug").eq("client_id", clientId),
+    ]);
+    for (const r of pages.data ?? []) if (typeof r.slug === "string") taken.add(r.slug.toLowerCase());
+    // A missing column here is the migration not being run yet, which is not a reason to refuse.
+    for (const r of plan.data ?? []) if (typeof r.slug === "string") taken.add(r.slug.toLowerCase());
+  } catch {
+    /* an unreadable slug list means every slug is proposed; the unique index is still the backstop */
+  }
+
+  return keywords.map((k) => {
+    const slug = keywordSlug(k);
+    if (!slug || taken.has(slug.toLowerCase())) return null;
+    taken.add(slug.toLowerCase());
+    return slug;
+  });
+}
+
 export async function proposePlan(
   clientId: string,
   ctx: Omit<FrameContext, "keywords">
@@ -924,6 +994,8 @@ export async function proposePlan(
 
   const now = new Date().toISOString();
   if (chosen.length) {
+    // Decided here, at creation, because it is the only window in which a URL can be decided.
+    const plannedSlugs = await slugsFor(clientId, framed.map((f) => f.targetKeyword));
     const { error: insError } = await supabaseAdmin.from("page_plan").insert(
       chosen.map((c, i) => ({
         client_id: clientId,
@@ -935,6 +1007,7 @@ export async function proposePlan(
         // had a writer, so on a database where that migration ran it is present and empty; naming it
         // unconditionally would still be safe, and this stays consistent with its five neighbours.
         ...(framed[i].secondaryKeywords?.length ? { secondary_keywords: framed[i].secondaryKeywords } : {}),
+        ...(plannedSlugs[i] ? { slug: plannedSlugs[i] } : {}),
         working_title: framed[i].workingTitle,
         angle: framed[i].angle,
         theme: c.theme,

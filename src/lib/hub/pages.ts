@@ -427,12 +427,25 @@ export async function startPageDraft(input: {
    * because there is nothing to choose; with several it is a REFUSAL, named by audienceForWrite.
    */
   audienceId?: string | null;
+  /**
+   * The URL this page takes, from page_plan.slug, built by keywordSlug() off the target keyword.
+   *
+   * ‼️ IT REACHES AN INSERT AND NOTHING ELSE, AND THE FUNCTION'S OWN SHAPE IS WHAT GUARANTEES THAT.
+   * The resume branch below returns `existing.slug` untouched before this is ever used, and the
+   * update path in pre-call-pages.ts hands savePage the page's current slug back. pageSlug's own
+   * comment says a slug "must not silently change for an existing page": it is a public URL a
+   * crawler has indexed, and changing it is a 404 plus the loss of whatever standing it had.
+   *
+   * Omitted means "derive it from the working title", which is what every caller did before
+   * docs/2026-09-26-keyword-strategy.sql added the column.
+   */
+  slug?: string | null;
 }): Promise<{ ok: true; id: string; slug: string; resumed: boolean } | { ok: false; error: string }> {
   const question = input.question.trim();
   if (!question) return { ok: false, error: "There is no question to open a page for." };
 
   const workingTitle = input.title?.trim() || question;
-  const slug = pageSlug(workingTitle);
+  const slug = pageSlug(input.slug?.trim() || workingTitle);
   if (!slug) return { ok: false, error: "That question does not produce a usable web address." };
 
   const { data: existing, error: readError } = await supabaseAdmin

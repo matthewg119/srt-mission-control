@@ -161,7 +161,7 @@ Site, hosting and DNS intelligence
 | Reads | nothing |
 | [Done] reads | no table |
 | Dataset fields | none: hosting, DNS and the site are observed from the network, never answered |
-| Downstream | `clients` is selected in 95 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
+| Downstream | `clients` is selected in 96 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
 
 **[Done] refuses on:**
 
@@ -322,7 +322,7 @@ One offer proposed from what they told us at intake
 | Reads | `client_audiences`, `client_delivery_steps` |
 | [Done] reads | no table |
 | Dataset fields | none: the proposal is written from what intake already said, so nothing has to be collected for it. What it LOSES, the proposal's own reasoning before offer_locked overwrites it, is a missing history row rather than a missing field |
-| Downstream | `client_offers` is selected in 1 other file(s), e.g. `src/lib/clients/archive.ts`; `clients` is selected in 95 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
+| Downstream | `client_offers` is selected in 1 other file(s), e.g. `src/lib/clients/archive.ts`; `clients` is selected in 96 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
 
 **[Done] refuses on:**
 
@@ -423,7 +423,7 @@ Keywords: 200+ ways the offer is said, approved by me
 | Reads | `audit_reports`, `audit_runs`, `clients` |
 | [Done] reads | no table |
 | Dataset fields | 1 needed, 3 wanted |
-| Downstream | steps 13 `custom_question_set`, 14 `page_candidates`, 21 `pre_call_pages` declare they wait on this; `client_keywords` is selected in 2 other file(s), e.g. `src/lib/clients/anchor-ladder.ts`, `src/lib/clients/archive.ts` |
+| Downstream | steps 13 `custom_question_set`, 14 `page_candidates`, 21 `pre_call_pages` declare they wait on this; `client_keywords` is selected in 3 other file(s), e.g. `src/lib/clients/anchor-ladder.ts`, `src/lib/clients/archive.ts`, `src/lib/clients/keyword-strategy.ts` |
 
 **[Done] refuses on:**
 
@@ -1099,7 +1099,7 @@ SRT pixel live on the client site, first real session seen
 | Reads | nothing |
 | [Done] reads | no table |
 | Dataset fields | none: the pixel is live or it is not, and a real session proves it |
-| Downstream | `clients` is selected in 95 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
+| Downstream | `clients` is selected in 96 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
 
 **[Done] refuses on:**
 

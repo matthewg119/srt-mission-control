@@ -1232,6 +1232,105 @@ export async function POST(request: NextRequest) {
           }
         }
 
+        // 1a-quater-bis. A Google screenshot dropped in step 12's thread with `keywords serp 12` as
+        // the caption.
+        //
+        // ‼️ IT MUST SIT ABOVE THE TYPED-COMMAND CHAIN BELOW, AND captureOnboardingUploads IS NOT
+        // THE HAZARD. That chain is gated on `userText.trim().length > 0` and does NOT exclude
+        // attached files, so a screenshot posted WITH its command is claimed by
+        // handleStrategyThreadReply, answered "paste the screenshot in the same message", and the
+        // image is never looked at. The same latent ordering exists for the mascot lane.
+        //
+        // ‼️ IT STILL FILES THE UPLOAD. The skin and mascot branches return without calling
+        // captureOnboardingUploads and rely on the independent file_shared event to store the bytes,
+        // which is a race. Here the capture runs first so the screenshot is a client_docs row with
+        // delivery_step_key='keyword_set' whatever the vision read does, and doc_id on the verdict
+        // is best effort rather than load bearing.
+        //
+        // ‼️ THE ACK GOES OUT BEFORE THE VISION CALL. Slack re-delivers an event it has not heard
+        // back from within three seconds and a vision read is slower than that.
+        if (client && parentThreadTs && attachedFiles.length > 0 && client.stepKey === "keyword_set") {
+          const { KEYWORDS_SERP } = await import("@/lib/clients/keyword-strategy-rules");
+          const serpAsk = KEYWORDS_SERP.exec(userText.trim());
+          const { SERP_VISION_TYPES } = await import("@/lib/clients/serp-read");
+          const shot = attachedFiles.find(
+            (f) => SERP_VISION_TYPES.has((f.mimetype ?? "").toLowerCase()) && f.url_private_download
+          );
+
+          if (serpAsk && shot) {
+            const clientId = client.id;
+            const clientLegalName = client.legalName;
+            const n = Number(serpAsk[1]);
+            const by = event.user ? `<@${event.user as string}>` : "someone in Slack";
+            const threadTs = parentThreadTs;
+
+            const said = await slack.postThreadReply(
+              channel,
+              threadTs,
+              `:hourglass_flowing_sand: Reading that results page for \`${n}\`. A few seconds.`
+            );
+            if (!slackOk(said)) console.error("[slack/events] serp ack failed");
+
+            waitUntil(
+              (async () => {
+                // File it first, exactly as it would have been filed without this branch, then
+                // look the row up by the Slack file id. captureOnboardingUploads returns void, and
+                // client_docs.slack_file_id is unique, so the lookup is the honest way to learn
+                // which row it wrote. A miss costs the verdict its screenshot link, nothing else.
+                let docId: string | null = null;
+                try {
+                  await captureOnboardingUploads({
+                    channel,
+                    threadTs,
+                    client: { id: clientId, legalName: clientLegalName, stepKey: "keyword_set" },
+                    files: attachedFiles,
+                    text: userText,
+                  });
+                  const { supabaseAdmin } = await import("@/lib/db");
+                  const { data } = await supabaseAdmin
+                    .from("client_docs")
+                    .select("id")
+                    .eq("slack_file_id", shot.id)
+                    .maybeSingle();
+                  docId = (data?.id as string) ?? null;
+                } catch (e) {
+                  console.error("[slack/events] serp capture failed:", (e as Error).message);
+                }
+
+                const buf = await slack.downloadFile(shot.url_private_download as string).catch(() => null);
+                if (!buf) {
+                  await slack.postThreadReply(channel, threadTs, ":warning: I could not download that screenshot from Slack. Post it again, or type `keywords serp " + n + ": merge`.");
+                  return;
+                }
+                // The same 6 MB ceiling every other vision reader in this repo uses. Anthropic
+                // answers an oversized request with a 413, which is not retried.
+                if (buf.byteLength > 6 * 1024 * 1024) {
+                  await slack.postThreadReply(channel, threadTs, ":warning: That screenshot is over 6 MB, which is too large to read. Post a smaller one, or type `keywords serp " + n + ": merge`.");
+                  return;
+                }
+
+                const { recordSerpScreenshot } = await import("@/lib/clients/keyword-strategy");
+                const res = await recordSerpScreenshot({
+                  clientId,
+                  n,
+                  image: { media_type: (shot.mimetype as string).toLowerCase(), data: buf.toString("base64") },
+                  by,
+                  docId,
+                });
+                const { postClientReply } = await import("@/lib/clients/client-events");
+                await postClientReply({
+                  clientId,
+                  stepKey: "keyword_set",
+                  channel,
+                  threadTs,
+                  text: res.message,
+                }).catch(() => {});
+              })().catch((e) => console.error("[slack/events] serp screenshot threw:", (e as Error).message))
+            );
+            return NextResponse.json({ ok: true });
+          }
+        }
+
         // 1a-quinquies. The keyword step's grammar (`keywords approve`, `keywords drop 12`, ...) and
         // the pre-call plan's (`plan approve`, `plan swap 4`, `anchor: <key>`), each only in its own
         // step's thread. Exact forms only; a sentence that merely starts with the word falls
@@ -1248,6 +1347,17 @@ export async function POST(request: NextRequest) {
           const { handleReviewLinkThreadReply } = await import("@/lib/clients/review-link");
           const said =
             (await handleKeywordThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText, by })) ??
+            // ‼️ ABOVE THE LADDER, AND THAT ORDER MATTERS. Step 21 owns `pillar:` and `supports`;
+            // the strategy verbs are namespaced under `strategy ...` precisely so the two cannot be
+            // confused, and sitting above the ladder means a mistyped `strategy pillar 4` in step
+            // 12's thread is answered here rather than falling through to a step 21 handler that
+            // would correctly refuse it for the wrong reason.
+            (await (await import("@/lib/clients/keyword-strategy")).handleStrategyThreadReply({
+              clientId: client.id,
+              stepKey: client.stepKey,
+              text: userText,
+              by,
+            })) ??
             (await (await import("@/lib/clients/anchor-ladder")).handleLadderThreadReply({
               clientId: client.id,
               stepKey: client.stepKey,
