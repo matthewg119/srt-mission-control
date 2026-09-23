@@ -139,6 +139,62 @@ export interface Finalist {
 }
 
 /**
+ * Would a person type this into Google?
+ *
+ * ‼️ keywordFault() DOES NOT ANSWER THIS, AND I CHECKED. Run against SRT's 376 approved queries it
+ * keeps every one of these: "If a client can book without commitment, your schedule is at risk.",
+ * "Get a Free Audit Book a Strategy Call Ready to grow your practice?", "How much does this cost?".
+ * That function was built to catch EXTRACTION DEBRIS (urls, citation markers, markup, nav chrome) and
+ * it is right about all of those. A grammatical English sentence is not debris; it is simply not a
+ * search, and nothing had ever needed to tell the difference before something started spending a
+ * screenshot on each one.
+ *
+ * Three tests, each one a shape rather than a judgement:
+ *
+ *  1. IT ENDS IN A FULL STOP. Nobody types a sentence-final period into a search box. A question mark
+ *     is fine, because people do type questions.
+ *  2. ITS QUOTE MARKS DO NOT BALANCE. That is an extraction that took half of somebody's quotation.
+ *  3. IT POINTS AT SOMETHING IT DOES NOT NAME. "How much does this cost?" and "What is included in
+ *     the appointment?" are real questions a buyer asks out loud, and they belong in question_bank,
+ *     which is where they came from. As a SEARCH they name nothing: the subject is in the room, not
+ *     in the phrase, so the page would be aimed at "this".
+ *
+ * ‼️ IT FILTERS THE SHORTLIST, NOT THE KEYWORD SET. Those rows stay approved and stay in the set:
+ * they are the buying questions the concierge and the page angles are built from, and dropping them
+ * would break lanes that legitimately want them. The only thing this decides is which phrases are
+ * worth a SERP check, because googling "how much does this cost" tells nobody anything.
+ */
+export function searchable(phrase: string): boolean {
+  const p = phrase.trim();
+  if (!p) return false;
+
+  // 1. A statement, not a search.
+  if (/[.](\s|$)/.test(p.slice(-2))) return false;
+
+  // 2. Half a quotation.
+  const straight = (p.match(/"/g) ?? []).length;
+  const curlyOpen = (p.match(/[“‘]/g) ?? []).length;
+  const curlyClose = (p.match(/[”’]/g) ?? []).length;
+  if (straight % 2 !== 0) return false;
+  // An apostrophe is a closing curly quote too, so only an unmatched OPENING one is a fault.
+  if (curlyOpen > curlyClose) return false;
+
+  // 3. It points at something it does not name.
+  return !POINTS_AT_NOTHING.test(p);
+}
+
+/**
+ * Deictics: words that stand in for a subject the phrase never gives.
+ *
+ * ‼️ ANCHORED TO THE WHOLE PHRASE, NOT A BARE WORD MATCH. "this" appears legitimately inside plenty
+ * of real searches ("is this covered by insurance" is one somebody types). What makes a phrase
+ * unsearchable is that the deictic is the ONLY subject in it, which in practice is the shapes below:
+ * a question whose object is "this", "it", "they", or a bare definite noun with no qualifier.
+ */
+const POINTS_AT_NOTHING =
+  /^(how much|how long|how many|what|when|where|why|who|which|is|are|does|do|can|will)\b[^?]*\b(this|that|these|those|it|they|them|my front desk|the(\s+\w+)?\s+(appointment|process|service|package|session))\b/i;
+
+/**
  * The ~25 subjects worth googling, from the approved query set.
  *
  * ‼️ SUBJECTS, NOT PHRASES, WHICH IS WHY IT DEDUPES BEFORE IT CAPS. SRT approves 376 queries and
@@ -150,7 +206,11 @@ export interface Finalist {
  * card's numbers be typed at: `keywords serp 12` has to mean the same row tomorrow.
  */
 export function shortlistOf(rows: readonly Finalist[]): Finalist[] {
-  const ordered = [...rows].sort((a, b) => b.score - a.score || a.rank - b.rank || a.id.localeCompare(b.id));
+  // ‼️ UNSEARCHABLE ROWS ARE DROPPED BEFORE THE CAP, NOT AFTER. Filtering afterwards would spend
+  // slots on sentences and hand back a list of eighteen when twenty-five were asked for.
+  const ordered = [...rows]
+    .filter((r) => searchable(r.phrase))
+    .sort((a, b) => b.score - a.score || a.rank - b.rank || a.id.localeCompare(b.id));
 
   const kept: Finalist[] = [];
   const perCategory = new Map<string, number>();

@@ -23,6 +23,7 @@ import {
   clusterFinalists,
   parseStrategyCommand,
   sameSubject,
+  searchable,
   shortlistOf,
   typedVerdict,
   verdictFrom,
@@ -120,6 +121,44 @@ check("with no typed row, the newest vision one wins", bestVerdict([rows[0]])?.v
 check("no rows is null, not a default", bestVerdict([]) === null);
 
 // ─────────────────────────────────────────────────────────────────────────────
+console.log("\n3b. only things a person would actually type reach the shortlist");
+
+// ‼️ keywordFault() KEEPS EVERY ONE OF THE JUNK CASES BELOW. Measured against SRT's 376 approved
+// queries: that function was built for extraction debris (urls, citation markers, markup) and it is
+// right about all of those. A grammatical English sentence is not debris, it is simply not a search,
+// and nothing needed to tell the difference until something started spending a screenshot on each.
+for (const real of [
+  "med spa marketing agency Greensboro",
+  "does seo actually work for med spas",
+  "AEO vs SEO: What is the difference and do you need both?",
+  "how long does lip filler last",
+]) {
+  check(`"${real.slice(0, 44)}" is searchable`, searchable(real));
+}
+
+for (const junk of [
+  "If a client can book without commitment, your schedule is at risk.",
+  "When clients cannot see meaningful differences, decisions shift toward price.",
+]) {
+  check("a statement ending in a full stop is not", !searchable(junk), junk.slice(0, 52));
+}
+
+// ‼️ THESE ARE REAL QUESTIONS A BUYER ASKS OUT LOUD, and they stay approved and stay in the keyword
+// set: the concierge and the page angles are built from them. As a SEARCH they name nothing, because
+// the subject is in the room rather than in the phrase, so a page aimed at one is aimed at "this".
+for (const deictic of [
+  "How much does this cost?",
+  "What is included in the appointment?",
+  "How long is the booked appointment?",
+  "How much work is this for me and my front desk?",
+]) {
+  check(`"${deictic}" points at nothing`, !searchable(deictic));
+}
+
+check("half a quotation is not searchable", !searchable("“Belief vs Reality: AI Solves Medspa Marketing?"));
+check("an apostrophe is not an unbalanced quote", searchable("what is a med spa's busiest month"));
+check("a question mark is fine", searchable("how much is botox in greensboro?"));
+
 console.log("\n4. the shortlist dedupes subjects, then caps");
 
 check("'botox cost' and 'how much does botox cost' are one subject", sameSubject("botox cost", "how much does botox cost"));
