@@ -388,7 +388,7 @@ Buyer-phrase harvest and the deep research for the confirmed avatar
 | Reads | `audit_reports`, `audit_runs`, `clients` |
 | [Done] reads | `harvest_runs`, `question_bank` |
 | Dataset fields | 46 needed, 12 wanted |
-| Downstream | step 12 `keyword_set` declares it waits on this; `harvest_runs` is selected in 2 other file(s), e.g. `src/lib/clients/research-intake.ts`, `src/lib/clients/step-verify.ts`; `question_bank` is selected in 12 other file(s), e.g. `src/lib/clients/artifacts/custom-question-set.ts`, `src/lib/clients/artifacts/deep-research-run.ts`, `src/lib/clients/artifacts/page-candidates.ts` |
+| Downstream | step 12 `keyword_set` declares it waits on this; `harvest_runs` is selected in 2 other file(s), e.g. `src/lib/clients/research-intake.ts`, `src/lib/clients/step-verify.ts`; `question_bank` is selected in 13 other file(s), e.g. `src/lib/clients/artifacts/custom-question-set.ts`, `src/lib/clients/artifacts/deep-research-run.ts`, `src/lib/clients/artifacts/page-candidates.ts` |
 
 **[Done] refuses on:**
 

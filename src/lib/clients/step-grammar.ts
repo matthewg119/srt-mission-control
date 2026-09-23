@@ -316,6 +316,21 @@ const KEYWORDS: CommandSpec = {
   mustBeOnTheCard: true,
 };
 
+/**
+ * ‼️ `keywords prompt`, NOT a bare `prompt`. Step 11's framework thread owns `prompt` and
+ * `prompt short`, gated on avatar_harvest. Two steps answering one bare word is how somebody types
+ * it in the wrong thread, gets a plausible answer, and files research against the wrong step.
+ */
+const KEYWORDS_PROMPT: CommandSpec = {
+  label: "keywords prompt",
+  test: /^\s*[`*_]*keywords\s+prompt\b/i,
+  unmistakable: /^\s*[`*_]*keywords\s+prompt\b/i,
+  pointAt: "keyword_set",
+  what: "Keyword commands",
+  implementedIn: "src/lib/clients/client-keywords.ts",
+  mustBeOnTheCard: true,
+};
+
 const KEYWORDS_ADD: CommandSpec = {
   label: "keywords add:",
   test: /^\s*[`*_]*keywords\s+add\s*:/i,
@@ -646,7 +661,7 @@ export const STEP_COMMANDS: Record<StepKey, readonly CommandSpec[]> = {
     BELIEFS,
     ...LETTER,
   ],
-  keyword_set: [KEYWORDS, KEYWORDS_ADD, KEYWORDS_APPROVE, KEYWORDS_DROP, KEYWORDS_MORE],
+  keyword_set: [KEYWORDS, KEYWORDS_PROMPT, KEYWORDS_ADD, KEYWORDS_APPROVE, KEYWORDS_DROP, KEYWORDS_MORE],
   custom_question_set: [OBJECTION],
   page_candidates: [],
   citation_cleanup_list: [],

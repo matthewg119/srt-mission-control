@@ -151,6 +151,12 @@ export const STEP_ACTIONS: Record<StepKey, StepAction> = {
   keyword_set: {
     verb: "pick",
     bullets: [
+      // ‼️ THE PROMPT IS THE FIRST BULLET, AND THAT ORDER IS THE POINT. What is in the set before
+      // anybody types anything is mostly `expansion` rows, which are a model's proposal and rank
+      // below evidence on purpose. Approving first means approving those. Researching first means
+      // the answers arrive as `manual` rows, which PRECEDENCE puts above every one of them.
+      "`keywords prompt` first: it hands over a research prompt that already knows the offer. Run it in claude.com.",
+      "Bring the numbered list back with `keywords add:` on the line above it.",
       "`keywords` to see the set. `keywords drop 4, 9` for anything off-offer.",
       "`keywords add: <phrase>` to add one, `keywords more <category>` for a thin bucket.",
       "`keywords approve` when the set is right. Then press Done.",

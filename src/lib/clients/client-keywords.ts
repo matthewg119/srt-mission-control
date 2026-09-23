@@ -964,7 +964,102 @@ export async function handleKeywordThreadReply(input: {
         : addManyCommand(input.clientId, cmd.phrases, input.by);
     case "more":
       return moreCommand(input.clientId, cmd.category);
+    case "prompt":
+      return promptCommand(input.clientId);
   }
+}
+
+/**
+ * `keywords prompt`: hand over the research prompt for this offer.
+ *
+ * ‼️ IT UPLOADS A FILE RATHER THAN POSTING A MESSAGE, for the reason postFinalPrompt and
+ * postFrameworkScript both record: this prompt carries the research on file, the documents and
+ * every phrase already stored, which is tens of thousands of characters on a real client, and a
+ * Slack section over 3,000 fails the WHOLE message rather than truncating.
+ *
+ * ‼️ ALL_SLICES, NOT A HAND-WRITTEN LIST. "All of the context possible" is the requirement, and a
+ * slice list retyped here stops being all of it the day one is added to lead-context.ts.
+ *
+ * ‼️ IT REFUSES RATHER THAN DEGRADING. No locked offer means there is no offer to find keywords
+ * for, and a prompt sent anyway returns keywords for a category rather than for this business.
+ */
+async function promptCommand(clientId: string): Promise<KeywordReply> {
+  const { leadContext, ALL_SLICES } = await import("./lead-context");
+  const ctx = await leadContext(clientId, { include: [...ALL_SLICES] });
+
+  // buildContext refuses without a confirmed avatar. Unlike the deep research prompt, that is NOT
+  // fatal here: a keyword is a search phrase, this door files nothing into the shared per-vertical
+  // phrase corpus, and the offer alone is enough to ask the question. So a missing avatar costs the
+  // owner's own words and nothing else.
+  //
+  // ‼️ THE CORPUS IS NOT NAMED IN WORDS HERE ON PURPOSE. scripts/_step-wiring.ts greps source as
+  // TEXT to work out which files touch which table, so a comment mentioning one counts as a reader
+  // and silently moves a number in a generated document. Same class of trap as the publish-gate
+  // hole checks, which count a quoting comment as a second call site.
+  const { buildContext } = await import("./artifacts/deep-research-run");
+  const built = await buildContext(clientId).catch(() => ({ ok: false as const, error: "unreadable" }));
+
+  const { docTextsFor } = await import("./doc-text");
+  const docs = await docTextsFor(clientId).catch(() => []);
+
+  const loaded = await loadKeywords(clientId);
+  const existing = "error" in loaded
+    ? []
+    : loaded.rows
+        .filter((r) => !r.dropped)
+        .map((r) => ({ phrase: r.phrase, origin: r.origin, category: r.category, approved: r.approved }));
+
+  const { gapsFrom } = await import("./step-gaps");
+  const stepGaps = gapsFrom(ctx, "keyword_set").gaps;
+
+  const { buildKeywordPrompt, keywordPromptSummary } = await import("./keyword-prompt");
+  const { ADD_MAX } = await import("./keyword-expansion");
+  const result = buildKeywordPrompt({
+    ctx,
+    research: built.ok ? built.ctx : null,
+    docs,
+    existing,
+    stepGaps,
+    addMax: ADD_MAX,
+  });
+
+  if (!result.ok) return { message: `:warning: No keyword prompt: ${result.error}` };
+  const prompt = result.prompt;
+
+  const name = (ctx.identity.name || "client").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const file = `keyword-prompt-${name || "client"}.txt`;
+
+  return {
+    message: keywordPromptSummary(prompt),
+    after: async () => {
+      const { channelFor, anchorTsFor } = await import("./step-board");
+      const channel = await channelFor(clientId);
+      const thread = await anchorTsFor(clientId, "keyword_set");
+      if (!channel || !thread) return;
+
+      // uploadFile returns {ok:false} and never throws, and the share no-ops when the bot is not
+      // a member of the channel.
+      await slack.joinChannel(channel).catch(() => {});
+      const res = (await slack.uploadFile(
+        channel,
+        file,
+        Buffer.from(prompt.body, "utf8"),
+        "text/plain",
+        thread
+      )) as { ok?: boolean; error?: string };
+
+      if (res?.ok !== true) {
+        const { postClientReply } = await import("./client-events");
+        await postClientReply({
+          clientId,
+          stepKey: "keyword_set",
+          channel,
+          threadTs: thread,
+          text: `:warning: The keyword prompt was built but could not be uploaded: ${res?.error ?? "no reason given"}.`,
+        }).catch(() => {});
+      }
+    },
+  };
 }
 
 async function approveCommand(clientId: string, by: string): Promise<KeywordReply> {

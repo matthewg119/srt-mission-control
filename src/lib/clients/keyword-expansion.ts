@@ -734,6 +734,30 @@ export const KEYWORDS_DROP = /^keywords\s+drop\s+(\d{1,4}(?:\s*,\s*\d{1,4})*)$/i
 export const KEYWORDS_ADD = /^keywords\s+add\s*:\s*([\s\S]+)$/i;
 export const KEYWORDS_MORE = /^keywords\s+more\s+(.+)$/i;
 
+// ‼️ `keywords prompt`, NOT a bare `prompt`. Step 11's framework thread already owns `prompt` and
+// `prompt short`, gated on avatar_harvest. Two steps answering the same bare word is how somebody
+// types it in the wrong thread, gets a plausible answer, and files research against the wrong
+// step. The `keywords ` prefix also puts it in the family the card already teaches, and it is what
+// lets handleKeywordThreadReply keep its one cheap /^keywords\b/ guard before parsing anything.
+export const KEYWORDS_PROMPT = /^keywords\s+prompt$/i;
+
+/**
+ * The triage rule, in Matthew's own words, 2026-09-23.
+ *
+ * ‼️ ONE STRING, QUOTED EVERYWHERE, EDITED NOWHERE. It is what decides whether a phrase becomes its
+ * own post, gets folded under a bigger one, or becomes a service page. It reaches the research
+ * prompt, the SERP reader's instructions and the strategy card, and a probe greps it out of all of
+ * them. Three copies would drift into three slightly different rules and nobody could say which one
+ * a stored verdict was made under.
+ *
+ * ‼️ IT LIVES HERE, in the pure half of the step, because the impure half cannot be imported by a
+ * probe without a database and the rule has to be assertable offline.
+ */
+export const SERP_TRIAGE_RULE = [
+  "Google each keyword. If the AI Overview fully answers it, merge that keyword into a bigger post.",
+  "If the page is all local listings or software products, make a service page instead of a post.",
+].join(" ");
+
 // ‼️ `keywords check` WAS HERE AND IS GONE (2026-09-12). It put the top twenty phrases to ChatGPT
 // from this lane, with its own scoring and its own second engine caller. The approved queries now
 // JOIN the tracked question set and the visibility audit measures them, which is what Matthew asked
@@ -746,7 +770,9 @@ export type KeywordCommand =
   | { kind: "drop"; ranks: number[] }
   /** One phrase, or a pasted list: one per line, numbered or not. */
   | { kind: "add"; phrases: string[] }
-  | { kind: "more"; category: CategorySpec };
+  | { kind: "more"; category: CategorySpec }
+  /** Hand over the research prompt for this offer. Answers come back through `add`. */
+  | { kind: "prompt" };
 
 /**
  * `keywords more price`, `keywords more naming`, `keywords more direct_naming`. A key, a label, or
@@ -799,6 +825,7 @@ export function addList(body: string): string[] {
 export function parseKeywordCommand(raw: string, categories: readonly CategorySpec[]): KeywordCommand | null {
   const text = raw.trim().replace(/^[`*_]+|[`*_]+$/g, "").trim();
   if (KEYWORDS_APPROVE.test(text)) return { kind: "approve" };
+  if (KEYWORDS_PROMPT.test(text)) return { kind: "prompt" };
 
   const drop = KEYWORDS_DROP.exec(text);
   if (drop) {
@@ -1041,6 +1068,11 @@ export function formatKeywordCard(
   lines.push(
     "",
     "*In this thread:*",
+    // ‼️ THE PROMPT IS OFFERED BEFORE APPROVAL IS, because of what is in the set at this moment.
+    // Most of it is `expansion`, which is a model's proposal and is ranked below evidence on
+    // purpose. Putting `keywords approve` first taught everybody to accept that, which is the
+    // opposite of what the origin ranking exists to achieve.
+    "  • `keywords prompt` hands over a research prompt that already carries this offer, the avatar and everything on file. Run it in claude.com and bring the numbered list back with `keywords add:`.",
     "  • `keywords approve` approves the query set as shown.",
     "  • `keywords drop 12` or `keywords drop 12, 15, 40` removes rows by number.",
     "  • `keywords add: <phrase>` adds your own. It ranks like evidence, because you said it.",
