@@ -157,7 +157,8 @@ export const STEP_ACTIONS: Record<StepKey, StepAction> = {
       // the answers arrive as `manual` rows, which PRECEDENCE puts above every one of them.
       "`keywords prompt` first: it hands over a research prompt that already knows the offer. Run it in claude.com.",
       "Bring the numbered list back with `keywords add:` on the line above it.",
-      "`keywords` to see the set. `keywords drop 4, 9` for anything off-offer. `keywords approve` when it is right.",
+      "`keywords` to see the set. `keywords drop 4, 9` for anything off-offer.",
+      "`keywords approve 411-423` locks only the ones you picked. `keywords approve mine` locks the ones you typed. Bare `keywords approve` takes all of them.",
       "`keywords shortlist` then picks the 25 subjects worth googling. Paste each screenshot with `keywords serp 12` in the message.",
       "`strategy` groups what is checked into clusters. `strategy approve` locks it, then press Done.",
     ],

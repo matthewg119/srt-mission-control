@@ -331,6 +331,21 @@ const KEYWORDS_PROMPT: CommandSpec = {
   mustBeOnTheCard: true,
 };
 
+/**
+ * ‼️ THE NARROW FORM IS ITS OWN SPEC so the card can teach it. The bare `keywords approve` approves
+ * every query row, which on a fresh client is mostly the model's own expansion, and there was no way
+ * to say "these thirteen" until 2026-09-23.
+ */
+const KEYWORDS_APPROVE_SOME: CommandSpec = {
+  label: "keywords approve 411-423",
+  test: /^\s*[`*_]*keywords\s+approve\s+(\d|mine|manual|ours)/i,
+  unmistakable: /^\s*[`*_]*keywords\s+approve\s+(\d|mine|manual|ours)/i,
+  pointAt: "keyword_set",
+  what: "Keyword commands",
+  implementedIn: "src/lib/clients/client-keywords.ts",
+  mustBeOnTheCard: true,
+};
+
 const KEYWORDS_SHORTLIST: CommandSpec = {
   label: "keywords shortlist",
   test: /^\s*[`*_]*keywords\s+shortlist\b/i,
@@ -724,6 +739,7 @@ export const STEP_COMMANDS: Record<StepKey, readonly CommandSpec[]> = {
     KEYWORDS_PROMPT,
     KEYWORDS_ADD,
     KEYWORDS_APPROVE,
+    KEYWORDS_APPROVE_SOME,
     KEYWORDS_DROP,
     KEYWORDS_MORE,
     KEYWORDS_SHORTLIST,

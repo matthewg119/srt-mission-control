@@ -330,6 +330,18 @@ async function resetForNewOffer(
     .neq("origin", "manual");
   if (delError) return delError.message;
 
+  // ‼️ A PHRASE A PERSON TYPED KEEPS ITS APPROVAL, AND ONLY THAT KIND DOES. Measured 2026-09-23:
+  // thirteen phrases were added by hand and approved, the offer fingerprint moved, and this cleared
+  // all thirteen along with the model's 340. The rows survived, because the delete above spares
+  // `manual`; the approval did not, and nothing on screen said it had gone.
+  //
+  // The distinction is what the approval was ABOUT. Approving an expansion row is a judgement about
+  // a proposal written for one offer, and a new offer voids it. Typing a phrase and approving it is
+  // a judgement about the PHRASE, and "how to get more google reviews for a med spa" is still what
+  // this buyer searches whatever we decide to call the thing we sell.
+  //
+  // The rank is cleared either way, because the card renumbers from the new set and a stale number
+  // is worse than none: `keywords drop 12` would take the wrong row.
   const { error } = await supabaseAdmin
     .from("client_keywords")
     .update({
@@ -340,8 +352,16 @@ async function resetForNewOffer(
       rank: null,
       updated_at: new Date().toISOString(),
     })
-    .eq("client_id", clientId);
-  return error?.message ?? null;
+    .eq("client_id", clientId)
+    .neq("origin", "manual");
+  if (error) return error.message;
+
+  const { error: mineError } = await supabaseAdmin
+    .from("client_keywords")
+    .update({ dropped_at: null, rank: null, updated_at: new Date().toISOString() })
+    .eq("client_id", clientId)
+    .eq("origin", "manual");
+  return mineError?.message ?? null;
 }
 
 /**
@@ -955,7 +975,11 @@ export async function handleKeywordThreadReply(input: {
 
   switch (cmd.kind) {
     case "approve":
-      return approveCommand(input.clientId, input.by);
+      return approveCommand(input.clientId, input.by, null);
+    case "approve_some":
+      return approveCommand(input.clientId, input.by, { ranks: cmd.ranks });
+    case "approve_mine":
+      return approveCommand(input.clientId, input.by, { manualOnly: true });
     case "drop":
       return dropCommand(input.clientId, cmd.ranks, input.by);
     case "add":
@@ -1062,21 +1086,52 @@ async function promptCommand(clientId: string): Promise<KeywordReply> {
   };
 }
 
-async function approveCommand(clientId: string, by: string): Promise<KeywordReply> {
+/** Which rows an approve is about. Null means every query row, which is the blunt original. */
+interface ApproveScope {
+  /** Ranks as the card prints them, already expanded from any ranges. */
+  ranks?: number[];
+  /** Only rows a person typed, which is `origin = 'manual'`. */
+  manualOnly?: boolean;
+}
+
+/**
+ * Approve the set, or the part of it somebody actually chose.
+ *
+ * ‼️ THE BARE FORM APPROVES EVERY QUERY ROW, AND THAT WAS THE WHOLE PROBLEM. Measured 2026-09-23:
+ * fifteen chosen phrases were pasted, thirteen stored, `keywords approve` typed, and the reply said
+ * "Approved 413 queries". The page plan draws ONLY from approved queries, so 149 model proposals
+ * nobody had read became the pool every page is chosen from. A scope makes "these thirteen" sayable.
+ */
+async function approveCommand(clientId: string, by: string, scope: ApproveScope | null): Promise<KeywordReply> {
   const c = await keywordContext(clientId);
   if (!c.ok) return { message: `:warning: Nothing to approve yet. Missing: ${c.missing.join("; ")}.` };
 
   const now = new Date().toISOString();
-  const { data, error } = await supabaseAdmin
+  let q = supabaseAdmin
     .from("client_keywords")
     .update({ approved: true, approved_at: now, approved_by: by, updated_at: now })
     .eq("client_id", clientId)
     .eq("use", "query")
-    .is("dropped_at", null)
-    .select("id, phrase, category, rank, score, origin, use");
+    .is("dropped_at", null);
+
+  if (scope?.manualOnly) q = q.eq("origin", "manual");
+  if (scope?.ranks?.length) q = q.in("rank", scope.ranks);
+
+  const { data, error } = await q.select("id, phrase, category, rank, score, origin, use");
   if (error) return { message: `:warning: Not approved: ${error.message}` };
 
   const n = (data ?? []).length;
+
+  // ‼️ A NARROW APPROVE THAT MATCHED NOTHING IS A REFUSAL, NOT A SUCCESS. "Approved 0 queries" reads
+  // as done. The numbers on the card are RANKS, and a reset clears every rank, so yesterday's
+  // numbers match nothing today. Saying so is the only way anybody finds that out.
+  if (n === 0 && scope) {
+    return {
+      message: scope.manualOnly
+        ? ":warning: *Nothing was approved.* There are no phrases you typed yourself in this set. `keywords add:` puts them in first."
+        : ":warning: *Nothing was approved.* No live query row carries those numbers. They are the ranks the card prints, and a re-run renumbers them, so `keywords` first.",
+    };
+  }
   await recordKeywordDecisions({
     clientId,
     action: "approve",
@@ -1092,9 +1147,15 @@ async function approveCommand(clientId: string, by: string): Promise<KeywordRepl
     })),
     context: { fingerprint: c.ctx.fingerprint },
   });
+  const scoped = scope?.manualOnly
+    ? " that you typed yourself"
+    : scope?.ranks?.length
+      ? " you picked"
+      : " as shown";
+
   return {
     message:
-      `:white_check_mark: *Approved ${n} queries* as shown. Hooks are kept for ads and emails and are ` +
+      `:white_check_mark: *Approved ${n} quer${n === 1 ? "y" : "ies"}*${scoped}. Hooks are kept for ads and emails and are ` +
       "not part of it.\nChecking the set now. The step ticks itself if it passes and says why if it does not.",
     after: async () => {
       const { setDeliveryStep } = await import("./delivery-checklist");
