@@ -51,6 +51,19 @@ export const LEAD_DISPOSITIONS = {
 
 export type LeadDisposition = keyof typeof LEAD_DISPOSITIONS;
 
+/**
+ * The work row: the two things worth doing to a fresh lead, as buttons.
+ *
+ * Both are doorways to src/lib/leads/lead-actions.ts, which is where the typed `run audit` and
+ * `loom` in the thread go too. One implementation, two ways in.
+ *
+ * ‼️ EXPORTED SO THE ACTIONS ROUTE AND THIS BUILDER AGREE. A literal in the switch that drifts
+ * from a literal here is a button that silently does nothing, and old cards never expire, so a
+ * renamed id would also break every card already sitting in scrollback.
+ */
+export const LEAD_RUN_AUDIT = "lead_run_audit";
+export const LEAD_LOOM = "lead_loom";
+
 export const DISPOSITION_BY_ACTION_ID = Object.fromEntries(
   Object.entries(LEAD_DISPOSITIONS).map(([key, meta]) => [meta.actionId, key as LeadDisposition])
 ) as Record<string, LeadDisposition>;
@@ -165,6 +178,27 @@ function formatInitialBlocks(contact: ContactRow): SlackBlock[] {
         type: "button",
         action_id: "sms_create_channel",
         text: { type: "plain_text", text: "📱 Start SMS Thread", emoji: true },
+        value: String(contact.id),
+      },
+    ],
+  });
+
+  // Work row. Deliberately NOT replaced once used, unlike the outcome row below: an audit can be
+  // re-run on a lead months later, and the Loom is reachable at any point after the report lands.
+  // Both are idempotent at the other end (runAuditForContact holds a 15 minute in-flight claim).
+  blocks.push({
+    type: "actions",
+    elements: [
+      {
+        type: "button",
+        action_id: LEAD_RUN_AUDIT,
+        text: { type: "plain_text", text: "🔍 Run audit", emoji: true },
+        value: String(contact.id),
+      },
+      {
+        type: "button",
+        action_id: LEAD_LOOM,
+        text: { type: "plain_text", text: "🎥 Loom", emoji: true },
         value: String(contact.id),
       },
     ],

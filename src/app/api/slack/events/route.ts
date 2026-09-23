@@ -469,6 +469,35 @@ export async function POST(request: NextRequest) {
         if (handled) return NextResponse.json({ ok: true });
       }
 
+      // A reply inside a lead's thread in #hot-leads. Same shape as the two branches above:
+      // channel-gated first (free), then routed by contacts.slack_thread_ts, which is
+      // UNIQUE-indexed by docs/2026-09-23-lead-thread-index.sql. A thread under anything else in
+      // this channel (a speed-to-lead notice, a standalone audit post) resolves no contact, the
+      // handler returns false, and the message falls through exactly as it did before.
+      //
+      // ‼️ WITHOUT THIS BRANCH #hot-leads REACHES THE GENERIC TAIL, and the generic tail answers
+      // with slack.postMessage(channel, reply) and NO thread_ts, against a conversationId of
+      // `slack-${channel}`. So the answer to a question asked under one lead appeared at the top
+      // of the channel, and every lead in #hot-leads shared a single 20 message history.
+      const hotLeadsChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
+      if (
+        hotLeadsChannel &&
+        channel === hotLeadsChannel &&
+        parentThreadTs &&
+        parentThreadTs !== event.ts &&
+        userText.trim().length > 0
+      ) {
+        const { handleLeadThreadReply } = await import("@/lib/leads/thread-reply");
+        const handled = await handleLeadThreadReply({
+          channel,
+          threadTs: parentThreadTs,
+          text: userText,
+          messageTs: (event.ts as string | undefined) ?? null,
+          userId: event.user as string,
+        });
+        if (handled) return NextResponse.json({ ok: true });
+      }
+
       // ---- Dedicated lanes: these two channels ALWAYS return here, never falling
       // through to the legacy content / AI-manager handlers. ----
 
