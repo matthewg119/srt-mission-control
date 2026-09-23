@@ -826,9 +826,17 @@ export async function loadPlan(clientId: string): Promise<{ rows: PlanRow[] } | 
     };
   }
 
-  const rows = await withPostFormat(
-    await withAwareness(
-      await withHeadlines(await withRoles(((data ?? []) as Array<Record<string, unknown>>).map(toPlanRow)))
+  // ‼️ withStrategy IS IN THIS CHAIN, AND IT WAS NOT UNTIL 2026-09-23. It was written, exported and
+  // never called, so every PlanRow carried the `slug: null` toPlanRow hardcodes, and
+  // pre-call-pages.ts's `slug: row.slug ?? undefined` was ALWAYS undefined. The whole "decide the URL
+  // from the keyword before the page exists" mechanism was inert, silently, while the column filled
+  // up correctly underneath it. A merge helper with no caller is the one kind of dead code that
+  // leaves the data looking right.
+  const rows = await withStrategy(
+    await withPostFormat(
+      await withAwareness(
+        await withHeadlines(await withRoles(((data ?? []) as Array<Record<string, unknown>>).map(toPlanRow)))
+      )
     )
   );
   const pageIds = rows.map((r) => r.pageId).filter((id): id is string => Boolean(id));
@@ -924,7 +932,7 @@ async function existingPageQuestions(clientId: string): Promise<Set<string>> {
  * ‼️ AGAINST THE SLUGS ALREADY TAKEN, NOT ONLY AGAINST THIS BATCH. A plan proposed in two goes would
  * otherwise hand the same slug to a row in each.
  */
-async function slugsFor(clientId: string, keywords: readonly string[]): Promise<Array<string | null>> {
+export async function slugsForPlan(clientId: string, keywords: readonly string[]): Promise<Array<string | null>> {
   const { keywordSlug } = await import("@/lib/hub/keyword-placement");
   const taken = new Set<string>();
 
@@ -995,7 +1003,7 @@ export async function proposePlan(
   const now = new Date().toISOString();
   if (chosen.length) {
     // Decided here, at creation, because it is the only window in which a URL can be decided.
-    const plannedSlugs = await slugsFor(clientId, framed.map((f) => f.targetKeyword));
+    const plannedSlugs = await slugsForPlan(clientId, framed.map((f) => f.targetKeyword));
     const { error: insError } = await supabaseAdmin.from("page_plan").insert(
       chosen.map((c, i) => ({
         client_id: clientId,

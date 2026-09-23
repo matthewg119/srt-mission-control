@@ -295,6 +295,14 @@ async function proposePreCallPlan(
   if (delError) return { ok: false, error: delError.message };
 
   const now = new Date().toISOString();
+
+  // The URL each of these pages will take, decided here because this is the only window in which a
+  // URL can be decided. Same helper the studio writer uses, so both agree about collisions.
+  const { slugsForPlan } = await import("./page-plan");
+  const precallSlugs = await slugsForPlan(clientId, framed.map((f) => f.targetKeyword)).catch(
+    () => framed.map(() => null)
+  );
+
   const rowFor = (item: PoolItem, i: number, pillarId: string | null) => ({
     client_id: clientId,
     rank: 1000 + i,
@@ -316,6 +324,13 @@ async function proposePreCallPlan(
     // framing call may choose a different approved phrase than the item's own; the id follows the
     // phrase actually written, and falls back to the item's keyword when the phrase is not in the set.
     target_keyword_id: pool.idByPhrase.get(normalizePhrase(framed[i].targetKeyword)) ?? item.keywordId ?? null,
+    // ‼️ THE PHRASE FAMILY AND THE URL, WRITTEN HERE TOO, AND THE OMISSION WAS BACKWARDS. Both
+    // columns were filled only by the STUDIO writer in page-plan.ts, and both are read by the
+    // PRE-CALL drafter and the publish gate. So the seven pages this file creates, which are the
+    // ones actually drafted before a call, were the only pages that got neither: no variants for
+    // checkPlacement to accept, and a URL derived from the working title rather than the keyword.
+    ...(framed[i].secondaryKeywords?.length ? { secondary_keywords: framed[i].secondaryKeywords } : {}),
+    ...(precallSlugs[i] ? { slug: precallSlugs[i] } : {}),
     // ‼️ WHICH AUDIENCE AND WHICH OFFER THIS PAGE IS FOR (2026-09-17). A client has many audiences
     // and an offer hangs under one, so "the client's offer" stopped being a single answer on
     // 2026-09-15. Without these a drafted page could not say what it was selling, and page_dataset
