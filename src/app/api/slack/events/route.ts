@@ -1283,6 +1283,15 @@ export async function POST(request: NextRequest) {
               text: userText,
               by,
             })) ??
+            // `booking: ...` is any-thread for the same reason: it is where this client's PATIENTS
+            // book, which is a fact about the client and usually comes up on the prep call, long
+            // before the concierge step that reads it.
+            (await (await import("@/lib/clients/concierge-booking")).handleConciergeBookingThreadReply({
+              clientId: client.id,
+              stepKey: client.stepKey,
+              text: userText,
+              by,
+            })) ??
             (await (await import("@/lib/clients/objection-mining")).handleObjectionThreadReply({
               clientId: client.id,
               stepKey: client.stepKey,

@@ -308,7 +308,8 @@ export const STEP_ACTIONS: Record<StepKey, StepAction> = {
     verb: "decide",
     bullets: [
       "Press Turn the concierge ON. It appears on their pages within five minutes.",
-      "The audience has to be confirmed and a booking destination set, or it greets people and strands them.",
+      "`booking: <their booking link>` sets where their patients go. A phone number or `booking: callback` also work.",
+      "The audience has to be confirmed too, or it greets people and strands them.",
       "Then press Done. The switch alone does not tick this step.",
     ],
   },

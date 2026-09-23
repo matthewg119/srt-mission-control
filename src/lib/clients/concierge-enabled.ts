@@ -198,7 +198,8 @@ export function switchLines(state: ConciergeSwitchState, by: string): string[] {
   }
   if (state.bookingMode === "none" || (!state.bookingUrl && !state.bookingPhone)) {
     lines.push(
-      ":warning: No booking destination is set, so the widget can talk but has nowhere to send a booking. Set one before the call."
+      ":warning: No booking destination is set, so the widget can talk but has nowhere to send a booking. " +
+        "`booking: <their booking link>` sets one, and a phone number or `booking: callback` also work."
     );
   }
   if (!state.allowedOrigins.length) {

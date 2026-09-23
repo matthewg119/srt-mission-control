@@ -760,6 +760,15 @@ export const ANY_THREAD_COMMANDS: readonly CommandSpec[] = [
     what: "The concierge add-on",
     implementedIn: "src/lib/clients/concierge-addon.ts",
   },
+  {
+    // Where this client's PATIENTS book. Any thread, because it is a fact about the client and it
+    // comes up on the prep call, not on the concierge step that eventually reads it.
+    label: "booking: https://their-calendar.com/book",
+    test: /^\s*[`*_]*booking\s*:\s*(.+?)\s*[`*_]*\s*$/i,
+    unmistakable: /^\s*[`*_]*booking\s*:\s*\S/i,
+    what: "Where their patients book",
+    implementedIn: "src/lib/clients/concierge-booking.ts",
+  },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────

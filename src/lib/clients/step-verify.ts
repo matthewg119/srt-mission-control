@@ -1150,12 +1150,20 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
       );
     }
 
+    // ‼️ 'calendly' DOES NOTHING ON A PATIENT LANE AND THIS LINE USED TO CLAIM OTHERWISE. The CHECK
+    // constraint allows the value and bookingMode() parses it, but patientOffer() in
+    // concierge/booking.ts tests `=== "link"` and nothing else, so a clinic stored as 'calendly'
+    // behaves exactly like 'none'. Saying "bookings are taken in the chat via Calendly" on a
+    // verified step was a green tick over a widget with nowhere to send anybody. A Calendly URL
+    // belongs in `booking: <url>`, which stores it as a link.
     const destination =
       mode === "link"
         ? `bookings go to ${data.booking_url}`
         : mode === "calendly"
-          ? "bookings are taken in the chat via Calendly"
-          : "capture only, no booking destination, so a human calls them back";
+          ? "booking_mode is 'calendly', which nothing reads on a patient lane, so this behaves as no destination. Set `booking: <their Calendly link>` instead"
+          : data.booking_phone
+            ? `no booking link, so the assistant tells people to call ${data.booking_phone}`
+            : "capture only, no booking destination, so a human calls them back";
 
     // ‼️ ENABLED IS A DECISION SOMEBODY MADE. ANSWERING IS A FACT ABOUT THE WORLD.
     // This step is the one that says the assistant is LIVE on a client's own website, and until
