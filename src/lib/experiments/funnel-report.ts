@@ -37,6 +37,7 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
+import { postInfraAlert } from "@/lib/alerts";
 
 /** Friday. UTC, like every other cron in this app. */
 const REPORT_WEEKDAY = 5;
@@ -57,15 +58,6 @@ function pct(n: number, d: number): string {
   return (Math.round((n / d) * 1000) / 10).toFixed(1) + "%";
 }
 
-/** Loud failures go here. Same channel and same doctrine as clients/provision.ts. */
-async function postInfraAlert(text: string): Promise<void> {
-  const channel = process.env.SLACK_ALERTS_INFRA_CHANNEL;
-  if (!channel) {
-    console.error("[funnel-report] SLACK_ALERTS_INFRA_CHANNEL unset. Report dropped:\n" + text);
-    return;
-  }
-  await slack.postMessage(channel, text);
-}
 
 export async function buildFunnelReport(now: Date): Promise<string | null> {
   const since = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();

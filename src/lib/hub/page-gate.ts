@@ -30,6 +30,7 @@
 import crypto from "crypto";
 import { supabaseAdmin } from "@/lib/db";
 import { slack, type SlackBlock } from "@/lib/slack-bot";
+import { postInfraAlert } from "@/lib/alerts";
 import { callClaudeJSON } from "@/lib/claude-calls";
 import { hasBannedDash } from "@/lib/copy-guard";
 import {
@@ -1266,15 +1267,6 @@ export async function waiveGate(args: {
   return { ok: true };
 }
 
-/** Loud failures go here. Same channel and same doctrine as day-zero.ts. */
-async function postInfraAlert(text: string): Promise<void> {
-  const channel = process.env.SLACK_ALERTS_INFRA_CHANNEL;
-  if (!channel) {
-    console.error("[hub/page-gate] SLACK_ALERTS_INFRA_CHANNEL unset. Alert dropped:", text);
-    return;
-  }
-  await slack.postMessage(channel, text);
-}
 
 // ---------------------------------------------------------------------------
 // Rendering a verdict

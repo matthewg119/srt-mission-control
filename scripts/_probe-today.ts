@@ -1,6 +1,11 @@
 // The day plan, proved: the role map, the ordering, and the noise rule.
 //
-//   bunx tsx --env-file=.env.local scripts/_probe-today.ts
+//   bun run --env-file=.env.local scripts/_probe-today.ts
+//
+// ‼️ `bun run`, NOT `bunx tsx`. Section 5 uses a top-level await to import the plan builder only
+// when a database is configured, and tsx cannot transform a top-level await: it dies with a
+// TransformError before a single check runs, which reads as the probe being broken rather than the
+// runner being wrong.
 //
 // Sections 1 to 4 are PURE and run with no environment at all. Section 5 builds a real plan and is
 // the one that needs the env file; it asserts the noise rule against live rows, because that is the

@@ -23,6 +23,7 @@
 import dns from "dns/promises";
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
+import { postInfraAlert } from "@/lib/alerts";
 import { ingestLead, enrichLead } from "@/lib/lead-intake";
 import { normalizeTarget } from "@/lib/scan/normalize";
 import { sendPilotWelcome } from "@/lib/clients/welcome-email";
@@ -882,12 +883,3 @@ async function postOnboardingCard(args: {
   await slack.postMessage(channel, text);
 }
 
-/** Loud failures go here. Silence about a half-provisioned client is the failure mode. */
-async function postInfraAlert(text: string): Promise<void> {
-  const channel = process.env.SLACK_ALERTS_INFRA_CHANNEL;
-  if (!channel) {
-    console.error("[clients/provision] SLACK_ALERTS_INFRA_CHANNEL unset. Alert dropped:", text);
-    return;
-  }
-  await slack.postMessage(channel, text);
-}
