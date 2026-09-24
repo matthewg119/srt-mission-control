@@ -156,8 +156,8 @@ export const STEP_ACTIONS: Record<StepKey, StepAction> = {
       // below evidence on purpose. Approving first means approving those. Researching first means
       // the answers arrive as `manual` rows, which PRECEDENCE puts above every one of them.
       "`keywords prompt` first: it hands over a research prompt that already knows the offer. Run it in claude.com.",
-      "Bring the numbered list back with `keywords add:` on the line above it.",
-      "`keywords` to see the set. `keywords drop 4, 9` for anything off-offer.",
+      "‼️ `keywords pick:` then the list, one per line: it stores them AND selects them, and hands back the numbers. `keywords add:` stores without selecting.",
+      "`keywords variations` writes more ways to say the ones you picked. `keywords` to see the set, `keywords drop 4, 9` for anything off-offer.",
       "`keywords approve 411-423` locks only the ones you picked. `keywords approve mine` locks the ones you typed. Bare `keywords approve` takes all of them.",
       "`keywords shortlist` then picks the 25 subjects worth googling. Paste each screenshot with `keywords serp 12` in the message. Nothing is used until its picture is on file.",
       "`strategy` groups them into clusters, `serp cards` puts the pictures and the scores in this thread to approve. `strategy approve` locks it, then press Done.",
