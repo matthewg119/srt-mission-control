@@ -53,6 +53,21 @@ function finalist(phrase: string, opts: Partial<Finalist> = {}): Finalist {
     verdict: null,
     intent: null,
     mergedInto: null,
+    // ‼️ pictured DEFAULTS TO false, WHICH IS THE UNSAFE-LOOKING CHOICE AND IS THE RIGHT ONE. A
+    // helper that defaulted it to true would make every gate assertion below pass by construction,
+    // which is precisely the failure mode the gate exists to prevent, reproduced in the thing meant
+    // to catch it. Clustering does not read this field, so the clustering cases are unaffected.
+    pictured: false,
+    route: null,
+    clickValue: null,
+    citationValue: null,
+    magnetSpace: null,
+    magnetIdea: null,
+    magnetBy: null,
+    recommendedAsset: null,
+    readEvidence: null,
+    docId: null,
+    slackFileId: null,
     ...opts,
   };
 }

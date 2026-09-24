@@ -772,6 +772,30 @@ export const SERP_TRIAGE_RULE = [
   "If the page is all local listings or software products, make a service page instead of a post.",
 ].join(" ");
 
+/**
+ * What FOLLOWS from the triage for an AEO client, which is not what follows for a publisher.
+ *
+ * ‼️ A SECOND CONSTANT RATHER THAN AN EDIT TO THE FIRST, AND THE REASON IS THAT THE FIRST ONE IS
+ * RIGHT. Matthew asked whether the triage rule contradicts the two-score model and whether it should
+ * be rewritten. It does not, and the code already proved it: clusterFinalists places a `merge` row as
+ * a MEMBER UNDER A PILLAR, never as a discard, so "merge it into a bigger post" and "make it an
+ * answer block on the hub" have always been the same instruction in different words.
+ *
+ * What the triage rule genuinely lacked is the SKIP case, because a publisher never needs it. It is
+ * stated here instead of being smuggled into a sentence that is doing a different job: the rule above
+ * says what to OBSERVE on a results page, and this says what the observation is worth to a business
+ * that sells appointments rather than ad impressions.
+ *
+ * ‼️ QUOTED BESIDE SERP_TRIAGE_RULE EVERYWHERE, NEVER ALONE AND NEVER RESTATED. Both reach the
+ * research prompt and both reach the step 12 cards, and scripts/_probe-serp-gate.ts greps both back
+ * out of src/. Two rules that can drift apart are one rule nobody trusts.
+ */
+export const AEO_ROUTING_RULE = [
+  "A search the AI Overview answers in full still matters, because being named in that answer is",
+  "the product. It becomes an answer block on the hub, or a tool page when the thing being given",
+  "away is the asset. It is skipped only when there is nothing left to hand over.",
+].join(" ");
+
 // ‼️ `keywords check` WAS HERE AND IS GONE (2026-09-12). It put the top twenty phrases to ChatGPT
 // from this lane, with its own scoring and its own second engine caller. The approved queries now
 // JOIN the tracked question set and the visibility audit measures them, which is what Matthew asked

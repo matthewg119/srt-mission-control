@@ -20,12 +20,24 @@ import { stepNumber } from "@/config/delivery-steps";
 import { normalizePhrase } from "./phrase-quality";
 import { isAwarenessStage, type AwarenessStage } from "@/lib/audit-engine/awareness";
 import {
+  AEO_ROUTING_RULE,
   SERP_TRIAGE_RULE,
   SHORTLIST_SIZE,
   bestVerdict,
+  blockLine,
+  citationValueFrom,
+  clickValueFrom,
   clusterFinalists,
+  gateClusters,
+  intentFrom,
+  isRecommendedAsset,
+  isRoute,
   isVerdict,
+  pageTypeFrom,
   parseStrategyCommand,
+  pictured,
+  routeFrom,
+  routeLine,
   shortlistOf,
   stageName,
   typedVerdict,
@@ -34,8 +46,12 @@ import {
   KEYWORDS_SHORTLIST,
   KEYWORDS_SERP,
   KEYWORDS_SERP_TYPED,
+  MAGNET_SET,
+  SERP_CARDS,
+  type ClusterGate,
   type Finalist,
   type SerpRead,
+  type SerpReadRow,
   type Verdict,
 } from "./keyword-strategy-rules";
 
@@ -97,12 +113,23 @@ async function loadFinalists(
       verdict: null,
       intent: null,
       mergedInto: null,
+      pictured: false,
+      route: null,
+      clickValue: null,
+      citationValue: null,
+      magnetSpace: null,
+      magnetIdea: null,
+      magnetBy: null,
+      recommendedAsset: null,
+      readEvidence: null,
+      docId: null,
+      slackFileId: null,
     };
   });
 
   const extra = await supabaseAdmin
     .from("client_keywords")
-    .select("id, intent, merged_into, serp_verdict")
+    .select("id, intent, merged_into")
     .eq("client_id", clientId)
     .range(0, 2999);
 
@@ -115,14 +142,150 @@ async function loadFinalists(
   for (const e of extra.data ?? []) {
     const row = by.get(e.id as string);
     if (!row) continue;
-    const v = e.serp_verdict as string | null;
-    row.verdict = isVerdict(v) ? v : null;
     const intent = e.intent as string | null;
     row.intent = intent === "post" || intent === "service_page" || intent === "merged" ? intent : null;
     row.mergedInto = (e.merged_into as string | null) ?? null;
   }
 
+  await attachReadings(clientId, rows);
   return { ok: true, rows, strategyReady: true };
+}
+
+/**
+ * The readings themselves, from the evidence table, merged onto the finalists.
+ *
+ * ‼️ THIS REPLACES READING client_keywords.serp_verdict, AND THAT COLUMN WAS A BUG WEARING A CACHE.
+ * recordVerdict overwrites it on EVERY reading regardless of source, so a re-run of the vision pass
+ * silently replaced a correction a person had typed ten minutes earlier. bestVerdict() exists
+ * precisely to stop that, its docstring says so in capitals, and it had NO production caller at all:
+ * verdictsFor() was written, exported, and never called by anything but the probe. The rule was
+ * documented, tested, and not in force.
+ *
+ * ‼️ KEYED ON `normalized`, NOT ON keyword_id, and the migration explains why: resetForNewOffer
+ * hard-deletes keyword rows when the offer changes, so keyword_id goes null while the reading stays
+ * true. `normalized` is what re-attaches a SERP fact to the phrase it was about.
+ *
+ * ‼️ TOLERANT, AND A MISSING TABLE IS "NO READINGS", NOT AN ERROR. Same contract as the select above
+ * it. Before the migration runs, every finalist reads as unchecked and unpictured, which is exactly
+ * what it is.
+ */
+async function attachReadings(clientId: string, rows: Finalist[]): Promise<void> {
+  const reads = await supabaseAdmin
+    .from("keyword_serp_reads")
+    .select(
+      "normalized, source, created_at, verdict, doc_id, evidence, click_value, citation_value, route, recommended_asset, magnet_space, magnet_idea, magnet_by"
+    )
+    .eq("client_id", clientId)
+    .order("created_at", { ascending: false })
+    .range(0, 2999);
+
+  if (reads.error || !reads.data?.length) return;
+
+  const byPhrase = new Map<string, SerpReadRow[]>();
+  for (const r of reads.data) {
+    const key = (r.normalized as string) ?? "";
+    const verdict = r.verdict as string | null;
+    if (!key || !isVerdict(verdict)) continue;
+    const list = byPhrase.get(key) ?? [];
+    list.push({
+      source: (r.source as "vision" | "typed") ?? "vision",
+      createdAt: (r.created_at as string) ?? "",
+      verdict,
+      docId: (r.doc_id as string | null) ?? null,
+      evidence: (r.evidence as string | null) ?? null,
+      clickValue: numOrNull(r.click_value),
+      citationValue: numOrNull(r.citation_value),
+      route: isRoute(r.route) ? r.route : null,
+      recommendedAsset: isRecommendedAsset(r.recommended_asset) ? r.recommended_asset : null,
+      magnetSpace: numOrNull(r.magnet_space),
+      magnetIdea: (r.magnet_idea as string | null) ?? null,
+      magnetBy: magnetByOf(r.magnet_by),
+    });
+    byPhrase.set(key, list);
+  }
+
+  const docIds = new Set<string>();
+
+  for (const row of rows) {
+    const list = byPhrase.get(row.normalized);
+    if (!list?.length) continue;
+
+    // ‼️ TWO DIFFERENT QUESTIONS ASKED OF THE SAME ROWS, AND THEY GET DIFFERENT ANSWERS ON PURPOSE.
+    // bestVerdict picks the reading we TRUST, preferring a person over a screenshot. pictured asks
+    // whether a screenshot is ON FILE at all, which a typed verdict can never satisfy however much
+    // more we trust it. See pictured() in keyword-strategy-rules.ts.
+    const best = bestVerdict(list);
+    row.pictured = pictured(list);
+
+    if (best) {
+      row.verdict = best.verdict;
+      row.readEvidence = best.evidence;
+    }
+
+    // The scores and the magnet come from the newest reading that HAS them, which is not always the
+    // one bestVerdict picked: a typed `keywords serp 9: merge` outranks the vision read for routing
+    // and carries no scores of its own, and throwing away the screenshot's numbers because somebody
+    // later corrected its verdict would blank the card for no reason.
+    const scored = list.find((r) => r.clickValue !== null || r.citationValue !== null);
+    if (scored) {
+      row.clickValue = scored.clickValue;
+      row.citationValue = scored.citationValue;
+      row.route = scored.route;
+      row.recommendedAsset = scored.recommendedAsset;
+    }
+    const magnet = list.find((r) => r.magnetBy !== null);
+    if (magnet) {
+      row.magnetSpace = magnet.magnetSpace;
+      row.magnetIdea = magnet.magnetIdea;
+      row.magnetBy = magnet.magnetBy;
+    }
+
+    // The newest picture, for the contact sheet. Not necessarily the trusted verdict's.
+    const shot = list.find((r) => r.source === "vision" && r.docId);
+    if (shot?.docId) {
+      row.docId = shot.docId;
+      docIds.add(shot.docId);
+    }
+  }
+
+  await attachSlackFiles(rows, docIds);
+}
+
+/**
+ * The Slack file id behind each screenshot, so the card can show the picture you already posted.
+ *
+ * ‼️ THE FILE ID AND NOT A SIGNED URL, AND THE TTL IS THE REASON. signedDocUrl mints a link that
+ * lives 600 seconds, and Slack re-fetches an image_url when it renders a message: a contact sheet
+ * built from signed URLs would be broken pictures ten minutes after it was posted, and it would have
+ * looked fine when it went up. The bytes are already in Slack, uploaded by the person who pasted
+ * them. Referring to them is free, permanent, and needs no bucket at all.
+ */
+async function attachSlackFiles(rows: Finalist[], docIds: Set<string>): Promise<void> {
+  if (!docIds.size) return;
+
+  const docs = await supabaseAdmin
+    .from("client_docs")
+    .select("id, slack_file_id")
+    .in("id", [...docIds]);
+  if (docs.error || !docs.data) return;
+
+  const fileByDoc = new Map<string, string>();
+  for (const d of docs.data) {
+    const fileId = d.slack_file_id as string | null;
+    if (fileId) fileByDoc.set(d.id as string, fileId);
+  }
+
+  for (const row of rows) {
+    if (row.docId) row.slackFileId = fileByDoc.get(row.docId) ?? null;
+  }
+}
+
+function numOrNull(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+function magnetByOf(v: unknown): "model" | "person" | null {
+  return v === "model" || v === "person" ? v : null;
 }
 
 /** The shortlist as the card numbers it. Deterministic, so `keywords serp 12` means one row. */
@@ -147,6 +310,54 @@ export interface RecordVerdictInput {
   actor: string;
   docId?: string | null;
   model?: string | null;
+  /** The magnet judgement, when one was made. Absent is not the same as "there is nothing". */
+  magnet?: { space: number | null; idea: string | null; by: "model" | "person" } | null;
+  device?: "mobile" | "desktop" | null;
+}
+
+/**
+ * The scores and the route for one reading. Pure, and derived here so every writer agrees.
+ *
+ * ‼️ COMPUTED ON THE WAY IN AND STORED, RATHER THAN COMPUTED ON EVERY READ. The alternative is that
+ * the card and the gate each re-derive them from the raw observations, which is fine until the
+ * scoring changes and two stored decisions disagree about what a keyword was. Storing the numbers
+ * means a re-score is a deliberate backfill that can be seen, the way the scraper's re-score is.
+ */
+function scoresFor(
+  read: SerpRead | null,
+  verdict: Verdict,
+  magnet: RecordVerdictInput["magnet"]
+): {
+  click: number | null;
+  cite: number | null;
+  route: string | null;
+  asset: string | null;
+  intent: string | null;
+  pageType: string | null;
+} {
+  // A typed verdict carries no reading, so it carries no scores. Inventing them from a single word
+  // would put numbers on the card that nobody measured.
+  if (!read) return { click: null, cite: null, route: null, asset: null, intent: null, pageType: null };
+
+  const click = clickValueFrom(read);
+  const cite = citationValueFrom(read);
+  const routed = routeFrom({
+    verdict,
+    clickValue: click,
+    citationValue: cite,
+    magnetSpace: magnet?.space ?? null,
+    magnetIdea: magnet?.idea ?? null,
+    magnetBy: magnet?.by ?? null,
+  });
+
+  return {
+    click,
+    cite,
+    route: routed.route,
+    asset: routed.asset,
+    intent: intentFrom(read),
+    pageType: pageTypeFrom(read),
+  };
 }
 
 /**
@@ -159,6 +370,8 @@ export interface RecordVerdictInput {
 export async function recordVerdict(input: RecordVerdictInput): Promise<{ ok: boolean; error?: string }> {
   const { clientId, keyword, read, verdict, source, actor } = input;
 
+  const s = scoresFor(read, verdict, input.magnet);
+
   const { error } = await supabaseAdmin.from("keyword_serp_reads").insert({
     client_id: clientId,
     keyword_id: keyword.id,
@@ -166,13 +379,37 @@ export async function recordVerdict(input: RecordVerdictInput): Promise<{ ok: bo
     normalized: keyword.normalized || normalizePhrase(keyword.phrase),
     ai_overview: read?.aiOverview ?? null,
     ai_overview_answers: read?.aiOverviewAnswers ?? null,
+    ai_overview_satisfies: read?.aiOverviewSatisfies ?? null,
     result_shape: read?.resultShape ?? null,
+    local_pack: read?.localPack ?? null,
+    paa_present: read?.paaPresent ?? null,
+    ads_above_fold: read?.adsAboveFold ?? null,
+    // ‼️ READ SINCE THE FIRST COMMIT AND STORED SINCE NEVER. readSerp has always returned both of
+    // these, this function printed them into the Slack reply, and neither had a column to land in,
+    // so the SERP's competitor list was recomputed from nothing every time somebody asked for it.
+    top_domains: read?.topDomains?.length ? read.topDomains : null,
+    forum_ranks: read?.forumRanks ?? null,
+    paa_questions: read?.paaQuestions?.length ? read.paaQuestions : null,
+    vocabulary: read?.vocabulary?.length ? read.vocabulary : null,
     verdict,
+    click_value: s.click,
+    citation_value: s.cite,
+    dominant_intent: s.intent,
+    dominant_page_type: s.pageType,
+    route: s.route,
+    recommended_asset: s.asset,
+    magnet_space: input.magnet?.space ?? null,
+    magnet_idea: input.magnet?.idea ?? null,
+    // ‼️ NULL MEANS THE JUDGEMENT NEVER RAN, WHICH IS NOT "THERE IS NOTHING HERE". routeFrom reads
+    // the difference: a failed magnet call asks for `magnet N:` on the card, and a person saying
+    // there is nothing routes the keyword to SKIP. An outage must never be able to make that call.
+    magnet_by: input.magnet?.by ?? null,
     source,
     // A person is not a legibility score. Recorded as 1 so a typed row never looks like a poor read.
     confidence: source === "typed" ? 1 : (read?.confidence ?? null),
     evidence: read?.evidence ?? (source === "typed" ? "typed in the thread" : null),
     doc_id: input.docId ?? null,
+    device: input.device ?? null,
     model: input.model ?? null,
     actor,
   });
@@ -450,24 +687,83 @@ export async function recordSerpScreenshot(args: {
   const found = await resolveRow(args.clientId, args.n);
   if (!found.ok) return { message: found.message };
 
-  const { readSerp } = await import("./serp-read");
+  const { readSerp, SERP_MODEL } = await import("./serp-read");
   const read = await readSerp(args.image, found.row.phrase);
   const verdict = verdictFrom(read);
 
   if (verdict === "unclear") {
-    // ‼️ NOTHING IS STORED ON AN UNREADABLE SCREENSHOT. A row saying "unclear" is indistinguishable
-    // from a row nobody has looked at, and storing it would make the shortlist claim progress it
-    // has not made. The typed form is the way through.
+    // ‼️ THE RULE IS UNCHANGED AND IS NOW PRECISE: AN UNCLEAR ROW IS STORED ONLY WHEN THERE IS A
+    // PICTURE BEHIND IT.
+    //
+    // The original rule stored nothing at all, because a stored "unclear" is indistinguishable from
+    // a keyword nobody has looked at, and a shortlist that claims progress it has not made is worse
+    // than one that admits it. That reasoning still holds for a reading with no evidence.
+    //
+    // But under the screenshot gate it created a deadlock: a keyword cannot be used until a picture
+    // is on file, and refusing to store the one that WAS posted meant one blurry screenshot became
+    // a permanent block with no visible cause. So the two cases are separated by the thing that
+    // actually distinguishes them. A row with a doc_id says "a picture was filed and it did not
+    // read", which is a third state, and the card prints it as one and asks for a re-shoot. A
+    // reading with no doc_id still stores nothing, exactly as before.
+    if (!args.docId) {
+      return {
+        message: [
+          `:grey_question: I could not tell from that screenshot for *${found.row.phrase}*.`,
+          read.evidence ? `_What I saw: ${read.evidence}._` : "",
+          "",
+          `Nothing was stored, because the picture was not filed either. Post it again, or type it: \`keywords serp ${args.n}: merge\`, \`: post\`, \`: service\`.`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      };
+    }
+
+    const kept = await recordVerdict({
+      clientId: args.clientId,
+      keyword: found.row,
+      read,
+      verdict,
+      source: "vision",
+      actor: args.by,
+      docId: args.docId,
+      model: SERP_MODEL,
+    });
+    if (!kept.ok) return { message: `:warning: ${kept.error}` };
+
     return {
       message: [
-        `:grey_question: I could not tell from that screenshot for *${found.row.phrase}*.`,
+        `:grey_question: I could not read that screenshot for *${found.row.phrase}*.`,
         read.evidence ? `_What I saw: ${read.evidence}._` : "",
         "",
-        `Nothing was stored. Post a wider screenshot, or type it: \`keywords serp ${args.n}: merge\`, \`: post\`, \`: service\`.`,
+        `The picture is on file and the reading is recorded as unreadable, so this keyword shows as *blocked* rather than as unchecked. Post a wider screenshot to clear it, or type \`keywords serp ${args.n}: merge\`, \`: post\`, \`: service\` to route it without one.`,
+        "_A typed verdict routes the keyword. It does not clear the block: the gate wants the picture._",
       ]
         .filter(Boolean)
         .join("\n"),
     };
+  }
+
+  // ── The magnet judgement, on the rows whose fate it decides ───────────────
+  //
+  // ‼️ A SECOND CALL, AND NOT A SECOND FIELD ON THE FIRST ONE. serp-read.ts is forbidden from
+  // deciding what anything means; this asks for a judgement, and the two must not be the same call
+  // or the reader is being asked to break its own rule. shouldAskMagnet keeps it off the ~18 rows in
+  // 25 where the answer changes nothing.
+  const click = clickValueFrom(read);
+  const cite = citationValueFrom(read);
+  let magnet: { space: number | null; idea: string | null; by: "model" | "person" } | null = null;
+
+  const { shouldAskMagnet } = await import("./magnet-space");
+  if (shouldAskMagnet({ verdict, clickValue: click, citationValue: cite })) {
+    const { readMagnetSpace } = await import("./magnet-space");
+    const ctx = await magnetContext(args.clientId);
+    const judged = await readMagnetSpace({ phrase: found.row.phrase, read, ctx });
+    // A failed call leaves `magnet` null, which stores magnet_by null, which routeFrom reads as
+    // "the check has not run" rather than as "there is nothing here". An outage may not skip a
+    // keyword.
+    if (judged.magnetSpace !== null || judged.magnetIdea) {
+      magnet = { space: judged.magnetSpace, idea: judged.magnetIdea, by: "model" };
+    }
   }
 
   const res = await recordVerdict({
@@ -478,18 +774,76 @@ export async function recordSerpScreenshot(args: {
     source: "vision",
     actor: args.by,
     docId: args.docId ?? null,
-    model: "claude-haiku-4-5-20251001",
+    model: SERP_MODEL,
+    magnet,
   });
   if (!res.ok) return { message: `:warning: ${res.error}` };
 
+  const routed = routeFrom({
+    verdict,
+    clickValue: click,
+    citationValue: cite,
+    magnetSpace: magnet?.space ?? null,
+    magnetIdea: magnet?.idea ?? null,
+    magnetBy: magnet?.by ?? null,
+  });
+
   const lines = [
-    `${verdictMark(verdict)} \`${args.n}\` *${found.row.phrase}* is a *${verdict.replace("_", " ")}*.`,
-    verdictLine(verdict),
+    `${verdictMark(verdict)} \`${args.n}\` *${found.row.phrase}*`,
+    `*click ${click}*  ·  *cite ${cite}*${magnet?.space !== null && magnet?.space !== undefined ? `  ·  *magnet ${magnet.space}*` : ""}  ->  *${routeLine(routed.route, routed.asset)}*`,
+    routed.why,
   ];
+  if (magnet?.idea) lines.push(`_Give away: ${magnet.idea}_`);
   if (read.topDomains.length) lines.push(`_Ranking: ${read.topDomains.join(", ")}._`);
   if (read.evidence) lines.push(`_Read: ${read.evidence}._`);
-  lines.push("", "`strategy` groups everything checked so far. `keywords serp N: <verdict>` overrides this.");
+  lines.push(
+    "",
+    "`strategy` groups everything checked so far. `keywords serp N: <verdict>` overrides the verdict, `magnet N: <what we give away>` overrides the magnet."
+  );
   return { message: lines.join("\n") };
+}
+
+/** What the magnet drafter needs to know about the client. Everything here exists by step 12. */
+async function magnetContext(clientId: string): Promise<import("./magnet-space").MagnetContext> {
+  const name = await clientNameFor(clientId);
+  const base = {
+    clientName: name,
+    vertical: null as string | null,
+    avatar: null as string | null,
+    offerName: null as string | null,
+    outcome: null as string | null,
+    existingMagnets: [] as string[],
+  };
+
+  // Tolerant, and its own select: the offer half and the magnet half live in different tables and a
+  // missing column in either must not cost the other one. One unknown column fails a whole
+  // PostgREST select, which is the rule this repo states everywhere and keeps relearning.
+  const { keywordContext } = await import("./client-keywords");
+  const ctx = await keywordContext(clientId).catch(() => null);
+  if (ctx?.ok) {
+    base.vertical = ctx.ctx.vertical ?? null;
+    base.avatar = ctx.ctx.avatarLabel ?? null;
+    base.offerName = ctx.ctx.treatment ?? null;
+    base.outcome = ctx.ctx.positioning ?? null;
+  }
+
+  // ‼️ THE LIBRARY ROWS PLUS THIS CLIENT'S OWN, which is the shape candidatesFor() in
+  // concierge/magnets.ts already uses: a null client_id is a shared magnet, not an orphan. The point
+  // of handing these over is that the drafter REUSES one where it fits, because a fifth magnet
+  // nobody asked for is worse than the right one said again.
+  const magnets = await supabaseAdmin
+    .from("lead_magnets")
+    .select("title")
+    .eq("active", true)
+    .or(`client_id.is.null,client_id.eq.${clientId}`)
+    .limit(12);
+  if (!magnets.error && magnets.data) {
+    base.existingMagnets = magnets.data
+      .map((m) => (m.title as string | null) ?? "")
+      .filter((t): t is string => Boolean(t));
+  }
+
+  return base;
 }
 
 async function strategyCommand(clientId: string, regroup: boolean): Promise<StrategyReply> {
@@ -523,35 +877,86 @@ async function strategyCommand(clientId: string, regroup: boolean): Promise<Stra
   return { message, after: async () => void (await persistClusters(clientId, clusters, byId)) };
 }
 
+/**
+ * Is the strategy locked FOR THE OFFER AS IT STANDS NOW?
+ *
+ * ‼️ SCOPED BY offer_fingerprint, AND WITHOUT THAT IT LIED. The lock table is one row per client per
+ * fingerprint precisely so a re-lock after an offer change is a new row and the old one stays
+ * readable. This read ignored the fingerprint entirely, so a strategy locked against "lip filler"
+ * made the card say "locked" after the offer became "Botox", while resetForNewOffer had already
+ * deleted the keywords underneath it. The card asserted a decision about phrases that no longer
+ * existed.
+ */
 async function isLocked(clientId: string): Promise<boolean> {
+  const fingerprint = await fingerprintFor(clientId);
+  if (!fingerprint) return false;
+
   const { data, error } = await supabaseAdmin
     .from("client_keyword_strategy")
     .select("locked_at")
     .eq("client_id", clientId)
+    .eq("offer_fingerprint", fingerprint)
     .not("locked_at", "is", null)
     .limit(1);
   if (error) return false;
   return (data ?? []).length > 0;
 }
 
-/** Write the proposal down so the numbers on the card survive to the next message. */
+/**
+ * Write the proposal down so the numbers on the card survive to the next message.
+ *
+ * ‼️ GATED. A cluster whose PILLAR has no screenshot is not written at all, and an unpictured CHILD
+ * is left out of the one that is. See src/lib/clients/serp-gate.ts. The refusal is thrown, not
+ * swallowed: a caller that wrote a smaller strategy and said nothing would be the invisible failure
+ * this gate exists to stop.
+ *
+ * ‼️ IT NO LONGER WIPES A CLUSTER SOMEBODY MADE BY HAND. `strategy pillar 9` inserts a cluster at
+ * rank 999, and this function used to delete EVERY `proposed` row before re-inserting from
+ * clusterFinalists, so the next `strategy` or `strategy approve` destroyed it silently, along with
+ * every `strategy merge` and `strategy service` edit made since the last regroup. Only rows this
+ * function wrote (origin='derived') are its to delete.
+ */
 async function persistClusters(
   clientId: string,
   clusters: ReturnType<typeof clusterFinalists>["clusters"],
   byId: Map<string, Finalist>
 ): Promise<void> {
+  const gates = gateClusters(clusters, byId);
+
+  // Every keyword about to be written, checked against the evidence table in one query.
+  const writable = gates.filter((g) => !g.pillarBlocked);
+  const wanted = writable.flatMap((g) => [g.cluster.pillarId, ...g.cluster.memberIds]);
+  const { assertPictured } = await import("./serp-gate");
+  await assertPictured(
+    clientId,
+    wanted
+      .map((id) => byId.get(id))
+      .filter((r): r is Finalist => Boolean(r))
+      // Children that gateClusters already knows are blocked are dropped from the write rather than
+      // thrown over: the cluster is still legitimate without them, and the card lists them.
+      .filter((r) => r.pictured)
+  );
+
   const wipe = await supabaseAdmin
     .from("keyword_clusters")
     .delete()
     .eq("client_id", clientId)
-    .eq("status", "proposed");
+    .eq("status", "proposed")
+    .eq("origin", "derived");
   if (wipe.error && missingTable(wipe.error)) return;
 
-  for (const [i, c] of clusters.entries()) {
+  const fingerprint = await fingerprintFor(clientId);
+
+  for (const [i, g] of writable.entries()) {
+    const c = g.cluster;
     const { data, error } = await supabaseAdmin
       .from("keyword_clusters")
       .insert({
         client_id: clientId,
+        // ‼️ WRITTEN AT LAST. The column has existed since the migration was drafted and nothing
+        // ever set it, so the staleness check its own header argues for could never fire and a
+        // cluster written for the previous offer was indistinguishable from a current one.
+        offer_fingerprint: fingerprint,
         label: c.label,
         pillar_keyword_id: c.pillarId,
         awareness_entry: c.awarenessEntry,
@@ -560,6 +965,8 @@ async function persistClusters(
         rationale: c.rationale,
         rank: i + 1,
         status: "proposed",
+        origin: "derived",
+        missing_pictures: g.blocked.length,
       })
       .select("id")
       .maybeSingle();
@@ -573,12 +980,40 @@ async function persistClusters(
       .eq("id", c.pillarId);
 
     for (const memberId of c.memberIds) {
+      // An unpictured child is not written into the cluster. It stays unplaced and visible.
+      if (!byId.get(memberId)?.pictured) continue;
       await supabaseAdmin
         .from("client_keywords")
         .update({ cluster_id: clusterId, intent: "merged", merged_into: pillar?.id ?? null })
         .eq("id", memberId);
     }
   }
+}
+
+/**
+ * The pillar keyword of every hand-made cluster still waiting to be approved.
+ *
+ * Its own tolerant select, because `origin` arrives with the same migration as the gate and a
+ * database without it must read as "no manual clusters" rather than failing the approve.
+ */
+async function proposedManualPillars(clientId: string): Promise<Array<{ id: string; phrase: string }>> {
+  const { data, error } = await supabaseAdmin
+    .from("keyword_clusters")
+    .select("pillar_keyword_id, label")
+    .eq("client_id", clientId)
+    .eq("status", "proposed")
+    .eq("origin", "manual");
+  if (error || !data) return [];
+  return data
+    .map((c) => ({ id: (c.pillar_keyword_id as string | null) ?? "", phrase: (c.label as string) ?? "" }))
+    .filter((c) => Boolean(c.id));
+}
+
+/** The offer this strategy is being written for, so a stale cluster can be seen rather than inferred. */
+async function fingerprintFor(clientId: string): Promise<string | null> {
+  const { keywordContext } = await import("./client-keywords");
+  const ctx = await keywordContext(clientId).catch(() => null);
+  return ctx?.ok ? ctx.ctx.fingerprint : null;
 }
 
 async function approveStrategyCommand(clientId: string, by: string): Promise<StrategyReply> {
@@ -595,9 +1030,75 @@ async function approveStrategyCommand(clientId: string, by: string): Promise<Str
   }
 
   const byId = new Map(list.map((r) => [r.id, r]));
+
+  // ── THE GATE ─────────────────────────────────────────────────────────────
+  //
+  // ‼️ CHECKED BEFORE ANYTHING IS WRITTEN, AND IT NAMES THE KEYWORDS. Approving is the moment a
+  // shortlist becomes the plan every page for this client is chosen from, so it is the one place a
+  // missing screenshot must be loud. The refusal prints the shortlist number beside each phrase,
+  // because a refusal a person cannot act on without looking something up is a refusal that gets
+  // worked around.
+  const gates = gateClusters(clusters, byId);
+  const blockedPillars = gates.filter((g) => g.pillarBlocked);
+  const blockedChildren = gates.flatMap((g) => (g.pillarBlocked ? [] : g.blocked));
+
+  // ‼️ AND THE HAND-MADE CLUSTERS, WHICH clusterFinalists NEVER SEES. `strategy pillar 9` writes a
+  // cluster straight into the table, and the promote-to-approved update below flips EVERY proposed
+  // row, so gating only the derived ones would approve a manual cluster nobody had a picture for.
+  // Gated at creation too, but a row written before that gate shipped would still be sitting there.
+  const manual = await proposedManualPillars(clientId);
+  const manualBlocked: Array<{ id: string; phrase: string; reason: "no_reading" | "typed_only" | "unreadable" }> = [];
+  if (manual.length) {
+    const { picturedIds } = await import("./serp-gate");
+    const shot = await picturedIds(clientId, manual.map((m) => m.id));
+    if (!shot.ok) {
+      return { message: `:warning: The screenshots could not be read back, so nothing was approved: ${shot.error}` };
+    }
+    for (const m of manual) {
+      if (shot.pictured.has(m.id)) continue;
+      const row = byId.get(m.id);
+      manualBlocked.push({
+        id: m.id,
+        phrase: row?.phrase ?? m.phrase,
+        reason: row?.docId ? "unreadable" : row?.verdict ? "typed_only" : "no_reading",
+      });
+    }
+  }
+
+  if (blockedPillars.length || blockedChildren.length || manualBlocked.length) {
+    const numberOf = (id: string) => {
+      const i = list.findIndex((r) => r.id === id);
+      return i >= 0 ? i + 1 : null;
+    };
+    const missing = [
+      ...blockedPillars.flatMap((g) => g.blocked),
+      ...blockedChildren,
+      ...manualBlocked,
+    ];
+    const { SerpGateError, refusalLines } = await import("./serp-gate");
+    const err = new SerpGateError(
+      `${missing.length} keyword${missing.length === 1 ? " has" : "s have"} no screenshot on file, across ` +
+        `${gates.filter((g) => g.blocked.length).length} cluster${gates.filter((g) => g.blocked.length).length === 1 ? "" : "s"}.`,
+      missing.map((m) => ({ keywordId: m.id, phrase: m.phrase, reason: m.reason }))
+    );
+    return { message: refusalLines(err, numberOf).join("\n") };
+  }
+
   await persistClusters(clientId, clusters, byId);
 
   const now = new Date().toISOString();
+
+  // ‼️ THE PREVIOUS APPROVED SET IS RETIRED FIRST, AND WITHOUT THIS A SECOND APPROVE DOUBLED EVERY
+  // PILLAR. persistClusters only ever deletes `proposed` rows, so the old approved ones survived,
+  // the freshly proposed ones were then promoted alongside them, and strategyView reads every row
+  // with status='approved'. Two runs of `strategy approve` produced two of each cluster and the page
+  // plan drew from both. Retired rather than deleted: what was locked last week is still readable.
+  await supabaseAdmin
+    .from("keyword_clusters")
+    .update({ status: "dropped", updated_at: now })
+    .eq("client_id", clientId)
+    .eq("status", "approved");
+
   await supabaseAdmin
     .from("keyword_clusters")
     .update({ status: "approved", approved_at: now, approved_by: by, updated_at: now })
@@ -683,6 +1184,25 @@ async function pillarCommand(clientId: string, n: number, by: string): Promise<S
   const row = res.list[n - 1];
   if (!row) return { message: `:warning: There is no \`${n}\` on the shortlist. \`keywords shortlist\` reprints it.` };
 
+  // ‼️ GATED AT CREATION, NOT ONLY AT APPROVAL, AND THAT IS NOT BELT AND BRACES. Promoting a phrase
+  // to a pillar IS the decision that it becomes a page; a cluster is exactly the "sub category under
+  // a pillar" the rule names. And the approval gate alone would not have caught it: that check runs
+  // over the clusters clusterFinalists DERIVES, while this writes one straight into the table, and
+  // the promote-to-approved update flips every proposed row regardless of where it came from. Two
+  // doors, one of them was ajar.
+  if (!row.pictured) {
+    const { blockLine } = await import("./keyword-strategy-rules");
+    const reason = row.docId ? "unreadable" : row.verdict ? "typed_only" : "no_reading";
+    return {
+      message: [
+        `:no_entry: *${row.phrase}* has no screenshot on file, so it cannot be made a pillar.`,
+        `_${blockLine(reason)}._`,
+        "",
+        `Google it, then paste the picture here with \`keywords serp ${n}\` in the same message.`,
+      ].join("\n"),
+    };
+  }
+
   const now = new Date().toISOString();
   const { data, error } = await supabaseAdmin
     .from("keyword_clusters")
@@ -696,6 +1216,13 @@ async function pillarCommand(clientId: string, n: number, by: string): Promise<S
       rationale: `Promoted by ${by}.`,
       rank: 999,
       status: "proposed",
+      // ‼️ MANUAL, SO THE NEXT REGROUP DOES NOT DELETE IT. persistClusters wipes the proposed rows it
+      // owns before re-inserting, and it used to wipe every proposed row, so this cluster lived
+      // exactly until somebody typed `strategy` or `strategy approve` and then vanished with no
+      // message. A person pointing at a phrase is a decision; a regroup is a recalculation, and a
+      // recalculation may not eat a decision.
+      origin: "manual",
+      offer_fingerprint: await fingerprintFor(clientId),
       updated_at: now,
     })
     .select("id")
@@ -754,6 +1281,16 @@ export interface StrategyView {
   excludeIds: Set<string>;
   /** Keyword ids that are a cluster pillar, in cluster order. */
   pillarIds: string[];
+  /**
+   * Pillars that were LEFT OUT because their screenshot is not on file.
+   *
+   * ‼️ RETURNED RATHER THAN SWALLOWED. This is the leak the gate exists to close: strategyView is
+   * the only way a strategy reaches page selection (pre-call-pages.ts imports it), so anything
+   * unverified that gets this far has already escaped. Filtering silently would hand the page plan
+   * a shorter list that looks complete, which is the same invisible failure in a quieter coat. The
+   * caller says what it left out.
+   */
+  unverified: string[];
 }
 
 /**
@@ -768,7 +1305,7 @@ export interface StrategyView {
  * ‼️ NO STRATEGY IS A NO-OP, ITEM FOR ITEM. That is what makes this safe to deploy before the SQL.
  */
 export async function strategyView(clientId: string): Promise<StrategyView> {
-  const empty: StrategyView = { locked: false, excludeIds: new Set(), pillarIds: [] };
+  const empty: StrategyView = { locked: false, excludeIds: new Set(), pillarIds: [], unverified: [] };
 
   const clusters = await supabaseAdmin
     .from("keyword_clusters")
@@ -792,9 +1329,36 @@ export async function strategyView(clientId: string): Promise<StrategyView> {
     if (intent === "merged" || intent === "service_page") excludeIds.add(r.id as string);
   }
 
-  const pillarIds = clusters.data
+  const candidates = clusters.data
     .map((c) => c.pillar_keyword_id as string | null)
     .filter((id): id is string => Boolean(id) && !excludeIds.has(id as string));
 
-  return { locked: true, excludeIds, pillarIds };
+  // ── THE GATE, THIRD AND LAST ─────────────────────────────────────────────
+  //
+  // ‼️ approveStrategyCommand ALREADY REFUSES AN UNPICTURED CLUSTER, SO THIS SHOULD NEVER FIRE, AND
+  // IT IS HERE BECAUSE "should never" IS NOT A GUARANTEE. A cluster approved before this gate
+  // shipped, or one written straight into the table, reaches page selection through exactly this
+  // function and nothing else would ever look at it again. Cheap, and it closes the door rather than
+  // trusting the corridor.
+  //
+  // ‼️ A FAILED CHECK RETURNS THE EMPTY VIEW, NOT THE UNCHECKED LIST. The empty view is already the
+  // documented no-op for "no strategy yet", so degrading into it costs today's behaviour and
+  // nothing more, whereas degrading into "pass them all through" would hand the page plan exactly
+  // what the gate was built to withhold.
+  const { picturedIds } = await import("./serp-gate");
+  const shot = await picturedIds(clientId, candidates);
+  if (!shot.ok) {
+    console.error("[clients/keyword-strategy] strategyView could not verify screenshots:", shot.error);
+    return empty;
+  }
+
+  const pillarIds = candidates.filter((id) => shot.pictured.has(id));
+  const unverified = candidates.filter((id) => !shot.pictured.has(id));
+  if (unverified.length) {
+    console.error(
+      `[clients/keyword-strategy] ${unverified.length} approved pillar(s) have no screenshot and were withheld from page selection for client ${clientId}`
+    );
+  }
+
+  return { locked: true, excludeIds, pillarIds, unverified };
 }

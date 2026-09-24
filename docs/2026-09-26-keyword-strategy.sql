@@ -47,10 +47,34 @@ create table if not exists public.keyword_clusters (
   -- under 12` names a row by a printed number.
   rank              integer,
 
+  -- ‼️ THE CARD IS EDITED, NEVER RE-POSTED. Slack orders a channel by post time, so a
+  -- delete-and-repost moves a cluster to the bottom of the thread permanently. Same rule
+  -- client_delivery_steps.slack_anchor_ts carries, written down here for the same reason.
+  card_ts           text,
+
+  -- ‼️ A CLUSTER MADE BY HAND SURVIVES A REGROUP, AND WITHOUT THIS COLUMN IT DOES NOT.
+  -- persistClusters deletes every `proposed` row before re-inserting from clusterFinalists, so
+  -- `strategy pillar 9` inserted a cluster at rank 999 that the very next `strategy approve` wiped,
+  -- silently, along with every `strategy merge` and `strategy service` edit made since the last
+  -- regroup. A cluster whose origin is `manual` is preserved instead of deleted.
+  origin            text not null default 'derived'
+                    check (origin in ('derived', 'manual')),
+
+  -- How many keywords in this cluster still owed a picture when the card was last drawn. A CACHE for
+  -- the card only. serp-gate.ts always re-reads keyword_serp_reads before it refuses anything, for
+  -- the reason assertGatePassed re-hashes the body rather than trusting what its caller loaded:
+  -- this is the one place where being convenient is worth less than being right.
+  missing_pictures  integer not null default 0,
+
+  -- 'rejected' is not 'dropped'. Dropped is what a merge does to a cluster that moved under another
+  -- one; rejected is a person looking at the pictures and saying no. Keeping them apart is what lets
+  -- the card say which happened, and neither one deletes a keyword.
   status            text not null default 'proposed'
-                    check (status in ('proposed', 'approved', 'dropped')),
+                    check (status in ('proposed', 'approved', 'rejected', 'dropped')),
   approved_at       timestamptz,
   approved_by       text,
+  rejected_at       timestamptz,
+  rejected_by       text,
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now(),
 
@@ -61,6 +85,27 @@ create table if not exists public.keyword_clusters (
   constraint keyword_clusters_page_kind_check
     check (page_kind is null or page_kind in ('post', 'service_page'))
 );
+
+-- ── Columns for a database that already ran the FIRST version of this file ─────────────
+--
+-- ‼️ THE create table ABOVE IS `if not exists` AND WOULD BE A NO-OP ON SUCH A DATABASE, so every
+-- column added since would be silently missing and persistClusters would fail its insert with a
+-- 42703 that names one column and not the file. Same belt and braces as the serp migration.
+alter table public.keyword_clusters add column if not exists card_ts text;
+alter table public.keyword_clusters add column if not exists missing_pictures integer not null default 0;
+alter table public.keyword_clusters add column if not exists rejected_at timestamptz;
+alter table public.keyword_clusters add column if not exists rejected_by text;
+alter table public.keyword_clusters add column if not exists origin text not null default 'derived';
+
+alter table public.keyword_clusters drop constraint if exists keyword_clusters_origin_check;
+alter table public.keyword_clusters add constraint keyword_clusters_origin_check
+  check (origin in ('derived', 'manual'));
+
+-- The status CHECK is REPLACED rather than added, because a table created by the first version of
+-- this file carries the three-value form and would refuse 'rejected' forever.
+alter table public.keyword_clusters drop constraint if exists keyword_clusters_status_check;
+alter table public.keyword_clusters add constraint keyword_clusters_status_check
+  check (status in ('proposed', 'approved', 'rejected', 'dropped'));
 
 create index if not exists keyword_clusters_client
   on public.keyword_clusters (client_id, rank);
@@ -116,8 +161,20 @@ alter table public.client_keywords add column if not exists merged_into uuid
 
 -- The latest SERP verdict, denormalised so the card and the shortlist sort without a join. The
 -- append-only history stays in keyword_serp_reads; this is the current reading.
+--
+-- ‼️ A SORT CONVENIENCE, AND NOT THE AUTHORITY. IT WAS THE AUTHORITY AND THAT WAS A BUG. This column
+-- is overwritten unconditionally by every recordVerdict, so when loadFinalists read it, a re-run
+-- vision pass silently replaced a correction a person had typed ten minutes earlier: exactly the
+-- failure bestVerdict() was written to prevent, on a path that never called bestVerdict() because
+-- verdictsFor() had no callers at all. loadFinalists reads keyword_serp_reads now and resolves the
+-- verdict through bestVerdict(). Nothing may go back to trusting this column for a decision.
 alter table public.client_keywords add column if not exists serp_verdict text;
 alter table public.client_keywords add column if not exists serp_checked_at timestamptz;
+
+comment on column public.client_keywords.serp_verdict is
+  'The latest reading, denormalised for sorting only. NOT the authority: it is overwritten on every '
+  'read regardless of source, so a decision taken from it ignores bestVerdict and lets a vision '
+  'pass overwrite a typed correction. keyword_serp_reads is the authority.';
 
 create index if not exists client_keywords_cluster
   on public.client_keywords (client_id, cluster_id);
@@ -162,20 +219,32 @@ alter table public.keyword_decisions add constraint keyword_decisions_action_che
   check (action in (
     'approve', 'drop', 'add', 'restore', 'pick_pillar', 'pick_support', 'unpick',
     -- added with the step 12 strategy
-    'merge', 'unmerge', 'mark_service_page', 'mark_post', 'pick_cluster_pillar', 'serp_verdict'
+    'merge', 'unmerge', 'mark_service_page', 'mark_post', 'pick_cluster_pillar', 'serp_verdict',
+    -- added with the screenshot gate. A cluster approval is a decision about the keywords in it, so
+    -- it belongs in the same history as the approve that put them there.
+    'approve_cluster', 'reject_cluster', 'set_magnet'
   ));
 
 alter table public.keyword_runs drop constraint if exists keyword_runs_reason_check;
 alter table public.keyword_runs add constraint keyword_runs_reason_check
   check (reason in ('expansion', 'more', 'reset', 'measurement', 'rerun', 'strategy'));
 
--- ── Verify. Expect EIGHT rows. Fewer means an alter did not apply. ─────────
+-- ── Verify. Expect ELEVEN rows. Fewer means an alter did not apply. ─────────
 select table_name || '.' || column_name as col, data_type, is_nullable
 from information_schema.columns
 where table_schema = 'public'
   and (
     (table_name = 'client_keywords' and column_name in ('cluster_id', 'intent', 'merged_into', 'serp_verdict')) or
     (table_name = 'page_plan'       and column_name in ('page_kind', 'cluster_id', 'slug')) or
-    (table_name = 'keyword_clusters' and column_name = 'label')
+    (table_name = 'keyword_clusters' and column_name in ('label', 'card_ts', 'origin', 'missing_pictures'))
   )
 order by col;
+
+-- ── And the status CHECK actually carries 'rejected'. Expect ONE row. ──────
+-- A column that exists proves an alter ran. A CHECK that was never replaced is invisible until an
+-- insert fails in production, which is the shape of failure this whole lane keeps finding.
+select conname, pg_get_constraintdef(oid) as definition
+from pg_constraint
+where conrelid = 'public.keyword_clusters'::regclass
+  and conname = 'keyword_clusters_status_check'
+  and pg_get_constraintdef(oid) like '%rejected%';

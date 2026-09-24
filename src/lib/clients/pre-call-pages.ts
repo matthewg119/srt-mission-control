@@ -153,12 +153,23 @@ async function offerPool(clientId: string): Promise<
   // ‼️ NO STRATEGY IS A NO-OP, ITEM FOR ITEM. strategyView returns an empty view when the tables are
   // absent, when nothing is approved, or on any read error, so this is safe to deploy before the SQL
   // and behaves exactly as it did before on every client who has not locked one.
+  //
+  // ‼️ AND SINCE 2026-09-24 IT IS ALSO THE LAST DOOR ON THE SCREENSHOT GATE. strategyView withholds
+  // any approved pillar whose Google screenshot is not on file and reports it in `unverified`. Said
+  // out loud here rather than left as a shorter list: a plan quietly built from four pillars instead
+  // of six looks exactly like a plan that was only ever meant to have four.
   const { strategyView } = await import("./keyword-strategy");
   const strategy = await strategyView(clientId).catch(() => ({
     locked: false,
     excludeIds: new Set<string>(),
     pillarIds: [] as string[],
+    unverified: [] as string[],
   }));
+  if (strategy.unverified.length) {
+    console.error(
+      `[clients/pre-call-pages] ${strategy.unverified.length} approved pillar(s) were withheld from the pool for client ${clientId}: no screenshot on file. Paste them at step 12 with \`keywords serp N\`.`
+    );
+  }
   const pillarSet = new Set(strategy.pillarIds);
 
   const pool: OfferPoolItem[] = pk.rows

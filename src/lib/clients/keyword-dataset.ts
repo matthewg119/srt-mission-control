@@ -148,7 +148,12 @@ export type KeywordDecisionAction =
   | "mark_service_page"
   | "mark_post"
   | "pick_cluster_pillar"
-  | "serp_verdict";
+  | "serp_verdict"
+  // The screenshot gate, added 2026-09-24. A cluster approval is a decision about the keywords in
+  // it, so it belongs in the same history as the approve that put them there.
+  | "approve_cluster"
+  | "reject_cluster"
+  | "set_magnet";
 
 export async function recordKeywordDecisions(args: {
   clientId: string;
