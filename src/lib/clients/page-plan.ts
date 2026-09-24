@@ -129,6 +129,14 @@ export interface PlanRow {
   /** 3 to 5 approved variations of targetKeyword, each verbatim from client_keywords. */
   secondaryKeywords: string[] | null;
   /**
+   * The URL this page will take, built from the target keyword rather than the working title.
+   *
+   * Null on every row written before docs/2026-09-26-keyword-strategy.sql, and on any row whose
+   * slug could not be made unique; both mean "derive it from the working title at draft time",
+   * which is what every row did before. Merged by withStrategy.
+   */
+  slug: string | null;
+  /**
    * Where the reader is when they arrive, 5 (unaware) to 1 (most aware), and where the page leaves
    * them. LOWER IS CLOSER TO BUYING. Null on a row from before docs/2026-09-15-awareness-stages.sql.
    */
@@ -387,6 +395,20 @@ export interface FramedRow {
   workingTitle: string;
   angle: string;
   targetKeyword: string;
+  /**
+   * Approved phrases that mean the same thing as targetKeyword.
+   *
+   * ‼️ CHOSEN FROM THE APPROVED LIST, NOT INVENTED, and that is what makes them usable. The model
+   * is picking, exactly as it already picks targetKeyword, and frameFaults refuses anything not in
+   * the KEYWORDS set. A model free to invent a synonym would be asserting that two phrases mean the
+   * same thing, which is the claim sales-letter.ts refuses to let a model make.
+   *
+   * They are what lets a page rank for more than the one phrase it was named for: checkPlacement
+   * accepts any of them in the title, the H1, the meta, the first sentence and the subheads, so a
+   * naturally written page is not reported as faulty for saying the same thing in better words.
+   * The slug stays the primary keyword's alone.
+   */
+  secondaryKeywords: string[];
   frame: PlannedFrame;
 }
 
@@ -405,14 +427,21 @@ export interface FrameContext {
 }
 
 const FRAME_SYSTEM = `You plan the pages on one business's website. The pages have already been chosen: each one
-answers a question the business's buyers actually ask. You write, for each page, four things.
+answers a question the business's buyers actually ask. You write, for each page, five things.
 
 1. workingTitle. How a person would say the question, under 70 characters. Not the raw phrase.
 2. angle. One sentence on what the reader walks away with. Useful, specific, no promise of results.
 3. targetKeyword. The one phrase this page is aimed at, COPIED EXACTLY from the KEYWORDS list.
    Usually the page's own question if it is in the list; otherwise the closest phrase in the list.
    A phrase that is not in the list is rejected.
-4. frame. How the business's ANCHOR OFFER is presented on this page. Every page on this site offers
+4. secondaryKeywords. Three to five OTHER phrases from the KEYWORDS list that a search engine
+   would treat as meaning the same thing as targetKeyword, COPIED EXACTLY from the list. "Get more
+   reviews", "increase patient reviews" and "review generation" are one subject said three ways, so
+   a page aimed at any of them is aimed at all of them. Return [] rather than reaching: a phrase
+   about a DIFFERENT subject is worse than none, because the page will be judged as though it were
+   about that too. Never the targetKeyword itself, never a duplicate, never a phrase not in the list.
+
+5. frame. How the business's ANCHOR OFFER is presented on this page. Every page on this site offers
    the same one free thing, the anchor, and the frame is the door into it that fits what the reader
    of THIS page is thinking about:
      - title: what the offer is called on this page
@@ -438,6 +467,7 @@ const FRAME_SCHEMA = `{
       "workingTitle": string,
       "angle": string,
       "targetKeyword": string,
+      "secondaryKeywords": string[],
       "frame": { "title": string, "ctaLabel": string, "conciergeEntry": string }
     }
   ]
@@ -488,6 +518,35 @@ export function frameFaults(
     if (!keyword) out.push(`${where} has no targetKeyword.`);
     else if (!keywordSet.has(normalizePhrase(keyword))) {
       out.push(`${where}'s targetKeyword "${keyword}" is not in the KEYWORDS list. Copy one exactly.`);
+    }
+
+    // ‼️ THE SAME BAR AS targetKeyword, AND FOR THE SAME REASON. These phrases widen what the page
+    // is judged against at the gate, so a model free to invent one would be widening the target by
+    // assertion. An empty array is a legitimate, and common, answer.
+    //
+    // ‼️ MISSING IS NOT A FAULT. Every row written before 2026-09-25 has no secondaryKeywords, and
+    // a batch is validated whole: making absence a fault would reject the entire batch on a field
+    // the model may simply have omitted, and throw away four good rows to punish one.
+    const secondary = Array.isArray(row?.secondaryKeywords) ? row.secondaryKeywords : [];
+    if (secondary.length > 5) {
+      out.push(`${where} returned ${secondary.length} secondaryKeywords. Five at most.`);
+    }
+    const seenSecondary = new Set<string>();
+    for (const raw of secondary) {
+      const phrase = typeof raw === "string" ? raw.trim() : "";
+      if (!phrase) {
+        out.push(`${where} has an empty entry in secondaryKeywords.`);
+        continue;
+      }
+      const norm = normalizePhrase(phrase);
+      if (!keywordSet.has(norm)) {
+        out.push(`${where}'s secondaryKeyword "${phrase}" is not in the KEYWORDS list. Copy one exactly.`);
+      }
+      if (keyword && norm === normalizePhrase(keyword)) {
+        out.push(`${where}'s secondaryKeywords repeat the targetKeyword. They are the OTHER ways of saying it.`);
+      }
+      if (seenSecondary.has(norm)) out.push(`${where} lists "${phrase}" twice.`);
+      seenSecondary.add(norm);
     }
 
     if (!frame) {
@@ -570,6 +629,15 @@ export async function framePages(pages: readonly PoolItem[], ctx: FrameContext):
     workingTitle: r.workingTitle.trim(),
     angle: r.angle.trim(),
     targetKeyword: r.targetKeyword.trim(),
+    // Trimmed and de-duplicated here rather than trusted: frameFaults has already refused anything
+    // not in the approved set, so what survives is the model's picks in their stored spelling.
+    secondaryKeywords: [
+      ...new Set(
+        (Array.isArray(r.secondaryKeywords) ? r.secondaryKeywords : [])
+          .map((k) => (typeof k === "string" ? k.trim() : ""))
+          .filter((k) => k.length > 0)
+      ),
+    ],
     frame: readFrame(r.frame) as PlannedFrame,
   }));
 }
@@ -605,6 +673,7 @@ function toPlanRow(r: Record<string, unknown>): PlanRow {
     // Merged on afterwards by withHeadlines, for the blast-radius reason it documents.
     headline: null,
     secondaryKeywords: null,
+    slug: null,
     // Merged on afterwards by withAwareness.
     awarenessEntry: null,
     awarenessTarget: null,
@@ -695,6 +764,30 @@ async function withAwareness(rows: PlanRow[]): Promise<PlanRow[]> {
  * database that has the earlier columns but not this one. A missing column reads as a plan whose
  * pages have no shape yet, which is what it is.
  */
+/**
+ * The strategy columns, merged on tolerantly.
+ *
+ * ‼️ THE SIXTH INSTANCE OF THIS PATTERN IN THIS FILE, and the reason is the same every time: one
+ * unknown column fails the WHOLE PostgREST select and supabase-js RETURNS the error rather than
+ * throwing, so naming a column that may not exist yet would turn the entire plan into "no plan".
+ * A database without docs/2026-09-26-keyword-strategy.sql reads as "no slug", which is what it is.
+ */
+async function withStrategy(rows: PlanRow[]): Promise<PlanRow[]> {
+  if (rows.length === 0) return rows;
+  const { data, error } = await supabaseAdmin
+    .from("page_plan")
+    .select("id, slug")
+    .in("id", rows.map((r) => r.id));
+  if (error) return rows;
+  const byId = new Map(((data ?? []) as Array<Record<string, unknown>>).map((r) => [String(r.id), r]));
+  for (const row of rows) {
+    const extra = byId.get(row.id);
+    if (!extra) continue;
+    row.slug = typeof extra.slug === "string" && extra.slug.trim() ? extra.slug.trim() : null;
+  }
+  return rows;
+}
+
 async function withPostFormat(rows: PlanRow[]): Promise<PlanRow[]> {
   if (rows.length === 0) return rows;
   const { data, error } = await supabaseAdmin
@@ -733,9 +826,17 @@ export async function loadPlan(clientId: string): Promise<{ rows: PlanRow[] } | 
     };
   }
 
-  const rows = await withPostFormat(
-    await withAwareness(
-      await withHeadlines(await withRoles(((data ?? []) as Array<Record<string, unknown>>).map(toPlanRow)))
+  // ‼️ withStrategy IS IN THIS CHAIN, AND IT WAS NOT UNTIL 2026-09-23. It was written, exported and
+  // never called, so every PlanRow carried the `slug: null` toPlanRow hardcodes, and
+  // pre-call-pages.ts's `slug: row.slug ?? undefined` was ALWAYS undefined. The whole "decide the URL
+  // from the keyword before the page exists" mechanism was inert, silently, while the column filled
+  // up correctly underneath it. A merge helper with no caller is the one kind of dead code that
+  // leaves the data looking right.
+  const rows = await withStrategy(
+    await withPostFormat(
+      await withAwareness(
+        await withHeadlines(await withRoles(((data ?? []) as Array<Record<string, unknown>>).map(toPlanRow)))
+      )
     )
   );
   const pageIds = rows.map((r) => r.pageId).filter((id): id is string => Boolean(id));
@@ -818,6 +919,43 @@ async function existingPageQuestions(clientId: string): Promise<Set<string>> {
  * different suggestions", not "forget what I decided". A claimed row has a page being written
  * against it, and deleting it would orphan that page from the plan it came from.
  */
+/**
+ * The URL each planned page will take, built from its target keyword.
+ *
+ * ‼️ TWO KEYWORDS CAN PRODUCE ONE SLUG, AND THE ANSWER IS TO LEAVE THE SECOND ONE NULL. keywordSlug
+ * strips stopwords, so "how much does botox cost" and "botox cost" both become "botox-cost", and
+ * client_pages is unique on (client_id, lower(slug)). A silent numeric suffix would put
+ * "botox-cost-2" on a client's live site, which is a URL nobody chose. A null means "derive it from
+ * the working title at draft time", which is exactly what every row did before this existed, so the
+ * collision costs the second page its keyword-shaped URL and nothing else.
+ *
+ * ‼️ AGAINST THE SLUGS ALREADY TAKEN, NOT ONLY AGAINST THIS BATCH. A plan proposed in two goes would
+ * otherwise hand the same slug to a row in each.
+ */
+export async function slugsForPlan(clientId: string, keywords: readonly string[]): Promise<Array<string | null>> {
+  const { keywordSlug } = await import("@/lib/hub/keyword-placement");
+  const taken = new Set<string>();
+
+  try {
+    const [pages, plan] = await Promise.all([
+      supabaseAdmin.from("client_pages").select("slug").eq("client_id", clientId),
+      supabaseAdmin.from("page_plan").select("slug").eq("client_id", clientId),
+    ]);
+    for (const r of pages.data ?? []) if (typeof r.slug === "string") taken.add(r.slug.toLowerCase());
+    // A missing column here is the migration not being run yet, which is not a reason to refuse.
+    for (const r of plan.data ?? []) if (typeof r.slug === "string") taken.add(r.slug.toLowerCase());
+  } catch {
+    /* an unreadable slug list means every slug is proposed; the unique index is still the backstop */
+  }
+
+  return keywords.map((k) => {
+    const slug = keywordSlug(k);
+    if (!slug || taken.has(slug.toLowerCase())) return null;
+    taken.add(slug.toLowerCase());
+    return slug;
+  });
+}
+
 export async function proposePlan(
   clientId: string,
   ctx: Omit<FrameContext, "keywords">
@@ -864,12 +1002,20 @@ export async function proposePlan(
 
   const now = new Date().toISOString();
   if (chosen.length) {
+    // Decided here, at creation, because it is the only window in which a URL can be decided.
+    const plannedSlugs = await slugsForPlan(clientId, framed.map((f) => f.targetKeyword));
     const { error: insError } = await supabaseAdmin.from("page_plan").insert(
       chosen.map((c, i) => ({
         client_id: clientId,
         rank: kept.length + i + 1,
         question: c.question,
         target_keyword: framed[i].targetKeyword,
+        // ‼️ CONDITIONAL SPREAD, the pattern this file already uses for role, headline, awareness
+        // and post_format. The column shipped in docs/2026-09-12-client-headlines.sql and has never
+        // had a writer, so on a database where that migration ran it is present and empty; naming it
+        // unconditionally would still be safe, and this stays consistent with its five neighbours.
+        ...(framed[i].secondaryKeywords?.length ? { secondary_keywords: framed[i].secondaryKeywords } : {}),
+        ...(plannedSlugs[i] ? { slug: plannedSlugs[i] } : {}),
         working_title: framed[i].workingTitle,
         angle: framed[i].angle,
         theme: c.theme,
@@ -988,6 +1134,9 @@ export async function swapPlanRow(
     .update({
       question: next.question,
       target_keyword: framed.targetKeyword,
+      // A swap replaces the subject, so the old family must not survive onto the new one. Written
+      // as null rather than omitted, or row 4 would keep row 4's previous page's variations.
+      secondary_keywords: framed.secondaryKeywords?.length ? framed.secondaryKeywords : null,
       working_title: framed.workingTitle,
       angle: framed.angle,
       theme: next.theme,

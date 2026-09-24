@@ -21,6 +21,7 @@
 import {
   keywordSlug,
   carriesKeyword,
+  carriesAnyKeyword,
   checkPlacement,
   firstSentence,
   h2Headings,
@@ -147,6 +148,94 @@ const pillar = checkPlacement({
 check("an absent pillar anchor is skipped, not failed", !pillar.missing.includes("pillar_anchor"));
 check("and so are an absent h1 and schema", !pillar.missing.includes("h1") && !pillar.missing.includes("schema"));
 check("a pillar with everything else placed has no faults", pillar.missing.length === 0, pillar.detail);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3b. THE PHRASE FAMILY. Matthew, 2026-09-23: "Google understands that 'get more reviews',
+// 'increase patient reviews' and 'review generation' mean the same thing, so one well-written page
+// can rank for dozens of related phrases, not just the one you picked."
+//
+// This is his own example, written the way a person would actually write it, and the point of the
+// section is that WITHOUT the family this page is reported as faulty and the only way to clear the
+// report is to weld the exact phrase into the subheads, which keyword_shaped then fails it for.
+// ─────────────────────────────────────────────────────────────────────────────
+console.log("\n3b. a natural variation counts as the keyword");
+
+const REVIEWS = "get more google reviews";
+const FAMILY = ["increase patient reviews", "review generation", "asking patients for reviews"];
+
+const naturalBody = [
+  `Getting more Google reviews for a med spa comes down to when you ask. ${prose(200)}`,
+  "",
+  "## Asking patients for reviews without the awkward pause",
+  prose(300),
+  "",
+  "## What review generation looks like over a month",
+  prose(300),
+].join("\n");
+
+const naturalArgs = {
+  keyword: REVIEWS,
+  slug: "more-google-reviews-med-spa",
+  title: "How to get more Google reviews for a med spa",
+  h1: "How to get more Google reviews for a med spa (without awkward asks)",
+  metaDescription: "How to increase patient reviews without the awkward ask.",
+  answerMd: naturalBody,
+  pillarAnchor: "Get more Google reviews",
+  schema: '{"headline":"How to get more Google reviews for a med spa"}',
+} as const;
+
+const without = checkPlacement({ ...naturalArgs });
+const withFamily = checkPlacement({ ...naturalArgs, variants: FAMILY });
+
+check(
+  "without the family, a naturally written page is reported as missing its subheads",
+  without.missing.includes("h2"),
+  without.detail
+);
+check(
+  "without the family, the meta description is blamed too",
+  without.missing.includes("meta"),
+  without.detail
+);
+check("with the family, the page is clean", withFamily.missing.length === 0, withFamily.detail);
+check("and the detail says the variations counted", /variation/.test(withFamily.detail), withFamily.detail);
+
+// ‼️ THE SLUG IS THE ONE SLOT THE FAMILY MUST NOT OPEN UP. Every other slot asks "is this page
+// about that subject". The URL is one permanent string built from the primary keyword, and a slug
+// matching only a variant would mean the plan and the address disagree about what was chosen.
+const variantSlug = checkPlacement({
+  ...naturalArgs,
+  slug: "review-generation",
+  variants: FAMILY,
+});
+check(
+  "a slug carrying only a VARIANT is still reported",
+  variantSlug.missing.includes("slug"),
+  variantSlug.detail
+);
+
+// An empty family must behave exactly as the file did before it existed.
+const emptyFamily = checkPlacement({ ...naturalArgs, variants: [] });
+check(
+  "an empty family changes nothing",
+  emptyFamily.missing.join(",") === without.missing.join(","),
+  `${emptyFamily.missing.join(",")} vs ${without.missing.join(",")}`
+);
+check(
+  "a family of blank strings is ignored rather than matching everything",
+  checkPlacement({ ...naturalArgs, variants: ["", "  "] }).missing.includes("h2")
+);
+
+// carriesAnyKeyword is the sibling, and carriesKeyword must be unchanged: client-headlines.ts uses
+// it as a HARD validator that a kept headline still carries the keyword it was written for.
+check(
+  "carriesKeyword still refuses a synonym on its own",
+  !carriesKeyword("asking patients for reviews", REVIEWS)
+);
+check(
+  "carriesAnyKeyword accepts it once the family is supplied",
+  carriesAnyKeyword("asking patients for reviews", REVIEWS, FAMILY)
+);
 
 check("firstSentence skips headings", firstSentence(goodBody).startsWith("Lip filler swelling is normal"));
 check("h2Headings finds both", h2Headings(goodBody).length === 2, h2Headings(goodBody).join(" | "));

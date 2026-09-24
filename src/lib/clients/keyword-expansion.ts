@@ -729,10 +729,48 @@ export function keywordVerdict(t: KeywordTally): KeywordVerdict {
 // people think" is a sentence. "keywords drop everything" is a sentence. Neither is a command.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * `keywords approve`, `keywords approve 411-423`, `keywords approve 62, 71, 84`, `keywords approve mine`.
+ *
+ * ‼️ THE BARE FORM APPROVES EVERY QUERY ROW AND THAT IS WHY THE OTHERS EXIST. Measured 2026-09-23:
+ * Matthew pasted fifteen phrases he had chosen, thirteen were stored, he typed `keywords approve`,
+ * and the reply said "Approved 413 queries". There was no way to say "these thirteen". A set of 355
+ * where 149 are a model's own proposals is not a set anybody chose, and the page plan draws from it.
+ *
+ * The numbers are RANKS, the same numbers `keywords drop 12, 15` takes and the same ones the card
+ * prints, so one number means one thing everywhere in this thread.
+ */
 export const KEYWORDS_APPROVE = /^keywords\s+approve$/i;
+export const KEYWORDS_APPROVE_SOME =
+  /^keywords\s+approve\s+(\d{1,4}(?:\s*-\s*\d{1,4})?(?:\s*,\s*\d{1,4}(?:\s*-\s*\d{1,4})?)*)$/i;
+export const KEYWORDS_APPROVE_MINE = /^keywords\s+approve\s+(mine|manual|ours)$/i;
 export const KEYWORDS_DROP = /^keywords\s+drop\s+(\d{1,4}(?:\s*,\s*\d{1,4})*)$/i;
 export const KEYWORDS_ADD = /^keywords\s+add\s*:\s*([\s\S]+)$/i;
 export const KEYWORDS_MORE = /^keywords\s+more\s+(.+)$/i;
+
+// ‼️ `keywords prompt`, NOT a bare `prompt`. Step 11's framework thread already owns `prompt` and
+// `prompt short`, gated on avatar_harvest. Two steps answering the same bare word is how somebody
+// types it in the wrong thread, gets a plausible answer, and files research against the wrong
+// step. The `keywords ` prefix also puts it in the family the card already teaches, and it is what
+// lets handleKeywordThreadReply keep its one cheap /^keywords\b/ guard before parsing anything.
+export const KEYWORDS_PROMPT = /^keywords\s+prompt$/i;
+
+/**
+ * The triage rule, in Matthew's own words, 2026-09-23.
+ *
+ * ‼️ ONE STRING, QUOTED EVERYWHERE, EDITED NOWHERE. It is what decides whether a phrase becomes its
+ * own post, gets folded under a bigger one, or becomes a service page. It reaches the research
+ * prompt, the SERP reader's instructions and the strategy card, and a probe greps it out of all of
+ * them. Three copies would drift into three slightly different rules and nobody could say which one
+ * a stored verdict was made under.
+ *
+ * ‼️ IT LIVES HERE, in the pure half of the step, because the impure half cannot be imported by a
+ * probe without a database and the rule has to be assertable offline.
+ */
+export const SERP_TRIAGE_RULE = [
+  "Google each keyword. If the AI Overview fully answers it, merge that keyword into a bigger post.",
+  "If the page is all local listings or software products, make a service page instead of a post.",
+].join(" ");
 
 // ‼️ `keywords check` WAS HERE AND IS GONE (2026-09-12). It put the top twenty phrases to ChatGPT
 // from this lane, with its own scoring and its own second engine caller. The approved queries now
@@ -742,11 +780,18 @@ export const KEYWORDS_MORE = /^keywords\s+more\s+(.+)$/i;
 // probe asserts exactly that, so the grammar cannot quietly grow it back.
 
 export type KeywordCommand =
+  /** Every query row. The blunt form, kept because a set somebody has already curated wants it. */
   | { kind: "approve" }
+  /** Only these ranks. `ranks` is already expanded from any ranges and de-duplicated. */
+  | { kind: "approve_some"; ranks: number[] }
+  /** Only the rows a person typed, which is `origin = 'manual'`. */
+  | { kind: "approve_mine" }
   | { kind: "drop"; ranks: number[] }
   /** One phrase, or a pasted list: one per line, numbered or not. */
   | { kind: "add"; phrases: string[] }
-  | { kind: "more"; category: CategorySpec };
+  | { kind: "more"; category: CategorySpec }
+  /** Hand over the research prompt for this offer. Answers come back through `add`. */
+  | { kind: "prompt" };
 
 /**
  * `keywords more price`, `keywords more naming`, `keywords more direct_naming`. A key, a label, or
@@ -765,6 +810,33 @@ export function resolveCategory(arg: string, categories: readonly CategorySpec[]
     if (hits.length === 1) return hits[0];
   }
   return null;
+}
+
+/**
+ * "411-423, 62, 84" into [62, 84, 411 ... 423].
+ *
+ * ‼️ A RANGE IS CAPPED AND A BACKWARDS ONE IS DROPPED. "1-9999" typed by accident would approve the
+ * whole set through the door that exists to stop exactly that, and "423-411" is a typo rather than
+ * an instruction. Both come back as nothing from that term rather than as a guess at what was meant.
+ */
+export function expandRanks(raw: string): number[] {
+  const MAX_SPAN = 200;
+  const out = new Set<number>();
+  for (const part of raw.split(",")) {
+    const bit = part.trim();
+    if (!bit) continue;
+    const range = /^(\d{1,4})\s*-\s*(\d{1,4})$/.exec(bit);
+    if (range) {
+      const from = Number(range[1]);
+      const to = Number(range[2]);
+      if (from < 1 || to < from || to - from + 1 > MAX_SPAN) continue;
+      for (let n = from; n <= to; n += 1) out.add(n);
+      continue;
+    }
+    const one = Number(bit);
+    if (Number.isInteger(one) && one > 0) out.add(one);
+  }
+  return [...out].sort((a, b) => a - b);
 }
 
 /** How many phrases one `keywords add:` takes. A list longer than this is a file, not a paste. */
@@ -798,7 +870,19 @@ export function addList(body: string): string[] {
 
 export function parseKeywordCommand(raw: string, categories: readonly CategorySpec[]): KeywordCommand | null {
   const text = raw.trim().replace(/^[`*_]+|[`*_]+$/g, "").trim();
+  // ‼️ THE NARROW FORMS ARE TESTED FIRST. The bare regex is anchored so it cannot swallow them, but
+  // ordering it this way means a future widening of the bare form cannot silently start approving
+  // everything when somebody typed a list.
+  if (KEYWORDS_APPROVE_MINE.test(text)) return { kind: "approve_mine" };
+
+  const some = KEYWORDS_APPROVE_SOME.exec(text);
+  if (some) {
+    const ranks = expandRanks(some[1]);
+    return ranks.length ? { kind: "approve_some", ranks } : null;
+  }
+
   if (KEYWORDS_APPROVE.test(text)) return { kind: "approve" };
+  if (KEYWORDS_PROMPT.test(text)) return { kind: "prompt" };
 
   const drop = KEYWORDS_DROP.exec(text);
   if (drop) {
@@ -1041,6 +1125,11 @@ export function formatKeywordCard(
   lines.push(
     "",
     "*In this thread:*",
+    // ‼️ THE PROMPT IS OFFERED BEFORE APPROVAL IS, because of what is in the set at this moment.
+    // Most of it is `expansion`, which is a model's proposal and is ranked below evidence on
+    // purpose. Putting `keywords approve` first taught everybody to accept that, which is the
+    // opposite of what the origin ranking exists to achieve.
+    "  • `keywords prompt` hands over a research prompt that already carries this offer, the avatar and everything on file. Run it in claude.com and bring the numbered list back with `keywords add:`.",
     "  • `keywords approve` approves the query set as shown.",
     "  • `keywords drop 12` or `keywords drop 12, 15, 40` removes rows by number.",
     "  • `keywords add: <phrase>` adds your own. It ranks like evidence, because you said it.",

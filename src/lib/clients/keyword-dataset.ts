@@ -127,6 +127,13 @@ export async function recordKeywordRun(args: {
   }
 }
 
+/**
+ * ‼️ THIS UNION AND THE keyword_decisions_action_check CONSTRAINT MUST MOVE TOGETHER. The insert
+ * below swallows its own errors by design ("NOTHING HERE EVER FAILS ITS CALLER"), so an action the
+ * database refuses is logged to a console nobody reads and the decision is lost while the feature
+ * that made it carries on working. The strategy verbs were added to both in
+ * docs/2026-09-26-keyword-strategy.sql.
+ */
 export type KeywordDecisionAction =
   | "approve"
   | "drop"
@@ -134,7 +141,14 @@ export type KeywordDecisionAction =
   | "restore"
   | "pick_pillar"
   | "pick_support"
-  | "unpick";
+  | "unpick"
+  // The step 12 strategy, added 2026-09-26.
+  | "merge"
+  | "unmerge"
+  | "mark_service_page"
+  | "mark_post"
+  | "pick_cluster_pillar"
+  | "serp_verdict";
 
 export async function recordKeywordDecisions(args: {
   clientId: string;
@@ -143,7 +157,12 @@ export async function recordKeywordDecisions(args: {
   rows: ReadonlyArray<Pick<StoredKeyword, "id" | "phrase" | "category" | "rank" | "score" | "origin" | "use">>;
   context?: Record<string, unknown>;
 }): Promise<void> {
-  if (args.rows.length === 0) return;
+  // ‼️ AN EMPTY ROW LIST USED TO MEAN "NOTHING HAPPENED" AND NOW DOES NOT. The strategy verbs record
+  // decisions about CLUSTERS (`merge`, `mark_post`), which have no client_keywords row of their own,
+  // and returning early would drop exactly the decisions that are hardest to reconstruct afterwards.
+  // Actions that are about rows still say nothing when handed none.
+  const CLUSTER_ACTIONS = new Set(["merge", "unmerge", "mark_service_page", "mark_post", "pick_cluster_pillar"]);
+  if (args.rows.length === 0 && !CLUSTER_ACTIONS.has(args.action)) return;
   try {
     const inserts = args.rows.map((r) => ({
       client_id: args.clientId,
@@ -158,6 +177,24 @@ export async function recordKeywordDecisions(args: {
       score: r.score,
       context: args.context ?? {},
     }));
+    // A cluster decision has no keyword row to hang off. One row, keyword_id null, and the context
+    // carries which clusters it was about. `phrase` is NOT NULL, so it says so in words.
+    if (inserts.length === 0) {
+      inserts.push({
+        client_id: args.clientId,
+        keyword_id: null,
+        action: args.action,
+        actor: args.actor,
+        phrase: `(cluster) ${JSON.stringify(args.context ?? {}).slice(0, 120)}`,
+        category: "cluster",
+        use: "query",
+        origin: "manual",
+        rank: null,
+        score: 0,
+        context: args.context ?? {},
+      } as (typeof inserts)[number]);
+    }
+
     for (let i = 0; i < inserts.length; i += 500) {
       const { error } = await supabaseAdmin.from("keyword_decisions").insert(inserts.slice(i, i + 500));
       if (error) {

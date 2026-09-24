@@ -74,6 +74,9 @@ const FILE_GATED = new Set(["src/lib/clients/mascot-art.ts"]);
 const ANY_THREAD_HANDLERS = new Set([
   "src/lib/clients/gap-thread.ts",
   "src/lib/clients/concierge-addon.ts",
+  // Where a client's PATIENTS book. A fact about the client, raised on the prep call, read by the
+  // concierge step much later, so gating it on one step would mean typing it in the wrong room.
+  "src/lib/clients/concierge-booking.ts",
 ]);
 
 async function main() {

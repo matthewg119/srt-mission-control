@@ -998,6 +998,7 @@ async function outlineCommand(session: Session, fresh: boolean): Promise<void> {
         ? {
             workingTitle: row.workingTitle,
             targetKeyword: row.targetKeyword,
+            secondaryKeywords: row.secondaryKeywords ?? [],
             angle: row.angle,
             headline: row.headline,
             postFormat: row.postFormat ?? picked?.postFormat ?? null,

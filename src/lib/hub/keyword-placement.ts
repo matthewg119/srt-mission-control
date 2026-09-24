@@ -30,6 +30,23 @@ export type PlacementSlot =
 
 export interface PlacementInput {
   keyword: string;
+  /**
+   * Phrases that mean the same thing to a search engine, verbatim from approved `client_keywords`
+   * rows on the plan's `secondary_keywords`.
+   *
+   * ‼️ THIS IS WHAT MAKES "ONE PAGE RANKS FOR DOZENS OF PHRASES" TRUE IN THE SYSTEM RATHER THAN
+   * ONLY IN THE INTENTION. Matthew, 2026-09-23: "Google understands that 'get more reviews',
+   * 'increase patient reviews' and 'review generation' mean the same thing, so one well-written
+   * page can rank for dozens of related phrases, not just the one you picked."
+   *
+   * Without it a page whose H2 reads "asking patients for reviews" is reported as MISSING its
+   * keyword, and the only way to clear the report is to weld the exact phrase in, which is the
+   * behaviour `keyword_shaped` fails a page for and which draft-page.ts refuses to ask for. The
+   * check was quietly pushing writers toward the thing the page beside it punishes.
+   *
+   * Empty is the honest default and behaves exactly as this file did before 2026-09-25.
+   */
+  variants?: readonly string[];
   slug: string | null;
   title: string | null;
   /** The headline rendered as the page's H1, which is NOT the title. See page_plan.headline. */
@@ -43,7 +60,7 @@ export interface PlacementInput {
 }
 
 export interface PlacementResult {
-  /** Slots the keyword reached. */
+  /** Slots the keyword, or one of its variants, reached. */
   present: PlacementSlot[];
   /** Slots it did not, in the order a person should fix them. */
   missing: PlacementSlot[];
@@ -132,6 +149,26 @@ export function carriesKeyword(text: string | null | undefined, keyword: string)
   return words.every((w) => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(haystack));
 }
 
+/**
+ * Does this text carry the keyword, or any phrase that means the same thing?
+ *
+ * ‼️ A SIBLING OF carriesKeyword, NEVER A WIDENING OF IT. That function is also a HARD validator in
+ * client-headlines.ts, where every one of thirty-three candidate headlines must carry the keyword it
+ * was written for, and a headline that merely carried a synonym would break the hinge that keeps a
+ * kept headline attached to its keyword row. Two callers, two questions, two functions.
+ *
+ * An empty variant list makes this identical to carriesKeyword, which is what every caller got
+ * before the family existed.
+ */
+export function carriesAnyKeyword(
+  text: string | null | undefined,
+  keyword: string,
+  variants: readonly string[] = []
+): boolean {
+  if (carriesKeyword(text, keyword)) return true;
+  return variants.some((v) => v.trim() && carriesKeyword(text, v));
+}
+
 /** The first sentence of the body, skipping any heading. */
 export function firstSentence(answerMd: string): string {
   const prose = answerMd
@@ -176,33 +213,56 @@ export function checkPlacement(input: PlacementInput): PlacementResult {
   const present: PlacementSlot[] = [];
   const missing: PlacementSlot[] = [];
 
+  // ‼️ THE SLUG IS THE ONE SLOT THE FAMILY DOES NOT OPEN UP, and it is deliberate. Every other slot
+  // asks "is this page about that subject", which a natural variant answers just as well. The URL
+  // asks something narrower: it is one string, it is permanent once published, and it is built from
+  // the primary keyword by keywordSlug(). A slug matching a variant instead would mean the plan and
+  // the address disagree about which phrase this page was chosen for.
+  const variants = (input.variants ?? []).filter((v) => v.trim().length > 0);
+  const carries = (text: string | null | undefined) => carriesAnyKeyword(text, input.keyword, variants);
+
   const test = (slot: PlacementSlot, text: string | null | undefined, applies = true) => {
     if (!applies) return;
-    if (carriesKeyword(text, input.keyword)) present.push(slot);
+    if (carries(text)) present.push(slot);
     else missing.push(slot);
   };
 
   // The slug is matched on its own shape: hyphens are its word separator, and it has already had
-  // stopwords stripped out of it, so the content words are what has to survive.
-  test("slug", (input.slug ?? "").replace(/-/g, " "), input.slug !== null);
+  // stopwords stripped out of it, so the content words are what has to survive. PRIMARY ONLY, for
+  // the reason above.
+  if (input.slug !== null) {
+    if (carriesKeyword(input.slug.replace(/-/g, " "), input.keyword)) present.push("slug");
+    else missing.push("slug");
+  }
+
   test("title", input.title);
   test("h1", input.h1, input.h1 !== null);
   test("meta", input.metaDescription);
   test("first_sentence", firstSentence(input.answerMd));
 
+  // ‼️ THE SUBHEADING IS THE SLOT THE FAMILY MATTERS MOST FOR. Matthew's own example is a page
+  // titled for "more google reviews" whose subheads say "asking patients for reviews". Demanding
+  // the exact phrase in an H2 is what turns a naturally written page into a stuffed one.
   const headings = h2Headings(input.answerMd);
   if (headings.length) {
-    if (headings.some((h) => carriesKeyword(h, input.keyword))) present.push("h2");
+    if (headings.some((h) => carries(h))) present.push("h2");
     else missing.push("h2");
   }
 
   test("pillar_anchor", input.pillarAnchor, input.pillarAnchor !== null);
   test("schema", input.schema, input.schema !== null);
 
+  // The family is named in the detail when there is one, because "missing from 3 of 8 places" reads
+  // very differently once you know six other phrasings were also accepted and none of them landed.
+  const family = variants.length
+    ? ` Its ${variants.length} approved variation${variants.length === 1 ? "" : "s"} counted too.`
+    : "";
+
   const detail = missing.length
     ? `"${input.keyword}" is missing from ${missing.length} of ${present.length + missing.length} places: ` +
-      missing.map((m) => SLOT_FIX[m]).join(" ")
-    : `"${input.keyword}" reaches all ${present.length} places.`;
+      missing.map((m) => SLOT_FIX[m]).join(" ") +
+      family
+    : `"${input.keyword}" reaches all ${present.length} places.${family}`;
 
   return { present, missing, detail };
 }

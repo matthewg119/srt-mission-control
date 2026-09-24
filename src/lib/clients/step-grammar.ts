@@ -316,6 +316,94 @@ const KEYWORDS: CommandSpec = {
   mustBeOnTheCard: true,
 };
 
+/**
+ * ‼️ `keywords prompt`, NOT a bare `prompt`. Step 11's framework thread owns `prompt` and
+ * `prompt short`, gated on avatar_harvest. Two steps answering one bare word is how somebody types
+ * it in the wrong thread, gets a plausible answer, and files research against the wrong step.
+ */
+const KEYWORDS_PROMPT: CommandSpec = {
+  label: "keywords prompt",
+  test: /^\s*[`*_]*keywords\s+prompt\b/i,
+  unmistakable: /^\s*[`*_]*keywords\s+prompt\b/i,
+  pointAt: "keyword_set",
+  what: "Keyword commands",
+  implementedIn: "src/lib/clients/client-keywords.ts",
+  mustBeOnTheCard: true,
+};
+
+/**
+ * ‼️ THE NARROW FORM IS ITS OWN SPEC so the card can teach it. The bare `keywords approve` approves
+ * every query row, which on a fresh client is mostly the model's own expansion, and there was no way
+ * to say "these thirteen" until 2026-09-23.
+ */
+const KEYWORDS_APPROVE_SOME: CommandSpec = {
+  label: "keywords approve 411-423",
+  test: /^\s*[`*_]*keywords\s+approve\s+(\d|mine|manual|ours)/i,
+  unmistakable: /^\s*[`*_]*keywords\s+approve\s+(\d|mine|manual|ours)/i,
+  pointAt: "keyword_set",
+  what: "Keyword commands",
+  implementedIn: "src/lib/clients/client-keywords.ts",
+  mustBeOnTheCard: true,
+};
+
+const KEYWORDS_SHORTLIST: CommandSpec = {
+  label: "keywords shortlist",
+  test: /^\s*[`*_]*keywords\s+shortlist\b/i,
+  unmistakable: /^\s*[`*_]*keywords\s+shortlist\b/i,
+  pointAt: "keyword_set",
+  what: "Keyword commands",
+  implementedIn: "src/lib/clients/keyword-strategy.ts",
+  mustBeOnTheCard: true,
+};
+
+const KEYWORDS_SERP: CommandSpec = {
+  label: "keywords serp 12",
+  test: /^\s*[`*_]*keywords\s+serp\s+\d/i,
+  unmistakable: /^\s*[`*_]*keywords\s+serp\s+\d/i,
+  pointAt: "keyword_set",
+  what: "Keyword commands",
+  implementedIn: "src/lib/clients/keyword-strategy.ts",
+};
+
+/**
+ * ‼️ NO `unmistakable` ON THE BARE WORD, the same treatment bare `keywords` and bare `mascot` get.
+ * "the strategy is working" and "our strategy here" are sentences somebody says in a step thread and
+ * they must reach the assistant. _probe-step-grammar.ts pins that.
+ */
+const STRATEGY: CommandSpec = {
+  label: "strategy",
+  test: /^\s*[`*_]*strategy[`*_]*\s*$/i,
+  pointAt: "keyword_set",
+  what: "The keyword strategy",
+  implementedIn: "src/lib/clients/keyword-strategy.ts",
+  mustBeOnTheCard: true,
+};
+
+const STRATEGY_APPROVE: CommandSpec = {
+  label: "strategy approve",
+  test: /^\s*[`*_]*strategy\s+approve\b/i,
+  unmistakable: /^\s*[`*_]*strategy\s+approve\b/i,
+  pointAt: "keyword_set",
+  what: "The keyword strategy",
+  implementedIn: "src/lib/clients/keyword-strategy.ts",
+  mustBeOnTheCard: true,
+};
+
+/**
+ * ‼️ NAMESPACED UNDER `strategy`, AND THAT IS WHY `pillar` IS SAFE HERE. anchor-ladder.ts owns
+ * `pillar: auto` and `supports auto` at step 21. A bare `pillar 4` in step 12's thread would be one
+ * step's verb typed in another's room; the prefix removes the ambiguity rather than relying on which
+ * handler runs first.
+ */
+const STRATEGY_EDIT: CommandSpec = {
+  label: "strategy merge 12 under 4",
+  test: /^\s*[`*_]*strategy\s+(new|merge\s+\d|pillar\s+\d|service\s+\d|post\s+\d)/i,
+  unmistakable: /^\s*[`*_]*strategy\s+(new|merge\s+\d|pillar\s+\d|service\s+\d|post\s+\d)/i,
+  pointAt: "keyword_set",
+  what: "The keyword strategy",
+  implementedIn: "src/lib/clients/keyword-strategy.ts",
+};
+
 const KEYWORDS_ADD: CommandSpec = {
   label: "keywords add:",
   test: /^\s*[`*_]*keywords\s+add\s*:/i,
@@ -646,7 +734,20 @@ export const STEP_COMMANDS: Record<StepKey, readonly CommandSpec[]> = {
     BELIEFS,
     ...LETTER,
   ],
-  keyword_set: [KEYWORDS, KEYWORDS_ADD, KEYWORDS_APPROVE, KEYWORDS_DROP, KEYWORDS_MORE],
+  keyword_set: [
+    KEYWORDS,
+    KEYWORDS_PROMPT,
+    KEYWORDS_ADD,
+    KEYWORDS_APPROVE,
+    KEYWORDS_APPROVE_SOME,
+    KEYWORDS_DROP,
+    KEYWORDS_MORE,
+    KEYWORDS_SHORTLIST,
+    KEYWORDS_SERP,
+    STRATEGY,
+    STRATEGY_APPROVE,
+    STRATEGY_EDIT,
+  ],
   custom_question_set: [OBJECTION],
   page_candidates: [],
   citation_cleanup_list: [],
@@ -744,6 +845,15 @@ export const ANY_THREAD_COMMANDS: readonly CommandSpec[] = [
     test: /^\s*[`*_]*concierge\s+(install|include|decline|remove)\s*[`*_]*\s*$/i,
     what: "The concierge add-on",
     implementedIn: "src/lib/clients/concierge-addon.ts",
+  },
+  {
+    // Where this client's PATIENTS book. Any thread, because it is a fact about the client and it
+    // comes up on the prep call, not on the concierge step that eventually reads it.
+    label: "booking: https://their-calendar.com/book",
+    test: /^\s*[`*_]*booking\s*:\s*(.+?)\s*[`*_]*\s*$/i,
+    unmistakable: /^\s*[`*_]*booking\s*:\s*\S/i,
+    what: "Where their patients book",
+    implementedIn: "src/lib/clients/concierge-booking.ts",
   },
 ];
 

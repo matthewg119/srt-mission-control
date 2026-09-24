@@ -161,7 +161,7 @@ Site, hosting and DNS intelligence
 | Reads | nothing |
 | [Done] reads | no table |
 | Dataset fields | none: hosting, DNS and the site are observed from the network, never answered |
-| Downstream | `clients` is selected in 95 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
+| Downstream | `clients` is selected in 96 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
 
 **[Done] refuses on:**
 
@@ -322,7 +322,7 @@ One offer proposed from what they told us at intake
 | Reads | `client_audiences`, `client_delivery_steps` |
 | [Done] reads | no table |
 | Dataset fields | none: the proposal is written from what intake already said, so nothing has to be collected for it. What it LOSES, the proposal's own reasoning before offer_locked overwrites it, is a missing history row rather than a missing field |
-| Downstream | `client_offers` is selected in 1 other file(s), e.g. `src/lib/clients/archive.ts`; `clients` is selected in 95 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
+| Downstream | `client_offers` is selected in 1 other file(s), e.g. `src/lib/clients/archive.ts`; `clients` is selected in 96 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
 
 **[Done] refuses on:**
 
@@ -388,7 +388,7 @@ Buyer-phrase harvest and the deep research for the confirmed avatar
 | Reads | `audit_reports`, `audit_runs`, `clients` |
 | [Done] reads | `harvest_runs`, `question_bank` |
 | Dataset fields | 46 needed, 12 wanted |
-| Downstream | step 12 `keyword_set` declares it waits on this; `harvest_runs` is selected in 2 other file(s), e.g. `src/lib/clients/research-intake.ts`, `src/lib/clients/step-verify.ts`; `question_bank` is selected in 12 other file(s), e.g. `src/lib/clients/artifacts/custom-question-set.ts`, `src/lib/clients/artifacts/deep-research-run.ts`, `src/lib/clients/artifacts/page-candidates.ts` |
+| Downstream | step 12 `keyword_set` declares it waits on this; `harvest_runs` is selected in 2 other file(s), e.g. `src/lib/clients/research-intake.ts`, `src/lib/clients/step-verify.ts`; `question_bank` is selected in 13 other file(s), e.g. `src/lib/clients/artifacts/custom-question-set.ts`, `src/lib/clients/artifacts/deep-research-run.ts`, `src/lib/clients/artifacts/page-candidates.ts` |
 
 **[Done] refuses on:**
 
@@ -423,7 +423,7 @@ Keywords: 200+ ways the offer is said, approved by me
 | Reads | `audit_reports`, `audit_runs`, `clients` |
 | [Done] reads | no table |
 | Dataset fields | 1 needed, 3 wanted |
-| Downstream | steps 13 `custom_question_set`, 14 `page_candidates`, 21 `pre_call_pages` declare they wait on this; `client_keywords` is selected in 2 other file(s), e.g. `src/lib/clients/anchor-ladder.ts`, `src/lib/clients/archive.ts` |
+| Downstream | steps 13 `custom_question_set`, 14 `page_candidates`, 21 `pre_call_pages` declare they wait on this; `client_keywords` is selected in 3 other file(s), e.g. `src/lib/clients/anchor-ladder.ts`, `src/lib/clients/archive.ts`, `src/lib/clients/keyword-strategy.ts` |
 
 **[Done] refuses on:**
 
@@ -562,7 +562,7 @@ AI Referral Engine preview live, themed to match
 | Reads | `client_dns_records`, `client_hosts`, `clients` |
 | [Done] reads | no table |
 | Dataset fields | none: the AI Referral Engine mirrors listings that already exist and asks for no dataset field |
-| Downstream | `client_delivery_steps` is selected in 28 other file(s), e.g. `src/app/api/clients/[id]/time-log/route.ts`, `src/app/api/internal/board-kick/route.ts`, `src/app/api/internal/run-step/route.ts` |
+| Downstream | `client_delivery_steps` is selected in 29 other file(s), e.g. `src/app/api/clients/[id]/time-log/route.ts`, `src/app/api/internal/board-kick/route.ts`, `src/app/api/internal/run-step/route.ts` |
 
 **[Done] refuses on:**
 
@@ -587,7 +587,7 @@ AI Concierge preview live, ready to demo on the call
 | Reads | `client_hosts`, `clients` |
 | [Done] reads | `concierge_configs` |
 | Dataset fields | 1 needed, 2 wanted |
-| Downstream | steps 19 `site_replica`, 21 `pre_call_pages` declare they wait on this; `client_delivery_steps` is selected in 28 other file(s), e.g. `src/app/api/clients/[id]/time-log/route.ts`, `src/app/api/internal/board-kick/route.ts`, `src/app/api/internal/run-step/route.ts`; `concierge_configs` is selected in 11 other file(s), e.g. `src/lib/clients/concierge-addon.ts`, `src/lib/clients/concierge-audience.ts`, `src/lib/clients/concierge-enabled.ts` |
+| Downstream | steps 19 `site_replica`, 21 `pre_call_pages` declare they wait on this; `client_delivery_steps` is selected in 29 other file(s), e.g. `src/app/api/clients/[id]/time-log/route.ts`, `src/app/api/internal/board-kick/route.ts`, `src/app/api/internal/run-step/route.ts`; `concierge_configs` is selected in 11 other file(s), e.g. `src/lib/clients/concierge-addon.ts`, `src/lib/clients/concierge-audience.ts`, `src/lib/clients/concierge-enabled.ts` |
 
 **[Done] refuses on:**
 
@@ -670,7 +670,7 @@ Seven pages drafted before the call: one pillar for the offer, six supports
 | Reads | `clients` |
 | [Done] reads | no table |
 | Dataset fields | 3 needed, 7 wanted |
-| Downstream | step 22 `call_sheet` declares it waits on this; `client_pages` is selected in 15 other file(s), e.g. `src/app/api/clients/[id]/hub/route.ts`, `src/app/dashboard/clients/[id]/page.tsx`, `src/lib/clients/client-reads.ts`; `page_plan` is selected in 14 other file(s), e.g. `src/lib/clients/artifacts/call-sheet.ts`, `src/lib/clients/batch-research.ts`, `src/lib/clients/client-headlines.ts` |
+| Downstream | step 22 `call_sheet` declares it waits on this; `client_pages` is selected in 15 other file(s), e.g. `src/app/api/clients/[id]/hub/route.ts`, `src/app/dashboard/clients/[id]/page.tsx`, `src/lib/clients/client-reads.ts`; `page_plan` is selected in 15 other file(s), e.g. `src/lib/clients/artifacts/call-sheet.ts`, `src/lib/clients/batch-research.ts`, `src/lib/clients/client-headlines.ts` |
 
 **[Done] refuses on:**
 
@@ -1099,7 +1099,7 @@ SRT pixel live on the client site, first real session seen
 | Reads | nothing |
 | [Done] reads | no table |
 | Dataset fields | none: the pixel is live or it is not, and a real session proves it |
-| Downstream | `clients` is selected in 95 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
+| Downstream | `clients` is selected in 96 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
 
 **[Done] refuses on:**
 

@@ -30,6 +30,7 @@
 import crypto from "crypto";
 import { supabaseAdmin } from "@/lib/db";
 import { slack, type SlackBlock } from "@/lib/slack-bot";
+import { postInfraAlert } from "@/lib/alerts";
 import { callClaudeJSON } from "@/lib/claude-calls";
 import { hasBannedDash } from "@/lib/copy-guard";
 import {
@@ -492,6 +493,8 @@ function checkKeywordShaped(question: string, answerMd: string): GateCheck {
  */
 function checkKeywordPlacement(args: {
   keyword: string | null;
+  /** Approved phrases meaning the same thing. Empty is the honest default. */
+  variants?: readonly string[];
   slug: string | null;
   title: string | null;
   h1: string | null;
@@ -511,6 +514,7 @@ function checkKeywordPlacement(args: {
 
   const res = checkPlacement({
     keyword: args.keyword.trim(),
+    variants: args.variants ?? [],
     slug: args.slug,
     title: args.title,
     h1: args.h1,
@@ -873,6 +877,8 @@ interface PageRow {
 /** What the plan decided this page was aimed at. Null for a page that was never on a plan. */
 interface PlanAim {
   targetKeyword: string | null;
+  /** Approved phrases that mean the same thing as the target. See page_plan.secondary_keywords. */
+  variants: string[];
   headline: string | null;
   /** The pillar links a support using the support's own working title. See plan-links.ts. */
   workingTitle: string | null;
@@ -891,7 +897,11 @@ interface PlanAim {
 async function planAimFor(clientId: string, pageId: string): Promise<PlanAim | null> {
   const { data, error } = await supabaseAdmin
     .from("page_plan")
-    .select("target_keyword, headline, working_title, role")
+    // ‼️ secondary_keywords RIDES WITH headline ON PURPOSE. Both arrived in
+    // docs/2026-09-12-client-headlines.sql, so either both columns exist or neither does, and the
+    // error message below already names that file. A separate tolerant select would be a second
+    // round trip to learn something this one already knows.
+    .select("target_keyword, headline, working_title, role, secondary_keywords")
     .eq("client_id", clientId)
     .eq("page_id", pageId)
     .maybeSingle();
@@ -907,6 +917,7 @@ async function planAimFor(clientId: string, pageId: string): Promise<PlanAim | n
 
   return {
     targetKeyword: (data.target_keyword as string | null) ?? null,
+    variants: ((data.secondary_keywords as string[] | null) ?? []).filter((v) => typeof v === "string"),
     headline: (data.headline as string | null) ?? null,
     workingTitle: (data.working_title as string | null) ?? null,
     role: (data.role as "pillar" | "support" | null) ?? null,
@@ -984,6 +995,9 @@ export async function runGate(
     checkKeywordShaped(page.question ?? "", body),
     checkKeywordPlacement({
       keyword: aim?.targetKeyword ?? null,
+      // The phrases that mean the same thing. Empty until the plan writes them, and empty behaves
+      // exactly as this check did before 2026-09-25.
+      variants: aim?.variants ?? [],
       slug: page.slug ?? null,
       title: page.title ?? null,
       h1: aim?.headline ?? null,
@@ -1253,15 +1267,6 @@ export async function waiveGate(args: {
   return { ok: true };
 }
 
-/** Loud failures go here. Same channel and same doctrine as day-zero.ts. */
-async function postInfraAlert(text: string): Promise<void> {
-  const channel = process.env.SLACK_ALERTS_INFRA_CHANNEL;
-  if (!channel) {
-    console.error("[hub/page-gate] SLACK_ALERTS_INFRA_CHANNEL unset. Alert dropped:", text);
-    return;
-  }
-  await slack.postMessage(channel, text);
-}
 
 // ---------------------------------------------------------------------------
 // Rendering a verdict

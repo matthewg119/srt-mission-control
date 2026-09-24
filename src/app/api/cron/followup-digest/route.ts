@@ -21,6 +21,7 @@ import { runTimeLogNudges } from "@/lib/clients/time-log-nudge";
 import { runFunnelReport } from "@/lib/experiments/funnel-report";
 import { runPolicyScan } from "@/lib/clients/policy-scan";
 import { runWeeklyCorpusScan } from "@/lib/clients/dataset-suggestions";
+import { runWeeklySelfReview } from "@/lib/ops/self-review";
 import { stepDigest } from "@/lib/clients/step-engine";
 import { slack } from "@/lib/slack-bot";
 
@@ -151,6 +152,20 @@ ${text}`);
           return { verticals: 0, filed: 0, already: 0, posted: false, skipped: null };
         });
 
+    // Passenger ten: one proposal a week toward Mission Control running the workflows from one page.
+    //
+    // ‼️ A PASSENGER, NEVER AN EIGHTEENTH CRON. vercel.json already carries 17 against a Hobby plan
+    // documenting 2, which this file's own header says is the reason every weekly job rides here.
+    //
+    // ‼️ Thursday-gated INSIDE the function, like the other three weeklies, and wrapped in its own
+    // catch so a model call that fails can never turn the follow-up digest into a 500.
+    const selfReview = dry
+      ? { posted: false, week: "", skipped: "dry run" }
+      : await runWeeklySelfReview().catch((e) => {
+          console.error("[followup-digest] self review failed:", (e as Error).message);
+          return { posted: false, week: "", skipped: (e as Error).message };
+        });
+
     return NextResponse.json({
       ok: true,
       dry,
@@ -163,6 +178,7 @@ ${text}`);
       funnelReport,
       policyScan,
       corpusScan,
+      selfReview,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

@@ -13,6 +13,7 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
+import { postInfraAlert } from "@/lib/alerts";
 
 /**
  * The delivery step whose completion opens the wall.
@@ -277,12 +278,3 @@ export async function waiveDay0(args: {
   return { ok: true };
 }
 
-/** Loud failures go here. Same channel and same doctrine as provision.ts. */
-async function postInfraAlert(text: string): Promise<void> {
-  const channel = process.env.SLACK_ALERTS_INFRA_CHANNEL;
-  if (!channel) {
-    console.error("[clients/day-zero] SLACK_ALERTS_INFRA_CHANNEL unset. Alert dropped:", text);
-    return;
-  }
-  await slack.postMessage(channel, text);
-}

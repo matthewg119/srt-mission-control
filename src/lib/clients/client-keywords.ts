@@ -330,6 +330,18 @@ async function resetForNewOffer(
     .neq("origin", "manual");
   if (delError) return delError.message;
 
+  // ‼️ A PHRASE A PERSON TYPED KEEPS ITS APPROVAL, AND ONLY THAT KIND DOES. Measured 2026-09-23:
+  // thirteen phrases were added by hand and approved, the offer fingerprint moved, and this cleared
+  // all thirteen along with the model's 340. The rows survived, because the delete above spares
+  // `manual`; the approval did not, and nothing on screen said it had gone.
+  //
+  // The distinction is what the approval was ABOUT. Approving an expansion row is a judgement about
+  // a proposal written for one offer, and a new offer voids it. Typing a phrase and approving it is
+  // a judgement about the PHRASE, and "how to get more google reviews for a med spa" is still what
+  // this buyer searches whatever we decide to call the thing we sell.
+  //
+  // The rank is cleared either way, because the card renumbers from the new set and a stale number
+  // is worse than none: `keywords drop 12` would take the wrong row.
   const { error } = await supabaseAdmin
     .from("client_keywords")
     .update({
@@ -340,8 +352,16 @@ async function resetForNewOffer(
       rank: null,
       updated_at: new Date().toISOString(),
     })
-    .eq("client_id", clientId);
-  return error?.message ?? null;
+    .eq("client_id", clientId)
+    .neq("origin", "manual");
+  if (error) return error.message;
+
+  const { error: mineError } = await supabaseAdmin
+    .from("client_keywords")
+    .update({ dropped_at: null, rank: null, updated_at: new Date().toISOString() })
+    .eq("client_id", clientId)
+    .eq("origin", "manual");
+  return mineError?.message ?? null;
 }
 
 /**
@@ -955,7 +975,11 @@ export async function handleKeywordThreadReply(input: {
 
   switch (cmd.kind) {
     case "approve":
-      return approveCommand(input.clientId, input.by);
+      return approveCommand(input.clientId, input.by, null);
+    case "approve_some":
+      return approveCommand(input.clientId, input.by, { ranks: cmd.ranks });
+    case "approve_mine":
+      return approveCommand(input.clientId, input.by, { manualOnly: true });
     case "drop":
       return dropCommand(input.clientId, cmd.ranks, input.by);
     case "add":
@@ -964,24 +988,150 @@ export async function handleKeywordThreadReply(input: {
         : addManyCommand(input.clientId, cmd.phrases, input.by);
     case "more":
       return moreCommand(input.clientId, cmd.category);
+    case "prompt":
+      return promptCommand(input.clientId);
   }
 }
 
-async function approveCommand(clientId: string, by: string): Promise<KeywordReply> {
+/**
+ * `keywords prompt`: hand over the research prompt for this offer.
+ *
+ * ‼️ IT UPLOADS A FILE RATHER THAN POSTING A MESSAGE, for the reason postFinalPrompt and
+ * postFrameworkScript both record: this prompt carries the research on file, the documents and
+ * every phrase already stored, which is tens of thousands of characters on a real client, and a
+ * Slack section over 3,000 fails the WHOLE message rather than truncating.
+ *
+ * ‼️ ALL_SLICES, NOT A HAND-WRITTEN LIST. "All of the context possible" is the requirement, and a
+ * slice list retyped here stops being all of it the day one is added to lead-context.ts.
+ *
+ * ‼️ IT REFUSES RATHER THAN DEGRADING. No locked offer means there is no offer to find keywords
+ * for, and a prompt sent anyway returns keywords for a category rather than for this business.
+ */
+async function promptCommand(clientId: string): Promise<KeywordReply> {
+  const { leadContext, ALL_SLICES } = await import("./lead-context");
+  const ctx = await leadContext(clientId, { include: [...ALL_SLICES] });
+
+  // buildContext refuses without a confirmed avatar. Unlike the deep research prompt, that is NOT
+  // fatal here: a keyword is a search phrase, this door files nothing into the shared per-vertical
+  // phrase corpus, and the offer alone is enough to ask the question. So a missing avatar costs the
+  // owner's own words and nothing else.
+  //
+  // ‼️ THE CORPUS IS NOT NAMED IN WORDS HERE ON PURPOSE. scripts/_step-wiring.ts greps source as
+  // TEXT to work out which files touch which table, so a comment mentioning one counts as a reader
+  // and silently moves a number in a generated document. Same class of trap as the publish-gate
+  // hole checks, which count a quoting comment as a second call site.
+  const { buildContext } = await import("./artifacts/deep-research-run");
+  const built = await buildContext(clientId).catch(() => ({ ok: false as const, error: "unreadable" }));
+
+  const { docTextsFor } = await import("./doc-text");
+  const docs = await docTextsFor(clientId).catch(() => []);
+
+  const loaded = await loadKeywords(clientId);
+  const existing = "error" in loaded
+    ? []
+    : loaded.rows
+        .filter((r) => !r.dropped)
+        .map((r) => ({ phrase: r.phrase, origin: r.origin, category: r.category, approved: r.approved }));
+
+  const { gapsFrom } = await import("./step-gaps");
+  const stepGaps = gapsFrom(ctx, "keyword_set").gaps;
+
+  const { buildKeywordPrompt, keywordPromptSummary } = await import("./keyword-prompt");
+  const { ADD_MAX } = await import("./keyword-expansion");
+  const result = buildKeywordPrompt({
+    ctx,
+    research: built.ok ? built.ctx : null,
+    docs,
+    existing,
+    stepGaps,
+    addMax: ADD_MAX,
+  });
+
+  if (!result.ok) return { message: `:warning: No keyword prompt: ${result.error}` };
+  const prompt = result.prompt;
+
+  const name = (ctx.identity.name || "client").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const file = `keyword-prompt-${name || "client"}.txt`;
+
+  return {
+    message: keywordPromptSummary(prompt),
+    after: async () => {
+      const { channelFor, anchorTsFor } = await import("./step-board");
+      const channel = await channelFor(clientId);
+      const thread = await anchorTsFor(clientId, "keyword_set");
+      if (!channel || !thread) return;
+
+      // uploadFile returns {ok:false} and never throws, and the share no-ops when the bot is not
+      // a member of the channel.
+      await slack.joinChannel(channel).catch(() => {});
+      const res = (await slack.uploadFile(
+        channel,
+        file,
+        Buffer.from(prompt.body, "utf8"),
+        "text/plain",
+        thread
+      )) as { ok?: boolean; error?: string };
+
+      if (res?.ok !== true) {
+        const { postClientReply } = await import("./client-events");
+        await postClientReply({
+          clientId,
+          stepKey: "keyword_set",
+          channel,
+          threadTs: thread,
+          text: `:warning: The keyword prompt was built but could not be uploaded: ${res?.error ?? "no reason given"}.`,
+        }).catch(() => {});
+      }
+    },
+  };
+}
+
+/** Which rows an approve is about. Null means every query row, which is the blunt original. */
+interface ApproveScope {
+  /** Ranks as the card prints them, already expanded from any ranges. */
+  ranks?: number[];
+  /** Only rows a person typed, which is `origin = 'manual'`. */
+  manualOnly?: boolean;
+}
+
+/**
+ * Approve the set, or the part of it somebody actually chose.
+ *
+ * ‼️ THE BARE FORM APPROVES EVERY QUERY ROW, AND THAT WAS THE WHOLE PROBLEM. Measured 2026-09-23:
+ * fifteen chosen phrases were pasted, thirteen stored, `keywords approve` typed, and the reply said
+ * "Approved 413 queries". The page plan draws ONLY from approved queries, so 149 model proposals
+ * nobody had read became the pool every page is chosen from. A scope makes "these thirteen" sayable.
+ */
+async function approveCommand(clientId: string, by: string, scope: ApproveScope | null): Promise<KeywordReply> {
   const c = await keywordContext(clientId);
   if (!c.ok) return { message: `:warning: Nothing to approve yet. Missing: ${c.missing.join("; ")}.` };
 
   const now = new Date().toISOString();
-  const { data, error } = await supabaseAdmin
+  let q = supabaseAdmin
     .from("client_keywords")
     .update({ approved: true, approved_at: now, approved_by: by, updated_at: now })
     .eq("client_id", clientId)
     .eq("use", "query")
-    .is("dropped_at", null)
-    .select("id, phrase, category, rank, score, origin, use");
+    .is("dropped_at", null);
+
+  if (scope?.manualOnly) q = q.eq("origin", "manual");
+  if (scope?.ranks?.length) q = q.in("rank", scope.ranks);
+
+  const { data, error } = await q.select("id, phrase, category, rank, score, origin, use");
   if (error) return { message: `:warning: Not approved: ${error.message}` };
 
   const n = (data ?? []).length;
+
+  // ‼️ A NARROW APPROVE THAT MATCHED NOTHING IS A REFUSAL, NOT A SUCCESS. "Approved 0 queries" reads
+  // as done. The numbers on the card are RANKS, and a reset clears every rank, so yesterday's
+  // numbers match nothing today. Saying so is the only way anybody finds that out.
+  if (n === 0 && scope) {
+    return {
+      message: scope.manualOnly
+        ? ":warning: *Nothing was approved.* There are no phrases you typed yourself in this set. `keywords add:` puts them in first."
+        : ":warning: *Nothing was approved.* No live query row carries those numbers. They are the ranks the card prints, and a re-run renumbers them, so `keywords` first.",
+    };
+  }
   await recordKeywordDecisions({
     clientId,
     action: "approve",
@@ -997,9 +1147,15 @@ async function approveCommand(clientId: string, by: string): Promise<KeywordRepl
     })),
     context: { fingerprint: c.ctx.fingerprint },
   });
+  const scoped = scope?.manualOnly
+    ? " that you typed yourself"
+    : scope?.ranks?.length
+      ? " you picked"
+      : " as shown";
+
   return {
     message:
-      `:white_check_mark: *Approved ${n} queries* as shown. Hooks are kept for ads and emails and are ` +
+      `:white_check_mark: *Approved ${n} quer${n === 1 ? "y" : "ies"}*${scoped}. Hooks are kept for ads and emails and are ` +
       "not part of it.\nChecking the set now. The step ticks itself if it passes and says why if it does not.",
     after: async () => {
       const { setDeliveryStep } = await import("./delivery-checklist");

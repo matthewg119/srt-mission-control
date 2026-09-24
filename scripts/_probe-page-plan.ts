@@ -365,6 +365,7 @@ const row: PlanRow = {
   keywordCategory: null,
   headline: null,
   secondaryKeywords: null,
+  slug: null,
   awarenessEntry: 4,
   awarenessTarget: 3,
 };

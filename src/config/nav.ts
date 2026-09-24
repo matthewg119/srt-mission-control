@@ -14,6 +14,7 @@ import {
   Smartphone,
   Clapperboard,
   PhoneCall,
+  Sunrise,
 } from "lucide-react";
 
 export interface NavSection {
@@ -31,6 +32,10 @@ export const navSections: NavSection[] = [
   {
     label: "Main",
     items: [
+      // ‼️ FIRST, BECAUSE IT IS THE QUESTION EVERY MORNING STARTS WITH. The post-login redirect still
+      // lands on /dashboard (BrainHeart), so there are two front doors until that moves. Worth doing
+      // deliberately rather than as a side effect of adding a nav line.
+      { label: "Today", href: "/dashboard/today", icon: Sunrise },
       { label: "BrainHeart", href: "/dashboard", icon: Brain },
       { label: "Vektor", href: "/dashboard/assistant", icon: MessageSquare },
       { label: "Call list", href: "/dashboard/worklist", icon: PhoneCall },

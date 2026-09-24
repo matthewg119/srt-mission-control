@@ -472,6 +472,7 @@ export async function writeSkeletonsFor(
       context: {
         workingTitle: row.workingTitle,
         targetKeyword: row.targetKeyword,
+        secondaryKeywords: row.secondaryKeywords ?? [],
         angle: row.angle,
         headline: row.headline,
         postFormat: row.postFormat ?? picked?.postFormat ?? null,
