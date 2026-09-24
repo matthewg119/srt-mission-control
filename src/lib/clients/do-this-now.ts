@@ -159,8 +159,8 @@ export const STEP_ACTIONS: Record<StepKey, StepAction> = {
       "Bring the numbered list back with `keywords add:` on the line above it.",
       "`keywords` to see the set. `keywords drop 4, 9` for anything off-offer.",
       "`keywords approve 411-423` locks only the ones you picked. `keywords approve mine` locks the ones you typed. Bare `keywords approve` takes all of them.",
-      "`keywords shortlist` then picks the 25 subjects worth googling. Paste each screenshot with `keywords serp 12` in the message.",
-      "`strategy` groups what is checked into clusters. `strategy approve` locks it, then press Done.",
+      "`keywords shortlist` then picks the 25 subjects worth googling. Paste each screenshot with `keywords serp 12` in the message. Nothing is used until its picture is on file.",
+      "`strategy` groups them into clusters, `serp cards` puts the pictures and the scores in this thread to approve. `strategy approve` locks it, then press Done.",
     ],
   },
   custom_question_set: {

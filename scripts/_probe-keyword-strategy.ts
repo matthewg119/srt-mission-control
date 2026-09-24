@@ -15,6 +15,7 @@
 //  6. An unchecked subject is returned unplaced rather than guessed at.
 //  7. The grammar is exact: "the strategy is working" is dictation.
 
+import { readFileSync } from "fs";
 import {
   SERP_TRIAGE_RULE,
   SHORTLIST_SIZE,
@@ -53,6 +54,25 @@ function finalist(phrase: string, opts: Partial<Finalist> = {}): Finalist {
     verdict: null,
     intent: null,
     mergedInto: null,
+    // ‼️ pictured DEFAULTS TO false, WHICH IS THE UNSAFE-LOOKING CHOICE AND IS THE RIGHT ONE. A
+    // helper that defaulted it to true would make every gate assertion below pass by construction,
+    // which is precisely the failure mode the gate exists to prevent, reproduced in the thing meant
+    // to catch it. Clustering does not read this field, so the clustering cases are unaffected.
+    pictured: false,
+    route: null,
+    clickValue: null,
+    citationValue: null,
+    magnetSpace: null,
+    magnetIdea: null,
+    magnetBy: null,
+    recommendedAsset: null,
+    rewrittenTarget: null,
+    paaQuestions: [],
+    vocabulary: [],
+    competitors: [],
+    readEvidence: null,
+    docId: null,
+    slackFileId: null,
     ...opts,
   };
 }
@@ -119,6 +139,38 @@ check(
 );
 check("with no typed row, the newest vision one wins", bestVerdict([rows[0]])?.verdict === "post");
 check("no rows is null, not a default", bestVerdict([]) === null);
+
+// ‼️ THE ASSERTION THAT WOULD HAVE CAUGHT THIS RULE BEING DEAD FOR A WEEK. bestVerdict was written,
+// exported, documented in capitals, and called by NOTHING but this probe: verdictsFor() was its only
+// intended caller and had no callers of its own, while loadFinalists read the denormalised
+// serp_verdict column that every recordVerdict overwrites. So a re-run of the vision pass silently
+// replaced a typed correction, which is exactly what the docstring above says must not happen. The
+// rule was tested and not in force, and only a wiring check can tell those apart.
+const strategySrc = readFileSync("src/lib/clients/keyword-strategy.ts", "utf8");
+check(
+  "bestVerdict has a production caller",
+  /bestVerdict\(/.test(strategySrc),
+  "keyword-strategy.ts does not call it, so the typed-beats-vision rule is documentation"
+);
+check(
+  "loadFinalists no longer decides from the denormalised column",
+  !/row\.verdict = isVerdict\(v\)/.test(strategySrc),
+  "reading serp_verdict for the verdict is what bypassed bestVerdict"
+);
+
+// ‼️ A SECOND `strategy approve` USED TO DOUBLE EVERY CLUSTER. persistClusters deletes only
+// `proposed` rows, so the previous approved set survived while the newly proposed one was promoted
+// alongside it, and strategyView reads every row with status='approved'.
+check(
+  "approving retires the previous approved set first",
+  /status: "dropped"[\s\S]{0,200}\.eq\("status", "approved"\)/.test(strategySrc),
+  "a second approve would leave two of every cluster"
+);
+check(
+  "a regroup only deletes the clusters it wrote",
+  /\.eq\("status", "proposed"\)\s*\n\s*\.eq\("origin", "derived"\)/.test(strategySrc),
+  "`strategy pillar 9` is destroyed by the next regroup without this"
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 console.log("\n3b. only things a person would actually type reach the shortlist");
