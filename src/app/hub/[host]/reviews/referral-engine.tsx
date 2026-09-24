@@ -136,6 +136,11 @@ export function ReferralEngine({
   // "both", so using it to pick the DICTATION language would set es-ES recognition for a bilingual
   // client and garble every English speaker who taps the microphone. Rendering a Spanish note and
   // listening in Spanish are different decisions.
+  //
+  // ‼️ ONLY v1 IS HANDED IT. The Virtual Agent has no microphone (removed 2026-09-24, Matthew:
+  // the keyboard is enough), so there is no dictation language for it to get wrong. It still
+  // renders the Spanish note, because who is being handed English questions is a separate fact
+  // from what a recogniser would have listened in.
   const needsSpanish = client.language === "es" || client.language === "both";
   const language = client.language ?? null;
 
@@ -166,7 +171,6 @@ export function ReferralEngine({
           clientId={client.id}
           destinations={destinations}
           needsSpanish={needsSpanish}
-          language={language}
         />
       )}
     </>

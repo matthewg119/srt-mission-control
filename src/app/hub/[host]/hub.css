@@ -751,38 +751,19 @@ body:has(.hub-root) {
   flex: 0 0 auto;
 }
 
-/* The microphone, as the loud option. Green because Matthew asked for green, and green is not a
-   token: it is the same colour on every client, the way the copy is. */
-.va-mic {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.6rem;
-  width: 100%;
-  font: inherit;
-  font-weight: 600;
-  color: #ffffff;
-  background: #17a34a;
-  border: none;
-  border-radius: 999px;
-  padding: 0.8rem 1.2rem;
-  cursor: pointer;
-  animation: vaPulse 2.4s infinite ease-in-out;
-}
-.va-mic span { font-size: 0.7rem; line-height: 1; }
-.va-mic.is-live { background: #b91c1c; animation: none; }
+/* ‼️ THE MICROPHONE WAS HERE AND IS GONE (2026-09-24). Matthew, having walked the panel: the
+   chatbot on its own is enough. The button, the SpeechRecognition plumbing and the getUserMedia
+   call that primed the permission went with it, because a page that asks to use a device it then
+   never touches is asking for access to nothing.
 
-/* An invitation to tap, not an alarm. Stopped outright for anyone who asked for less motion. */
-@keyframes vaPulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(23, 163, 74, 0.45); }
-  50% { box-shadow: 0 0 0 0.5rem rgba(23, 163, 74, 0); }
-}
+   v1 keeps its own .rev-mic-big and @keyframes revPulse further up this file. That flow is
+   unchanged and is the rollback, so do not tidy those away with these. An earlier pass at this
+   deletion matched v1's identically worded comment and removed the wrong block. */
+
 @media (prefers-reduced-motion: reduce) {
-  .va-mic { animation: none; }
   .va-typing span { animation: none; opacity: 0.5; }
   .va-spinner { animation-duration: 3s; }
 }
-
 /* The keyboard, always there. Under the microphone rather than instead of it: voice is the loud
    default and never a wall. */
 .va-bar { display: flex; gap: 0.5rem; align-items: flex-end; }

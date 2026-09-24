@@ -22,6 +22,18 @@
 // the path that assembles a customer's review, which is the one thing the build spec forbids
 // outright. FTC 16 CFR Part 465, the Rytr fact pattern.
 //
+// ‼️ THERE IS NO MICROPHONE IN THIS FILE, AND ITS ABSENCE IS LOAD BEARING TWICE OVER.
+//
+// Removed 2026-09-24 on Matthew's call: the chatbot on its own is enough. What went with it was
+// not just a button. SpeechRecognition, the recogniser refs, the composer mirror that existed
+// only because onend fires outside React, and the getUserMedia call that primed the permission
+// during the handover screen are all gone, because a page that asks to use a microphone it
+// never touches is asking for access to nothing.
+//
+// So the rule the v1 file spends forty lines defending, that a customer's VOICE must never reach
+// our servers because review_tool_submissions has nowhere to put an identity, is satisfied here
+// by there being no audio path at all. Do not add one back without reading that header first:
+// src/lib/clients/voice-notes.ts still has a working transcriber and it must stay unwired.
 // ‼️ A GATE IS A BRANCH. Tapping Yes shows "Yes" in the transcript, because that is what a chat
 // looks like, and puts the word nowhere else: not in `answers`, not in the stored row, not in the
 // clipboard. See answerGate(), which is the only function that handles a chip and which the probe
@@ -56,33 +68,6 @@ interface Props {
   clientId: string;
   destinations: ReviewDestination[];
   needsSpanish: boolean;
-  /** `clients.language`. Distinct from needsSpanish, which is also true for "both". */
-  language: string | null;
-}
-
-interface SpeechRecognitionLike {
-  lang: string;
-  continuous: boolean;
-  interimResults: boolean;
-  start(): void;
-  stop(): void;
-  abort?(): void;
-  onresult:
-    | ((event: { resultIndex: number; results: ArrayLike<{ 0: { transcript: string }; isFinal: boolean }> }) => void)
-    | null;
-  onend: (() => void) | null;
-  onerror: (() => void) | null;
-}
-
-type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
-
-function speechRecognition(): SpeechRecognitionCtor | null {
-  if (typeof window === "undefined") return null;
-  const w = window as unknown as {
-    SpeechRecognition?: SpeechRecognitionCtor;
-    webkitSpeechRecognition?: SpeechRecognitionCtor;
-  };
-  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
 const BUBBLE_GAP_MS = { min: 400, max: 900 } as const;
@@ -101,7 +86,6 @@ export function VirtualAgentClient({
   clientId,
   destinations,
   needsSpanish,
-  language,
 }: Props) {
   const [answers, setAnswers] = useState<ReviewAnswers>({});
   const [edited, setEdited] = useState<string | null>(null);
@@ -126,11 +110,6 @@ export function VirtualAgentClient({
   const [privateNote, setPrivateNote] = useState("");
   const [attested, setAttested] = useState(false);
 
-  const [micAvailable, setMicAvailable] = useState(false);
-  const [listening, setListening] = useState(false);
-  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
-  const stoppedByHerRef = useRef(false);
-
   // ── The walk ───────────────────────────────────────────────────────────────
   const [stage, setStage] = useState<Stage>("stars");
   const [index, setIndex] = useState(0);
@@ -138,17 +117,7 @@ export function VirtualAgentClient({
   const [bubbles, setBubbles] = useState<Bubble[]>([]);
   const [typing, setTyping] = useState(false);
   const [composed, setComposed] = useState("");
-  const askingMicRef = useRef(false);
   const aliveRef = useRef(false);
-
-  // Same reasoning as v1: SpeechRecognition's onend fires outside React's world, so the composer
-  // value and the commit function are both mirrored in refs. A stale closure here sends the wrong
-  // answer to the wrong question.
-  const composedRef = useRef("");
-  useEffect(() => {
-    composedRef.current = composed;
-  }, [composed]);
-  const commitRef = useRef<(value: string) => void>(() => {});
 
   const bubbleId = useRef(0);
   const timers = useRef<Array<ReturnType<typeof setTimeout>>>([]);
@@ -158,12 +127,9 @@ export function VirtualAgentClient({
 
   useEffect(() => {
     aliveRef.current = true;
-    setMicAvailable(speechRecognition() !== null);
     const pending = timers.current;
     return () => {
       aliveRef.current = false;
-      recognitionRef.current?.stop();
-      recognitionRef.current = null;
       for (const t of pending) clearTimeout(t);
     };
   }, []);
@@ -230,53 +196,26 @@ export function VirtualAgentClient({
   }, [stage, revealed]);
 
   /**
-   * Leave the stars, ask for the microphone ON THIS TAP, and hand over to the agent.
+   * Leave the stars and hand over to the agent.
    *
-   * ‼️ THE PERMISSION IS REQUESTED INSIDE THE CLICK. A browser shows its box for a request made
-   * during a user gesture, so getUserMedia is called synchronously here with nothing awaited
-   * before it. The handover screen is what she sees while that box is open, which is also why the
-   * two waits are ONE wait: v1 asked for the microphone on one screen and would now hand over on
-   * another, and two spinners back to back for a customer doing somebody a favour is a page she
-   * closes.
+   * ‼️ NO PERMISSION IS ASKED FOR HERE ANY MORE, AND THE ABSENCE IS THE POINT. Until
+   * 2026-09-24 this called getUserMedia inside the click so the browser would show its box while
+   * the handover screen was up, because the next screen had a microphone on it. Matthew removed
+   * the microphone: the keyboard is enough. A page that asks to use a device it then never
+   * touches is asking for access to nothing, which is the same objection the v1 file already
+   * makes about showing a priming screen where SpeechRecognition does not exist.
    *
-   * ‼️ EVERY TRACK IS STOPPED THE INSTANT THE PROMISE RESOLVES. The stream exists only so the
-   * browser asks the question. Nothing reads it and nothing records it, and there is no
-   * MediaRecorder here or anywhere near this file.
-   *
-   * ‼️ THE HANDOVER RUNS ON ITS OWN CLOCK. It does not wait for the permission answer, because
-   * getUserMedia is allowed to stay pending forever and some browsers do. Allowed, denied or
-   * never answered, she reaches the agent after CONNECTING_MS.
+   * There is no getUserMedia, no SpeechRecognition and no MediaRecorder in this file, so there is
+   * nothing to prime, nothing to stop and nothing to delete afterwards.
    */
   function leaveStars() {
-    if (askingMicRef.current) return;
     setStage("connecting");
     later(() => {
       if (aliveRef.current) setStage((s) => (s === "connecting" ? "chat" : s));
     }, CONNECTING_MS);
-
-    const media = typeof navigator !== "undefined" ? navigator.mediaDevices : undefined;
-    if (!micAvailable || typeof media?.getUserMedia !== "function") return;
-
-    let request: Promise<MediaStream>;
-    try {
-      request = media.getUserMedia({ audio: true });
-    } catch {
-      // A browser that throws instead of rejecting is a browser she will answer by keyboard.
-      return;
-    }
-    askingMicRef.current = true;
-    request.then(
-      (stream) => {
-        stream.getTracks().forEach((track) => track.stop());
-        askingMicRef.current = false;
-      },
-      () => {
-        askingMicRef.current = false;
-      }
-    );
   }
 
-  /** Her typed or spoken answer to the question that is open. */
+  /** Her answer to the question that is open. */
   function commit(value: string) {
     const current = REVIEW_SCRIPT[index];
     if (!current || current.kind !== "ask") return;
@@ -313,64 +252,6 @@ export function VirtualAgentClient({
     push("her", saidYes ? current.yes : current.no);
     setAwaiting("none");
     setIndex(stepAfter(index, saidYes));
-  }
-
-  /**
-   * Dictate into the composer.
-   *
-   * ‼️ THE TRANSCRIPT LANDS IN THE BAR, NOT STRAIGHT INTO THE CONVERSATION. SpeechRecognition
-   * ends itself on a pause, so sending on `onend` would post half a thought the moment she
-   * stopped to think, and a message already sent is not a thing she can fix. Stopping
-   * DELIBERATELY sends.
-   */
-  function dictate() {
-    const Ctor = speechRecognition();
-    if (!Ctor) return;
-
-    if (listening) {
-      stoppedByHerRef.current = true;
-      recognitionRef.current?.stop();
-      return;
-    }
-
-    recognitionRef.current?.stop();
-    const recognition = new Ctor();
-    // Spanish ONLY on an es client, never on "both": forcing es-ES on a bilingual client garbles
-    // an English speaker's words into Spanish-shaped nonsense she then has to retype.
-    recognition.lang = language === "es" ? "es-ES" : "en-US";
-    recognition.continuous = true;
-    recognition.interimResults = false;
-
-    recognition.onresult = (event) => {
-      let heard = "";
-      for (let i = event.resultIndex; i < event.results.length; i += 1) {
-        const result = event.results[i];
-        if (result?.isFinal) heard += result[0].transcript;
-      }
-      if (!heard.trim()) return;
-      setComposed((existing) =>
-        existing.trim() ? `${existing.replace(/\s+$/, "")} ${heard.trim()}` : heard.trim()
-      );
-    };
-
-    recognition.onend = () => {
-      setListening(false);
-      if (stoppedByHerRef.current) {
-        stoppedByHerRef.current = false;
-        const spoken = composedRef.current;
-        if (spoken.trim()) commitRef.current(spoken);
-      }
-    };
-    recognition.onerror = () => setListening(false);
-
-    recognitionRef.current = recognition;
-    stoppedByHerRef.current = false;
-    setListening(true);
-    try {
-      recognition.start();
-    } catch {
-      setListening(false);
-    }
   }
 
   async function store(postedDestination?: string) {
@@ -437,10 +318,6 @@ export function VirtualAgentClient({
   }, [reading]);
 
   const clean = rail.every((row) => row.n === 0);
-
-  // Kept pointing at the current closure, so a transcript that lands after three renders still
-  // answers the question that is on screen.
-  commitRef.current = commit;
 
   const step = REVIEW_SCRIPT[index];
   const canSend = composed.trim().length > 0;
@@ -563,12 +440,6 @@ export function VirtualAgentClient({
               <div className="va-connecting" aria-live="polite">
                 <span className="va-spinner" aria-hidden="true" />
                 <p className="va-connecting-line">{CONNECTING_LINE}</p>
-                {micAvailable && (
-                  <p className="va-connecting-note">
-                    You will be able to speak your answers. Please allow the microphone if your
-                    browser asks. Your voice stays on your phone and nothing is recorded.
-                  </p>
-                )}
               </div>
             ) : (
               <>
@@ -617,19 +488,6 @@ export function VirtualAgentClient({
                   </div>
                 ) : awaiting === "text" ? (
                   <div className="va-composer">
-                    {micAvailable && (
-                      <button
-                        type="button"
-                        className={`va-mic${listening ? " is-live" : ""}`}
-                        onClick={dictate}
-                        aria-pressed={listening}
-                        aria-label={listening ? "Stop and send" : "Speak your answer"}
-                      >
-                        <span aria-hidden="true">{listening ? "■" : "●"}</span>
-                        {listening ? "Listening, tap when you are done" : "Tap and speak"}
-                      </button>
-                    )}
-
                     <div className="va-bar">
                       <textarea
                         rows={2}

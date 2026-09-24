@@ -278,6 +278,30 @@ const interpolated = REVIEW_SCRIPT.filter(
 ).map((s) => s.id);
 check(interpolated.length === 0, "no scripted line interpolates anything", interpolated.join(", ") || undefined);
 
+// ── 11b. The Virtual Agent has no audio path at all. ───────────────────────
+//
+// ‼️ THE MICROPHONE WAS REMOVED ON 2026-09-24 AND MUST NOT COME BACK BY HALVES. v1 spends forty
+// lines of its header defending one rule: a customer's VOICE must never reach our servers, because
+// review_tool_submissions has deliberately no column for a name, an email, an IP or a device, and
+// a voice is more identifying than any field it refuses. v1 satisfies that with on-device
+// SpeechRecognition and no MediaRecorder. v2 now satisfies it by having no audio at all.
+//
+// The cheapest way for this to regress is somebody restoring the permission priming without the
+// button, or the button without the on-device constraint. Both are caught here.
+const AUDIO = ["getUserMedia", "mediaDevices", "SpeechRecognition", "MediaRecorder", "AudioContext"];
+const audioFound = AUDIO.filter((t) => v2Src.includes(t));
+check(
+  audioFound.length === 0,
+  "the Virtual Agent asks for no microphone and holds no audio path",
+  audioFound.length
+    ? `found: ${audioFound.join(", ")}. Read the header of referral-engine-client.tsx before adding one back.`
+    : "nothing to prime, nothing to stop, nothing to delete afterwards"
+);
+check(
+  !/^\s*import[^\n]*voice-notes/m.test(v2Src),
+  "and never imports the whisper transcriber"
+);
+
 // ── 12. A real customer cannot reach an unfinished flow. ───────────────────
 //
 // The live host renders the default engine because it never reads the parameter. Wiring
