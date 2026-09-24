@@ -452,6 +452,21 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
         userId,
         value: action.value ?? "",
       });
+    // ── Step 12: the screenshot gate's contact sheet ──
+    //
+    // ‼️ THESE ARE THE ONLY THINGS THAT APPROVE A CLUSTER. Nothing auto-approves, which is the whole
+    // reason the pictures are posted into the thread instead of the scores being left in a table.
+    case "kwgate_approve":
+    case "kwgate_reject":
+    case "kwgate_drop":
+      return serpGateAction({
+        actionId: action.action_id,
+        channel,
+        slackTs,
+        userName: payload.user?.username ?? null,
+        userId,
+        value: action.value ?? "",
+      });
     // ── Where the review page's Post button sends a customer ──
     case "review_link_open":
       return reviewLinkOpenAction({
@@ -2447,6 +2462,55 @@ async function stepRingOutAction(args: {
  * Step 21's buttons. Every one is the same function as its thread command, so the card and the thread
  * cannot disagree about what picking a rung does.
  */
+/**
+ * Step 12's gate card: approve a cluster, reject one, or drop one keyword off it.
+ *
+ * ‼️ THE VALUE IS `<clientId>:<entityId>` AND THE CLIENT ID COMES FIRST. logButtonPress matches a
+ * UUID prefix to work out which client a press belongs to, so anything else in front of it makes the
+ * press unattributable in the history while still working, which is the worst of both.
+ *
+ * The entity is a CLUSTER id for approve and reject and a KEYWORD id for drop, because those are the
+ * units those decisions are about. Three action ids rather than one with a mode, so the dispatcher
+ * above reads as what it does.
+ */
+async function serpGateAction(args: {
+  actionId: string;
+  channel: string;
+  slackTs: string;
+  userName: string | null;
+  userId: string;
+  value: string;
+}): Promise<NextResponse> {
+  const [clientId, entityId] = args.value.split(":");
+  if (!clientId || !entityId) return NextResponse.json({ ok: true });
+  const actor = args.userName ? `@${args.userName}` : args.userId;
+
+  waitUntil(
+    (async () => {
+      const strategy = await import("@/lib/clients/keyword-strategy");
+      let text: string;
+      if (args.actionId === "kwgate_approve") {
+        text = await strategy.approveClusterAction(clientId, entityId, actor);
+      } else if (args.actionId === "kwgate_reject") {
+        text = await strategy.rejectClusterAction(clientId, entityId, actor);
+      } else {
+        text = await strategy.dropKeywordAction(clientId, entityId, actor);
+      }
+
+      const { postClientReply } = await import("@/lib/clients/client-events");
+      await postClientReply({
+        clientId,
+        stepKey: "keyword_set",
+        channel: args.channel,
+        threadTs: args.slackTs,
+        text,
+      }).catch(() => {});
+    })().catch((e) => console.error("[slack/actions] serp gate action threw:", (e as Error).message))
+  );
+
+  return NextResponse.json({ ok: true });
+}
+
 async function step21Action(args: {
   actionId: string;
   channel: string;

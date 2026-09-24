@@ -876,6 +876,29 @@ export async function verifyKeywordSet(clientId: string): Promise<KeywordCheck> 
   const verdict = keywordVerdict(tally);
   if (!verdict.ok) return { ok: false, broken: false, found: verdict.found, todo: verdict.todo };
 
+  // ‼️ THE SCREENSHOT GATE, AS EVIDENCE. This repo's own doctrine is that a checkmark is evidence
+  // and not a button press, so a step whose strategy was locked over keywords nobody has a picture
+  // for must not tick. It is the fourth door on the gate and the only one that speaks the board's
+  // language: the other three refuse a write, and this refuses a claim that the work is done.
+  //
+  // ‼️ A CLIENT WITH NO LOCKED STRATEGY PASSES, UNCHANGED. Most of step 12's history predates the
+  // strategy half entirely. Blocking those would refuse a step for not using a feature that did not
+  // exist when it ran, which is not evidence of anything.
+  const unpictured = await unpicturedLockedPillars(clientId);
+  if (unpictured.length) {
+    return {
+      ok: false,
+      broken: false,
+      found:
+        `the strategy is locked over ${unpictured.length} keyword${unpictured.length === 1 ? "" : "s"} with no Google screenshot on file: ` +
+        unpictured.slice(0, 4).join("; ") +
+        (unpictured.length > 4 ? `; and ${unpictured.length - 4} more` : ""),
+      todo:
+        "Google each one, paste the screenshot in this thread with `keywords serp N` in the same message, then Re-check. " +
+        "`keywords shortlist` reprints the numbers.",
+    };
+  }
+
   return {
     ok: true,
     evidence: [
@@ -883,6 +906,36 @@ export async function verifyKeywordSet(clientId: string): Promise<KeywordCheck> 
       `${tally.relevantApproved} approved queries are about ${c.ctx.treatment}; the plan needs 9`,
     ],
   };
+}
+
+/**
+ * Approved cluster pillars with no screenshot behind them.
+ *
+ * ‼️ ITS OWN TOLERANT SELECT, AND EMPTY ON ANY FAILURE. The tables arrive with a migration that has
+ * not run, and this is a VERIFIER: a step that refuses to tick because a table is absent would block
+ * every client on the board the moment this deploys, before the SQL, in a repo that deploys code
+ * first. Absent reads as "no strategy locked", which is what it is.
+ */
+async function unpicturedLockedPillars(clientId: string): Promise<string[]> {
+  const clusters = await supabaseAdmin
+    .from("keyword_clusters")
+    .select("pillar_keyword_id, label")
+    .eq("client_id", clientId)
+    .eq("status", "approved");
+  if (clusters.error || !clusters.data?.length) return [];
+
+  const byId = new Map<string, string>();
+  for (const c of clusters.data) {
+    const id = c.pillar_keyword_id as string | null;
+    if (id) byId.set(id, (c.label as string) ?? id);
+  }
+  if (!byId.size) return [];
+
+  const { picturedIds } = await import("./serp-gate");
+  const shot = await picturedIds(clientId, [...byId.keys()]);
+  if (!shot.ok) return [];
+
+  return [...byId.entries()].filter(([id]) => !shot.pictured.has(id)).map(([, label]) => label);
 }
 
 /** The approved queries, for buildKeywordSet and the studio. Null when there is no approved set. */

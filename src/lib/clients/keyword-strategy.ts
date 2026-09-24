@@ -488,19 +488,30 @@ function verdictMark(v: Verdict | null): string {
 
 /** The shortlist card: the ~25 subjects worth googling, numbered. */
 export function shortlistLines(list: readonly Finalist[], clientName: string): string[] {
-  const checked = list.filter((r) => r.verdict && r.verdict !== "unclear").length;
+  const pictures = list.filter((r) => r.pictured).length;
 
   const lines: string[] = [
-    `*The ${list.length} subjects worth checking* for *${clientName}*. ${checked} checked, ${list.length - checked} to go.`,
+    `*The ${list.length} subjects worth checking* for *${clientName}*. ${pictures} with a picture on file, ${list.length - pictures} to go.`,
     "",
+    // ‼️ BOTH RULES, ALWAYS TOGETHER. The first says what to look at on a results page; the second
+    // says what the answer is worth to a business that sells appointments rather than ad
+    // impressions. Quoting one without the other is how the publisher's advice gets followed.
     `_${SERP_TRIAGE_RULE}_`,
+    `_${AEO_ROUTING_RULE}_`,
     "",
   ];
 
   list.forEach((r, i) => {
     const n = String(i + 1).padStart(2, " ");
-    const mark = verdictMark(r.verdict);
-    const tail = r.verdict && r.verdict !== "unclear" ? `  _(${r.verdict.replace("_", " ")})_` : "";
+    const mark = r.pictured ? verdictMark(r.verdict) : ":black_small_square:";
+    let tail = "";
+    if (r.clickValue !== null || r.citationValue !== null) {
+      const magnet = r.magnetSpace !== null ? ` magnet ${r.magnetSpace}` : "";
+      const route = r.route && r.recommendedAsset ? ` -> ${routeLine(r.route, r.recommendedAsset)}` : "";
+      tail = `  _(click ${r.clickValue ?? 0} cite ${r.citationValue ?? 0}${magnet}${route})_`;
+    } else if (!r.pictured) {
+      tail = `  _(${blockLine(r.docId ? "unreadable" : r.verdict ? "typed_only" : "no_reading")})_`;
+    }
     lines.push(`${mark} \`${n}\` ${r.phrase}${tail}`);
   });
 
@@ -508,10 +519,12 @@ export function shortlistLines(list: readonly Finalist[], clientName: string): s
     "",
     "*In this thread:*",
     "  • Google one of them, then paste the screenshot here with `keywords serp 12` in the message.",
-    "  • `keywords serp 12: merge` types the answer instead, when a screenshot is more trouble than it is worth.",
-    "  • `strategy` once enough of them are checked. It groups them and says what becomes a page.",
+    "  • `keywords serp 12: merge` types the answer instead. It routes the keyword and does NOT clear the picture requirement.",
+    "  • `magnet 12: the front desk script` names what we would give away, `magnet 12: none` says there is nothing.",
+    "  • `strategy` groups them, `serp cards` puts the pictures and the scores in this thread to approve.",
     "",
-    "_A screenshot is read for what is ON it: whether there is an AI Overview, whether it answers the search in full, and whether the results are articles, listings or products. The triage above is applied to that reading here, not by the model._"
+    "_A screenshot is read for what is ON it: whether there is an AI Overview, how completely it answers, and whether the results are articles, listings or products. The scores are worked out from that reading here, not by the model._",
+    "_No keyword is used, and no sub category is created under a pillar, until its picture is on file._"
   );
 
   return lines;
@@ -588,6 +601,11 @@ export async function handleStrategyThreadReply(input: {
   const text = input.text.trim();
 
   if (KEYWORDS_SHORTLIST.test(text)) return shortlistCommand(input.clientId);
+
+  if (SERP_CARDS.test(text)) return serpCardsCommand(input.clientId);
+
+  const magnet = MAGNET_SET.exec(text);
+  if (magnet) return magnetCommand(input.clientId, Number(magnet[1]), magnet[2], input.by);
 
   const typed = KEYWORDS_SERP_TYPED.exec(text);
   if (typed) return serpTypedCommand(input.clientId, Number(typed[1]), typed[2], input.by);
@@ -844,6 +862,174 @@ async function magnetContext(clientId: string): Promise<import("./magnet-space")
   }
 
   return base;
+}
+
+/**
+ * `serp cards`: draw the contact sheet for every cluster, pictures and all.
+ *
+ * ‼️ IT DRAWS WHAT IS PROPOSED, INCLUDING THE CLUSTERS THAT CANNOT BE APPROVED. The blocked ones are
+ * the entire reason to look: a card that only showed the ready clusters would hide the list of what
+ * still has to be googled, which is the one piece of work the card exists to hand over.
+ */
+async function serpCardsCommand(clientId: string): Promise<StrategyReply> {
+  const loaded = await loadFinalists(clientId);
+  if (!loaded.ok) return { message: `:warning: The keyword set could not be read: ${loaded.error}` };
+  if (!loaded.strategyReady) {
+    return { message: `:warning: The strategy columns are not on this database yet. Run \`${STRATEGY_SQL}\`, then try again.` };
+  }
+
+  const list = shortlistOf(loaded.rows);
+  const { clusters } = clusterFinalists(list);
+  if (!clusters.length) {
+    return {
+      message: [
+        ":mag: Nothing to draw yet, because no subject has a verdict.",
+        "",
+        `_${SERP_TRIAGE_RULE}_`,
+        `_${AEO_ROUTING_RULE}_`,
+        "",
+        "`keywords shortlist` lists the subjects with their numbers. Google one and paste the screenshot with `keywords serp 4` in the message.",
+      ].join("\n"),
+    };
+  }
+
+  const byId = new Map(list.map((r) => [r.id, r]));
+  const gates = gateClusters(clusters, byId);
+
+  // The stored cluster ids, so a card can be EDITED next time rather than posted again. A cluster
+  // with no row yet gets a card with no buttons and a line saying to run `strategy` first: posting
+  // buttons whose value has no id behind it is how a press does nothing and nobody knows why.
+  const stored = await storedClusterIds(clientId);
+
+  const { clusterCard } = await import("./serp-cards");
+  const cards = gates.map((gate, i) =>
+    clusterCard({
+      clientId,
+      clusterId: stored.get(gate.cluster.label) ?? null,
+      gate,
+      byId,
+      position: i + 1,
+      index: i,
+    })
+  );
+
+  const blocked = gates.reduce((n, g) => n + g.blocked.length, 0);
+  const lines = [
+    `:frame_with_picture: Drawing ${cards.length} cluster card${cards.length === 1 ? "" : "s"} below.`,
+    blocked
+      ? `${blocked} keyword${blocked === 1 ? " is" : "s are"} still owed a picture, and each is named on the card that wants it.`
+      : "Every keyword on every cluster has a picture on file.",
+    "",
+    "_Nothing auto-approves. The buttons are yours._",
+  ];
+
+  // ‼️ THE POSTING RUNS IN `after`, WHICH THE EVENTS ROUTE HANDS TO waitUntil. Ten cards is ten Slack
+  // calls, and every handler in that chain is awaited BEFORE the ack: Slack re-delivers an event it
+  // has not heard back from within three seconds, so doing this inline would post the whole sheet
+  // twice. Same shape the offer re-aim and the keyword runner already use, and the reason
+  // StrategyReply carries an `after` at all.
+  return {
+    message: lines.join("\n"),
+    after: async () => {
+      const { postClusterCards } = await import("./serp-cards");
+      const res = await postClusterCards({ clientId, cards });
+      if (!res.failed.length) return;
+
+      // ‼️ A FAILURE IS SAID OUT LOUD IN THE THREAD, NOT LOGGED. slack-bot's helpers return
+      // {ok:false} rather than throwing, so a refused card is silent by default: the sheet would
+      // simply be missing a cluster and look complete. That is the exact failure this gate exists to
+      // prevent, so it may not be how the gate itself fails.
+      const { notifyStep } = await import("./step-board");
+      await notifyStep(
+        clientId,
+        "keyword_set",
+        [
+          `:warning: ${res.failed.length} cluster card${res.failed.length === 1 ? "" : "s"} could not be posted, so ${res.failed.length === 1 ? "it is" : "they are"} not on screen above:`,
+          ...res.failed.map((f) => `  • ${f.label}: ${f.error}`),
+          "",
+          "_`serp cards` again once that is fixed. Nothing was approved either way._",
+        ].join("\n")
+      ).catch(() => {});
+    },
+  };
+}
+
+/** Cluster id by label, so a redraw edits the card it drew last time. */
+async function storedClusterIds(clientId: string): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const { data, error } = await supabaseAdmin
+    .from("keyword_clusters")
+    .select("id, label")
+    .eq("client_id", clientId)
+    .neq("status", "dropped");
+  if (error || !data) return out;
+  for (const c of data) out.set((c.label as string) ?? "", c.id as string);
+  return out;
+}
+
+/**
+ * `magnet 7: the front desk script` and `magnet 7: none`.
+ *
+ * ‼️ `none` IS A DECISION SOMEBODY TYPES, NOT A FIELD LEFT EMPTY, and the difference decides the
+ * keyword. Under a high AI Overview score a keyword with no magnet is SKIPPED, so "there is nothing
+ * to give away here" has to be sayable out loud and attributable to a person. A blank means the
+ * check never ran, which is a different fact, and routeFrom reads them differently.
+ *
+ * ‼️ IT APPENDS A READING RATHER THAN UPDATING ONE. keyword_serp_reads is append only, for the reason
+ * its migration gives: a second look is a second fact, not a correction of the first. The verdict
+ * and the screenshot travel with it so the row stays a complete reading rather than a fragment that
+ * only makes sense next to its neighbour.
+ */
+async function magnetCommand(clientId: string, n: number, said: string, by: string): Promise<StrategyReply> {
+  const found = await resolveRow(clientId, n);
+  if (!found.ok) return { message: found.message };
+  const row = found.row;
+
+  if (!row.verdict) {
+    return {
+      message: `:warning: *${row.phrase}* has no reading yet, so there is nothing for a magnet to change. Paste the screenshot with \`keywords serp ${n}\` first.`,
+    };
+  }
+
+  const text = said.trim();
+  const none = /^(none|nothing|no)$/i.test(text);
+  const idea = none ? null : text;
+
+  if (!none && idea && idea.length < 4) {
+    return { message: `:warning: "${idea}" is too short to be a thing somebody would hand over. Name the artifact, or say \`magnet ${n}: none\`.` };
+  }
+
+  const { hasBannedDash } = await import("@/lib/copy-guard");
+  if (idea && hasBannedDash(idea)) {
+    return { message: ":warning: That carries an em dash, an en dash or a double hyphen. Say it again without one." };
+  }
+
+  const res = await recordVerdict({
+    clientId,
+    keyword: row,
+    // The reading is unchanged; this row records the magnet decision against the same verdict. Null
+    // read means no scores are recomputed from it, and loadFinalists takes the scores from the
+    // newest row that HAS them, which is still the screenshot's.
+    read: null,
+    verdict: row.verdict,
+    source: "typed",
+    actor: by,
+    // ‼️ A PERSON SAYING "none" IS A 0 WITH AN AUTHOR, NEVER A NULL. Null is "the check has not run".
+    magnet: { space: none ? 0 : 5, idea, by: "person" },
+  });
+  if (!res.ok) return { message: `:warning: ${res.error}` };
+
+  return {
+    message: none
+      ? [
+          `:no_entry_sign: \`${n}\` *${row.phrase}*: nothing to give away (${by}).`,
+          "It is a SKIP now, and the reason is recorded rather than inferred. `serp cards` redraws its cluster.",
+        ].join("\n")
+      : [
+          `:magnet: \`${n}\` *${row.phrase}* gives away: *${idea}* (${by}).`,
+          "`serp cards` redraws its cluster with the new route.",
+        ].join("\n"),
+  };
 }
 
 async function strategyCommand(clientId: string, regroup: boolean): Promise<StrategyReply> {
@@ -1269,6 +1455,139 @@ async function kindCommand(
 
   const word = pageKind === "service_page" ? "a service page" : "a post";
   return { message: `:pencil2: *${c.label}* is ${word} now (${by}). \`strategy\` reprints the plan.` };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The gate card's buttons
+//
+// ‼️ THESE ARE THE ONLY THINGS THAT APPROVE A CLUSTER, AND NOTHING AUTO-APPROVES. The scores are a
+// proposal and the pictures are the evidence; the decision is a person pressing a button next to
+// both. That is the entire reason the sheet is in the thread rather than in a table.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** `[Approve cluster]`. Gated: the button is not drawn when it would refuse, and it refuses anyway. */
+export async function approveClusterAction(clientId: string, clusterId: string, by: string): Promise<string> {
+  const { data, error } = await supabaseAdmin
+    .from("keyword_clusters")
+    .select("id, label, pillar_keyword_id, status")
+    .eq("id", clusterId)
+    .eq("client_id", clientId)
+    .maybeSingle();
+  if (error || !data) return ":warning: That cluster is not on this client any more. `strategy` reprints what is.";
+  if (data.status === "approved") return `:white_check_mark: *${data.label}* was already approved.`;
+
+  const pillarId = (data.pillar_keyword_id as string | null) ?? null;
+  if (!pillarId) {
+    return `:warning: *${data.label}* has lost its pillar keyword, so there is nothing to approve. \`strategy new\` re-groups from the verdicts.`;
+  }
+
+  // ‼️ RE-CHECKED AT THE PRESS, NOT TRUSTED FROM THE CARD. The card may have been drawn an hour ago,
+  // and the thing it is asserting is that a picture exists. Same argument assertGatePassed makes for
+  // re-hashing the page body rather than believing what its caller loaded.
+  const { picturedIds } = await import("./serp-gate");
+  const shot = await picturedIds(clientId, [pillarId]);
+  if (!shot.ok) return `:warning: The screenshots could not be read back, so nothing was approved: ${shot.error}`;
+  if (!shot.pictured.has(pillarId)) {
+    return [
+      `:no_entry: *${data.label}* still has no screenshot for its pillar, so it was not approved.`,
+      "Paste the Google result here with `keywords serp N` in the same message, then press it again.",
+    ].join("\n");
+  }
+
+  const now = new Date().toISOString();
+  const up = await supabaseAdmin
+    .from("keyword_clusters")
+    .update({ status: "approved", approved_at: now, approved_by: by, updated_at: now })
+    .eq("id", clusterId);
+  if (up.error) return `:warning: ${up.error.message}`;
+
+  const { recordKeywordDecisions } = await import("./keyword-dataset");
+  await recordKeywordDecisions({
+    clientId,
+    action: "approve_cluster",
+    actor: by,
+    rows: [],
+    context: { cluster: data.label },
+  }).catch(() => {});
+
+  return [
+    `:white_check_mark: *${data.label}* approved (${by}).`,
+    `The page plan at step ${stepNumber("pre_call_pages")} draws from it now.`,
+  ].join("\n");
+}
+
+/** `[Reject]`. Nothing is deleted: the keywords stay, the cluster stops being a plan. */
+export async function rejectClusterAction(clientId: string, clusterId: string, by: string): Promise<string> {
+  const { data, error } = await supabaseAdmin
+    .from("keyword_clusters")
+    .select("id, label")
+    .eq("id", clusterId)
+    .eq("client_id", clientId)
+    .maybeSingle();
+  if (error || !data) return ":warning: That cluster is not on this client any more.";
+
+  const now = new Date().toISOString();
+  const up = await supabaseAdmin
+    .from("keyword_clusters")
+    .update({ status: "rejected", rejected_at: now, rejected_by: by, updated_at: now })
+    .eq("id", clusterId);
+  if (up.error) return `:warning: ${up.error.message}`;
+
+  // ‼️ THE KEYWORDS ARE LEFT ALONE, DELIBERATELY. Rejecting a grouping is a statement about the
+  // grouping. The phrases underneath it are still approved phrases somebody chose, and their SERP
+  // readings are still facts about Google. `strategy new` re-groups them.
+  const { recordKeywordDecisions } = await import("./keyword-dataset");
+  await recordKeywordDecisions({
+    clientId,
+    action: "reject_cluster",
+    actor: by,
+    rows: [],
+    context: { cluster: data.label },
+  }).catch(() => {});
+
+  return [
+    `:x: *${data.label}* rejected (${by}). Its keywords are untouched and still approved.`,
+    "`strategy new` re-groups them from the verdicts.",
+  ].join("\n");
+}
+
+/** `[Drop]` on one row. Drops the KEYWORD, which is the unit the decision is about. */
+export async function dropKeywordAction(clientId: string, keywordId: string, by: string): Promise<string> {
+  const { data, error } = await supabaseAdmin
+    .from("client_keywords")
+    .select("id, phrase, category, rank, score, origin, use")
+    .eq("id", keywordId)
+    .eq("client_id", clientId)
+    .maybeSingle();
+  if (error || !data) return ":warning: That keyword is not on this client any more.";
+
+  const now = new Date().toISOString();
+  const up = await supabaseAdmin
+    .from("client_keywords")
+    .update({ dropped_at: now, cluster_id: null, intent: null, merged_into: null, updated_at: now })
+    .eq("id", keywordId);
+  if (up.error) return `:warning: ${up.error.message}`;
+
+  const { recordKeywordDecisions } = await import("./keyword-dataset");
+  await recordKeywordDecisions({
+    clientId,
+    action: "drop",
+    actor: by,
+    rows: [
+      {
+        id: data.id as string,
+        phrase: data.phrase as string,
+        category: (data.category as string) ?? "other",
+        use: "query" as const,
+        origin: (data.origin as "manual") ?? "manual",
+        rank: Number(data.rank ?? 0),
+        score: Number(data.score ?? 0),
+      },
+    ],
+    context: { from: "gate card" },
+  }).catch(() => {});
+
+  return `:wastebasket: *${data.phrase}* dropped (${by}). \`serp cards\` redraws without it.`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

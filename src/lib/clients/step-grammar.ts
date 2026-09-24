@@ -365,6 +365,30 @@ const KEYWORDS_SERP: CommandSpec = {
   implementedIn: "src/lib/clients/keyword-strategy.ts",
 };
 
+const SERP_CARDS: CommandSpec = {
+  label: "serp cards",
+  test: /^\s*[`*_]*serp\s+cards\b/i,
+  unmistakable: /^\s*[`*_]*serp\s+cards\b/i,
+  pointAt: "keyword_set",
+  what: "The keyword strategy",
+  implementedIn: "src/lib/clients/serp-cards.ts",
+  mustBeOnTheCard: true,
+};
+
+/**
+ * ‼️ `unmistakable` ON THE COLON FORM ONLY, and "magnet" alone is deliberately not a command here.
+ * The word is ordinary English in a step thread ("that magnet is the one they liked"), and the
+ * concierge lane owns magnets elsewhere. `magnet 7:` names a numbered row and cannot be dictation.
+ */
+const MAGNET_SET: CommandSpec = {
+  label: "magnet 7: the front desk script",
+  test: /^\s*[`*_]*magnet\s+\d{1,3}\s*:/i,
+  unmistakable: /^\s*[`*_]*magnet\s+\d{1,3}\s*:/i,
+  pointAt: "keyword_set",
+  what: "The keyword strategy",
+  implementedIn: "src/lib/clients/keyword-strategy.ts",
+};
+
 /**
  * ‼️ NO `unmistakable` ON THE BARE WORD, the same treatment bare `keywords` and bare `mascot` get.
  * "the strategy is working" and "our strategy here" are sentences somebody says in a step thread and
@@ -744,6 +768,8 @@ export const STEP_COMMANDS: Record<StepKey, readonly CommandSpec[]> = {
     KEYWORDS_MORE,
     KEYWORDS_SHORTLIST,
     KEYWORDS_SERP,
+    SERP_CARDS,
+    MAGNET_SET,
     STRATEGY,
     STRATEGY_APPROVE,
     STRATEGY_EDIT,
