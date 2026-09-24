@@ -4,7 +4,8 @@ import { slack, type SlackBlock } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
 import { CATEGORY_LABELS, isSequenceCategory } from "@/config/sequence-categories";
 import { applyLeadDisposition } from "@/lib/lead-disposition";
-import { DISPOSITION_BY_ACTION_ID } from "@/lib/lead-thread";
+import { DISPOSITION_BY_ACTION_ID, LEAD_RUN_AUDIT, LEAD_LOOM } from "@/lib/lead-thread";
+import type { LeadRow } from "@/lib/leads/lead-actions";
 import { resolvePendingAction } from "@/lib/ai-intel/slack-approval";
 import { executePendingAction, postExecutionReceipt, handleMarketingEmailCancel } from "@/lib/ai-intel/execute-action";
 import type { PendingActionPayload } from "@/lib/ai-intel/types";
@@ -195,6 +196,11 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
     case "lead_booked_call":
     case "lead_converted":
       return leadDispositionAction({ actionId: action.action_id, channel, userId, contactId: action.value });
+
+    case LEAD_RUN_AUDIT:
+    case LEAD_LOOM:
+      return leadWorkAction({ actionId: action.action_id, channel, userId, contactId: action.value });
+
     case "imsg_send":
       return sendSuggestion({ slackTs, channel, userId });
     case "imsg_regenerate":
@@ -751,6 +757,69 @@ async function leadDispositionAction(args: {
       .catch((err) =>
         console.error("[slack/actions] lead disposition failed:", err instanceof Error ? err.message : err)
       )
+  );
+
+  return NextResponse.json({ ok: true });
+}
+
+/**
+ * The 🔍 Run audit and 🎥 Loom buttons on the lead card.
+ *
+ * Doorways to exactly the same functions the typed `run audit` and `loom` in the thread reach, so
+ * the two surfaces cannot drift. Everything they say, they say IN THE LEAD'S THREAD, not as an
+ * ephemeral: the answer to "what happened when I pressed that" belongs under the lead, where the
+ * rest of the conversation is and where anyone else on the account can see it.
+ *
+ * ‼️ THE THREAD TS COMES OFF THE CONTACT ROW, NOT OFF THE CLICKED MESSAGE. They are the same value
+ * today (the button lives on the top-level lead message, whose ts IS slack_thread_ts) but reading
+ * the row keeps this correct if the buttons are ever added to a card further down the thread.
+ */
+async function leadWorkAction(args: {
+  actionId: string;
+  channel: string;
+  userId: string;
+  contactId: string;
+}): Promise<NextResponse> {
+  if (!args.contactId) return NextResponse.json({ ok: true });
+
+  waitUntil(
+    (async () => {
+      const { runAuditForContact, proxyToAuditThread, LEAD_COLUMNS } = await import("@/lib/leads/lead-actions");
+      const { supabaseAdmin } = await import("@/lib/db");
+      const { data } = await supabaseAdmin
+        .from("contacts")
+        .select(LEAD_COLUMNS)
+        .eq("id", args.contactId)
+        .maybeSingle();
+
+      const contact = data as LeadRow | null;
+      if (!contact) {
+        await slack.postEphemeral(args.channel, args.userId, "⚠️ That lead is not in the database any more.");
+        return;
+      }
+
+      const threadTs = contact.slack_thread_ts;
+      if (!threadTs) {
+        await slack.postEphemeral(
+          args.channel,
+          args.userId,
+          "⚠️ This lead has no Slack thread recorded, so I have nowhere to put the answer."
+        );
+        return;
+      }
+
+      const channel = contact.slack_channel || args.channel;
+      const by = `<@${args.userId}>`;
+
+      if (args.actionId === LEAD_RUN_AUDIT) {
+        await runAuditForContact({ contact, channel, threadTs, by });
+        return;
+      }
+
+      await proxyToAuditThread({ contact, channel, threadTs, text: "loom", label: "Loom", by });
+    })().catch((err) =>
+      console.error("[slack/actions] lead work button failed:", err instanceof Error ? err.message : err)
+    )
   );
 
   return NextResponse.json({ ok: true });
