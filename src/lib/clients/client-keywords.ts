@@ -1278,6 +1278,23 @@ async function addCommand(
   const normalized = normalizePhrase(phrase);
   const existing = loaded.rows.find((r) => r.normalized === normalized && r.use === use);
   if (existing && !existing.dropped) {
+    // ‼️ `pick:` SELECTS A ROW THAT IS ALREADY THERE, AND WITHOUT THIS IT DID NOTHING AT ALL.
+    // Measured on SRT Agency 2026-09-24: fifteen phrases had been added earlier, so every one hit
+    // this branch, returned "Already in the set", and the approve never ran. The reply said
+    // "0 of 15 added" and the shortlist stayed empty, which reads as the paste being ignored twice.
+    // Being in the set and being CHOSEN are different facts, and `pick` is about the second.
+    if (opts?.approve && use === "query" && !existing.approved) {
+      const now = new Date().toISOString();
+      const { error } = await supabaseAdmin
+        .from("client_keywords")
+        .update({ approved: true, approved_at: now, approved_by: by, updated_at: now })
+        .eq("id", existing.id);
+      if (error) return { message: `:warning: ${existing.phrase} could not be selected: ${error.message}` };
+      return { message: `:white_check_mark: Selected *${existing.phrase}*, already in the set.` };
+    }
+    if (opts?.approve && existing.approved) {
+      return { message: `:white_check_mark: Selected *${existing.phrase}*, already in the set.` };
+    }
     return { message: `Already in the set as *${existing.rank}. ${existing.phrase}* (${existing.origin}).` };
   }
 
@@ -1404,7 +1421,12 @@ async function addManyCommand(
   const list = (items: string[]) => items.slice(0, 40).map((i) => `  • ${i}`).concat(items.length > 40 ? [`  • and ${items.length - 40} more`] : []);
   return {
     message: [
-      `*${added.length + hooks.length} of ${phrases.length} added*, each ranked like evidence because you said it.`,
+      // ‼️ "added" IS THE WRONG WORD FOR A PICK AND IT SAID "0 of 15" ON A RUN THAT WORKED. Under
+      // `pick:` most rows are usually already in the set, so what happened to them is that they were
+      // SELECTED, not added, and a count of additions reads as nothing having happened.
+      opts?.approve
+        ? `*${added.length + hooks.length} of ${phrases.length} selected*, each ranked like evidence because you said it.`
+        : `*${added.length + hooks.length} of ${phrases.length} added*, each ranked like evidence because you said it.`,
       ...(added.length ? ["*Queries* (can become a page's keyword):", ...list(added)] : []),
       ...(hooks.length
         ? ["*Hooks* (marketing lines: kept for ads and emails, never a page's keyword):", ...list(hooks)]
@@ -1482,8 +1504,11 @@ async function pickCommand(clientId: string, phrases: readonly string[], by: str
     }
 
     if (rest.length) {
+      // "The other N" is wrong when there was no first group, and it read as thirty phrases from a
+      // paste of fifteen.
+      const lead = notSearches.length ? `The other ${rest.length}` : `${rest.length} of them`;
       lines.push(
-        `_The other ${rest.length} folded into a row above, because two phrasings of one question are one subject and one screenshot answers both. At most ${SHORTLIST_PER_CATEGORY} subjects per category reach the shortlist, so a batch about one thing shows fewer rows than it has phrases. Nothing was lost: they count as the page's phrase family._`
+        `_${lead} folded into a row above, because two phrasings of one question are one subject and one screenshot answers both. At most ${SHORTLIST_PER_CATEGORY} subjects per category reach the shortlist, so a batch about one thing shows fewer rows than it has phrases. Nothing was lost: they count as the page's phrase family._`
       );
     }
   }
