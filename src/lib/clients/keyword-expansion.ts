@@ -746,6 +746,24 @@ export const KEYWORDS_APPROVE_SOME =
 export const KEYWORDS_APPROVE_MINE = /^keywords\s+approve\s+(mine|manual|ours)$/i;
 export const KEYWORDS_DROP = /^keywords\s+drop\s+(\d{1,4}(?:\s*,\s*\d{1,4})*)$/i;
 export const KEYWORDS_ADD = /^keywords\s+add\s*:\s*([\s\S]+)$/i;
+
+/**
+ * `keywords pick:` then the list. Add and SELECT in one move.
+ *
+ * ‼️ IT EXISTS BECAUSE `keywords add:` COULD NOT DO THIS AND LOOKED LIKE IT COULD. addCommand only
+ * approves a new row when the set ALREADY has an approved row in it, on the reasoning that a phrase
+ * joins an approval that exists rather than starting one. For a client at zero approved, which is
+ * every client the first time, that means pasting fifteen chosen phrases stores fifteen rows and
+ * selects none of them, and the next `keywords shortlist` correctly answers "no approved queries
+ * yet". Measured on SRT Agency, 2026-09-24.
+ *
+ * `pick` states the intent the paste already had: these are the ones I chose. It approves what it
+ * adds, unconditionally, and hands back the numbers `keywords serp N` takes.
+ */
+export const KEYWORDS_PICK = /^keywords\s+pick\s*:\s*([\s\S]+)$/i;
+
+/** `keywords variations`: more ways to say what has already been picked. */
+export const KEYWORDS_VARIATIONS = /^keywords\s+variations$/i;
 export const KEYWORDS_MORE = /^keywords\s+more\s+(.+)$/i;
 
 // ‼️ `keywords prompt`, NOT a bare `prompt`. Step 11's framework thread already owns `prompt` and
@@ -813,6 +831,10 @@ export type KeywordCommand =
   | { kind: "drop"; ranks: number[] }
   /** One phrase, or a pasted list: one per line, numbered or not. */
   | { kind: "add"; phrases: string[] }
+  /** The same paste, but SELECTED: added and approved in one move, then numbered back. */
+  | { kind: "pick"; phrases: string[] }
+  /** More ways to say what has already been picked. Proposals, never auto-approved. */
+  | { kind: "variations" }
   | { kind: "more"; category: CategorySpec }
   /** Hand over the research prompt for this offer. Answers come back through `add`. */
   | { kind: "prompt" };
@@ -913,6 +935,16 @@ export function parseKeywordCommand(raw: string, categories: readonly CategorySp
     const ranks = [...new Set(drop[1].split(",").map((n) => Number(n.trim())).filter((n) => n > 0))];
     return ranks.length ? { kind: "drop", ranks } : null;
   }
+
+  // ‼️ `pick:` IS TESTED BEFORE `add:` AND BOTH ARE ANCHORED, so neither can swallow the other. They
+  // differ only in whether what they store is SELECTED, which is the whole point of having two.
+  const pick = KEYWORDS_PICK.exec(text);
+  if (pick) {
+    const phrases = addList(pick[1]);
+    return phrases.length ? { kind: "pick", phrases } : null;
+  }
+
+  if (KEYWORDS_VARIATIONS.test(text)) return { kind: "variations" };
 
   const add = KEYWORDS_ADD.exec(text);
   if (add) {

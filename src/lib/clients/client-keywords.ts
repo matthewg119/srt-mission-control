@@ -1039,6 +1039,10 @@ export async function handleKeywordThreadReply(input: {
       return cmd.phrases.length === 1
         ? addCommand(input.clientId, cmd.phrases[0], input.by)
         : addManyCommand(input.clientId, cmd.phrases, input.by);
+    case "pick":
+      return pickCommand(input.clientId, cmd.phrases, input.by);
+    case "variations":
+      return variationsCommand(input.clientId, input.by);
     case "more":
       return moreCommand(input.clientId, cmd.category);
     case "prompt":
@@ -1254,7 +1258,12 @@ async function dropCommand(clientId: string, ranks: number[], by: string): Promi
   };
 }
 
-async function addCommand(clientId: string, phrase: string, by: string): Promise<KeywordReply> {
+async function addCommand(
+  clientId: string,
+  phrase: string,
+  by: string,
+  opts?: { approve?: boolean }
+): Promise<KeywordReply> {
   const c = await keywordContext(clientId);
   if (!c.ok) return { message: `:warning: Not added. Missing: ${c.missing.join("; ")}.` };
   const loaded = await loadKeywords(clientId);
@@ -1291,7 +1300,15 @@ async function addCommand(clientId: string, phrase: string, by: string): Promise
   };
   const score = scoreKeyword(base, spec?.intent ?? 0);
   // He said it, so it joins an approved set as approved. A hook never joins the approval.
-  const setApproved = use === "query" && loaded.rows.some((r) => r.approved && !r.dropped);
+  //
+  // ‼️ AND `keywords pick:` APPROVES REGARDLESS, WHICH IS THE WHOLE DIFFERENCE BETWEEN THE TWO VERBS.
+  // The condition below asks whether an approval already EXISTS to join, which is right for `add:`
+  // and silently wrong for the first paste on a new client: at zero approved it stores every phrase
+  // and selects none, so the next `keywords shortlist` answers "no approved queries yet" about
+  // fifteen phrases somebody just chose. Measured on SRT Agency, 2026-09-24. A hook still never
+  // joins the approval, whichever verb was typed: it is not a thing a page can be aimed at.
+  const setApproved =
+    use === "query" && (opts?.approve === true || loaded.rows.some((r) => r.approved && !r.dropped));
   const now = new Date().toISOString();
 
   let rank: number;
@@ -1359,14 +1376,19 @@ async function addCommand(clientId: string, phrase: string, by: string): Promise
  * rules one phrase does (the filter, query or hook, approved with an approved set), and the reply
  * is one summary rather than thirty messages.
  */
-async function addManyCommand(clientId: string, phrases: readonly string[], by: string): Promise<KeywordReply> {
+async function addManyCommand(
+  clientId: string,
+  phrases: readonly string[],
+  by: string,
+  opts?: { approve?: boolean }
+): Promise<KeywordReply> {
   const added: string[] = [];
   const hooks: string[] = [];
   const already: string[] = [];
   const refused: string[] = [];
 
   for (const phrase of phrases) {
-    const res = await addCommand(clientId, phrase, by);
+    const res = await addCommand(clientId, phrase, by, opts);
     const m = res.message;
     if (m.startsWith(":white_check_mark:")) {
       const label = m.match(/\*([^*]+)\*/)?.[1] ?? phrase;
@@ -1391,6 +1413,178 @@ async function addManyCommand(clientId: string, phrases: readonly string[], by: 
       ...(refused.length ? ["*Not added:*", ...list(refused)] : []),
     ].join("\n"),
     after: () => refreshKeywordCard(clientId),
+  };
+}
+
+/**
+ * `keywords pick:` then the list. Add and SELECT in one move, then hand back the numbers.
+ *
+ * ‼️ THE PASTE IS THE SELECTION, AND THAT IS THE WHOLE POINT. Pasting fifteen chosen phrases and
+ * then being told there is nothing to shortlist is not a smaller problem than being told nothing at
+ * all: it reads as the system losing them. addCommand only approved into an approval that already
+ * existed, so on a client at zero approved, which is every client the first time, a paste selected
+ * nothing. `pick` says what the paste already meant.
+ *
+ * ‼️ IT PRINTS THE SHORTLIST NUMBERS, NOT THE RANKS. `keywords serp N` takes a position in
+ * shortlistOf()'s output, which is deduped by subject and capped, and the ranks the add path prints
+ * are something else entirely. Handing back the wrong number is how somebody screenshots the wrong
+ * keyword and never finds out.
+ */
+async function pickCommand(clientId: string, phrases: readonly string[], by: string): Promise<KeywordReply> {
+  const added = await addManyCommand(clientId, phrases, by, { approve: true });
+  // A refusal from the add path (no locked offer, unreadable table) is returned as it stands: it
+  // already names what is missing and there is nothing to be numbered.
+  if (added.message.startsWith(":warning:")) return added;
+
+  const { finalistsFor } = await import("./keyword-strategy");
+  const res = await finalistsFor(clientId);
+  if (!res.ok) {
+    return {
+      message: [added.message, "", `_The shortlist could not be read back: ${res.error}_`].join("\n"),
+      after: added.after,
+    };
+  }
+
+  const picked = new Set(phrases.map((p) => normalizePhrase(p)));
+  const lines: string[] = [
+    added.message,
+    "",
+    `*Selected, and these are the numbers \`keywords serp N\` takes:*`,
+    "",
+  ];
+
+  res.list.forEach((r, i) => {
+    const mine = picked.has(r.normalized) ? "" : "  _(already in the set)_";
+    lines.push(`\`${String(i + 1).padStart(2, " ")}\` ${r.phrase}${mine}`);
+  });
+
+  // ‼️ SAID OUT LOUD WHEN THE SHORTLIST IS SHORTER THAN THE PASTE, AND SAID ACCURATELY. Somebody who
+  // pastes fifteen and counts twelve assumes three were dropped on the floor. There are three
+  // different reasons a phrase is not its own row, only ONE of them needs anything doing about it,
+  // and a single sentence covering all three would be wrong about two of them.
+  const onShortlist = new Set(res.list.map((r) => r.normalized));
+  const missing = phrases.filter((p) => !onShortlist.has(normalizePhrase(p)));
+
+  if (missing.length) {
+    const { searchable, SHORTLIST_PER_CATEGORY } = await import("./keyword-strategy-rules");
+    const notSearches = missing.filter((p) => !searchable(p));
+    const rest = missing.filter((p) => searchable(p));
+
+    lines.push("", `_${missing.length} of what you pasted are not separate rows above._`);
+
+    // The one that needs acting on: it is stored and approved, and it will never get a screenshot,
+    // because googling a sentence tells nobody anything.
+    if (notSearches.length) {
+      lines.push(
+        `‼️ _${notSearches.length} of them ${notSearches.length === 1 ? "is not a search" : "are not searches"}: a statement ending in a full stop, or a question naming nothing ("how much does this cost"). ${notSearches.length === 1 ? "It is" : "They are"} still in the set and still useful to the concierge and the page angles, but ${notSearches.length === 1 ? "it" : "they"} will not get a screenshot:_`
+      );
+      for (const p of notSearches.slice(0, 6)) lines.push(`      ${p}`);
+    }
+
+    if (rest.length) {
+      lines.push(
+        `_The other ${rest.length} folded into a row above, because two phrasings of one question are one subject and one screenshot answers both. At most ${SHORTLIST_PER_CATEGORY} subjects per category reach the shortlist, so a batch about one thing shows fewer rows than it has phrases. Nothing was lost: they count as the page's phrase family._`
+      );
+    }
+  }
+
+  lines.push(
+    "",
+    "*Next:*",
+    "  • Google one, then paste the screenshot here with `keywords serp 4` in the same message.",
+    "  • `keywords variations` writes more ways to say the ones you just picked.",
+    "  • `strategy` groups what is checked, `serp cards` puts the pictures and scores here to approve."
+  );
+
+  return { message: lines.join("\n"), after: added.after };
+}
+
+/**
+ * `keywords variations`: more ways to say what has already been picked.
+ *
+ * ‼️ IT WIDENS THE PHRASE FAMILY, NOT THE SHORTLIST, AND THE CARD SAYS SO. shortlistOf dedupes by
+ * sameSubject, so twenty variations of five picked phrases still produce five subjects and five
+ * screenshots. That is the design: one page ranks for a family of phrasings, and the family is what
+ * gets written into the title, the H1 and the subheads. Without the line saying so, this looks
+ * broken the moment somebody counts the shortlist afterwards.
+ *
+ * ‼️ PROPOSALS, NEVER AUTO-APPROVED. They join as `expansion`, which precedence ranks below anything
+ * a person typed, and wait for `keywords approve 411-423`.
+ */
+async function variationsCommand(clientId: string, by: string): Promise<KeywordReply> {
+  const c = await keywordContext(clientId);
+  if (!c.ok) return { message: `:warning: Nothing written. Missing: ${c.missing.join("; ")}.` };
+
+  const loaded = await loadKeywords(clientId);
+  if ("error" in loaded) return { message: `:warning: ${loaded.error}. ${TABLE_HINT}` };
+
+  // The picked set: approved queries somebody typed. Not the model's own proposals, which would make
+  // this a machine writing variations of a machine's guesses.
+  const picked = loaded.rows.filter((r) => r.approved && !r.dropped && r.use === "query" && r.origin === "manual");
+  if (!picked.length) {
+    return {
+      message: [
+        ":warning: Nothing has been picked yet, so there is nothing to write variations of.",
+        "`keywords pick:` then the list, one per line. Or `keywords approve mine` if they are already in the set.",
+      ].join("\n"),
+    };
+  }
+
+  return {
+    message: `Writing more ways to say the ${picked.length} phrase${picked.length === 1 ? "" : "s"} you picked. About a minute; they post here with their numbers.`,
+    after: async () => {
+      const { variationsFor } = await import("./keyword-variations");
+      const res = await variationsFor({ ctx: c.ctx, picked: picked.map((r) => r.phrase) });
+      if (!res.ok) return say(clientId, `:warning: No variations: ${res.error}`);
+      if (!res.rows.length) {
+        return say(clientId, "No variations worth keeping came back. The phrases you picked are already the way people type them.");
+      }
+
+      const vocab = vocabFor(c.ctx, loaded.rows);
+      const { isObjection } = await import("./harvest");
+      const candidates: KeywordCandidate[] = res.rows.map((v) => {
+        const category = classifyCategory(v.phrase, c.ctx.categories, vocab);
+        const spec = c.ctx.categories.find((s) => s.key === category);
+        const base: KeywordCandidate = {
+          phrase: v.phrase,
+          normalized: normalizePhrase(v.phrase),
+          category,
+          use: "query",
+          origin: "expansion",
+          frequency: 1,
+          intent: spec?.intent ?? 0,
+          objection: isObjection(v.phrase),
+          currentlyNamed: null,
+          sourceUrl: null,
+          score: 0,
+        };
+        return { ...base, score: scoreKeyword(base, spec?.intent ?? 0) };
+      });
+
+      const written = await writeMerged(c.ctx, loaded.rows, candidates);
+      if (written.error) return say(clientId, `:warning: Not written: ${written.error}`);
+
+      const byParent = new Map<string, string[]>();
+      for (const v of res.rows) byParent.set(v.of, [...(byParent.get(v.of) ?? []), v.phrase]);
+
+      const lines: string[] = [
+        `*${written.inserted} more ways to say them* (${by}). Proposals, not picks: nothing is approved.`,
+        "",
+      ];
+      for (const [parent, kids] of byParent) {
+        lines.push(`*${parent}*`);
+        for (const k of kids) lines.push(`      ${k}`);
+      }
+      lines.push(
+        "",
+        "‼️ _These do NOT add screenshots. Two phrasings of one question are one subject, so the shortlist is the same length and one picture answers the whole family. They widen what a page ranks for, which is what goes into the title, the H1 and the subheads._",
+        "",
+        "`keywords` to see them with their ranks, then `keywords approve 411-423` for the ones worth keeping."
+      );
+
+      await say(clientId, lines.join("\n"));
+      await refreshKeywordCard(clientId);
+    },
   };
 }
 

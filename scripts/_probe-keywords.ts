@@ -217,6 +217,33 @@ check(
   "and each line is still classified on its own: the outcome promise is a hook",
   pasted?.kind === "add" && classifyUse("query", pasted.phrases[1]) === "hook" && classifyUse("query", pasted.phrases[2]) === "query"
 );
+
+// ‼️ `pick:` IS `add:` PLUS THE SELECTION, AND THE TWO VERBS MUST NOT COLLAPSE INTO ONE. Measured on
+// SRT Agency 2026-09-24: pasting fifteen chosen phrases stored fifteen rows and approved none of
+// them, because addCommand only approves into an approval that already exists and the client was at
+// zero. `keywords shortlist` then correctly answered "no approved queries yet" about a list somebody
+// had just chosen, which reads as the system losing them.
+const picked = parseKeywordCommand(
+  "keywords pick:\ndo google reviews affect chatgpt recommendations\nhow to get more google reviews for a med spa\nfront desk script for asking for reviews",
+  owner
+);
+check(
+  '"keywords pick:" with a pasted list parses as pick, not add',
+  picked?.kind === "pick" && picked.phrases.length === 3,
+  JSON.stringify(picked)
+);
+check(
+  "pick uses the same list parser as add, so numbering and headings behave identically",
+  parseKeywordCommand("keywords pick:\n1. botox cost\nNot a heading:\n2. lip filler cost", owner)?.kind === "pick"
+);
+// Both are anchored, so neither swallows the other whichever is tested first.
+check('"keywords add:" still parses as add', parseKeywordCommand("keywords add: botox cost", owner)?.kind === "add");
+check('"keywords variations" parses', parseKeywordCommand("keywords variations", owner)?.kind === "variations");
+check(
+  '"keywords variations of the offer" is dictation, not the command',
+  parseKeywordCommand("keywords variations of the offer", owner) === null
+);
+check('"keywords pick" with no colon is not a command', parseKeywordCommand("keywords pick", owner) === null);
 {
   // ‼️ THE PASTED LIST, WHICH IS WHAT ACTUALLY HAPPENED TWICE. A list with no `keywords add:` in
   // front of it matches no command grammar, so it used to fall through to the general assistant,

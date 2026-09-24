@@ -438,6 +438,26 @@ const KEYWORDS_ADD: CommandSpec = {
   mustBeOnTheCard: true,
 };
 
+/** `keywords pick:` then the list. The paste IS the selection. */
+const KEYWORDS_PICK: CommandSpec = {
+  label: "keywords pick:",
+  test: /^\s*[`*_]*keywords\s+pick\s*:/i,
+  unmistakable: /^\s*[`*_]*keywords\s+pick\s*:/i,
+  pointAt: "keyword_set",
+  what: "Keyword commands",
+  implementedIn: "src/lib/clients/client-keywords.ts",
+  mustBeOnTheCard: true,
+};
+
+const KEYWORDS_VARIATIONS: CommandSpec = {
+  label: "keywords variations",
+  test: /^\s*[`*_]*keywords\s+variations\b/i,
+  unmistakable: /^\s*[`*_]*keywords\s+variations\b/i,
+  pointAt: "keyword_set",
+  what: "Keyword commands",
+  implementedIn: "src/lib/clients/keyword-variations.ts",
+};
+
 const KEYWORDS_APPROVE: CommandSpec = {
   label: "keywords approve",
   test: /^\s*[`*_]*keywords\s+approve\b/i,
@@ -762,6 +782,8 @@ export const STEP_COMMANDS: Record<StepKey, readonly CommandSpec[]> = {
     KEYWORDS,
     KEYWORDS_PROMPT,
     KEYWORDS_ADD,
+    KEYWORDS_PICK,
+    KEYWORDS_VARIATIONS,
     KEYWORDS_APPROVE,
     KEYWORDS_APPROVE_SOME,
     KEYWORDS_DROP,
