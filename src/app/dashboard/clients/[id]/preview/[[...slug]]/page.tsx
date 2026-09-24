@@ -407,9 +407,8 @@ function PreviewBanner({
         <span style={{ display: "flex", gap: "8px", alignItems: "baseline" }}>
           <span style={{ color: "rgba(255,255,255,0.5)" }}>review flow:</span>
           {[
-            { key: "v1" as const, label: "current" },
-            { key: "panel" as const, label: "agent panel" },
-            { key: "full" as const, label: "agent full screen" },
+            { key: "panel" as const, label: "Virtual Agent" },
+            { key: "v1" as const, label: "what it replaced" },
           ].map((option) => (
             <a
               key={option.key}

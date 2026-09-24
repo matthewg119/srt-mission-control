@@ -50,14 +50,6 @@ export interface ReviewDestination {
   url: string;
 }
 
-/**
- * Where the conversation happens.
- *
- * `panel` opens over the review page and CLOSES when the walk ends, so her notes are a normal
- * page with room for the reading rail beside them. `full` is the same markup pinned to the
- * viewport, built so the two can be compared on a call. See hub.css.
- */
-export type AgentShell = "panel" | "full";
 
 interface Props {
   businessName: string;
@@ -66,7 +58,6 @@ interface Props {
   needsSpanish: boolean;
   /** `clients.language`. Distinct from needsSpanish, which is also true for "both". */
   language: string | null;
-  shell?: AgentShell;
 }
 
 interface SpeechRecognitionLike {
@@ -111,7 +102,6 @@ export function VirtualAgentClient({
   destinations,
   needsSpanish,
   language,
-  shell = "panel",
 }: Props) {
   const [answers, setAnswers] = useState<ReviewAnswers>({});
   const [edited, setEdited] = useState<string | null>(null);
@@ -528,7 +518,18 @@ export function VirtualAgentClient({
       )}
 
       {chatting && (
-        <div className={`va-shell va-shell-${shell}`}>
+        /*
+          The panel opens OVER the page and closes when the walk ends, so the masthead, her stars
+          and the client's mark stay where they were, and her notes land on a normal page with room
+          for the reading rail beside them.
+
+          ‼️ A FULL-SCREEN VARIANT WAS BUILT, WALKED AND REJECTED (2026-09-24). It deleted the
+          masthead and the client's mark, which are the only things making reviews.{domain} look
+          like the same business as learn.{domain}, and it put the notes step, the rail, the
+          attestation, the destination links and the private note inside one fixed scrolling
+          column. If somebody proposes it again, that is what it costs.
+        */
+        <div className="va-shell">
           <div className="va-scrim" aria-hidden="true" />
           <div
             className="va-panel"

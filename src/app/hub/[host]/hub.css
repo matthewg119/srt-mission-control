@@ -590,37 +590,32 @@ body:has(.hub-root) {
 }
 .va-panel:focus { outline: none; }
 
-/* panel: a card floating over the review page, bottom right on a wide screen. The page, the
-   masthead and her stars stay visible behind it, which is what makes this read as an agent
-   joining rather than a navigation. */
-.va-shell-panel .va-panel {
+/* A card floating over the review page, bottom right on a wide screen. The page, the masthead
+   and her stars stay visible behind it, which is what makes this read as an agent joining
+   rather than a navigation.
+
+   ‼️ A FULL-SCREEN VARIANT LIVED HERE AND WAS REJECTED ON 2026-09-24. It was one ruleset
+   over identical markup, which is exactly why it was cheap to build, walk and delete. What it
+   cost: the masthead and the client's mark, and a notes step with the reading rail inside a
+   fixed scrolling column. */
+.va-shell .va-panel {
   right: 1.5rem;
   bottom: 1.5rem;
   width: min(28rem, calc(100vw - 3rem));
   height: min(38rem, calc(100vh - 3rem));
 }
 
-/* full: the same markup, pinned. Kept as one ruleset so the two can be compared on a call and
-   the loser deleted without touching the component. */
-.va-shell-full .va-scrim { display: none; }
-.va-shell-full .va-panel {
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  border-radius: 0;
-  box-shadow: none;
-}
 
 /* On a phone both shells are the screen. A 28rem card floating inside a 375px viewport is a card
    with no room for a keyboard under it. */
 @media (max-width: 40rem) {
-  .va-shell-panel .va-panel {
+  .va-shell .va-panel {
     inset: 0;
     width: 100%;
     height: 100%;
     border-radius: 0;
   }
-  .va-shell-panel .va-scrim { display: none; }
+  .va-shell .va-scrim { display: none; }
 }
 
 .va-head {

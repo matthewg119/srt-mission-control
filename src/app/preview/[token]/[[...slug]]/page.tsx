@@ -319,9 +319,8 @@ function PreviewRibbon({
         <span style={{ display: "flex", gap: "10px", alignItems: "baseline" }}>
           <span style={{ opacity: 0.6 }}>review flow:</span>
           {[
-            { key: "v1", label: "current" },
-            { key: "panel", label: "agent panel" },
-            { key: "full", label: "agent full screen" },
+            { key: "panel", label: "Virtual Agent" },
+            { key: "v1", label: "what it replaced" },
           ].map((choice) => (
             <a
               key={choice.key}

@@ -73,10 +73,11 @@ const DEMO_CLIENT: HubClient = {
   skin: null,
 };
 
+// ‼️ `panel` IS THE LIVE FLOW NOW, and `v1` is kept here because a demo that can only show the
+// winner cannot show what changed. Full screen was walked on 2026-09-24 and rejected.
 const ENGINES = [
-  { key: "v1", label: "current", note: "Four questions, four stacked answers, notes above the box." },
-  { key: "panel", label: "agent panel", note: "The agent opens over the page and closes when the walk ends." },
-  { key: "full", label: "agent full screen", note: "Same markup, pinned to the viewport. Look at the notes step." },
+  { key: "panel", label: "Virtual Agent", note: "Live. Six questions, three of them behind a yes or no." },
+  { key: "v1", label: "what it replaced", note: "The four-question chat, kept as the rollback." },
 ] as const;
 
 export default function AgentDemo({

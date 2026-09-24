@@ -5,7 +5,7 @@ import type { HubClient } from "@/lib/hub/resolve";
 import { HubLogo } from "@/components/hub/hub-bodies";
 import { REVIEW_PLATFORMS } from "@/lib/hub/review-destinations";
 import { ReferralEngineClient, type ChatLook, type ReviewDestination } from "./referral-engine-client";
-import { VirtualAgentClient, type AgentShell } from "./virtual-agent-client";
+import { VirtualAgentClient } from "./virtual-agent-client";
 
 /**
  * The three chat looks, and the one everybody gets.
@@ -32,20 +32,32 @@ export function readLook(raw: string | string[] | undefined): ChatLook {
 /**
  * Which review flow to render, and the one every customer gets.
  *
- * ‼️ A SEPARATE AXIS FROM `look`, DELIBERATELY. `look` picks one of three CSS skins over the v1
- * chat's markup; this picks which chat exists at all. Folding them into one parameter would make
- * "v1, editorial" and "v2, full screen" unrequestable, and would hand the v2 client a value that
- * names a ruleset written for a component it is not.
+ * ‼️ CUT OVER TO `panel` ON 2026-09-24 (Matthew, having walked all three). This is the live
+ * default now: a customer on reviews.{domain} gets the Virtual Agent and the six questions.
+ * The printed QR card follows on its own, because CARD_QUESTIONS in review-script.ts is derived
+ * from the walk rather than kept by hand.
  *
- * ‼️ AND THE LIVE ROUTE NEVER CALLS THIS. hub/[host]/page.tsx renders <ReferralEngine client={...} />
- * with no engine, so DEFAULT_ENGINE is what reviews.{domain} serves and a customer cannot opt into
- * an unfinished flow by typing a query string. Only the two previews pass it. Cutover is changing
- * one word below, which is also the moment LIVE_QUESTIONS in review-assemble.ts moves so the
- * printed QR card stops naming questions the walk no longer asks.
+ * ‼️ `full` IS GONE, AND IT WAS REJECTED FOR THE REASON IT WAS BUILT TO TEST. Full screen deleted
+ * the masthead and the client's mark, and put the notes step, the reading rail, the attestation,
+ * the destination links and the private note inside a fixed scrolling column. The panel closes
+ * when the walk ends and hands her a normal page, which is where all of that belongs.
+ *
+ * ‼️ `v1` STAYS SELECTABLE IN THE PREVIEWS AND IS NOT THE DEFAULT ANY MORE. It is the flow that
+ * was live until today, so it is the rollback: if the Virtual Agent turns out to cost completions,
+ * changing one word below puts the old one back with no other edit. Delete it once the new one has
+ * run long enough to trust, and delete the probe's second CLIENTS entry with it.
+ *
+ * ‼️ A SEPARATE AXIS FROM `look`, DELIBERATELY. `look` picks one of three CSS skins over the v1
+ * chat's markup; this picks which chat exists at all. Folding them into one parameter would hand
+ * the v2 client a value that names a ruleset written for a component it is not.
+ *
+ * ‼️ THE LIVE ROUTE STILL NEVER CALLS readEngine. hub/[host]/page.tsx renders <ReferralEngine
+ * client={...} /> with no engine, so what reviews.{domain} serves is decided HERE and not by a
+ * query string a visitor can type. Only the previews pass one.
  */
-const ENGINES = ["v1", "panel", "full"] as const;
+const ENGINES = ["v1", "panel"] as const;
 export type ReviewEngine = (typeof ENGINES)[number];
-const DEFAULT_ENGINE: ReviewEngine = "v1";
+const DEFAULT_ENGINE: ReviewEngine = "panel";
 
 /** Anything unrecognised is the default. Same rule as readLook: the value reaches a class name. */
 export function readEngine(raw: string | string[] | undefined): ReviewEngine {
@@ -155,7 +167,6 @@ export function ReferralEngine({
           destinations={destinations}
           needsSpanish={needsSpanish}
           language={language}
-          shell={engine as AgentShell}
         />
       )}
     </>

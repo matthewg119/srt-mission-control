@@ -443,7 +443,13 @@ const cardText = pdfText(
 
 ok("the card carries the clinic name", /Acme Med Spa/.test(cardText));
 ok("and the promise", /Ninety seconds/.test(cardText));
-ok("and the four questions come from REVIEW_QUESTIONS", /worried about before you came in/.test(cardText));
+// ‼️ THE GATE'S OWN WORDING, NOT THE FOLLOW-UP'S. The card prints what she is asked without
+// conditions: the three free-text questions plus the three yes/no gates. If this ever matches
+// "What were they?" or "Tell us about it." the card has started printing follow-ups, which read
+// as nonsense in a numbered list on card stock.
+ok("the card names the service question", /What service did you get done with us/.test(cardText));
+ok("and asks the gate, not its follow-up", /Did you have any expectations/.test(cardText));
+ok("and never prints a bare follow-up", !/Tell us about it|What were they/.test(cardText));
 ok("and the reassurance", /Nothing is posted unless you post it/.test(cardText));
 // ‼️ Every one of these is a rule from the build spec, not a style preference.
 ok("no star rating", !/star/i.test(cardText));

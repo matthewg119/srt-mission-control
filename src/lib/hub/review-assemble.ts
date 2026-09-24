@@ -162,14 +162,6 @@ export const REVIEW_QUESTIONS_V4: ReviewQuestion[] = [
  */
 export const ALL_REVIEW_QUESTIONS: ReviewQuestion[] = [...REVIEW_QUESTIONS, ...REVIEW_QUESTIONS_V4];
 
-/**
- * What the tool actually asks a customer today.
- *
- * ONE constant, so the printed QR card and the live walk cannot drift. At cutover this becomes
- * REVIEW_QUESTIONS_V4 and the card, the walk and the heading on the card's back page all move
- * together. artifacts/review-card.ts reads this and nothing else.
- */
-export const LIVE_QUESTIONS: ReviewQuestion[] = REVIEW_QUESTIONS;
 
 /** The stamp a v4 row carries. v3 rows keep QUESTION_SET_VERSION above and nothing rewrites them. */
 export const QUESTION_SET_VERSION_V4 = "v4";

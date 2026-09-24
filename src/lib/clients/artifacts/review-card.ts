@@ -12,13 +12,12 @@
 // So the accent colour comes from clients.theme and NOTHING ELSE DOES. There is no per-client
 // wording hook here and there must not be one.
 //
-// ‼️ THE QUESTIONS ARE IMPORTED, NEVER RETYPED, AND SO IS HOW MANY THERE ARE. LIVE_QUESTIONS
-// in hub/review-assemble.ts is the one definition of what the tool asks TODAY. A card whose
-// questions have drifted from the ones the tool actually asks is worse than no card: she reads
-// one thing on paper and is asked another on screen, and card stock cannot be redeployed.
-//
-// There are two sets in that file now. LIVE_QUESTIONS points at whichever one a real customer
-// walks, so the cutover to v4 is one word there and this file follows it, count and all.
+// ‼️ THE QUESTIONS ARE DERIVED FROM THE WALK, NEVER RETYPED, AND SO IS HOW MANY THERE ARE.
+// CARD_QUESTIONS in hub/review-script.ts is built by reading REVIEW_SCRIPT: every question she
+// is asked unconditionally, plus the yes/no gates, and not the follow-ups that only exist after
+// a Yes. A card whose questions have drifted from the ones the tool actually asks is worse than
+// no card, because she reads one thing on paper and is asked another on screen, and card stock
+// cannot be redeployed.
 //
 // ‼️ NO MODEL IN THIS PATH, like everything else in the AI Referral Engine. Nothing here generates,
 // rewrites or suggests review content. FTC 16 CFR Part 465 regulates a tool that GENERATES
@@ -41,7 +40,7 @@
 
 import QRCode from "qrcode";
 import { supabaseAdmin } from "@/lib/db";
-import { LIVE_QUESTIONS } from "@/lib/hub/review-assemble";
+import { CARD_QUESTIONS, fillBusiness } from "@/lib/hub/review-script";
 
 const COUNT_WORDS = [
   "No",
@@ -63,7 +62,7 @@ const COUNT_WORDS = [
  * hardcoded four is a stack of card stock in a clinic promising something the page does not do,
  * and card stock cannot be redeployed.
  */
-const QUESTION_COUNT = COUNT_WORDS[LIVE_QUESTIONS.length] ?? String(LIVE_QUESTIONS.length);
+const QUESTION_COUNT = COUNT_WORDS[CARD_QUESTIONS.length] ?? String(CARD_QUESTIONS.length);
 import { readTheme, activeTheme } from "@/lib/hub/theme";
 import {
   startDoc,
@@ -179,11 +178,14 @@ export async function renderReviewCard(input: ReviewCardInput): Promise<Buffer> 
   doc.text(`${QUESTION_COUNT} questions`, PAGE_W / 2, state.y, { align: "center" });
   state.y += 14;
 
-  LIVE_QUESTIONS.forEach((q, i) => {
+  CARD_QUESTIONS.forEach((prompt, i) => {
     doc.setFontSize(11);
     doc.setFont("helvetica", "normal");
     setColor(doc, "text", WHITE);
-    const lines = doc.splitTextToSize(`${i + 1}. ${q.prompt}`, CONTENT_W - 16) as string[];
+    // One question carries the business name. fillBusiness is the same substitution the screen
+    // does, so the card cannot say it differently.
+    const line = `${i + 1}. ${fillBusiness(prompt, input.clinicName)}`;
+    const lines = doc.splitTextToSize(line, CONTENT_W - 16) as string[];
     doc.text(lines, MARGIN + 8, state.y);
     state.y += lines.length * 6 + 8;
   });

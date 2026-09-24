@@ -142,6 +142,35 @@ export const REVIEW_SCRIPT: ScriptStep[] = [
 export const GATE_IDS: string[] = REVIEW_SCRIPT.filter((s) => s.kind === "gate").map((s) => s.id);
 
 /**
+ * What she is asked, in order, for anything that has to READ ON ITS OWN.
+ *
+ * ‼️ THIS IS NOT REVIEW_QUESTIONS_V4, AND PRINTING THAT INSTEAD WOULD BE NONSENSE ON CARD STOCK.
+ * Three of those six are FOLLOW-UPS: "What were they?" and "Tell us about it." twice. On screen
+ * they arrive after she has already said Yes and they read as somebody listening. In a numbered
+ * list on the back of a card at a clinic counter they read as a bug. So a gate stands in for the
+ * pair it guards: "Did you have any expectations before you came in?" is the question she is
+ * actually asked, and the follow-up only exists if she says yes.
+ *
+ * ‼️ DERIVED FROM THE WALK, NEVER RETYPED. The printed card is the one surface that cannot be
+ * redeployed: a stack of it sits on a counter for months. A hand-kept copy of the questions is a
+ * copy that drifts, and the drift is discovered by a customer reading one thing on paper and being
+ * asked another on her phone. Change the script and the card follows in the same commit.
+ */
+export const CARD_QUESTIONS: string[] = (() => {
+  const guarded = new Set(
+    REVIEW_SCRIPT.filter((s): s is Extract<ScriptStep, { kind: "gate" }> => s.kind === "gate").map(
+      (s) => s.onYes
+    )
+  );
+  const out: string[] = [];
+  for (const step of REVIEW_SCRIPT) {
+    if (step.kind === "gate") out.push(step.prompt);
+    else if (step.kind === "ask" && !guarded.has(step.id)) out.push(step.prompt);
+  }
+  return out;
+})();
+
+/**
  * The step after `index`, given how a gate at `index` was answered.
  *
  * ‼️ IT ONLY EVER COUNTS FORWARD. A No skips the one ask the gate guards; a Yes walks into it.
