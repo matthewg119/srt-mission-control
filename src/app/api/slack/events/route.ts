@@ -229,6 +229,24 @@ export async function POST(request: NextRequest) {
         });
         if (proposalHandled) return NextResponse.json({ ok: true });
 
+        // Step 12 keyword cards: ✅ keeps it, ✖ steps back one, 🔄 writes more ways to say it.
+        //
+        // ‼️ BELOW THE GUARDIAN AND THE FIELD PROPOSAL, ABOVE EVERYTHING ELSE. Those two are also
+        // keyed on a card's own ts and also own ✅, and they were placed first deliberately. Every
+        // handler below this one self-routes through content_jobs, so a keyword card cannot collide
+        // with any of them; sitting high means a ✅ on a keyword card is answered without first
+        // missing fifteen other lookups.
+        // Imported here rather than at the top, the way every other clients-lane module in this file
+        // is, so a reaction in a content channel does not pull the onboarding lane into memory.
+        const { handleKeywordCardReaction } = await import("@/lib/clients/keyword-decisions");
+        const keywordCardHandled = await handleKeywordCardReaction({
+          reaction: event.reaction as string,
+          slackTs: event.item.ts as string,
+          channel: event.item.channel as string,
+          userId: event.user as string,
+        });
+        if (keywordCardHandled) return NextResponse.json({ ok: true });
+
         // Unified content pipeline (Content Engine v2): ✅/🚫 ideate gate + 1️⃣/2️⃣/3️⃣ shot pick
         // for ANY registry format (attic B-roll, jumpscare, ...). Self-routes by the
         // content_jobs table; returns false for non-pipeline messages so legacy handlers still run.
@@ -1261,8 +1279,19 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        // 1a-quater-bis. A Google screenshot dropped in step 12's thread with `keywords serp 12` as
-        // the caption.
+        // 1a-quater-bis. A Google screenshot dropped in step 12's thread. No caption needed.
+        //
+        // ‼️ THE CAPTION USED TO BE COMPULSORY AND THAT WAS THE BUG. This branch required
+        // `keywords serp N` to match exactly, so a screenshot pasted on its own fell past every
+        // branch below to the upload catch-all, was filed into client_docs, and Slack said NOTHING.
+        // The query is in the search box of every one of these pictures, so the number never needed
+        // typing: serp-read.ts reads it back as queryOnScreen and resolveFromScreen matches it
+        // against the shortlist. `keywords serp N` is now an OVERRIDE for the ambiguous cases.
+        //
+        // ‼️ EVERY IMAGE IN THE MESSAGE IS READ, NOT THE FIRST. This used to be
+        // `attachedFiles.find(...)`, which silently read one and filed the rest, and one card per
+        // screenshot is the whole point: "only one keyword per message so i can paste more than 1
+        // screenshot".
         //
         // ‼️ IT MUST SIT ABOVE THE TYPED-COMMAND CHAIN BELOW, AND captureOnboardingUploads IS NOT
         // THE HAZARD. That chain is gated on `userText.trim().length > 0` and does NOT exclude
@@ -1281,32 +1310,37 @@ export async function POST(request: NextRequest) {
         if (client && parentThreadTs && attachedFiles.length > 0 && client.stepKey === "keyword_set") {
           const { KEYWORDS_SERP } = await import("@/lib/clients/keyword-strategy-rules");
           const serpAsk = KEYWORDS_SERP.exec(userText.trim());
-          const { SERP_VISION_TYPES } = await import("@/lib/clients/serp-read");
-          const shot = attachedFiles.find(
+          const { SERP_VISION_TYPES, MAX_SERP_BYTES } = await import("@/lib/clients/serp-read");
+          const shots = attachedFiles.filter(
             (f) => SERP_VISION_TYPES.has((f.mimetype ?? "").toLowerCase()) && f.url_private_download
           );
 
-          if (serpAsk && shot) {
+          if (shots.length) {
             const clientId = client.id;
             const clientLegalName = client.legalName;
-            const n = Number(serpAsk[1]);
+            // ‼️ A NUMBER ONLY WHEN ONE WAS TYPED. null means "read the search box", which is the
+            // normal path now. With several pictures in one message a single number cannot be right
+            // for all of them, so it is ignored: each one finds its own keyword.
+            const typedN = serpAsk && shots.length === 1 ? Number(serpAsk[1]) : null;
             const by = event.user ? `<@${event.user as string}>` : "someone in Slack";
             const threadTs = parentThreadTs;
 
             const said = await slack.postThreadReply(
               channel,
               threadTs,
-              `:hourglass_flowing_sand: Reading that results page for \`${n}\`. A few seconds.`
+              shots.length === 1
+                ? `:hourglass_flowing_sand: Reading that results page${typedN ? ` for \`${typedN}\`` : ""}. A few seconds.`
+                : `:hourglass_flowing_sand: Reading ${shots.length} results pages, one card each. A few seconds.`
             );
             if (!slackOk(said)) console.error("[slack/events] serp ack failed");
 
             waitUntil(
               (async () => {
-                // File it first, exactly as it would have been filed without this branch, then
-                // look the row up by the Slack file id. captureOnboardingUploads returns void, and
+                // File them first, exactly as they would have been filed without this branch, then
+                // look each row up by its Slack file id. captureOnboardingUploads returns void, and
                 // client_docs.slack_file_id is unique, so the lookup is the honest way to learn
                 // which row it wrote. A miss costs the verdict its screenshot link, nothing else.
-                let docId: string | null = null;
+                const docIds = new Map<string, string>();
                 try {
                   await captureOnboardingUploads({
                     channel,
@@ -1318,42 +1352,54 @@ export async function POST(request: NextRequest) {
                   const { supabaseAdmin } = await import("@/lib/db");
                   const { data } = await supabaseAdmin
                     .from("client_docs")
-                    .select("id")
-                    .eq("slack_file_id", shot.id)
-                    .maybeSingle();
-                  docId = (data?.id as string) ?? null;
+                    .select("id, slack_file_id")
+                    .in("slack_file_id", shots.map((s) => s.id));
+                  for (const row of data ?? []) {
+                    const fileId = row.slack_file_id as string | null;
+                    if (fileId) docIds.set(fileId, row.id as string);
+                  }
                 } catch (e) {
                   console.error("[slack/events] serp capture failed:", (e as Error).message);
                 }
 
-                const buf = await slack.downloadFile(shot.url_private_download as string).catch(() => null);
-                if (!buf) {
-                  await slack.postThreadReply(channel, threadTs, ":warning: I could not download that screenshot from Slack. Post it again, or type `keywords serp " + n + ": merge`.");
-                  return;
-                }
-                // The same 6 MB ceiling every other vision reader in this repo uses. Anthropic
-                // answers an oversized request with a 413, which is not retried.
-                if (buf.byteLength > 6 * 1024 * 1024) {
-                  await slack.postThreadReply(channel, threadTs, ":warning: That screenshot is over 6 MB, which is too large to read. Post a smaller one, or type `keywords serp " + n + ": merge`.");
-                  return;
-                }
-
                 const { recordSerpScreenshot } = await import("@/lib/clients/keyword-strategy");
-                const res = await recordSerpScreenshot({
-                  clientId,
-                  n,
-                  image: { media_type: (shot.mimetype as string).toLowerCase(), data: buf.toString("base64") },
-                  by,
-                  docId,
-                });
                 const { postClientReply } = await import("@/lib/clients/client-events");
-                await postClientReply({
-                  clientId,
-                  stepKey: "keyword_set",
-                  channel,
-                  threadTs,
-                  text: res.message,
-                }).catch(() => {});
+
+                // ‼️ ONE AT A TIME, NOT Promise.all. Each read is a vision call and each card is a
+                // Slack post; firing twelve at once would race the card writes and rate limit the
+                // posts, and the cards would land in an order nobody chose.
+                for (const shot of shots) {
+                  const buf = await slack.downloadFile(shot.url_private_download as string).catch(() => null);
+                  if (!buf) {
+                    await slack.postThreadReply(channel, threadTs, ":warning: I could not download one of those screenshots from Slack. Post it again.");
+                    continue;
+                  }
+                  // The same ceiling every other vision reader in this repo uses. Anthropic answers
+                  // an oversized request with a 413, which is not retried.
+                  if (buf.byteLength > MAX_SERP_BYTES) {
+                    await slack.postThreadReply(channel, threadTs, ":warning: One of those screenshots is over 6 MB, which is too large to read. Post a smaller one.");
+                    continue;
+                  }
+
+                  const res = await recordSerpScreenshot({
+                    clientId,
+                    n: typedN,
+                    image: { media_type: (shot.mimetype as string).toLowerCase(), data: buf.toString("base64") },
+                    by,
+                    docId: docIds.get(shot.id) ?? null,
+                  });
+
+                  // A card was posted, so there is nothing to say. Only a refusal, an ambiguity or
+                  // an unreadable picture carries a message.
+                  if (!res.message) continue;
+                  await postClientReply({
+                    clientId,
+                    stepKey: "keyword_set",
+                    channel,
+                    threadTs,
+                    text: res.message,
+                  }).catch(() => {});
+                }
               })().catch((e) => console.error("[slack/events] serp screenshot threw:", (e as Error).message))
             );
             return NextResponse.json({ ok: true });

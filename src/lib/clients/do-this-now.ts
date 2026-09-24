@@ -159,8 +159,10 @@ export const STEP_ACTIONS: Record<StepKey, StepAction> = {
       "‼️ `keywords pick:` then the list, one per line: it stores them AND selects them, and hands back the numbers. `keywords add:` stores without selecting.",
       "`keywords variations` writes more ways to say the ones you picked. `keywords` to see the set, `keywords drop 4, 9` for anything off-offer.",
       "`keywords approve 411-423` locks only the ones you picked. `keywords approve mine` locks the ones you typed. Bare `keywords approve` takes all of them.",
-      "`keywords shortlist` then picks the 25 subjects worth googling. Paste each screenshot with `keywords serp 12` in the message. Nothing is used until its picture is on file.",
+      "`keywords shortlist` then picks the 25 subjects worth googling. Google each one and **paste the screenshot here with no caption**: it reads the search box and posts that keyword's own card. Several in one message is fine, one card each.",
+      "On each card: :white_check_mark: keeps it, :x: steps back one, :arrows_counterclockwise: writes more ways to say it. The target is 20 kept. Nothing is used until its picture is on file.",
       "`strategy` groups them into clusters, `serp cards` puts the pictures and the scores in this thread to approve. `strategy approve` locks it, then press Done.",
+      "‼️ `keywords delete all` empties the set and asks once before it does. Use it to paste a fresh list over the top of a bad one.",
     ],
   },
   custom_question_set: {

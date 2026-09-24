@@ -473,6 +473,14 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
         userId,
         value: action.value ?? "",
       });
+
+    // The second press of `keywords delete all`. The FIRST press is typing those three words, which
+    // only drew this button; this is where anything is actually destroyed.
+    case "kwdelete_all":
+      return keywordWipeAction({
+        userId,
+        value: action.value ?? "",
+      });
     // ── Where the review page's Post button sends a customer ──
     case "review_link_open":
       return reviewLinkOpenAction({
@@ -2575,6 +2583,58 @@ async function serpGateAction(args: {
         text,
       }).catch(() => {});
     })().catch((e) => console.error("[slack/actions] serp gate action threw:", (e as Error).message))
+  );
+
+  return NextResponse.json({ ok: true });
+}
+
+/**
+ * Empty a client's keyword set, having been asked twice.
+ *
+ * ‼️ IT REPLIES INTO THE STEP THREAD, NOT UNDER THE BUTTON. The button is the last thing in a
+ * conversation that is about to be deleted, and the answer belongs where the set lives so the next
+ * person reading step 12 can see what happened to it.
+ */
+async function keywordWipeAction(args: { userId: string; value: string }): Promise<NextResponse> {
+  const [clientId, expectedRaw] = args.value.split(":");
+  const expected = Number(expectedRaw);
+  if (!clientId || !Number.isFinite(expected)) return NextResponse.json({ ok: true });
+  const by = `<@${args.userId}>`;
+
+  waitUntil(
+    (async () => {
+      const { deleteEveryKeyword } = await import("@/lib/clients/client-keywords");
+      const { notifyStep } = await import("@/lib/clients/step-board");
+      const res = await deleteEveryKeyword({ clientId, by, expected });
+
+      if (!res.ok) {
+        await notifyStep(
+          clientId,
+          "keyword_set",
+          res.current !== undefined
+            ? `:warning: Nothing was deleted: ${res.error}. Type \`keywords delete all\` again for a fresh count.`
+            : `:warning: Nothing was deleted: ${res.error}`
+        ).catch(() => {});
+        return;
+      }
+
+      const d = res.deleted;
+      await notifyStep(
+        clientId,
+        "keyword_set",
+        [
+          `:wastebasket: The keyword set is empty (${by}).`,
+          `Deleted *${d.keywords}* keywords, *${d.reads}* SERP readings and *${d.clusters}* clusters${d.locked ? ", and the locked strategy" : ""}.`,
+          "The snapshot is in `keyword_runs` and every past decision is still in `keyword_decisions`.",
+          "",
+          "`keywords pick:` then the list, one per line, starts the new set.",
+        ].join("\n")
+      ).catch(() => {});
+
+      // The card still shows the old counts until it is redrawn.
+      const { postStep } = await import("@/lib/clients/step-engine");
+      await postStep(clientId, "keyword_set").catch(() => {});
+    })().catch((e) => console.error("[slack/actions] keyword wipe threw:", (e as Error).message))
   );
 
   return NextResponse.json({ ok: true });

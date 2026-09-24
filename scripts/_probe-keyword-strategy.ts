@@ -73,6 +73,16 @@ function finalist(phrase: string, opts: Partial<Finalist> = {}): Finalist {
     readEvidence: null,
     docId: null,
     slackFileId: null,
+    answerShape: null,
+    assetFit: null,
+    assetIdeas: [],
+    assetIdeasBy: null,
+    queryOnScreen: null,
+    deliverables: { script: false, steps: false, checklist: false, videos: false },
+    cardTs: null,
+    selectedAt: null,
+    selectedBy: null,
+    variationOf: null,
     ...opts,
   };
 }

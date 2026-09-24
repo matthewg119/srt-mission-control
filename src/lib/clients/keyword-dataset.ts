@@ -153,7 +153,18 @@ export type KeywordDecisionAction =
   // it, so it belongs in the same history as the approve that put them there.
   | "approve_cluster"
   | "reject_cluster"
-  | "set_magnet";
+  | "set_magnet"
+  // The decision cards, added 2026-09-27. `select` and `unselect` are the reaction taken on one
+  // keyword's own card, `variation` is a phrase written because somebody asked for more ways to say
+  // one, and `delete_all` is the whole set being thrown away on purpose.
+  //
+  // ‼️ EACH OF THESE NEEDS docs/2026-09-27-keyword-decision-cards.sql TO HAVE RUN. The CHECK on
+  // keyword_decisions.action refuses an unknown word, and recordKeywordDecisions swallows its own
+  // errors by design, so a decision recorded before that migration is lost without a sound.
+  | "select"
+  | "unselect"
+  | "variation"
+  | "delete_all";
 
 export async function recordKeywordDecisions(args: {
   clientId: string;

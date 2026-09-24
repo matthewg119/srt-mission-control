@@ -50,6 +50,34 @@ export interface SerpRead {
    * is quoted in. Terms, never a phrase. Shape, not content.
    */
   vocabulary: string[];
+  /**
+   * The text in the search box at the top of the screenshot.
+   *
+   * ‼️ A SEARCH, NOT A CLAIM, which is the same licence paaQuestions carries and the only reason
+   * this field is allowed to exist. It is what lets a screenshot find its own keyword with nobody
+   * typing a number, and what makes a picture filed against the wrong keyword VISIBLE: before it,
+   * `keywords serp 4` over a picture of a different search cleared keyword 4's gate and nothing
+   * anywhere could tell. Capped in serp-read.ts, in code.
+   */
+  queryOnScreen: string | null;
+  /**
+   * ── The four deliverable observables. Each one is a question about a PICTURE. ──
+   *
+   * ‼️ THESE ARE TRANSCRIPTION AND answerShapeFrom IS THE JUDGEMENT, and keeping them apart is the
+   * whole reason this file can be argued with. "Is there a quoted script in the AI Overview" is
+   * something that is either on the screen or not. "Is this worth building a tool for" is a rule.
+   *
+   * Words on the screen somebody is meant to SAY or SEND: a line to read to a customer, a text
+   * message, an email. The strongest signal there is, because a script is the one deliverable that
+   * is finished the moment it is written.
+   */
+  hasScript: boolean | null;
+  /** A numbered or ordered list of things to do, on the screen. */
+  hasSteps: boolean | null;
+  /** A list of things to tick, a form, or something printable, on the screen. */
+  hasChecklist: boolean | null;
+  /** Video results in the visible list: a video carousel, a YouTube result. */
+  videosRank: boolean | null;
   /** One short phrase naming what was on screen. Never a paragraph. */
   evidence: string;
   /** 0..1. Below MIN_LEGIBLE the reading is not trusted whatever it says. */
@@ -60,6 +88,19 @@ export type ResultShape = "articles" | "listings" | "products" | "mixed";
 export const RESULT_SHAPES: readonly ResultShape[] = ["articles", "listings", "products", "mixed"];
 export function isResultShape(v: unknown): v is ResultShape {
   return typeof v === "string" && (RESULT_SHAPES as readonly string[]).includes(v);
+}
+
+/**
+ * What the search wants: a thing to DO, or a thing to KNOW.
+ *
+ * Text, not an enum, for the reason RESULT_SHAPES is: the CHECK lives in
+ * docs/2026-09-27-keyword-decision-cards.sql and scripts/_probe-keyword-cards.ts asserts the two
+ * lists agree, so neither can drift without something going red.
+ */
+export type AnswerShape = "task" | "fact" | "mixed";
+export const ANSWER_SHAPES: readonly AnswerShape[] = ["task", "fact", "mixed"];
+export function isAnswerShape(v: unknown): v is AnswerShape {
+  return typeof v === "string" && (ANSWER_SHAPES as readonly string[]).includes(v);
 }
 
 /** What follows from the reading. What the SERP IS. */
@@ -280,6 +321,89 @@ export function citationValueFrom(
   return clamp05(score);
 }
 
+/**
+ * Is this search asking to be DONE, or to be UNDERSTOOD?
+ *
+ * ‼️ A TASK HAS A DELIVERABLE ON THE SCREEN AND A FACT IS AN EXPLANATION, and that single line is
+ * the whole rule. A script, an ordered list of moves, a thing with boxes to tick: somebody wants to
+ * go and do a thing, and is looking for the thing itself. An explanation, however long and however
+ * good, is somebody wanting to know.
+ *
+ * ‼️ IT IS A DIFFERENT QUESTION FROM BOTH SCORES ABOVE. clickValueFrom asks whether anybody lands on
+ * the page and citationValueFrom asks whether we can be named in the answer. This asks whether there
+ * is anything to BUILD here, and a query can score badly on both of those and still be the best
+ * thing on the shortlist because the deliverable is sitting on the screen waiting to be done better.
+ *
+ * ‼️ null IS A REAL ANSWER AND IS NOT "fact". None of the three deliverable questions was legible,
+ * so nobody has looked. Collapsing that into `fact` would tell somebody there is nothing to build
+ * here on the strength of a screenshot that was cropped, which is the failure every tri-state on
+ * this read exists to prevent.
+ */
+export function answerShapeFrom(
+  read: Pick<SerpRead, "hasScript" | "hasSteps" | "hasChecklist" | "forumRanks" | "localPack" | "resultShape">
+): AnswerShape | null {
+  const looked = read.hasScript !== null || read.hasSteps !== null || read.hasChecklist !== null;
+  if (!looked) return null;
+
+  const deliverable = read.hasScript === true || read.hasSteps === true || read.hasChecklist === true;
+  if (!deliverable) return "fact";
+
+  // A deliverable IS on the screen, and the page is also answering a different question underneath
+  // it: a forum ranking is people reaching for somebody's lived answer, and a map pack is the
+  // engines answering "who near me". Either one means the deliverable is not the whole of what is
+  // being asked, and a page that only ships the deliverable would miss half the search.
+  if (read.forumRanks === true || read.localPack === true || read.resultShape === "listings") return "mixed";
+
+  return "task";
+}
+
+/**
+ * How much of a thing worth building is already visible on the results page?
+ *
+ * Reads UP from 0, the mirror of citationValueFrom, because a page with no deliverable on it should
+ * score nothing rather than lose points from a start it never earned.
+ *
+ * ‼️ A SCRIPT ON SCREEN IS THE TOP OF THE SCALE. Words somebody says out loud are the one deliverable
+ * that can be handed over whole, and Google printing a thin version of it is the strongest evidence
+ * there is both that the thing IS a deliverable and that ours can be better.
+ *
+ * ‼️ AN EXPLANATION SCORES 0, ALWAYS, and the early return is what guarantees it. The two weaker
+ * signals only count where a deliverable is already there: a video beside an explanation is somebody
+ * explaining on camera, which is not a thing to open.
+ *
+ * ‼️ NOT magnetSpace, AND THE TWO MUST NOT BE MERGED. magnetSpace asks "is there anything left to
+ * trade for an email". This asks "could we build the thing that WINS this SERP". A front desk script
+ * scores high on both; a pricing calculator scores high here and low there, because the number it
+ * gives away is the whole of what it had. If they turn out to be the same number on real data, delete
+ * one then, on the evidence.
+ */
+export function assetFitFrom(
+  read: Pick<SerpRead, "hasScript" | "hasSteps" | "hasChecklist" | "videosRank" | "aiOverviewSatisfies">
+): number {
+  const deliverable = read.hasScript === true || read.hasSteps === true || read.hasChecklist === true;
+  if (!deliverable) return 0;
+
+  let score = 0;
+
+  // The top of the scale. A script is finished the moment it is written, and nobody writes good ones.
+  if (read.hasScript === true) score += 3;
+  // A thing with boxes is a thing with a door on it, and it prints.
+  if (read.hasChecklist === true) score += 2;
+  // An order of operations is real, and it is the cheapest of the three to write.
+  if (read.hasSteps === true) score += 1;
+  // People are watching somebody DO it, which is what a doing-search looks like from the other side.
+  if (read.videosRank === true) score += 1;
+
+  // ‼️ 5 MEANS A PERSON WOULD HAVE NO REASON TO CLICK ANYTHING, in serp-read.ts's own words. On a
+  // search that has a deliverable on it, that means the deliverable ITSELF is being handed over
+  // whole on the results page, which is exactly the case this stage exists to catch: the thing being
+  // searched for is the asset. It is the biggest deduction clickValueFrom makes and an addition here,
+  // and that is not a contradiction: nobody clicks, and the thing is worth building anyway.
+  if (typeof read.aiOverviewSatisfies === "number" && read.aiOverviewSatisfies >= 5) score += 1;
+
+  return clamp05(score);
+}
+
 /** What the first screen is really asking for. */
 export function intentFrom(
   read: Pick<SerpRead, "resultShape" | "localPack">
@@ -471,6 +595,24 @@ export interface SerpReadRow {
   paaQuestions: string[];
   /** Which words the results use for it. Terms, never a phrase. */
   vocabulary: string[];
+  /** The text in the search box on this screenshot. A search, not a claim. */
+  queryOnScreen: string | null;
+  answerShape: AnswerShape | null;
+  assetFit: number | null;
+  assetIdeas: ReadonlyArray<{ kind: string; title: string; why: string }>;
+  assetIdeasBy: "model" | "person" | null;
+  /**
+   * The four observables the shape and the fit were computed FROM.
+   *
+   * ‼️ READ BACK SO THE SCORE CAN BE ARGUED WITH. answer_shape and asset_fit are derived, and a
+   * derived number nobody can see the inputs to is a number nobody can check. These are also what
+   * lets a scoring change be re-applied to every stored reading without re-reading anybody's
+   * screenshot, which is the whole reason scripts/_rescore-optimization.ts can exist for the scraper.
+   */
+  hasScript: boolean | null;
+  hasSteps: boolean | null;
+  hasChecklist: boolean | null;
+  videosRank: boolean | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -528,6 +670,36 @@ export interface Finalist {
   docId: string | null;
   /** The Slack file id of that screenshot, so the card can show the picture you already posted. */
   slackFileId: string | null;
+
+  // ── The decision card's half: is there a thing to build, and what ────────
+  /** task | fact | mixed, from answerShapeFrom. Null when nobody has looked. */
+  answerShape: AnswerShape | null;
+  /** 0..5 from assetFitFrom. How much of a thing worth building is already on the page. */
+  assetFit: number | null;
+  /** Up to three things somebody could OPEN. Shape matches AssetIdea in asset-ideas.ts. */
+  assetIdeas: ReadonlyArray<{ kind: string; title: string; why: string }>;
+  /** 'model' means the call answered, empty list included. Null means it never ran. */
+  assetIdeasBy: "model" | "person" | null;
+  /**
+   * The search box text off the newest screenshot.
+   *
+   * ‼️ READ BACK SO A MISFILED PICTURE CAN BE SEEN. It is printed on the card, which is the only
+   * place anybody would ever notice that `keywords serp 4` was pasted over a picture of something
+   * else entirely.
+   */
+  queryOnScreen: string | null;
+
+  /** What was on the screen that made it a task: a script, steps, a checklist, videos ranking. */
+  deliverables: { script: boolean; steps: boolean; checklist: boolean; videos: boolean };
+
+  /** The Slack ts of this keyword's own decision card, so a re-read edits rather than re-posts. */
+  cardTs: string | null;
+  /** It survived its screenshot. A third state, not a rename of approved. */
+  selectedAt: string | null;
+  /** Who kept it, printed on the card so a decision has a name against it. */
+  selectedBy: string | null;
+  /** The phrase this is another way of saying, when somebody asked for variations of one. */
+  variationOf: string | null;
 }
 
 /**
@@ -634,6 +806,68 @@ export function sameSubject(a: string, b: string): boolean {
   if (!wa.length || !wb.length) return false;
   const [small, large] = wa.length <= wb.length ? [wa, wb] : [wb, wa];
   return small.every((w) => large.includes(w));
+}
+
+/**
+ * Which shortlist row is this screenshot of?
+ *
+ * ‼️ THE QUERY IS ON THE SCREEN AND ALWAYS WAS, which is why the number never needed typing. The
+ * handler required `keywords serp 4` in the same message as the image, a screenshot pasted on its
+ * own fell through every branch to the upload catch-all, and Slack said nothing at all.
+ *
+ * ‼️ EXACT BEFORE CONTAINMENT, AND THAT ORDER IS THE WHOLE SAFETY. The common case is somebody
+ * googling the phrase they pasted, so an exact normalized match is both the likeliest answer and the
+ * only unambiguous one. sameSubject is containment, and containment is deliberately generous: "botox
+ * cost" is contained in "how much does botox cost near me", so leading with it would make one
+ * screenshot match three rows and score the wrong one. Containment only gets a say when nothing
+ * matched exactly, and an ambiguous containment is REFUSED rather than guessed.
+ *
+ * Indexes are into the list as given, so the caller's printed numbers are index + 1.
+ */
+export function matchQueryToShortlist(
+  query: string,
+  list: readonly { normalized: string }[]
+):
+  | { kind: "one"; index: number }
+  | { kind: "many"; indexes: number[] }
+  | { kind: "none"; nearest: number[] } {
+  const wanted = normalizePhrase(query);
+  if (!wanted) return { kind: "none", nearest: nearestTo(query, list) };
+
+  const exact: number[] = [];
+  list.forEach((row, i) => {
+    if (row.normalized === wanted) exact.push(i);
+  });
+  if (exact.length === 1) return { kind: "one", index: exact[0] };
+  if (exact.length > 1) return { kind: "many", indexes: exact };
+
+  const contained: number[] = [];
+  list.forEach((row, i) => {
+    if (sameSubject(row.normalized, wanted)) contained.push(i);
+  });
+  if (contained.length === 1) return { kind: "one", index: contained[0] };
+  if (contained.length > 1) return { kind: "many", indexes: contained };
+
+  return { kind: "none", nearest: nearestTo(query, list) };
+}
+
+/**
+ * The three rows sharing the most content words, for a refusal that helps.
+ *
+ * ‼️ FOR A MESSAGE, NEVER FOR A DECISION. This IS the overlap scoring sameSubject refuses to do, and
+ * it is safe here for one reason: nothing is stored on the strength of it. It orders a list of
+ * suggestions somebody then picks from by number. The moment anything reads this to choose a row to
+ * write against, it has become the thing sameSubject exists to prevent.
+ */
+function nearestTo(query: string, list: readonly { normalized: string }[]): number[] {
+  const words = new Set(contentWords(query));
+  if (!words.size) return [];
+  return list
+    .map((row, i) => ({ i, shared: contentWords(row.normalized).filter((w) => words.has(w)).length }))
+    .filter((r) => r.shared > 0)
+    .sort((a, b) => b.shared - a.shared || a.i - b.i)
+    .slice(0, 3)
+    .map((r) => r.i);
 }
 
 const NOISE = new Set([

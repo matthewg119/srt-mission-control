@@ -762,6 +762,16 @@ export const KEYWORDS_ADD = /^keywords\s+add\s*:\s*([\s\S]+)$/i;
  */
 export const KEYWORDS_PICK = /^keywords\s+pick\s*:\s*([\s\S]+)$/i;
 
+/**
+ * `keywords delete all`: throw the whole set away and start again.
+ *
+ * ‼️ THREE WORDS, AND THE THIRD IS NOT OPTIONAL. `keywords delete` on its own would sit one typo
+ * away from `keywords drop 4`, which is a soft drop of one row, and the two are not remotely the
+ * same act. Spelling `all` out loud is the smallest thing that makes the sentence say what it does.
+ * It still does not delete anything on its own: it draws a confirm button.
+ */
+export const KEYWORDS_DELETE_ALL = /^keywords\s+delete\s+all$/i;
+
 /** `keywords variations`: more ways to say what has already been picked. */
 export const KEYWORDS_VARIATIONS = /^keywords\s+variations$/i;
 export const KEYWORDS_MORE = /^keywords\s+more\s+(.+)$/i;
@@ -835,6 +845,8 @@ export type KeywordCommand =
   | { kind: "pick"; phrases: string[] }
   /** More ways to say what has already been picked. Proposals, never auto-approved. */
   | { kind: "variations" }
+  /** Empty the set and start again. Draws a confirm button; deletes nothing by itself. */
+  | { kind: "delete_all" }
   | { kind: "more"; category: CategorySpec }
   /** Hand over the research prompt for this offer. Answers come back through `add`. */
   | { kind: "prompt" };
@@ -945,6 +957,9 @@ export function parseKeywordCommand(raw: string, categories: readonly CategorySp
   }
 
   if (KEYWORDS_VARIATIONS.test(text)) return { kind: "variations" };
+  // Above `add:` and below `drop`, where it reads in the order somebody would say these things.
+  // Anchored and three words long, so nothing else can reach it by accident.
+  if (KEYWORDS_DELETE_ALL.test(text)) return { kind: "delete_all" };
 
   const add = KEYWORDS_ADD.exec(text);
   if (add) {
@@ -1189,7 +1204,12 @@ export function formatKeywordCard(
     "  • `keywords approve` approves the query set as shown.",
     "  • `keywords drop 12` or `keywords drop 12, 15, 40` removes rows by number.",
     "  • `keywords add: <phrase>` adds your own. It ranks like evidence, because you said it.",
+    "  • `keywords pick: <list>` stores AND selects a pasted list, then hands back the numbers.",
     "  • `keywords more <category>` writes more for one category, e.g. `keywords more price`.",
+    "  • `keywords shortlist` picks the 25 worth googling. Then paste each Google screenshot here *with no caption*: it reads the search box, finds the keyword itself, and posts that one's card. `keywords serp 4` in the message overrides the match if it guesses wrong.",
+    "  • On a card: :white_check_mark: keep it, :x: step back one, :arrows_counterclockwise: more ways to say it.",
+    "  • `strategy`, `serp cards` and `strategy approve` group and lock what survived.",
+    "  • `keywords delete all` empties the set and asks once first. The history is kept.",
     `  • Measuring is not a command here. The approved queries JOIN the tracked question set, and the visibility audit asks them: at Day 0 for the archived run, then again at day 30, 60 and 90. Roughly $0.03 a question, and the Day 0 card states the count before anything is spent.`,
     "",
     "_Every `expansion` row was proposed by a model. That is not evidence anybody searched it, which is why those rows rank below anything the market or you said. Hooks are kept for ads and emails and never become a page's keyword._"

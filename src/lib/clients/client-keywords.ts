@@ -364,6 +364,149 @@ async function resetForNewOffer(
   return mineError?.message ?? null;
 }
 
+/** What `keywords delete all` would destroy, counted before anybody presses anything. */
+export interface KeywordWipeCount {
+  keywords: number;
+  reads: number;
+  clusters: number;
+  locked: boolean;
+  /** Rows in OTHER steps that lose their link to a keyword. Named so nobody discovers it later. */
+  plannedPages: number;
+  headlines: number;
+}
+
+/** Count what a wipe would take, so the confirmation names real numbers rather than a warning. */
+export async function countKeywordWipe(clientId: string): Promise<KeywordWipeCount> {
+  const countOf = async (table: string, column = "client_id"): Promise<number> => {
+    const { count, error } = await supabaseAdmin
+      .from(table)
+      .select("id", { count: "exact", head: true })
+      .eq(column, clientId);
+    // A table this database has not got yet holds nothing, which is the honest count.
+    return error ? 0 : (count ?? 0);
+  };
+
+  // ‼️ ONLY THE ROWS THAT ACTUALLY LOSE SOMETHING. Counting every page_plan row would tell somebody
+  // that all nineteen planned pages are affected when four of them carry a keyword link, and a
+  // confirmation that overstates what it destroys is one people learn to click through.
+  const linkedOf = async (table: string, column: string): Promise<number> => {
+    const { count, error } = await supabaseAdmin
+      .from(table)
+      .select("id", { count: "exact", head: true })
+      .eq("client_id", clientId)
+      .not(column, "is", null);
+    return error ? 0 : (count ?? 0);
+  };
+
+  const [keywords, reads, clusters, plannedPages, headlines] = await Promise.all([
+    countOf("client_keywords"),
+    countOf("keyword_serp_reads"),
+    countOf("keyword_clusters"),
+    linkedOf("page_plan", "target_keyword_id"),
+    linkedOf("client_headlines", "keyword_id"),
+  ]);
+
+  const lock = await supabaseAdmin
+    .from("client_keyword_strategy")
+    .select("id", { count: "exact", head: true })
+    .eq("client_id", clientId);
+
+  return {
+    keywords,
+    reads,
+    clusters,
+    plannedPages,
+    headlines,
+    locked: !lock.error && (lock.count ?? 0) > 0,
+  };
+}
+
+/**
+ * Throw the whole keyword set away, on purpose, and start again.
+ *
+ * ‼️ THIS IS NOT resetForNewOffer AND MUST NOT BE FOLDED INTO IT. That one is AUTOMATIC, fires when
+ * the locked offer changes, and spares `origin = 'manual'` rows because a phrase somebody typed is
+ * still something they said. Neither is true here: this is a person asking, out loud, for an empty
+ * set, and the rows they typed are exactly the ones they want gone. Sparing them would leave the
+ * pasted list behind and make the command a lie.
+ *
+ * ‼️ THE SET IS SNAPSHOTTED BEFORE IT IS DELETED, the same way resetForNewOffer does it. What was
+ * proposed, and what a person approved and dropped from it, is the training record, and the delete
+ * below used to be the end of it.
+ *
+ * ‼️ THE SCREENSHOTS GO TOO, AND THAT IS A DEPARTURE FROM THIS LANE'S USUAL RULE. keyword_serp_reads
+ * normally survives everything, because a SERP is a fact about Google on a day and stays true after
+ * we re-word what we sell, and it re-attaches by `normalized`. That is right for an offer change.
+ * It is wrong for a deliberate wipe: a reading that silently re-attaches to a phrase pasted next
+ * week would clear that keyword's gate without anybody looking at a picture, which is the one thing
+ * the gate exists to prevent. Asked for explicitly, the pictures go.
+ *
+ * ‼️ WHAT SURVIVES, AND IT IS SAID ON THE CARD RATHER THAN LEFT TO BE DISCOVERED. keyword_runs and
+ * keyword_decisions keep the history. client_docs keeps the uploaded files: the gate reads
+ * keyword_serp_reads, not client_docs, so deleting the readings is what makes everything unpictured,
+ * and client_docs is the whole board's evidence store which other steps verify against.
+ * page_plan.secondary_keyword_ids is a uuid[] with NO foreign key, so it keeps ids of rows that no
+ * longer exist and nothing in this repo cleans it.
+ */
+export async function deleteEveryKeyword(args: {
+  clientId: string;
+  by: string;
+  /** What the button was drawn for. A set that has moved since is not the set they agreed to wipe. */
+  expected: number;
+}): Promise<
+  | { ok: true; deleted: KeywordWipeCount }
+  | { ok: false; error: string; current?: number }
+> {
+  const { clientId, by } = args;
+
+  const loaded = await loadKeywords(clientId);
+  if ("error" in loaded) return { ok: false, error: `${loaded.error}. ${TABLE_HINT}` };
+
+  // ‼️ A STALE BUTTON DELETES NOTHING. The count travels on the button so a press made after
+  // somebody pasted forty more phrases is refused rather than silently taking them too. Same rule
+  // the card already lives by: a stale number is worse than no number.
+  if (loaded.rows.length !== args.expected) {
+    return {
+      ok: false,
+      error: `the set changed since that button was drawn: it had ${args.expected} and now has ${loaded.rows.length}`,
+      current: loaded.rows.length,
+    };
+  }
+
+  const before = await countKeywordWipe(clientId);
+
+  await recordKeywordRun({
+    clientId,
+    reason: "reset",
+    offerFingerprint: [...loaded.fingerprints][0] ?? null,
+    rows: loaded.rows,
+    context: { deletedEverything: true, by, counts: before },
+  });
+
+  await recordKeywordDecisions({
+    clientId,
+    action: "delete_all",
+    actor: by,
+    rows: loaded.rows,
+    context: { counts: before },
+  }).catch(() => {});
+
+  // Every foreign key into these is `on delete set null`, so the order is for reading rather than
+  // for integrity. Readings first, because they are the thing whose survival would be a bug.
+  for (const table of ["keyword_serp_reads", "keyword_clusters", "client_keyword_strategy"]) {
+    const { error } = await supabaseAdmin.from(table).delete().eq("client_id", clientId);
+    // A table this database has not got is nothing to delete from, which is not a failure.
+    if (error && !/does not exist|schema cache/i.test(error.message)) {
+      return { ok: false, error: `${table} was not cleared: ${error.message}` };
+    }
+  }
+
+  const { error } = await supabaseAdmin.from("client_keywords").delete().eq("client_id", clientId);
+  if (error) return { ok: false, error: `the keywords were not deleted: ${error.message}` };
+
+  return { ok: true, deleted: before };
+}
+
 /**
  * Merge what came in with what is stored, then write it.
  *
@@ -1013,6 +1156,88 @@ async function say(clientId: string, text: string): Promise<void> {
   await notifyStep(clientId, "keyword_set", text).catch(() => {});
 }
 
+/**
+ * Write more ways to say ONE phrase, each stamped as a variation of it.
+ *
+ * ‼️ THE SAME WRITE PATH `keywords variations` USES, and not a second one. It goes through
+ * writeMerged, so a phrase already in the set keeps its rank, its approval and its drop, and a
+ * variation that somebody had already picked is not quietly demoted to a proposal.
+ *
+ * ‼️ THEY ARRIVE UNAPPROVED, which is what makes the card's tick mean something. A variation is a
+ * model's proposal until a person looks at its own results page and keeps it, and `origin:
+ * "expansion"` is this repo's word for exactly that.
+ *
+ * ‼️ variation_of IS STAMPED IN A SECOND, TOLERANT WRITE. The column arrives with
+ * docs/2026-09-27-keyword-decision-cards.sql and this repo deploys code first, so a database without
+ * it still gets the phrases and loses only the parent link, which is a label rather than the work.
+ */
+export async function writeVariationsOf(args: {
+  clientId: string;
+  parent: { id: string; phrase: string };
+  phrases: readonly string[];
+}): Promise<{ ok: true; rows: Array<{ id: string; phrase: string }> } | { ok: false; error: string }> {
+  if (!args.phrases.length) return { ok: true, rows: [] };
+
+  const c = await keywordContext(args.clientId);
+  if (!c.ok) return { ok: false, error: `missing: ${c.missing.join("; ")}` };
+
+  const loaded = await loadKeywords(args.clientId);
+  if ("error" in loaded) return { ok: false, error: loaded.error };
+
+  const vocab = vocabFor(c.ctx, loaded.rows);
+  const { isObjection } = await import("./harvest");
+
+  const candidates: KeywordCandidate[] = args.phrases.map((phrase) => {
+    const category = classifyCategory(phrase, c.ctx.categories, vocab);
+    const spec = c.ctx.categories.find((s) => s.key === category);
+    const base: KeywordCandidate = {
+      phrase,
+      normalized: normalizePhrase(phrase),
+      category,
+      use: "query",
+      origin: "expansion",
+      frequency: 1,
+      intent: spec?.intent ?? 0,
+      objection: isObjection(phrase),
+      currentlyNamed: null,
+      sourceUrl: null,
+      score: 0,
+    };
+    return { ...base, score: scoreKeyword(base, spec?.intent ?? 0) };
+  });
+
+  const written = await writeMerged(c.ctx, loaded.rows, candidates);
+  if (written.error) return { ok: false, error: written.error };
+
+  // writeMerged returns counts, not ids, so the rows are read back by the phrase they were written
+  // under. `normalized` is the unique key (client_id, normalized, use), which is what makes this
+  // exact rather than a guess.
+  const wanted = candidates.map((k) => k.normalized);
+  const { data, error } = await supabaseAdmin
+    .from("client_keywords")
+    .select("id, phrase, normalized")
+    .eq("client_id", args.clientId)
+    .eq("use", "query")
+    .in("normalized", wanted);
+  if (error) return { ok: false, error: error.message };
+
+  const rows = (data ?? []).map((r) => ({ id: r.id as string, phrase: r.phrase as string }));
+  // Never stamp a parent onto itself: a model that returns the phrase it was given would otherwise
+  // make the row its own variation, and the card would print "another way of saying" itself.
+  const ids = rows.map((r) => r.id).filter((id) => id !== args.parent.id);
+  if (ids.length) {
+    const stamp = await supabaseAdmin
+      .from("client_keywords")
+      .update({ variation_of: args.parent.id, updated_at: new Date().toISOString() })
+      .in("id", ids);
+    if (stamp.error) {
+      console.error("[client-keywords] variation_of not stamped:", stamp.error.message);
+    }
+  }
+
+  return { ok: true, rows: rows.filter((r) => r.id !== args.parent.id) };
+}
+
 export async function handleKeywordThreadReply(input: {
   clientId: string;
   stepKey: string | null;
@@ -1043,6 +1268,8 @@ export async function handleKeywordThreadReply(input: {
       return pickCommand(input.clientId, cmd.phrases, input.by);
     case "variations":
       return variationsCommand(input.clientId, input.by);
+    case "delete_all":
+      return deleteAllCommand(input.clientId);
     case "more":
       return moreCommand(input.clientId, cmd.category);
     case "prompt":
@@ -1536,6 +1763,84 @@ async function pickCommand(clientId: string, phrases: readonly string[], by: str
  * ‼️ PROPOSALS, NEVER AUTO-APPROVED. They join as `expansion`, which precedence ranks below anything
  * a person typed, and wait for `keywords approve 411-423`.
  */
+/**
+ * The action_id the confirm button mints.
+ *
+ * ‼️ A CONSTANT BECAUSE TWO FILES HAVE TO AGREE ON IT: this one draws the button and
+ * src/app/api/slack/actions/route.ts switches on it, and scripts/_probe-serp-gate.ts already checks
+ * every action_id a keyword card mints against that switch.
+ */
+export const KEYWORD_WIPE_ACTION = "kwdelete_all";
+
+/**
+ * `keywords delete all`: say what would go, and offer one button.
+ *
+ * ‼️ IT DELETES NOTHING. There is no two-press flow anywhere else in this repo, and this is the
+ * first: everything destructive here is either automatic (resetForNewOffer) or a CLI script behind
+ * `--yes`. A typed phrase that wiped four hundred rows on the spot would be one autocorrect away
+ * from a very bad afternoon, and the count on the button is what makes the second press specific.
+ */
+async function deleteAllCommand(clientId: string): Promise<KeywordReply> {
+  const counts = await countKeywordWipe(clientId);
+
+  if (counts.keywords === 0) {
+    return { message: "There are no keywords to delete. `keywords pick:` then the list starts a new set." };
+  }
+
+  const alsoLoses: string[] = [];
+  if (counts.plannedPages) alsoLoses.push(`${counts.plannedPages} planned page${counts.plannedPages === 1 ? "" : "s"}`);
+  if (counts.headlines) alsoLoses.push(`${counts.headlines} headline${counts.headlines === 1 ? "" : "s"}`);
+
+  const goes = [
+    `*${counts.keywords}* keyword${counts.keywords === 1 ? "" : "s"}, including the ones you typed`,
+    counts.reads ? `*${counts.reads}* SERP reading${counts.reads === 1 ? "" : "s"}, so every keyword needs a fresh screenshot` : "",
+    counts.clusters ? `*${counts.clusters}* cluster${counts.clusters === 1 ? "" : "s"}` : "",
+    counts.locked ? "the locked strategy" : "",
+  ].filter(Boolean);
+
+  return {
+    message: [
+      ":warning: *This empties the keyword set for this client.*",
+      "",
+      "Deleted:",
+      ...goes.map((g) => `  •  ${g}`),
+      alsoLoses.length ? `  •  ${alsoLoses.join(" and ")} lose their link to a keyword` : "",
+      "",
+      "Kept: the history. The whole set is snapshotted to `keyword_runs` first, and every approve and drop stays in `keyword_decisions`. The screenshot files stay in this thread; it is the readings that go, which is what makes everything need a fresh picture.",
+      "",
+      "Press the button to go ahead. Nothing has been deleted yet.",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    after: async () => {
+      const { notifyStep } = await import("./step-board");
+      await notifyStep(
+        clientId,
+        "keyword_set",
+        `Delete all ${counts.keywords} keywords?`,
+        [
+          {
+            type: "actions",
+            elements: [
+              {
+                type: "button",
+                style: "danger",
+                text: { type: "plain_text", text: `Yes, delete all ${counts.keywords}` },
+                action_id: KEYWORD_WIPE_ACTION,
+                // ‼️ THE CLIENT ID FIRST, then the count the button was drawn for. The actions
+                // route's automatic button log matches a UUID PREFIX to attribute the press, so
+                // anything in front of it makes the press unattributable. The count is the
+                // staleness check: a press after the set has moved deletes nothing.
+                value: `${clientId}:${counts.keywords}`,
+              },
+            ],
+          },
+        ] as unknown as Parameters<typeof notifyStep>[3]
+      ).catch(() => {});
+    },
+  };
+}
+
 async function variationsCommand(clientId: string, by: string): Promise<KeywordReply> {
   const c = await keywordContext(clientId);
   if (!c.ok) return { message: `:warning: Nothing written. Missing: ${c.missing.join("; ")}.` };

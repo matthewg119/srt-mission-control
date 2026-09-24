@@ -25,14 +25,18 @@ import {
   SHORTLIST_SIZE,
   bestVerdict,
   blockLine,
+  answerShapeFrom,
+  assetFitFrom,
   citationValueFrom,
   clickValueFrom,
   clusterFinalists,
   gateClusters,
   intentFrom,
+  isAnswerShape,
   isRecommendedAsset,
   isRoute,
   isVerdict,
+  matchQueryToShortlist,
   pageTypeFrom,
   parseStrategyCommand,
   pictured,
@@ -128,6 +132,16 @@ async function loadFinalists(
       readEvidence: null,
       docId: null,
       slackFileId: null,
+      answerShape: null,
+      assetFit: null,
+      assetIdeas: [],
+      assetIdeasBy: null,
+      queryOnScreen: null,
+      deliverables: { script: false, steps: false, checklist: false, videos: false },
+      cardTs: null,
+      selectedAt: null,
+      selectedBy: null,
+      variationOf: null,
     };
   });
 
@@ -149,6 +163,30 @@ async function loadFinalists(
     const intent = e.intent as string | null;
     row.intent = intent === "post" || intent === "service_page" || intent === "merged" ? intent : null;
     row.mergedInto = (e.merged_into as string | null) ?? null;
+  }
+
+  // ‼️ A THIRD SELECT AND NOT THREE MORE COLUMNS ON `extra`, for the same reason attachCardReadings
+  // is separate: `extra` failing is what sets strategyReady false, and a database carrying the
+  // strategy migration but not the decision-cards one would have its whole strategy half switched
+  // off by a column that only the cards need. Each migration gets its own read, and each one's
+  // absence means only its own feature is not there yet.
+  const cards = await supabaseAdmin
+    .from("client_keywords")
+    .select("id, card_ts, selected_at, selected_by, variation_of")
+    .eq("client_id", clientId)
+    .range(0, 2999);
+
+  if (cards.error) {
+    if (!missingTable(cards.error)) console.error("[clients/keyword-strategy] card state:", cards.error.message);
+  } else {
+    for (const c of cards.data ?? []) {
+      const row = by.get(c.id as string);
+      if (!row) continue;
+      row.cardTs = (c.card_ts as string | null) ?? null;
+      row.selectedAt = (c.selected_at as string | null) ?? null;
+      row.selectedBy = (c.selected_by as string | null) ?? null;
+      row.variationOf = (c.variation_of as string | null) ?? null;
+    }
   }
 
   await attachReadings(clientId, rows);
@@ -184,7 +222,7 @@ async function attachReadings(clientId: string, rows: Finalist[]): Promise<void>
     // level to work out the row shape, and it can only do that for a literal: `"a" + "b"` types every
     // column as GenericStringError and the whole function stops compiling in a way that names the
     // columns rather than the cause.
-    .select("normalized, source, created_at, verdict, doc_id, evidence, click_value, citation_value, route, recommended_asset, magnet_space, magnet_idea, magnet_by, rewritten_target, top_domains, paa_questions, vocabulary")
+    .select("id, normalized, source, created_at, verdict, doc_id, evidence, click_value, citation_value, route, recommended_asset, magnet_space, magnet_idea, magnet_by, rewritten_target, top_domains, paa_questions, vocabulary")
     .eq("client_id", clientId)
     .order("created_at", { ascending: false })
     .range(0, 2999);
@@ -192,12 +230,14 @@ async function attachReadings(clientId: string, rows: Finalist[]): Promise<void>
   if (reads.error || !reads.data?.length) return;
 
   const byPhrase = new Map<string, SerpReadRow[]>();
+  /** The same objects, by keyword_serp_reads.id, so the tolerant second read can fill them in. */
+  const byReadId = new Map<string, SerpReadRow>();
   for (const r of reads.data) {
     const key = (r.normalized as string) ?? "";
     const verdict = r.verdict as string | null;
     if (!key || !isVerdict(verdict)) continue;
     const list = byPhrase.get(key) ?? [];
-    list.push({
+    const row: SerpReadRow = {
       source: (r.source as "vision" | "typed") ?? "vision",
       createdAt: (r.created_at as string) ?? "",
       verdict,
@@ -214,9 +254,33 @@ async function attachReadings(clientId: string, rows: Finalist[]): Promise<void>
       topDomains: strings(r.top_domains),
       paaQuestions: strings(r.paa_questions),
       vocabulary: strings(r.vocabulary),
-    });
+      // Filled by the tolerant second read below, so a database without
+      // docs/2026-09-27-keyword-decision-cards.sql reads as "no card yet" rather than no reading.
+      queryOnScreen: null,
+      answerShape: null,
+      assetFit: null,
+      assetIdeas: [],
+      assetIdeasBy: null,
+      hasScript: null,
+      hasSteps: null,
+      hasChecklist: null,
+      videosRank: null,
+    };
+    list.push(row);
+    const readId = r.id as string | null;
+    if (readId) byReadId.set(readId, row);
     byPhrase.set(key, list);
   }
+
+  // ‼️ A SECOND, TOLERANT SELECT, AND NOT SEVEN MORE COLUMNS ON THE ONE ABOVE. That one is flat, and
+  // PostgREST fails a WHOLE select on a single unknown column while attachReadings returns silently
+  // on error. Adding the card columns there would mean that between a deploy and this migration,
+  // every keyword on every client read as "no reading at all": the gate would block the whole step
+  // and the card would say the screenshots were never taken. This repo deploys code first, which is
+  // the exact reason docs/2026-09-26-keyword-serp.sql exists as its own table.
+  //
+  // The sixth instance of the tolerant-merge pattern page-plan.ts already runs five times.
+  await attachCardReadings(clientId, byReadId);
 
   const docIds = new Set<string>();
 
@@ -266,6 +330,28 @@ async function attachReadings(clientId: string, rows: Finalist[]): Promise<void>
       row.competitors = mirrored.topDomains;
     }
 
+    // ‼️ THE SHAPE AND THE IDEAS COME FROM THE NEWEST READING THAT HAS THEM, not from the newest
+    // reading, for the reason the scores do: a typed `keywords serp 9: merge` carries none of this
+    // and would otherwise blank a card that a screenshot had already filled in.
+    const shaped = list.find((r) => r.answerShape !== null || r.assetFit !== null);
+    if (shaped) {
+      row.answerShape = shaped.answerShape;
+      row.assetFit = shaped.assetFit;
+      row.deliverables = {
+        script: shaped.hasScript === true,
+        steps: shaped.hasSteps === true,
+        checklist: shaped.hasChecklist === true,
+        videos: shaped.videosRank === true,
+      };
+    }
+    const ideas = list.find((r) => r.assetIdeasBy !== null);
+    if (ideas) {
+      row.assetIdeas = ideas.assetIdeas;
+      row.assetIdeasBy = ideas.assetIdeasBy;
+    }
+    const searched = list.find((r) => r.queryOnScreen !== null);
+    if (searched) row.queryOnScreen = searched.queryOnScreen;
+
     // The newest picture, for the contact sheet. Not necessarily the trusted verdict's.
     const shot = list.find((r) => r.source === "vision" && r.docId);
     if (shot?.docId) {
@@ -275,6 +361,71 @@ async function attachReadings(clientId: string, rows: Finalist[]): Promise<void>
   }
 
   await attachSlackFiles(rows, docIds);
+}
+
+/**
+ * The decision card's columns, merged onto readings that already loaded.
+ *
+ * ‼️ ITS OWN SELECT, AND ITS OWN FAILURE. A database without
+ * docs/2026-09-27-keyword-decision-cards.sql answers this with a 42703 and every reading keeps the
+ * nulls it was built with, which reads as "no card has been drawn yet". That is what it is. The
+ * alternative was seven more columns on the flat select above, where one unknown column fails the
+ * whole query and attachReadings swallows the error, and the entire step would read as unscreenshot
+ * between a deploy and a migration.
+ */
+async function attachCardReadings(clientId: string, byReadId: Map<string, SerpReadRow>): Promise<void> {
+  if (!byReadId.size) return;
+
+  const { data, error } = await supabaseAdmin
+    .from("keyword_serp_reads")
+    .select("id, query_on_screen, answer_shape, asset_fit, asset_ideas, asset_ideas_by, has_script, has_steps, has_checklist, videos_rank")
+    .eq("client_id", clientId)
+    .range(0, 2999);
+
+  if (error) {
+    // Not an error worth surfacing: the migration has not been run, and every caller already
+    // degrades to "nothing on file". Anything else is a real fault and is worth a line in the log.
+    if (!missingTable(error)) console.error("[clients/keyword-strategy] card columns:", error.message);
+    return;
+  }
+
+  for (const r of data ?? []) {
+    const row = byReadId.get(r.id as string);
+    if (!row) continue;
+    row.queryOnScreen = (r.query_on_screen as string | null) ?? null;
+    row.answerShape = isAnswerShape(r.answer_shape) ? r.answer_shape : null;
+    row.assetFit = numOrNull(r.asset_fit);
+    row.assetIdeas = assetIdeasOf(r.asset_ideas);
+    const by = r.asset_ideas_by as string | null;
+    row.assetIdeasBy = by === "model" || by === "person" ? by : null;
+    row.hasScript = triOf(r.has_script);
+    row.hasSteps = triOf(r.has_steps);
+    row.hasChecklist = triOf(r.has_checklist);
+    row.videosRank = triOf(r.videos_rank);
+  }
+}
+
+/**
+ * The stored ideas, shaped.
+ *
+ * ‼️ jsonb IS WHATEVER WAS PUT IN IT, so every field is checked on the way out rather than cast. A
+ * row written by an older build, or by hand, must read as "no ideas" rather than crash a card.
+ */
+/** A stored tri-state. null is "could not tell" and must never be flattened into false. */
+function triOf(v: unknown): boolean | null {
+  return v === true || v === false ? v : null;
+}
+
+function assetIdeasOf(v: unknown): Array<{ kind: string; title: string; why: string }> {
+  if (!Array.isArray(v)) return [];
+  const out: Array<{ kind: string; title: string; why: string }> = [];
+  for (const raw of v) {
+    if (!raw || typeof raw !== "object") continue;
+    const rec = raw as Record<string, unknown>;
+    if (typeof rec.kind !== "string" || typeof rec.title !== "string") continue;
+    out.push({ kind: rec.kind, title: rec.title, why: typeof rec.why === "string" ? rec.why : "" });
+  }
+  return out;
 }
 
 /**
@@ -346,6 +497,13 @@ export interface RecordVerdictInput {
   magnet?: { space: number | null; idea: string | null; by: "model" | "person" } | null;
   /** The phrasing the page should aim at, when the searched words are not the best target. */
   rewrittenTarget?: string | null;
+  /**
+   * What we would build. A separate judgement from the magnet one, and labelled separately.
+   *
+   * Absent is not "there is nothing": `by` null means the call never ran or it failed, and an empty
+   * `ideas` under by='model' is the real finding that there is nothing worth building.
+   */
+  assets?: { ideas: ReadonlyArray<{ kind: string; title: string; why: string }>; by: "model" | "person" } | null;
 }
 
 /**
@@ -405,7 +563,7 @@ export async function recordVerdict(input: RecordVerdictInput): Promise<{ ok: bo
 
   const s = scoresFor(read, verdict, input.magnet);
 
-  const { error } = await supabaseAdmin.from("keyword_serp_reads").insert({
+  const { data: inserted, error } = await supabaseAdmin.from("keyword_serp_reads").insert({
     client_id: clientId,
     keyword_id: keyword.id,
     phrase: keyword.phrase,
@@ -445,13 +603,40 @@ export async function recordVerdict(input: RecordVerdictInput): Promise<{ ok: bo
     doc_id: input.docId ?? null,
     model: input.model ?? null,
     actor,
-  });
+  }).select("id").maybeSingle();
 
   if (error) {
     if (missingTable(error)) {
       return { ok: false, error: `nothing was stored: run ${SERP_SQL} on this database first.` };
     }
     return { ok: false, error: error.message };
+  }
+
+  // ‼️ THE CARD'S COLUMNS ARE A SECOND, TOLERANT WRITE, AND NOT SEVEN MORE KEYS ON THE INSERT ABOVE.
+  // An insert naming one column this database does not have fails WHOLLY, and the reading itself is
+  // the expensive half: a vision call has already been paid for by the time we get here. Before
+  // docs/2026-09-27-keyword-decision-cards.sql runs, the verdict and both scores still land and only
+  // the card's extras are missing, which is what the card then says. Same split, same reason, as
+  // attachCardReadings on the way back out.
+  const readId = (inserted?.id as string | undefined) ?? null;
+  if (readId && (read || input.assets)) {
+    const cardFields = await supabaseAdmin
+      .from("keyword_serp_reads")
+      .update({
+        query_on_screen: read?.queryOnScreen ?? null,
+        has_script: read?.hasScript ?? null,
+        has_steps: read?.hasSteps ?? null,
+        has_checklist: read?.hasChecklist ?? null,
+        videos_rank: read?.videosRank ?? null,
+        answer_shape: read ? answerShapeFrom(read) : null,
+        asset_fit: read ? assetFitFrom(read) : null,
+        asset_ideas: input.assets ? input.assets.ideas : null,
+        asset_ideas_by: input.assets?.by ?? null,
+      })
+      .eq("id", readId);
+    if (cardFields.error && !missingTable(cardFields.error)) {
+      console.error("[clients/keyword-strategy] card columns not stored:", cardFields.error.message);
+    }
   }
 
   // Best effort. A missing column here costs the card its sort order, never the evidence.
@@ -727,19 +912,112 @@ async function serpTypedCommand(clientId: string, n: number, word: string, by: s
   };
 }
 
+/**
+ * What one screenshot produced.
+ *
+ * ‼️ A DISCRIMINATED RESULT AND NOT A BARE STRING, because the caller now has two jobs and used to
+ * be told nothing. `message` is posted as a thread reply when it is there: a refusal, an ambiguity,
+ * an unreadable picture. `matched` is set when a keyword's own CARD was posted instead, which is the
+ * success path and posts nothing extra. Before this, the route could not tell "recorded" from "no
+ * such number" from "the read failed", and logged all three identically.
+ */
+export interface SerpShotOutcome {
+  message: string | null;
+  matched: { id: string; phrase: string; number: number } | null;
+}
+
+/**
+ * Which keyword is this a picture of?
+ *
+ * A typed `keywords serp 4` wins, because somebody said it out loud. Otherwise the search box
+ * decides, and an answer that is not exactly one row is REFUSED rather than guessed: scoring the
+ * wrong keyword stores evidence against a phrase nobody looked at and clears its gate, which is the
+ * single most expensive mistake this lane can make.
+ */
+async function resolveFromScreen(
+  clientId: string,
+  queryOnScreen: string | null,
+  typed: { ok: true; row: Finalist } | null
+): Promise<{ ok: true; row: Finalist; number: number } | { ok: false; message: string }> {
+  const res = await finalistsFor(clientId);
+  if (!res.ok) return { ok: false, message: `:warning: The keyword set could not be read: ${res.error}` };
+
+  if (typed) {
+    const number = res.list.findIndex((r) => r.id === typed.row.id) + 1;
+    // ‼️ THE TYPED NUMBER STILL WINS, but a mismatch is said out loud for the first time. The
+    // screenshot is stored against the row that was named, because a person naming a row is a
+    // decision; the line below is what lets them notice they named the wrong one.
+    return { ok: true, row: typed.row, number: number > 0 ? number : 0 };
+  }
+
+  if (!queryOnScreen) {
+    return {
+      ok: false,
+      message: [
+        ":grey_question: I could not read the search box on that screenshot, so I do not know which keyword it is for.",
+        "Post one that includes the search bar at the top, or say which row it is: `keywords serp 4` in the same message as the picture.",
+        "`keywords shortlist` reprints the numbers.",
+      ].join("\n"),
+    };
+  }
+
+  const hit = matchQueryToShortlist(queryOnScreen, res.list);
+
+  if (hit.kind === "one") return { ok: true, row: res.list[hit.index], number: hit.index + 1 };
+
+  if (hit.kind === "many") {
+    const options = hit.indexes
+      .slice(0, 5)
+      .map((i: number) => `  \`${i + 1}\`  ${res.list[i].phrase}`)
+      .join("\n");
+    return {
+      ok: false,
+      message: [
+        `:mag: That screenshot is of *"${queryOnScreen}"*, and more than one row on the shortlist could be it:`,
+        options,
+        "",
+        "Say which, by number: `keywords serp 4` in the same message as the picture.",
+      ].join("\n"),
+    };
+  }
+
+  const nearest = hit.nearest.map((i: number) => `  \`${i + 1}\`  ${res.list[i].phrase}`).join("\n");
+  return {
+    ok: false,
+    message: [
+      `:mag: That screenshot is of *"${queryOnScreen}"*, which is not on the shortlist, so nothing was stored.`,
+      nearest ? `The closest rows are:\n${nearest}` : "Nothing on the shortlist is close to it.",
+      "",
+      "Google one of the phrases on the list, or add this one with `keywords pick:` and screenshot it again. `keywords shortlist` reprints the numbers.",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  };
+}
+
 /** Read a screenshot, apply the rule, store both. Called from the events route, not from a verb. */
 export async function recordSerpScreenshot(args: {
   clientId: string;
-  n: number;
+  /** The typed override. Absent means "work it out from the search box", which is the normal path. */
+  n?: number | null;
   image: { media_type: string; data: string };
   by: string;
   docId?: string | null;
-}): Promise<{ message: string }> {
-  const found = await resolveRow(args.clientId, args.n);
-  if (!found.ok) return { message: found.message };
+}): Promise<SerpShotOutcome> {
+  // ‼️ THE PHRASE IS ONLY PASSED IN WHEN SOMEBODY TYPED A NUMBER, and even then the reader is told
+  // to read the search box itself rather than believe it. That is what makes a screenshot filed
+  // against the wrong keyword detectable at all.
+  const typed = typeof args.n === "number" ? await resolveRow(args.clientId, args.n) : null;
+  if (typed && !typed.ok) return { message: typed.message, matched: null };
 
   const { readSerp, SERP_MODEL } = await import("./serp-read");
-  const read = await readSerp(args.image, found.row.phrase);
+  const read = await readSerp(args.image, typed?.ok ? typed.row.phrase : null);
+
+  const resolved = await resolveFromScreen(args.clientId, read.queryOnScreen, typed?.ok ? typed : null);
+  if (!resolved.ok) return { message: resolved.message, matched: null };
+  const found = { row: resolved.row } as const;
+  const n = resolved.number;
+
   const verdict = verdictFrom(read);
 
   if (verdict === "unclear") {
@@ -762,10 +1040,11 @@ export async function recordSerpScreenshot(args: {
           `:grey_question: I could not tell from that screenshot for *${found.row.phrase}*.`,
           read.evidence ? `_What I saw: ${read.evidence}._` : "",
           "",
-          `Nothing was stored, because the picture was not filed either. Post it again, or type it: \`keywords serp ${args.n}: merge\`, \`: post\`, \`: service\`.`,
+          `Nothing was stored, because the picture was not filed either. Post it again, or type it: \`keywords serp ${n}: merge\`, \`: post\`, \`: service\`.`,
         ]
           .filter(Boolean)
           .join("\n"),
+        matched: null,
       };
     }
 
@@ -779,14 +1058,15 @@ export async function recordSerpScreenshot(args: {
       docId: args.docId,
       model: SERP_MODEL,
     });
-    if (!kept.ok) return { message: `:warning: ${kept.error}` };
+    if (!kept.ok) return { message: `:warning: ${kept.error}`, matched: null };
 
     return {
+      matched: null,
       message: [
         `:grey_question: I could not read that screenshot for *${found.row.phrase}*.`,
         read.evidence ? `_What I saw: ${read.evidence}._` : "",
         "",
-        `The picture is on file and the reading is recorded as unreadable, so this keyword shows as *blocked* rather than as unchecked. Post a wider screenshot to clear it, or type \`keywords serp ${args.n}: merge\`, \`: post\`, \`: service\` to route it without one.`,
+        `The picture is on file and the reading is recorded as unreadable, so this keyword shows as *blocked* rather than as unchecked. Post a wider screenshot to clear it, or type \`keywords serp ${n}: merge\`, \`: post\`, \`: service\` to route it without one.`,
         "_A typed verdict routes the keyword. It does not clear the block: the gate wants the picture._",
       ]
         .filter(Boolean)
@@ -819,6 +1099,26 @@ export async function recordSerpScreenshot(args: {
     rewrittenTarget = judged.rewrittenTarget;
   }
 
+  // ── What we would build, where there is anything to build ─────────────────
+  //
+  // ‼️ A THIRD CALL, AND GATED LIKE THE SECOND ONE. shouldAskAssets keeps it off every row whose
+  // results page is an explanation, because an explanation has nothing to open and so nothing to
+  // build a better version of. A `fact` never reaches this line.
+  const shape = answerShapeFrom(read);
+  const fit = assetFitFrom(read);
+  let assets: { ideas: ReadonlyArray<{ kind: string; title: string; why: string }>; by: "model" } | null = null;
+
+  const { shouldAskAssets } = await import("./asset-ideas");
+  if (shape && shouldAskAssets({ verdict, answerShape: shape, assetFit: fit })) {
+    const { readAssetIdeas } = await import("./asset-ideas");
+    const ctx = await magnetContext(args.clientId);
+    const judged = await readAssetIdeas({ phrase: found.row.phrase, read, shape, fit, ctx });
+    // A failed call leaves `assets` null, which stores asset_ideas_by null, which the card reads as
+    // "the check has not run" rather than "there is nothing worth building". An outage may not
+    // decide that, for the same reason it may not decide the magnet.
+    if (judged.by) assets = { ideas: judged.ideas, by: judged.by };
+  }
+
   const res = await recordVerdict({
     clientId: args.clientId,
     keyword: found.row,
@@ -830,31 +1130,50 @@ export async function recordSerpScreenshot(args: {
     model: SERP_MODEL,
     magnet,
     rewrittenTarget,
+    assets,
   });
-  if (!res.ok) return { message: `:warning: ${res.error}` };
+  if (!res.ok) return { message: `:warning: ${res.error}`, matched: null };
 
-  const routed = routeFrom({
-    verdict,
-    clickValue: click,
-    citationValue: cite,
-    magnetSpace: magnet?.space ?? null,
-    magnetIdea: magnet?.idea ?? null,
-    magnetBy: magnet?.by ?? null,
+  // ‼️ THE CARD IS DRAWN FROM THE STORE, NOT FROM THE VARIABLES ABOVE. Re-reading is what makes a
+  // re-screenshot of the same keyword EDIT its existing card instead of posting a second one, and
+  // what makes the card show the verdict bestVerdict actually trusts rather than the one this call
+  // happened to produce. A typed correction made ten minutes ago has to survive a re-read.
+  const drawn = await postCardFor(args.clientId, found.row.id);
+  if (!drawn.ok) {
+    // The reading IS stored; only the card failed. Say so rather than implying nothing happened.
+    return {
+      matched: null,
+      message: `:warning: *${found.row.phrase}* was read and stored, but its card did not post: ${drawn.error}`,
+    };
+  }
+
+  return { message: null, matched: { id: found.row.id, phrase: found.row.phrase, number: drawn.number } };
+}
+
+/** Draw or redraw one keyword's card from what is on file. */
+async function postCardFor(
+  clientId: string,
+  keywordId: string
+): Promise<{ ok: true; number: number } | { ok: false; error: string }> {
+  const { keywordCard, postKeywordCard, selectedCount } = await import("./keyword-cards");
+
+  const listed = await finalistsFor(clientId);
+  if (!listed.ok) return { ok: false, error: listed.error };
+
+  const index = listed.list.findIndex((r) => r.id === keywordId);
+  if (index < 0) return { ok: false, error: "it is no longer on the shortlist" };
+
+  const row = listed.list[index];
+  const count = await selectedCount(clientId);
+  const card = keywordCard({
+    row,
+    number: index + 1,
+    variationOf: null,
+    selectedCount: count,
   });
-
-  const lines = [
-    `${verdictMark(verdict)} \`${args.n}\` *${found.row.phrase}*`,
-    `*click ${click}*  ·  *cite ${cite}*${magnet?.space !== null && magnet?.space !== undefined ? `  ·  *magnet ${magnet.space}*` : ""}  ->  *${routeLine(routed.route, routed.asset)}*`,
-    routed.why,
-  ];
-  if (magnet?.idea) lines.push(`_Give away: ${magnet.idea}_`);
-  if (read.topDomains.length) lines.push(`_Ranking: ${read.topDomains.join(", ")}._`);
-  if (read.evidence) lines.push(`_Read: ${read.evidence}._`);
-  lines.push(
-    "",
-    "`strategy` groups everything checked so far. `keywords serp N: <verdict>` overrides the verdict, `magnet N: <what we give away>` overrides the magnet."
-  );
-  return { message: lines.join("\n") };
+  const posted = await postKeywordCard({ clientId, card });
+  if (!posted.ok) return { ok: false, error: posted.error };
+  return { ok: true, number: index + 1 };
 }
 
 /** What the magnet drafter needs to know about the client. Everything here exists by step 12. */

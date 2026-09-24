@@ -76,9 +76,33 @@ const EMPTY: SerpRead = {
   adsAboveFold: null,
   paaQuestions: [],
   vocabulary: [],
+  queryOnScreen: null,
+  hasScript: null,
+  hasSteps: null,
+  hasChecklist: null,
+  videosRank: null,
   evidence: "nothing readable",
   confidence: 0,
 };
+
+/** At most this many characters of search box text. A query, never a paragraph. */
+export const MAX_QUERY_CHARS = 100;
+
+/**
+ * The text in the search box.
+ *
+ * ‼️ CAPPED IN CODE, like every other text field here, because a prompt is a request and a cap is a
+ * guarantee. A model that drifts from "the search" to "the search and the first headline" does it by
+ * returning something long, and this is what stops that becoming a claim in the database.
+ */
+function queryLine(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const q = v.trim().replace(/\s+/g, " ").slice(0, MAX_QUERY_CHARS);
+  if (q.length < 2) return null;
+  // The model was asked for the search and had nothing to report; that is a null, not a phrase.
+  if (/^(null|none|n\/a|unknown)$/i.test(q)) return null;
+  return q;
+}
 
 /** At most five hosts, lowercased, no scheme and no path. A host is a shape, a URL is a claim. */
 function hosts(v: unknown): string[] {
@@ -161,15 +185,27 @@ function count(v: unknown): number | null {
   return Math.min(20, Math.round(v));
 }
 
-export async function readSerp(image: ClaudeImageInput, phrase: string): Promise<SerpRead> {
+/**
+ * Read one Google results page.
+ *
+ * ‼️ `phrase` IS OPTIONAL AND THAT IS THE POINT. Pass it when somebody typed `keywords serp 12` and
+ * we know which row they meant; pass null when a screenshot arrived on its own. Either way the model
+ * reports `queryOnScreen`, because the search is ON THE SCREEN and always was: the number never
+ * needed typing. When the phrase is known it becomes a cross-check rather than the truth, which is
+ * the first time a picture filed against the wrong keyword has been detectable at all.
+ */
+export async function readSerp(image: ClaudeImageInput, phrase: string | null): Promise<SerpRead> {
   try {
     const { data } = await callClaudeJSON<SerpRead>({
       model: SERP_MODEL,
       system: [
-        `You are looking at a screenshot of a Google results page for the search "${phrase}". Report what is on the screen. Do not decide what it means.`,
+        phrase
+          ? `You are looking at a screenshot of a Google results page. Somebody says it is for the search "${phrase}", but READ THE SEARCH BOX YOURSELF and report what is actually in it. Report what is on the screen. Do not decide what it means.`
+          : `You are looking at a screenshot of a Google results page. The search is the text in the box at the top of the screen: read it first. Report what is on the screen. Do not decide what it means.`,
         "",
         "WHAT TO REPORT:",
         "",
+        "0. queryOnScreen: the text typed in the search box at the top of the page, exactly as written. THIS IS A SEARCH, the same kind of thing as a 'People also ask' entry. Return null if the search box is cropped off or unreadable. Never guess it from the results.",
         "1. aiOverview: is there an AI Overview box (also called SGE or AI answer) above or among the results? true, false, or null if you cannot tell.",
         "2. aiOverviewAnswers: if there is one, does it FULLY answer the search on its own, so a person would have no reason to click anything? true, false, or null. Return null when there is no AI Overview at all, and null when one is present but cut off so you cannot judge it.",
         "3. aiOverviewSatisfies: 0 to 5, how completely that box resolves the search on its own. 0 is it barely touches the question, 5 is a person would have no reason to click anything. Return null when there is no AI Overview, and null when it is cut off so you cannot judge it.",
@@ -184,22 +220,30 @@ export async function readSerp(image: ClaudeImageInput, phrase: string): Promise
         "7. adsAboveFold: how many sponsored or ad results sit above the first normal result. 0 if none, null if you cannot tell.",
         "8. paaQuestions: the questions inside the 'People also ask' box, exactly as written, at most eight. THESE ARE SEARCHES, the same kind of thing as the phrase at the top of this prompt. Empty array if there is no such box.",
         "9. vocabulary: at most twelve single words or two-word terms that the results themselves use for this subject, so we can write in the words already on the page. For example a word the results prefer over its synonym, or the unit a price is quoted in. TERMS ONLY. Never a phrase from a headline, never anything with a full stop in it.",
+        "10. Four questions about whether there is a THING on this page, as against an explanation of a subject. Each true, false, or null.",
+        "   - hasScript:    are there words somebody is meant to SAY or SEND, quoted? A line to read to a customer, a text message, an email template.",
+        "   - hasSteps:     is there a numbered or ordered list of things to do?",
+        "   - hasChecklist: is there a list of things to tick off, a form, or something printable?",
+        "   - videosRank:   are there video results in the visible list, a video carousel or a YouTube result?",
+        "   ‼️ These are four questions about a PICTURE. Do not tell us whether the page is useful, whether the advice is good, or what the steps say. Only whether the thing is on the screen. Do NOT transcribe any of it.",
         "",
         "clientRanks is always null; you have no way to know whose business this is, so never guess it.",
         "",
         "‼️ null IS A REAL ANSWER AND IS BETTER THAN A GUESS. A half-visible page scored as 'no AI Overview' sends this keyword to a page nobody checked. If the screenshot is cropped above the results, blurred, a different search engine, or not a search results page at all, return nulls and say what you saw in evidence.",
         "",
-        "‼️ TRANSCRIBE NOTHING ELSE. No headlines, no snippets, no prices, no advert copy, no sentence from any result, and nothing out of the AI Overview itself. paaQuestions and vocabulary are the only text fields on this form and both are capped. There is no field for anything else and there will not be one.",
+        "‼️ TRANSCRIBE NOTHING ELSE. No headlines, no snippets, no prices, no advert copy, no sentence from any result, and nothing out of the AI Overview itself. queryOnScreen, paaQuestions and vocabulary are the only text fields on this form, all three are SEARCHES or TERMS rather than anybody's writing, and all three are capped. There is no field for anything else and there will not be one.",
         "",
         "confidence is 0 to 1 and measures how much of the results page is legible on this screen. A full first screen, crisp, is 0.9. A narrow phone screenshot showing two results is 0.5. A page with no results visible is 0.",
         "evidence is one short phrase naming what you saw: 'AI Overview then four articles', 'map pack and three directories', 'cropped above the results'.",
       ].join("\n"),
-      user: `Report what is on this Google results page for "${phrase}". Return nulls rather than guesses.`,
+      user: phrase
+        ? `Report what is on this Google results page. Read the search box and report queryOnScreen from it, not from the phrase you were given. Return nulls rather than guesses.`
+        : `Report what is on this Google results page, starting with the search in the box at the top. Return nulls rather than guesses.`,
       images: [image],
-      maxTokens: 900,
+      maxTokens: 1000,
       temperature: 0,
       schemaHint:
-        '{ "aiOverview": boolean|null, "aiOverviewAnswers": boolean|null, "aiOverviewSatisfies": number|null, "resultShape": "articles"|"listings"|"products"|"mixed"|null, "topDomains": string[], "localPack": boolean|null, "paaPresent": boolean|null, "forumRanks": boolean|null, "adsAboveFold": number|null, "paaQuestions": string[], "vocabulary": string[], "clientRanks": null, "evidence": string, "confidence": number }',
+        '{ "queryOnScreen": string|null, "aiOverview": boolean|null, "aiOverviewAnswers": boolean|null, "aiOverviewSatisfies": number|null, "resultShape": "articles"|"listings"|"products"|"mixed"|null, "topDomains": string[], "localPack": boolean|null, "paaPresent": boolean|null, "forumRanks": boolean|null, "adsAboveFold": number|null, "paaQuestions": string[], "vocabulary": string[], "hasScript": boolean|null, "hasSteps": boolean|null, "hasChecklist": boolean|null, "videosRank": boolean|null, "clientRanks": null, "evidence": string, "confidence": number }',
     });
 
     const raw = camelizeKeys(data) as Partial<SerpRead>;
@@ -228,6 +272,15 @@ export async function readSerp(image: ClaudeImageInput, phrase: string): Promise
       // in deference to the worse one.
       paaQuestions: questions(raw.paaQuestions),
       vocabulary: terms(raw.vocabulary),
+      queryOnScreen: queryLine(raw.queryOnScreen),
+      // ‼️ NOT NULLED AGAINST ANYTHING, unlike aiOverviewAnswers above. A script can be in an AI
+      // Overview, in a featured snippet, or in the first organic result, and all three are "there is
+      // a deliverable on this page". Tying these to aiOverview would throw away the reading on every
+      // SERP that has no box, which is most of the ones worth building for.
+      hasScript: tri(raw.hasScript),
+      hasSteps: tri(raw.hasSteps),
+      hasChecklist: tri(raw.hasChecklist),
+      videosRank: tri(raw.videosRank),
       // Never trusted from the model: it cannot know whose business this is.
       clientRanks: null,
       evidence: typeof raw.evidence === "string" ? raw.evidence.slice(0, 160) : "",

@@ -449,6 +449,21 @@ const KEYWORDS_PICK: CommandSpec = {
   mustBeOnTheCard: true,
 };
 
+/**
+ * ‼️ `delete all`, NOT `delete`, AND THE THIRD WORD IS THE POINT. `keywords drop 4` is a soft drop of
+ * one row and is a keystroke away; this empties the set. Spelling it out is the smallest thing that
+ * makes the sentence say what it does, and it still only draws a confirm button.
+ */
+const KEYWORDS_DELETE_ALL: CommandSpec = {
+  label: "keywords delete all",
+  test: /^\s*[`*_]*keywords\s+delete\s+all\b/i,
+  unmistakable: /^\s*[`*_]*keywords\s+delete\s+all\b/i,
+  pointAt: "keyword_set",
+  what: "Keyword commands",
+  implementedIn: "src/lib/clients/client-keywords.ts",
+  mustBeOnTheCard: true,
+};
+
 const KEYWORDS_VARIATIONS: CommandSpec = {
   label: "keywords variations",
   test: /^\s*[`*_]*keywords\s+variations\b/i,
@@ -787,6 +802,7 @@ export const STEP_COMMANDS: Record<StepKey, readonly CommandSpec[]> = {
     KEYWORDS_APPROVE,
     KEYWORDS_APPROVE_SOME,
     KEYWORDS_DROP,
+    KEYWORDS_DELETE_ALL,
     KEYWORDS_MORE,
     KEYWORDS_SHORTLIST,
     KEYWORDS_SERP,

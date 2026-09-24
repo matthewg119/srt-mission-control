@@ -420,10 +420,10 @@ Keywords: 200+ ways the offer is said, approved by me
 | Waits on | `offer_locked`, `avatar_harvest` |
 | Runner | `runKeywordStep()` in `src/lib/clients/client-keywords.ts` |
 | Writes | `client_keywords` |
-| Reads | `audit_reports`, `audit_runs`, `clients` |
+| Reads | `audit_reports`, `audit_runs`, `client_keyword_strategy`, `clients`, `keyword_clusters` |
 | [Done] reads | no table |
 | Dataset fields | 1 needed, 3 wanted |
-| Downstream | steps 13 `custom_question_set`, 14 `page_candidates`, 21 `pre_call_pages` declare they wait on this; `client_keywords` is selected in 3 other file(s), e.g. `src/lib/clients/anchor-ladder.ts`, `src/lib/clients/archive.ts`, `src/lib/clients/keyword-strategy.ts` |
+| Downstream | steps 13 `custom_question_set`, 14 `page_candidates`, 21 `pre_call_pages` declare they wait on this; `client_keywords` is selected in 5 other file(s), e.g. `src/lib/clients/anchor-ladder.ts`, `src/lib/clients/archive.ts`, `src/lib/clients/keyword-cards.ts` |
 
 **[Done] refuses on:**
 
