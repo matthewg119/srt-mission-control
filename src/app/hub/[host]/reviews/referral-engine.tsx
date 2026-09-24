@@ -5,6 +5,7 @@ import type { HubClient } from "@/lib/hub/resolve";
 import { HubLogo } from "@/components/hub/hub-bodies";
 import { REVIEW_PLATFORMS } from "@/lib/hub/review-destinations";
 import { ReferralEngineClient, type ChatLook, type ReviewDestination } from "./referral-engine-client";
+import { VirtualAgentClient, type AgentShell } from "./virtual-agent-client";
 
 /**
  * The three chat looks, and the one everybody gets.
@@ -26,6 +27,30 @@ const DEFAULT_LOOK: ChatLook = "a";
 export function readLook(raw: string | string[] | undefined): ChatLook {
   const value = Array.isArray(raw) ? raw[0] : raw;
   return (LOOKS as readonly string[]).includes(value ?? "") ? (value as ChatLook) : DEFAULT_LOOK;
+}
+
+/**
+ * Which review flow to render, and the one every customer gets.
+ *
+ * ‼️ A SEPARATE AXIS FROM `look`, DELIBERATELY. `look` picks one of three CSS skins over the v1
+ * chat's markup; this picks which chat exists at all. Folding them into one parameter would make
+ * "v1, editorial" and "v2, full screen" unrequestable, and would hand the v2 client a value that
+ * names a ruleset written for a component it is not.
+ *
+ * ‼️ AND THE LIVE ROUTE NEVER CALLS THIS. hub/[host]/page.tsx renders <ReferralEngine client={...} />
+ * with no engine, so DEFAULT_ENGINE is what reviews.{domain} serves and a customer cannot opt into
+ * an unfinished flow by typing a query string. Only the two previews pass it. Cutover is changing
+ * one word below, which is also the moment LIVE_QUESTIONS in review-assemble.ts moves so the
+ * printed QR card stops naming questions the walk no longer asks.
+ */
+const ENGINES = ["v1", "panel", "full"] as const;
+export type ReviewEngine = (typeof ENGINES)[number];
+const DEFAULT_ENGINE: ReviewEngine = "v1";
+
+/** Anything unrecognised is the default. Same rule as readLook: the value reaches a class name. */
+export function readEngine(raw: string | string[] | undefined): ReviewEngine {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return (ENGINES as readonly string[]).includes(value ?? "") ? (value as ReviewEngine) : DEFAULT_ENGINE;
 }
 
 /**
@@ -77,7 +102,31 @@ function destinationsFor(client: HubClient): ReviewDestination[] {
   }));
 }
 
-export function ReferralEngine({ client, look }: { client: HubClient; look?: ChatLook }) {
+export function ReferralEngine({
+  client,
+  look,
+  engine = DEFAULT_ENGINE,
+}: {
+  client: HubClient;
+  look?: ChatLook;
+  engine?: ReviewEngine;
+}) {
+  const destinations = destinationsFor(client);
+  // The three props below mean the same thing to both clients and are commented once, here,
+  // rather than twice in two argument lists that would then drift.
+  //
+  // needsSpanish: the spec requires Spanish for the questions and requires it to be checked by a
+  // native speaker, because a machine translation of a deliberately sentiment-neutral question can
+  // land as a leading one, which is the one thing this tool cannot afford. So Spanish is NOT
+  // generated here. English renders until reviewed copy exists.
+  //
+  // language: the RAW value as well, and not a duplicate of the flag. needsSpanish is true for
+  // "both", so using it to pick the DICTATION language would set es-ES recognition for a bilingual
+  // client and garble every English speaker who taps the microphone. Rendering a Spanish note and
+  // listening in Spanish are different decisions.
+  const needsSpanish = client.language === "es" || client.language === "both";
+  const language = client.language ?? null;
+
   return (
     <>
       {/*
@@ -90,23 +139,25 @@ export function ReferralEngine({ client, look }: { client: HubClient; look?: Cha
         what a customer notices and nobody testing a single page ever does.
       */}
       <HubLogo client={client} />
-      <ReferralEngineClient
-        businessName={client.displayName}
-        clientId={client.id}
-        destinations={destinationsFor(client)}
-        // The spec requires Spanish for the four questions and requires it to be checked by a
-        // native speaker, because a machine translation of a deliberately sentiment-neutral
-        // question can land as a leading one — the one thing this tool cannot afford. So
-        // Spanish is NOT generated here. English renders until reviewed copy exists, the same
-        // refusal isUnwritten() already makes for an unwritten WhatsApp draft.
-        needsSpanish={client.language === "es" || client.language === "both"}
-        // ‼️ THE RAW VALUE AS WELL, and it is not a duplicate of the flag above. needsSpanish is
-        // true for "both", so using it to pick the DICTATION language would set es-ES recognition
-        // for a bilingual client and garble every English speaker who taps the microphone.
-        // Rendering a Spanish note and listening in Spanish are different decisions.
-        language={client.language ?? null}
-        look={look ?? DEFAULT_LOOK}
-      />
+      {engine === "v1" ? (
+        <ReferralEngineClient
+          businessName={client.displayName}
+          clientId={client.id}
+          destinations={destinations}
+          needsSpanish={needsSpanish}
+          language={language}
+          look={look ?? DEFAULT_LOOK}
+        />
+      ) : (
+        <VirtualAgentClient
+          businessName={client.displayName}
+          clientId={client.id}
+          destinations={destinations}
+          needsSpanish={needsSpanish}
+          language={language}
+          shell={engine as AgentShell}
+        />
+      )}
     </>
   );
 }

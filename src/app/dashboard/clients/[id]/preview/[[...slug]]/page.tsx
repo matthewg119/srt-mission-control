@@ -39,7 +39,12 @@ import { hostsFor } from "@/lib/hub/vercel-domains";
 import { HubIndexBody, HubAnswerBody } from "@/components/hub/hub-bodies";
 import { themeStyle } from "@/lib/hub/theme";
 import { EMPTY_SKIN, skinStyle, hubRootClass } from "@/lib/hub/skin";
-import { ReferralEngine, readLook } from "@/app/hub/[host]/reviews/referral-engine";
+import {
+  ReferralEngine,
+  readEngine,
+  readLook,
+  type ReviewEngine,
+} from "@/app/hub/[host]/reviews/referral-engine";
 import type { ChatLook } from "@/app/hub/[host]/reviews/referral-engine-client";
 import { loadCandidates } from "@/lib/clients/hub-skin";
 import {
@@ -71,7 +76,13 @@ export const metadata: Metadata = {
 
 interface Props {
   params: { id: string; slug?: string[] };
-  searchParams: { kind?: string; look?: string; candidate?: string; universe?: string };
+  searchParams: {
+    kind?: string;
+    look?: string;
+    engine?: string;
+    candidate?: string;
+    universe?: string;
+  };
 }
 
 export default async function HubPreview({ params, searchParams }: Props) {
@@ -107,6 +118,8 @@ export default async function HubPreview({ params, searchParams }: Props) {
   // renders the default. readLook() validates rather than interpolates, because the value ends
   // up in a class attribute.
   const look = readLook(searchParams.look);
+  // Which review flow. A separate axis from `look`: see readEngine in referral-engine.tsx.
+  const engine = readEngine(searchParams.engine);
 
   // ‼️ A CANDIDATE IS RENDERED, NEVER STORED, AND THAT IS THE WHOLE POINT OF THE THREE.
   //
@@ -165,6 +178,7 @@ export default async function HubPreview({ params, searchParams }: Props) {
         host={host}
         slug={slug}
         look={look}
+        engine={engine}
         candidateSet={candidateSet}
         candidateSlot={candidate?.slot ?? null}
         universe={universeParam}
@@ -181,7 +195,7 @@ export default async function HubPreview({ params, searchParams }: Props) {
       />
       <div className="hub-wrap">
         {kind === "reviews" ? (
-          <ReferralEngine client={client} look={look} />
+          <ReferralEngine client={client} look={look} engine={engine} />
         ) : slug ? (
           <PreviewAnswer clientId={params.id} host={host} slug={slug} client={client} />
         ) : (
@@ -273,6 +287,7 @@ function PreviewBanner({
   host,
   slug,
   look,
+  engine,
   candidateSet,
   candidateSlot,
   reviewDestinations,
@@ -283,6 +298,7 @@ function PreviewBanner({
   host: string;
   slug?: string;
   look: ChatLook;
+  engine: ReviewEngine;
   candidateSet: SkinCandidateSet | null;
   candidateSlot: number | null;
   reviewDestinations: ReturnType<typeof destinationState>;
@@ -389,11 +405,39 @@ function PreviewBanner({
       )}
       {kind === "reviews" && (
         <span style={{ display: "flex", gap: "8px", alignItems: "baseline" }}>
+          <span style={{ color: "rgba(255,255,255,0.5)" }}>review flow:</span>
+          {[
+            { key: "v1" as const, label: "current" },
+            { key: "panel" as const, label: "agent panel" },
+            { key: "full" as const, label: "agent full screen" },
+          ].map((option) => (
+            <a
+              key={option.key}
+              href={`/dashboard/clients/${clientId}/preview?kind=reviews&engine=${option.key}&look=${look}`}
+              style={{
+                color: option.key === engine ? "#fff" : "#F5A623",
+                fontWeight: option.key === engine ? 700 : 400,
+                textDecoration: option.key === engine ? "none" : "underline",
+              }}
+            >
+              {option.label}
+            </a>
+          ))}
+        </span>
+      )}
+      {/*
+        ‼️ THE THREE CHAT SKINS BELONG TO v1 AND ARE HIDDEN FOR THE OTHER TWO. They are CSS over
+        the v1 chat markup, so on an agent flow they are three links that change a class nothing
+        renders. A control that does nothing is the bug the comment over `looks` complains about,
+        one level up.
+      */}
+      {kind === "reviews" && engine === "v1" && (
+        <span style={{ display: "flex", gap: "8px", alignItems: "baseline" }}>
           <span style={{ color: "rgba(255,255,255,0.5)" }}>chat look:</span>
           {looks.map((option) => (
             <a
               key={option.key}
-              href={`/dashboard/clients/${clientId}/preview?kind=reviews&look=${option.key}`}
+              href={`/dashboard/clients/${clientId}/preview?kind=reviews&engine=${engine}&look=${option.key}`}
               style={{
                 color: option.key === look ? "#fff" : "#F5A623",
                 fontWeight: option.key === look ? 700 : 400,

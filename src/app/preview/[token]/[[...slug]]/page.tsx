@@ -48,7 +48,7 @@ import { listReplica } from "@/lib/hub/replica-pages";
 import { ConciergeEmbed } from "@/lib/concierge/embed";
 import { themeStyle } from "@/lib/hub/theme";
 import { skinStyle, hubRootClass } from "@/lib/hub/skin";
-import { ReferralEngine } from "@/app/hub/[host]/reviews/referral-engine";
+import { ReferralEngine, readEngine, readLook } from "@/app/hub/[host]/reviews/referral-engine";
 import { GHOST_BELOW, GHOST_NOTICE, GHOST_PAGES, ghostAnswerPage } from "@/lib/hub/ghost-content";
 import { universeFontClass } from "@/components/hub/universe-fonts";
 import { UniverseBand, UniverseTop } from "@/components/hub/universe-chrome";
@@ -68,7 +68,20 @@ export const metadata: Metadata = {
 
 interface Props {
   params: { token: string; slug?: string[] };
-  searchParams: { kind?: string; mascot?: string };
+  searchParams: {
+    kind?: string;
+    mascot?: string;
+    /**
+     * Which review flow, and which chat skin inside the old one.
+     *
+     * Both are narrowed by the readers in referral-engine.tsx rather than passed through, because
+     * both reach a class name. This route USED TO DROP `look` ENTIRELY, so the three chat skins
+     * could only be seen on the login-required dashboard preview and never on the link anybody was
+     * actually sent. Same mistake was one edit away for `engine`.
+     */
+    engine?: string;
+    look?: string;
+  };
 }
 
 export default async function TokenPreview({ params, searchParams }: Props) {
@@ -92,6 +105,7 @@ export default async function TokenPreview({ params, searchParams }: Props) {
     domain: string | null;
   });
 
+  const engine = readEngine(searchParams.engine);
   const kind =
     searchParams.kind === "reviews"
       ? "reviews"
@@ -206,11 +220,11 @@ export default async function TokenPreview({ params, searchParams }: Props) {
       // Skin first, theme second. Same order as the live layout; see src/lib/hub/skin.ts.
       style={{ ...skinStyle(client.skin), ...themeStyle(client.theme) }}
     >
-      <PreviewRibbon host={host} slug={slug} />
+      <PreviewRibbon host={host} slug={slug} engine={kind === "reviews" ? engine : null} />
       <UniverseTop universe={kind === "reviews" ? null : client.skin?.universe} name={client.displayName} where={[client.city, client.state].filter(Boolean).join(", ") || null} pages={-1} />
       <div className="hub-wrap">
         {kind === "reviews" ? (
-          <ReferralEngine client={client} />
+          <ReferralEngine client={client} engine={engine} look={readLook(searchParams.look)} />
         ) : slug ? (
           <PreviewAnswer clientId={verified.clientId} host={host} slug={slug} client={client} />
         ) : (
@@ -270,7 +284,16 @@ async function PreviewAnswer({
  * back to the board and no client id: this URL is handed over, and a control that only makes
  * sense to us on a screen somebody else is reading is clutter at best.
  */
-function PreviewRibbon({ host, slug }: { host: string; slug?: string }) {
+function PreviewRibbon({
+  host,
+  slug,
+  engine,
+}: {
+  host: string;
+  slug?: string;
+  /** null on every kind except reviews, where the three flows are the thing being compared. */
+  engine?: string | null;
+}) {
   return (
     <div
       style={{
@@ -290,6 +313,30 @@ function PreviewRibbon({ host, slug }: { host: string; slug?: string }) {
         This is what <code style={{ color: "#fff" }}>{host}</code>
         {slug ? `/${slug}` : ""} will serve. Nothing here is live yet and nothing is indexed.
       </span>
+      {engine ? (
+        // The whole point of this link. Three flows, one deployment, nothing switched on for a
+        // real customer: the live route never reads this parameter.
+        <span style={{ display: "flex", gap: "10px", alignItems: "baseline" }}>
+          <span style={{ opacity: 0.6 }}>review flow:</span>
+          {[
+            { key: "v1", label: "current" },
+            { key: "panel", label: "agent panel" },
+            { key: "full", label: "agent full screen" },
+          ].map((choice) => (
+            <a
+              key={choice.key}
+              href={`?kind=reviews&engine=${choice.key}`}
+              style={{
+                color: engine === choice.key ? "#F5A623" : "rgba(255,255,255,0.75)",
+                fontWeight: engine === choice.key ? 700 : 400,
+                textDecoration: engine === choice.key ? "none" : "underline",
+              }}
+            >
+              {choice.label}
+            </a>
+          ))}
+        </span>
+      ) : null}
     </div>
   );
 }

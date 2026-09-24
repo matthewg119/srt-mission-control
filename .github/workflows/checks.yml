@@ -60,6 +60,15 @@ jobs:
 
       - name: Step verify probe
         run: bun --no-env-file run scripts/_probe-step-verify.ts
+      # ‼️ THE ANTI-GATING RULE WAS A COMMENT UNTIL 2026-09-24. _probe-review-gating.ts has
+      # existed since the stars were added and was referenced in three docs, but it was in no
+      # workflow and no package script, so nothing ran it. It needs no secrets and no database,
+      # which is exactly why there was no reason for it to be missing.
+      - name: Review gating probe (the rating must not route, and neither may a Yes)
+        run: bun --no-env-file run scripts/_probe-review-gating.ts
+
+      - name: Virtual Agent grammar probe (one agent, two surfaces)
+        run: bun --no-env-file run scripts/_probe-virtual-agent-grammar.ts
 
       - name: Headline probes
         run: |

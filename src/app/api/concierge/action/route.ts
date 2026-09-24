@@ -8,6 +8,7 @@
 //   magnet        the page's offer, handed over deterministically (no model decides what is given)
 //   audit_start   a website, then the same self-serve scan srtagency.com/scan runs
 //   audit_status  where that scan is, claimed with their email the moment its report exists
+//   booking       times, a link or a phone number, resolved exactly as the model's tool resolves them
 //
 // ‼️ PUBLIC, SO THE SESSION IS THE GATE. Every action needs a session token, and a session is minted only
 // by /api/concierge/start, which is where `enabled` and the preview grant are checked. The tenant, the
@@ -20,7 +21,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { loadConciergeConfig } from "@/lib/concierge/config";
 import { conciergeAllowed, PREVIEW_TOKEN_PARAM } from "@/lib/concierge/preview-grant";
-import { allowedMagnet } from "@/lib/concierge/engine";
+import { allowedMagnet, onboardingUrl, trackedUrl } from "@/lib/concierge/engine";
+import { resolveBooking } from "@/lib/concierge/booking";
+import { safeTimeZone } from "@/lib/calendly";
 import { deliveryUrlFor } from "@/lib/concierge/magnets";
 import { appendMessage, captureLead, loadConciergeSession, loadMessages, recordDelivered } from "@/lib/concierge/session";
 import { claimScan, isEmail, startScan } from "@/lib/scan/start-claim";
@@ -131,6 +134,59 @@ export async function POST(req: NextRequest) {
     return reply({ ok: true, magnet: { title: magnet.title, promise: magnet.promise, url, cta: magnet.ctaLabel || "Open it" } });
   }
 
+  // ── booking ────────────────────────────────────────────────────
+  //
+  // ‼️ THE KIND EXISTED IN THE TYPE AND NOWHERE ELSE UNTIL NOW. QuickAction.kind has accepted
+  // "booking" since the doors were built, readQuickActions validated it, and neither
+  // quickActionsFor nor the frame's choose() ever handled one. A tenant who put a booking button
+  // in concierge_configs.quick_actions got a button that opened a text box.
+  //
+  // ‼️ IT RESOLVES THE CALL THE SAME WAY offer_booking DOES, by calling the same function. A
+  // second way to work out whether this tenant has a calendar is a second thing to get wrong, and
+  // the failure mode is a visitor being offered a time that does not exist.
+  //
+  // ‼️ NOTHING HERE MARKS THE SESSION BOOKED. Offering a time is not taking one;
+  // /api/concierge/booked records the click.
+  if (action === "booking") {
+    const offer = await resolveBooking({
+      config,
+      timeZone: safeTimeZone(clean(body.tz, 64)),
+      window: "today_tomorrow",
+      // The session carries no place or business on this path, and inventing one would put a
+      // city into a handoff URL that nobody said out loud.
+      fallbackUrl: onboardingUrl(session, null, null),
+    });
+
+    if (offer.mode === "slots") {
+      return reply({
+        ok: true,
+        message: "Here are the next times. Pick whichever suits you.",
+        attachments: offer.slots.map((slot) => ({
+          kind: "slot",
+          key: slot.startTime,
+          title: slot.label,
+          url: trackedUrl(session, slot.url),
+        })),
+      });
+    }
+    if (offer.mode === "link") {
+      return reply({
+        ok: true,
+        message: "Here is the calendar. Pick a time that suits you.",
+        attachments: [{ kind: "booking", key: "link", title: offer.label, url: trackedUrl(session, offer.url) }],
+      });
+    }
+    if (offer.mode === "phone") {
+      return reply({ ok: true, message: `The fastest way is to call ${offer.phone}.`, attachments: [] });
+    }
+    // no_slots and callback both mean: there is nothing to put in front of them right now. Say
+    // so rather than rendering an empty row of buttons.
+    return reply({
+      ok: true,
+      message: "I do not have times to offer this minute. Leave it with me and we will come back to you with some.",
+      attachments: [],
+    });
+  }
   // The audit is SRT's product, offered to a business owner. It is not a button a patient ever sees.
   if ((action === "audit_start" || action === "audit_status") && config.audience !== "owner") {
     return reply({ error: "Not found" }, 404);

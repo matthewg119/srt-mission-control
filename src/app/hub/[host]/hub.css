@@ -531,6 +531,403 @@ body:has(.hub-root) {
 .rev-chat-c .rev-send { border-radius: 6px; padding: 0.55rem 0.9rem; }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   THE VIRTUAL AGENT
+   ───────────────────────────────────────────────────────────────────────────
+   The panel the review chat opens in, and the same grammar the concierge widget in
+   src/app/w/[slug]/route.ts is written in.
+
+   ‼️ SAME NAMES, SEPARATE VALUES, AND THAT IS THE WHOLE ARRANGEMENT. The widget is a
+   hand-written HTML string on another origin with no bundle and no access to these tokens, so
+   the two surfaces cannot share a stylesheet and must not try. What they share is the
+   VOCABULARY: the class list and the token list below are declared identically in both files,
+   and scripts/_probe-virtual-agent-grammar.ts fails if one grows a name the other does not.
+   It deliberately does NOT compare the values. They must not match: the widget carries SRT's
+   accent because it is SRT's product, and this panel carries the client's.
+
+   ‼️ THE CHROME IS THE AGENT'S. THE ACCENT IS THEIRS. --hub-accent and --hub-on-accent are the
+   ONLY --hub-* tokens any .va-* rule may read. The ground, the bubbles, the avatar and the
+   hairlines are fixed on every client, so an owner who buys this for their whole site gets one
+   recognisable product rather than a different widget per page. Buttons, chips and the visitor's
+   own bubbles take their colour, so it still belongs to them. The probe checks that too.
+
+   ‼️ IT IS LIGHT ON EVERY CLIENT, INCLUDING DARK ONES, AND THAT IS DELIBERATE. A panel that
+   inherited --hub-bg would be a near-black rectangle on a white clinic page and a white one on a
+   dark page, which is two products. A floating light card reads as an agent on both. */
+
+.va-shell { position: fixed; inset: 0; z-index: 60; }
+
+.va-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 12, 16, 0.45);
+  backdrop-filter: blur(2px);
+}
+
+.va-panel {
+  /* The eight shared tokens. Same names in src/app/w/[slug]/route.ts, own values. */
+  --va-bg: #ffffff;
+  --va-ink: #14181f;
+  --va-mut: #5b6672;
+  --va-line: #e3e8ec;
+  --va-card: #f2f5f7;
+  --va-radius: 14px;
+  --va-accent: var(--hub-accent);
+  --va-on-accent: var(--hub-on-accent);
+
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--va-bg);
+  color: var(--va-ink);
+  /* The agent's own face, not the client's heading face. A widget set in a clinic's display
+     serif stops reading as software and starts reading as the clinic talking. */
+  font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  border-radius: var(--va-radius);
+  box-shadow: 0 18px 50px rgba(8, 12, 16, 0.3);
+}
+.va-panel:focus { outline: none; }
+
+/* panel: a card floating over the review page, bottom right on a wide screen. The page, the
+   masthead and her stars stay visible behind it, which is what makes this read as an agent
+   joining rather than a navigation. */
+.va-shell-panel .va-panel {
+  right: 1.5rem;
+  bottom: 1.5rem;
+  width: min(28rem, calc(100vw - 3rem));
+  height: min(38rem, calc(100vh - 3rem));
+}
+
+/* full: the same markup, pinned. Kept as one ruleset so the two can be compared on a call and
+   the loser deleted without touching the component. */
+.va-shell-full .va-scrim { display: none; }
+.va-shell-full .va-panel {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* On a phone both shells are the screen. A 28rem card floating inside a 375px viewport is a card
+   with no room for a keyboard under it. */
+@media (max-width: 40rem) {
+  .va-shell-panel .va-panel {
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+  }
+  .va-shell-panel .va-scrim { display: none; }
+}
+
+.va-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.9rem 1rem;
+  border-bottom: 1px solid var(--va-line);
+  flex: 0 0 auto;
+}
+.va-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  background: var(--va-accent);
+  color: var(--va-on-accent);
+  flex: 0 0 auto;
+}
+.va-title { font-weight: 700; font-size: 0.9375rem; }
+
+.va-msgs {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 1rem;
+}
+
+.va-msg {
+  max-width: 85%;
+  padding: 0.65rem 0.85rem;
+  border-radius: var(--va-radius);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.va-msg.is-them {
+  align-self: flex-start;
+  background: var(--va-card);
+  color: var(--va-ink);
+  border-bottom-left-radius: 4px;
+}
+.va-msg.is-her {
+  align-self: flex-end;
+  background: var(--va-accent);
+  color: var(--va-on-accent);
+  border-bottom-right-radius: 4px;
+  font-weight: 500;
+}
+
+/* Three dots. Never a sentence claiming something is happening, because nothing is: the whole
+   script is in the bundle and there is no model in this panel. */
+.va-typing { display: flex; gap: 0.3rem; align-items: center; padding: 0.8rem 0.9rem; }
+.va-typing span {
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 50%;
+  background: var(--va-mut);
+  animation: vaDot 1.2s infinite ease-in-out;
+}
+.va-typing span:nth-child(2) { animation-delay: 0.15s; }
+.va-typing span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes vaDot {
+  0%, 60%, 100% { opacity: 0.25; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-2px); }
+}
+
+/* ── The handover ─────────────────────────────────────────────────────────────
+   What she sees for CONNECTING_MS while the agent arrives and, where there is a microphone,
+   while the browser's permission box is open. It names the pause and claims nothing else. */
+.va-connecting {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.9rem;
+  padding: 2rem 1.5rem;
+  text-align: center;
+}
+.va-connecting-line { margin: 0; font-weight: 600; }
+.va-connecting-note {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--va-mut);
+  max-width: 22rem;
+}
+.va-spinner {
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 2px solid var(--va-line);
+  border-top-color: var(--va-accent);
+  border-radius: 50%;
+  animation: vaSpin 0.9s linear infinite;
+}
+@keyframes vaSpin { to { transform: rotate(360deg); } }
+
+/* ── Chips ────────────────────────────────────────────────────────────────────
+   A column of doors, or a pair of them for a yes/no. Outlined rather than filled: a chip that
+   looks like the send button reads as the thing to press, and on a yes/no neither answer is. */
+.va-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0 1rem 1rem;
+  flex: 0 0 auto;
+}
+.va-chips.is-pair { flex-direction: row; }
+.va-chip {
+  flex: 1 1 auto;
+  font: inherit;
+  font-weight: 600;
+  text-align: center;
+  color: var(--va-accent);
+  background: transparent;
+  border: 1px solid var(--va-accent);
+  border-radius: 999px;
+  padding: 0.7rem 1.1rem;
+  cursor: pointer;
+}
+.va-chips:not(.is-pair) .va-chip { text-align: left; border-radius: 12px; }
+.va-chip:hover { background: var(--va-card); }
+
+/* ── The composer ─────────────────────────────────────────────────────────── */
+.va-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0 1rem 1rem;
+  flex: 0 0 auto;
+}
+
+/* The microphone, as the loud option. Green because Matthew asked for green, and green is not a
+   token: it is the same colour on every client, the way the copy is. */
+.va-mic {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  width: 100%;
+  font: inherit;
+  font-weight: 600;
+  color: #ffffff;
+  background: #17a34a;
+  border: none;
+  border-radius: 999px;
+  padding: 0.8rem 1.2rem;
+  cursor: pointer;
+  animation: vaPulse 2.4s infinite ease-in-out;
+}
+.va-mic span { font-size: 0.7rem; line-height: 1; }
+.va-mic.is-live { background: #b91c1c; animation: none; }
+
+/* An invitation to tap, not an alarm. Stopped outright for anyone who asked for less motion. */
+@keyframes vaPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(23, 163, 74, 0.45); }
+  50% { box-shadow: 0 0 0 0.5rem rgba(23, 163, 74, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .va-mic { animation: none; }
+  .va-typing span { animation: none; opacity: 0.5; }
+  .va-spinner { animation-duration: 3s; }
+}
+
+/* The keyboard, always there. Under the microphone rather than instead of it: voice is the loud
+   default and never a wall. */
+.va-bar { display: flex; gap: 0.5rem; align-items: flex-end; }
+.va-bar textarea {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  font: inherit;
+  /* 16px on the control itself, or iOS zooms the whole panel on focus. */
+  font-size: 16px;
+  color: var(--va-ink);
+  background: var(--va-bg);
+  border: 1px solid var(--va-line);
+  border-radius: 12px;
+  padding: 0.6rem 0.75rem;
+}
+.va-send {
+  font: inherit;
+  font-weight: 700;
+  color: var(--va-on-accent);
+  background: var(--va-accent);
+  border: none;
+  border-radius: 999px;
+  padding: 0.7rem 1.2rem;
+  cursor: pointer;
+}
+.va-send.is-wide { width: 100%; }
+.va-send:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.va-skip {
+  align-self: flex-start;
+  font: inherit;
+  font-size: 0.875rem;
+  color: var(--va-mut);
+  background: transparent;
+  border: none;
+  padding: 0.25rem 0;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   HER WORDS, AND THE RAIL BESIDE THEM (v2)
+   ───────────────────────────────────────────────────────────────────────────
+   ‼️ SCOPED UNDER .rev2-read SO v1 IS UNTOUCHED. The mark classes below are the same ones the
+   v1 notes screen uses, and v1 is the thing v2 is being compared against. Restyling them
+   globally would change both sides of the comparison.
+
+   ‼️ IT POINTS. IT DOES NOT REWRITE. Every rule here paints; none of them offers a replacement,
+   and there is no button in the component that does. "This sentence runs long" is a fact about
+   her sentence. "Try this instead" is us writing her review, which is what FTC 16 CFR Part 465
+   reaches and what this whole tool is built not to do.
+
+   ‼️ COLOUR AND text-decoration ONLY, NEVER A BOX. The mirror has to wrap identically to the
+   textarea on top of it, character for character. A border, an outline, padding or a changed
+   weight on an inline span moves the text under it and drags every later highlight off its word.
+   The colours are mid-tone on purpose: they have to read on a white clinic page AND on a client
+   whose ground is near black, and neither a pale wash nor a dark one does both. */
+
+.rev2-read {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 15rem;
+  gap: 1.5rem;
+  align-items: start;
+  margin-top: 0.5rem;
+}
+@media (max-width: 52rem) {
+  /* The rail goes under the words rather than shrinking beside them. At 15rem it is already as
+     narrow as a two-word label and a number can be. */
+  .rev2-read { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+}
+
+.rev2-read .rev-editor { margin-top: 0; }
+
+/* Sentence shading. Amber runs long, red is packed tight, the same two facts the rail counts. */
+.rev2-read .rev-mirror .rev-hard-long {
+  background: rgba(245, 166, 35, 0.3);
+  box-shadow: none;
+}
+.rev2-read .rev-mirror .rev-hard-dense {
+  background: rgba(239, 68, 68, 0.26);
+  box-shadow: none;
+}
+
+/* Word marks, one colour each so the rail row and the mark are obviously the same thing. */
+.rev2-read .rev-mirror .rev-flag-adverb { text-decoration-color: #3b82f6; }
+.rev2-read .rev-mirror .rev-flag-passive { text-decoration-color: #10b981; }
+.rev2-read .rev-mirror .rev-flag-complex { text-decoration-color: #8b5cf6; }
+
+/* ‼️ A HEDGE IS STRUCK THROUGH, WHICH IS THE ONE MARK THAT LOOKS LIKE AN INSTRUCTION AND IS NOT.
+   Matthew asked for the redundant phrases to be crossed out. A line through "I would say that"
+   says THIS ADDS NOTHING; it does not say what to put there, nothing removes it for her, and the
+   words stay in the box until she deletes them herself. That is the line between pointing and
+   authoring, and it is the whole reason there is no button beside it. */
+.rev2-read .rev-mirror .rev-flag-qualifier {
+  text-decoration-line: line-through;
+  text-decoration-style: solid;
+  text-decoration-color: #ec4899;
+}
+
+.rev2-rail {
+  border: 1px solid var(--hub-rule);
+  border-radius: var(--hub-radius);
+  padding: 0.9rem 1rem;
+  font-size: 0.875rem;
+}
+.rev2-rail-head {
+  margin: 0 0 0.6rem;
+  font-weight: 700;
+  color: var(--hub-fg);
+}
+.rev2-rail-clear { margin: 0; color: var(--hub-muted); }
+.rev2-rail-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.45rem; }
+.rev2-rail-rows li {
+  display: grid;
+  grid-template-columns: 0.75rem 1fr auto;
+  align-items: center;
+  gap: 0.55rem;
+}
+.rev2-rail-label { color: var(--hub-fg); }
+.rev2-rail-n { font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* The key, painted the same way the mark it counts is painted. */
+.rev2-key { display: block; width: 0.75rem; height: 0.75rem; border-radius: 3px; }
+.rev2-key-long { background: rgba(245, 166, 35, 0.85); }
+.rev2-key-dense { background: rgba(239, 68, 68, 0.8); }
+.rev2-key-adverb { background: #3b82f6; }
+.rev2-key-passive { background: #10b981; }
+.rev2-key-complex { background: #8b5cf6; }
+.rev2-key-qualifier { background: #ec4899; }
+
+.rev2-rail-foot {
+  margin: 0.9rem 0 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--hub-rule);
+  font-size: 0.8125rem;
+  color: var(--hub-muted);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    TEMPLATES
    ───────────────────────────────────────────────────────────────────────────
    One class per template, written by skinClass() in src/lib/hub/skin.ts and

@@ -24,9 +24,9 @@ import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { resolveHost } from "@/lib/hub/resolve";
 import {
-  QUESTION_SET_VERSION,
-  REVIEW_QUESTIONS,
+  ALL_REVIEW_QUESTIONS,
   assembleBullet,
+  readQuestionSetVersion,
   type ReviewAnswers,
 } from "@/lib/hub/review-assemble";
 
@@ -85,6 +85,15 @@ export async function POST(req: Request): Promise<NextResponse> {
     privateNote?: unknown;
     /** "I am a real customer and these are my own words." */
     attested?: unknown;
+    /**
+     * Which question set she walked. Narrowed by readQuestionSetVersion, never trusted: it lands
+     * in a not-null text column that every later reader keys off.
+     *
+     * A client that sends nothing is v1, which stamps "v3". Nothing migrates and nothing is
+     * rewritten: the assemblers iterate the questions, so a row contributes no bullet for a key
+     * that set no longer asks.
+     */
+    questionSetVersion?: unknown;
   };
   try {
     body = await req.json();
@@ -112,7 +121,15 @@ export async function POST(req: Request): Promise<NextResponse> {
   // way, and a review that never gets posted still says what a future customer is afraid of.
   const answers: ReviewAnswers = {};
   let any = false;
-  for (const question of REVIEW_QUESTIONS) {
+  // ‼️ BOTH SETS, AND MISSING THIS IS SILENT. If this iterated only the v3 four, a v4 walk would
+  // store nothing, `any` would stay false, and the 400 below is swallowed by the client on
+  // purpose. She would see a working flow and the row would never exist.
+  //
+  // A gate answer cannot arrive here even if one were posted: the yes/no steps live in
+  // review-script.ts and have no key in ReviewQuestion, so there is no iteration that reaches
+  // them and no column they could land in. That is what keeps "Yes" out of page-review.ts, which
+  // reads Object.values() off this bag for quotable review lines.
+  for (const question of ALL_REVIEW_QUESTIONS) {
     const raw = body.answers?.[question.key];
     if (typeof raw !== "string") continue;
     // Stored assembled, exactly as she saw it. Storing the raw string and assembling later
@@ -143,7 +160,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     .from("review_tool_submissions")
     .insert({
       client_id: clientId,
-      question_set_version: QUESTION_SET_VERSION,
+      question_set_version: readQuestionSetVersion(body.questionSetVersion),
       answers,
       posted_destination:
         typeof body.postedDestination === "string" ? body.postedDestination.slice(0, 40) : null,
