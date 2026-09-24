@@ -107,6 +107,16 @@ export function clusterCard(args: {
     }
   }
 
+  // ── THE LANGUAGE MIRROR ───────────────────────────────────────────────────
+  //
+  // ‼️ THIS IS WHY THE READER IS ALLOWED TO BRING ANY TEXT BACK AT ALL, so it had better be on
+  // screen. serp-read.ts refuses headlines, snippets and prices; the two things it may take are
+  // Google's own questions and the words the results use, on the rule that a query is not a claim
+  // and a term is not a sentence. Both exist so the page gets written in the language already on the
+  // results page. Collected across the cluster, because one subject is what the cluster IS.
+  const mirror = mirrorOf(rows.map((r) => r.row));
+  if (mirror.length) blocks.push(...bodySections(mirror));
+
   // Blocked rows last, so the list of what to go and shoot is in one place at the bottom.
   if (gate.blocked.length) {
     blocks.push(
@@ -159,6 +169,40 @@ function scoreRow(clientId: string, row: Finalist, cardIndex: number, rowIndex: 
       value: `${clientId}:${row.id}`,
     },
   };
+}
+
+/**
+ * What the results page calls this subject, and who is on it, across the whole cluster.
+ *
+ * ‼️ DEDUPED ACROSS THE ROWS AND CAPPED, because a cluster is one subject said several ways and its
+ * members return overlapping question sets. Printing all of them would push the card past the
+ * section limit and fail the whole message, which is the failure mode this file is most careful
+ * about.
+ */
+function mirrorOf(rows: readonly Finalist[]): string[] {
+  const questions = unique(rows.flatMap((r) => r.paaQuestions)).slice(0, 8);
+  const terms = unique(rows.flatMap((r) => r.vocabulary)).slice(0, 12);
+  const who = unique(rows.flatMap((r) => r.competitors)).slice(0, 6);
+  const target = rows.find((r) => r.rewrittenTarget)?.rewrittenTarget ?? null;
+
+  const out: string[] = [];
+  if (target) out.push(`*Aim it at:* ${target}`);
+  if (questions.length) out.push(`*They also ask:* ${questions.join(" · ")}`);
+  if (terms.length) out.push(`*Their words:* ${terms.join(", ")}`);
+  if (who.length) out.push(`*Ranking now:* ${who.join(", ")}`);
+  return out;
+}
+
+function unique(values: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of values) {
+    const key = v.trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(v.trim());
+  }
+  return out;
 }
 
 function actionsBlock(clientId: string, clusterId: string | null, gate: ClusterGate, index: number): SlackBlock {

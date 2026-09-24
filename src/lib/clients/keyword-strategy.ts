@@ -121,6 +121,10 @@ async function loadFinalists(
       magnetIdea: null,
       magnetBy: null,
       recommendedAsset: null,
+      rewrittenTarget: null,
+      paaQuestions: [],
+      vocabulary: [],
+      competitors: [],
       readEvidence: null,
       docId: null,
       slackFileId: null,
@@ -172,9 +176,15 @@ async function loadFinalists(
 async function attachReadings(clientId: string, rows: Finalist[]): Promise<void> {
   const reads = await supabaseAdmin
     .from("keyword_serp_reads")
-    .select(
-      "normalized, source, created_at, verdict, doc_id, evidence, click_value, citation_value, route, recommended_asset, magnet_space, magnet_idea, magnet_by"
-    )
+    // ‼️ THE OBSERVATIONS COME BACK TOO, NOT JUST THE SCORES. Every column this lane writes has to
+    // have something that reads it: the audit that started this build found eleven columns written
+    // by one thing and read by another that never saw them, and the data looked correct throughout.
+    // The raw fields feed scripts/_rescore-serp.ts, and the language mirror feeds the card.
+    // ‼️ ONE STRING LITERAL, NEVER A CONCATENATION. The Supabase client parses the select at the type
+    // level to work out the row shape, and it can only do that for a literal: `"a" + "b"` types every
+    // column as GenericStringError and the whole function stops compiling in a way that names the
+    // columns rather than the cause.
+    .select("normalized, source, created_at, verdict, doc_id, evidence, click_value, citation_value, route, recommended_asset, magnet_space, magnet_idea, magnet_by, rewritten_target, top_domains, paa_questions, vocabulary")
     .eq("client_id", clientId)
     .order("created_at", { ascending: false })
     .range(0, 2999);
@@ -200,6 +210,10 @@ async function attachReadings(clientId: string, rows: Finalist[]): Promise<void>
       magnetSpace: numOrNull(r.magnet_space),
       magnetIdea: (r.magnet_idea as string | null) ?? null,
       magnetBy: magnetByOf(r.magnet_by),
+      rewrittenTarget: (r.rewritten_target as string | null) ?? null,
+      topDomains: strings(r.top_domains),
+      paaQuestions: strings(r.paa_questions),
+      vocabulary: strings(r.vocabulary),
     });
     byPhrase.set(key, list);
   }
@@ -238,6 +252,18 @@ async function attachReadings(clientId: string, rows: Finalist[]): Promise<void>
       row.magnetSpace = magnet.magnetSpace;
       row.magnetIdea = magnet.magnetIdea;
       row.magnetBy = magnet.magnetBy;
+      row.rewrittenTarget = magnet.rewrittenTarget;
+    }
+
+    // ‼️ THE LANGUAGE MIRROR, FROM THE NEWEST READING THAT CAPTURED ONE. These are the exact words
+    // the results page uses for this subject, and the whole reason the reader is allowed to bring
+    // any text back at all. They reach the card so the page gets written in the language already on
+    // the SERP rather than in ours.
+    const mirrored = list.find((r) => r.paaQuestions.length || r.vocabulary.length || r.topDomains.length);
+    if (mirrored) {
+      row.paaQuestions = mirrored.paaQuestions;
+      row.vocabulary = mirrored.vocabulary;
+      row.competitors = mirrored.topDomains;
     }
 
     // The newest picture, for the contact sheet. Not necessarily the trusted verdict's.
@@ -284,6 +310,12 @@ function numOrNull(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
+/** A text[] column as strings. Postgres hands back null for an empty array, never []. */
+function strings(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter((x): x is string => typeof x === "string" && x.trim().length > 0);
+}
+
 function magnetByOf(v: unknown): "model" | "person" | null {
   return v === "model" || v === "person" ? v : null;
 }
@@ -312,7 +344,8 @@ export interface RecordVerdictInput {
   model?: string | null;
   /** The magnet judgement, when one was made. Absent is not the same as "there is nothing". */
   magnet?: { space: number | null; idea: string | null; by: "model" | "person" } | null;
-  device?: "mobile" | "desktop" | null;
+  /** The phrasing the page should aim at, when the searched words are not the best target. */
+  rewrittenTarget?: string | null;
 }
 
 /**
@@ -408,8 +441,8 @@ export async function recordVerdict(input: RecordVerdictInput): Promise<{ ok: bo
     // A person is not a legibility score. Recorded as 1 so a typed row never looks like a poor read.
     confidence: source === "typed" ? 1 : (read?.confidence ?? null),
     evidence: read?.evidence ?? (source === "typed" ? "typed in the thread" : null),
+    rewritten_target: input.rewrittenTarget ?? null,
     doc_id: input.docId ?? null,
-    device: input.device ?? null,
     model: input.model ?? null,
     actor,
   });
@@ -770,6 +803,7 @@ export async function recordSerpScreenshot(args: {
   const click = clickValueFrom(read);
   const cite = citationValueFrom(read);
   let magnet: { space: number | null; idea: string | null; by: "model" | "person" } | null = null;
+  let rewrittenTarget: string | null = null;
 
   const { shouldAskMagnet } = await import("./magnet-space");
   if (shouldAskMagnet({ verdict, clickValue: click, citationValue: cite })) {
@@ -782,6 +816,7 @@ export async function recordSerpScreenshot(args: {
     if (judged.magnetSpace !== null || judged.magnetIdea) {
       magnet = { space: judged.magnetSpace, idea: judged.magnetIdea, by: "model" };
     }
+    rewrittenTarget = judged.rewrittenTarget;
   }
 
   const res = await recordVerdict({
@@ -794,6 +829,7 @@ export async function recordSerpScreenshot(args: {
     docId: args.docId ?? null,
     model: SERP_MODEL,
     magnet,
+    rewrittenTarget,
   });
   if (!res.ok) return { message: `:warning: ${res.error}` };
 

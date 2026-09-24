@@ -141,9 +141,6 @@ create table if not exists public.keyword_serp_reads (
   -- ‼️ THIS COLUMN IS THE GATE. A row with source='vision' AND a non-null doc_id is the only thing
   -- that lets a keyword be used. See pictured() in keyword-strategy-rules.ts.
   doc_id            uuid references public.client_docs (id) on delete set null,
-  -- 'mobile' or 'desktop'. Recorded, never inferred, and never used to claim the reading generalises
-  -- past the screen it was taken on.
-  device            text check (device is null or device in ('mobile', 'desktop')),
   model             text,
   actor             text,
 
@@ -174,7 +171,6 @@ alter table public.keyword_serp_reads add column if not exists magnet_space smal
 alter table public.keyword_serp_reads add column if not exists magnet_idea text;
 alter table public.keyword_serp_reads add column if not exists magnet_by text;
 alter table public.keyword_serp_reads add column if not exists rewritten_target text;
-alter table public.keyword_serp_reads add column if not exists device text;
 
 -- Latest-per-keyword is resolved in code, not by a partial unique index: a re-read of the same
 -- phrase next month is a SECOND fact, not a correction of the first. Append only.
@@ -206,7 +202,7 @@ comment on column public.keyword_serp_reads.magnet_idea is
 
 alter table public.keyword_serp_reads enable row level security;
 
--- ── Verify. Expect ONE row saying 35: the original 16 plus the 19 alters above. ──────────────────────────────────────
+-- ── Verify. Expect ONE row saying 34: the original 16 plus the 18 alters above. ──────────────────────────────────────
 select table_name, count(*) as columns
 from information_schema.columns
 where table_schema = 'public' and table_name = 'keyword_serp_reads'

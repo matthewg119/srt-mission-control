@@ -92,6 +92,10 @@ function finalist(phrase: string, opts: Partial<Finalist> = {}): Finalist {
     magnetIdea: null,
     magnetBy: null,
     recommendedAsset: null,
+    rewrittenTarget: null,
+    paaQuestions: [],
+    vocabulary: [],
+    competitors: [],
     readEvidence: null,
     docId: null,
     slackFileId: null,
@@ -342,6 +346,55 @@ for (const shape of RESULT_SHAPES) {
 }
 
 check("the doc_id column is described as the gate", /THIS COLUMN IS THE GATE/.test(SERP_SQL));
+
+// ─────────────────────────────────────────────────────────────────────────────
+console.log("\n6b. every column this migration adds has something that reads it back");
+
+// ‼️ THIS IS THE RULE THE WHOLE BUILD PLAN WAS WRITTEN AROUND, MADE ENFORCEABLE. The audit that
+// started this found ELEVEN columns written by one thing and read by another that never saw them,
+// and the data looked correct the entire time. Two of them were changes made that same week: a merge
+// helper written and never added to its chain, and a column written by one of two writers and read
+// by the other.
+//
+// So the check is not "the column exists" and not "something writes it". It is: does any select
+// anywhere in src/ or scripts/ NAME this column. A write with no read is a fact nobody can ever be
+// wrong about out loud, which is the same as not having recorded it.
+//
+// It runs against the migration rather than a hand-kept list, so a column added tomorrow is covered
+// without anybody remembering to add it here.
+const scriptSrc = readdirSync("scripts")
+  .filter((f) => /\.ts$/.test(f))
+  .map((f) => readFileSync(join("scripts", f), "utf8"))
+  .join("\n");
+const READERS = `${SRC}\n${scriptSrc}`;
+
+const added = [...SERP_SQL.matchAll(/add column if not exists ([a-z_]+)/g)].map((m) => m[1]);
+check("the migration adds the columns this build needs", added.length >= 18, `${added.length} added`);
+
+// ‼️ A SELECT LIST IS NOT ALWAYS WRITTEN INSIDE THE `.select(` CALL. client-keywords.ts keeps its as
+// `const KW_COLUMNS = "..."` and passes the name, and the rescore script does the same, so a check
+// that only looked between `.select(` and its closing bracket would report those columns as dead and
+// be wrong about it. Both shapes are collected here.
+const selectStrings: string[] = [
+  ...[...READERS.matchAll(/\.select\(\s*("(?:[^"\\]|\\.)*")/g)].map((m) => m[1]),
+  ...[...READERS.matchAll(/const\s+[A-Za-z_]*COLUMNS[A-Za-z_]*\s*(?::[^=]+)?=\s*((?:"(?:[^"\\]|\\.)*"\s*\+?\s*)+)/g)].map(
+    (m) => m[1]
+  ),
+];
+const selected = selectStrings.join(" ");
+
+for (const col of added) {
+  // A column is READ when a select list names it. That is the only way this codebase gets a value
+  // back out of PostgREST, so it is the only thing that makes a stored column checkable.
+  const readBack = new RegExp(`\\b${col}\\b`).test(selected);
+  check(`${col} is read back by something`, readBack, "written and never read: either wire it or drop it");
+}
+
+// ‼️ AND THE COLUMN THAT COULD NOT HONESTLY BE WRITTEN WAS DROPPED RATHER THAN LEFT LOOKING USEFUL.
+// `device` was in the first draft of this migration to record mobile against desktop. Nothing can
+// determine it: the reader is forbidden from inferring it and no caller knows it. A dead column that
+// looks like provenance is worse than no column, which is the audit's own verdict on page_kind.
+check("the device column is gone rather than always null", !/\bdevice\b/.test(SERP_SQL));
 
 // ‼️ THE OLD SENTENCE IS QUOTED IN THE FILE ON PURPOSE, inside the paragraph that withdraws it, so a
 // plain "these words are absent" test fails on the correction itself. What matters is that the claim

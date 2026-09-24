@@ -464,6 +464,13 @@ export interface SerpReadRow {
   magnetSpace: number | null;
   magnetIdea: string | null;
   magnetBy: "model" | "person" | null;
+  rewrittenTarget: string | null;
+  /** Hostnames that ranked. A host is a shape, a URL is a claim. */
+  topDomains: string[];
+  /** Google's own question set for this subject. Searches, not sentences. */
+  paaQuestions: string[];
+  /** Which words the results use for it. Terms, never a phrase. */
+  vocabulary: string[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -502,6 +509,19 @@ export interface Finalist {
   magnetIdea: string | null;
   magnetBy: "model" | "person" | null;
   recommendedAsset: RecommendedAsset | null;
+  /** The phrasing the page should aim at, when the searched words are not the best target. */
+  rewrittenTarget: string | null;
+  /**
+   * The language mirror: Google's own question set and the words the results use.
+   *
+   * ‼️ THIS IS WHAT THE READER IS ALLOWED TO BRING BACK TEXT FOR, so it had better be read. A query
+   * is not a claim and a term is not a sentence, and the point of taking either is that the page
+   * gets written in the language already on the results page instead of in ours.
+   */
+  paaQuestions: string[];
+  vocabulary: string[];
+  /** Hostnames that ranked for it. What the brief called competitors_named. */
+  competitors: string[];
   /** The reader's own words about what it saw, so a block can say WHY it is blocked. */
   readEvidence: string | null;
   /** The screenshot, for the contact sheet. Null when the only reading was typed. */
