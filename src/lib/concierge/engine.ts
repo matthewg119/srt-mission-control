@@ -80,7 +80,7 @@ export function asksToBook(text: string): boolean {
 }
 
 /** Where the owner lane hands off. A link, and nothing more: onboarding2 belongs to another lane. */
-function onboardingUrl(session: ConciergeSession, place: Place | null, business: string | null): string {
+export function onboardingUrl(session: ConciergeSession, place: Place | null, business: string | null): string {
   const base = (process.env.CONCIERGE_BOOKING_URL ?? "https://srtagency.com/onboarding2").trim();
   const url = new URL(base);
   if (business) url.searchParams.set("business", business);
@@ -127,7 +127,7 @@ function bookingHopOrigin(session: ConciergeSession): string {
  * before redirecting, because a public route that takes a URL and forwards a browser is an open
  * redirect until it does.
  */
-function trackedUrl(session: ConciergeSession, target: string): string {
+export function trackedUrl(session: ConciergeSession, target: string): string {
   const url = new URL("/api/concierge/booked", bookingHopOrigin(session));
   url.searchParams.set("t", session.sessionToken);
   url.searchParams.set("u", target);

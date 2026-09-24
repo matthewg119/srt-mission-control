@@ -112,9 +112,14 @@ const SCRIPT = `(function(){
  //
  // Matthew, 2026-09-15: "a little emoji in the bottom right side of the website with the ability to be
  // closed ... saying stuff like popup texts ... an extension for the website not a whole chatbot itself."
- // The palette is onboarding2's chat bubble: a near black ground with #00C9A7 as the one accent. Matthew
- // asked for the same object in both places, so the two are deliberately not styled independently.
- var REEF="#00C9A7", INK="#04252b";
+ // The palette is the Virtual Agent's: a white panel with #00C9A7 as the one accent, matching the
+ // frame in src/app/w/[slug]/route.ts. The panel here and the document inside it are ONE OBJECT.
+ // Change one and change the other, or the widget opens as a white card inside a black frame.
+ //
+ // It was near black (#0b1416) until 2026-09-24. The widget is now sold for a client's whole site
+ // rather than living on SRT's own dark pages, and a dark rectangle on a white clinic page reads as
+ // something bolted on. INK is the text that sits ON the accent and is unchanged.
+ var REEF="#00C9A7", INK="#04252b", PANEL="#ffffff", PANEL_FG="#14181f", PANEL_MUT="#5b6672", PANEL_LINE="#e3e8ec";
  var reduce=false;
  try{reduce=window.matchMedia("(prefers-reduced-motion: reduce)").matches}catch(e){}
 
@@ -122,16 +127,16 @@ const SCRIPT = `(function(){
  wrap.style.cssText="position:fixed;z-index:2147483000;display:flex;font:15px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
 
  var panel=document.createElement("div");
- panel.style.cssText="display:none;width:min(380px,calc(100vw - 32px));height:min(580px,calc(100vh - 150px));background:#0b1416;border-radius:16px;overflow:hidden;box-shadow:0 12px 48px rgba(0,0,0,.35)";
+ panel.style.cssText="display:none;width:min(380px,calc(100vw - 32px));height:min(580px,calc(100vh - 150px));background:"+PANEL+";border-radius:16px;overflow:hidden;box-shadow:0 18px 50px rgba(8,12,16,.3)";
 
  // The speech bubble. It carries one line at a time and never the conversation.
  var bubble=document.createElement("div");
  bubble.setAttribute("role","status");
- bubble.style.cssText="display:none;position:relative;max-width:250px;padding:11px 30px 11px 14px;background:#0b1416;color:#eaf4f3;box-shadow:0 8px 28px rgba(0,0,0,.28);cursor:pointer;font-size:14px;line-height:1.4;opacity:0;transform:translateY(6px);transition:opacity .25s,transform .25s";
+ bubble.style.cssText="display:none;position:relative;max-width:250px;padding:11px 30px 11px 14px;background:"+PANEL+";color:"+PANEL_FG+";border:1px solid "+PANEL_LINE+";box-shadow:0 8px 28px rgba(8,12,16,.18);cursor:pointer;font-size:14px;line-height:1.4;opacity:0;transform:translateY(6px);transition:opacity .25s,transform .25s";
  var bubbleText=document.createElement("span");
  var bubbleClose=document.createElement("button");
  bubbleClose.type="button";bubbleClose.setAttribute("aria-label","Stop the messages");bubbleClose.textContent="\\u00d7";
- bubbleClose.style.cssText="position:absolute;top:4px;right:6px;border:0;background:none;color:#7fa3a2;font-size:18px;line-height:1;cursor:pointer;padding:2px 4px";
+ bubbleClose.style.cssText="position:absolute;top:4px;right:6px;border:0;background:none;color:"+PANEL_MUT+";font-size:18px;line-height:1;cursor:pointer;padding:2px 4px";
  bubble.appendChild(bubbleText);bubble.appendChild(bubbleClose);
 
  // The launcher: a pill until the config says there is a mascot.
@@ -145,7 +150,7 @@ const SCRIPT = `(function(){
  var cat=null, catAssets=null, talkLoaded=false;
  var hide=document.createElement("button");
  hide.type="button";hide.setAttribute("aria-label","Hide the assistant");hide.textContent="\\u00d7";
- hide.style.cssText="display:none;position:absolute;top:-4px;left:-4px;width:22px;height:22px;border:0;border-radius:50%;background:#0b1416;color:#cfe3e2;font-size:15px;line-height:22px;text-align:center;cursor:pointer;padding:0;box-shadow:0 2px 8px rgba(0,0,0,.3)";
+ hide.style.cssText="display:none;position:absolute;top:-4px;left:-4px;width:22px;height:22px;border:0;border-radius:50%;background:"+PANEL+";color:"+PANEL_MUT+";border:1px solid "+PANEL_LINE+";font-size:15px;line-height:22px;text-align:center;cursor:pointer;padding:0;box-shadow:0 2px 8px rgba(8,12,16,.2)";
  var launcher=document.createElement("div");
  launcher.style.cssText="position:relative;touch-action:none";
  launcher.appendChild(btn);launcher.appendChild(hide);

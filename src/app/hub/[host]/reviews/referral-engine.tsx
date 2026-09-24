@@ -5,6 +5,7 @@ import type { HubClient } from "@/lib/hub/resolve";
 import { HubLogo } from "@/components/hub/hub-bodies";
 import { REVIEW_PLATFORMS } from "@/lib/hub/review-destinations";
 import { ReferralEngineClient, type ChatLook, type ReviewDestination } from "./referral-engine-client";
+import { VirtualAgentClient } from "./virtual-agent-client";
 
 /**
  * The three chat looks, and the one everybody gets.
@@ -26,6 +27,42 @@ const DEFAULT_LOOK: ChatLook = "a";
 export function readLook(raw: string | string[] | undefined): ChatLook {
   const value = Array.isArray(raw) ? raw[0] : raw;
   return (LOOKS as readonly string[]).includes(value ?? "") ? (value as ChatLook) : DEFAULT_LOOK;
+}
+
+/**
+ * Which review flow to render, and the one every customer gets.
+ *
+ * ‼️ CUT OVER TO `panel` ON 2026-09-24 (Matthew, having walked all three). This is the live
+ * default now: a customer on reviews.{domain} gets the Virtual Agent and the six questions.
+ * The printed QR card follows on its own, because CARD_QUESTIONS in review-script.ts is derived
+ * from the walk rather than kept by hand.
+ *
+ * ‼️ `full` IS GONE, AND IT WAS REJECTED FOR THE REASON IT WAS BUILT TO TEST. Full screen deleted
+ * the masthead and the client's mark, and put the notes step, the reading rail, the attestation,
+ * the destination links and the private note inside a fixed scrolling column. The panel closes
+ * when the walk ends and hands her a normal page, which is where all of that belongs.
+ *
+ * ‼️ `v1` STAYS SELECTABLE IN THE PREVIEWS AND IS NOT THE DEFAULT ANY MORE. It is the flow that
+ * was live until today, so it is the rollback: if the Virtual Agent turns out to cost completions,
+ * changing one word below puts the old one back with no other edit. Delete it once the new one has
+ * run long enough to trust, and delete the probe's second CLIENTS entry with it.
+ *
+ * ‼️ A SEPARATE AXIS FROM `look`, DELIBERATELY. `look` picks one of three CSS skins over the v1
+ * chat's markup; this picks which chat exists at all. Folding them into one parameter would hand
+ * the v2 client a value that names a ruleset written for a component it is not.
+ *
+ * ‼️ THE LIVE ROUTE STILL NEVER CALLS readEngine. hub/[host]/page.tsx renders <ReferralEngine
+ * client={...} /> with no engine, so what reviews.{domain} serves is decided HERE and not by a
+ * query string a visitor can type. Only the previews pass one.
+ */
+const ENGINES = ["v1", "panel"] as const;
+export type ReviewEngine = (typeof ENGINES)[number];
+const DEFAULT_ENGINE: ReviewEngine = "panel";
+
+/** Anything unrecognised is the default. Same rule as readLook: the value reaches a class name. */
+export function readEngine(raw: string | string[] | undefined): ReviewEngine {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return (ENGINES as readonly string[]).includes(value ?? "") ? (value as ReviewEngine) : DEFAULT_ENGINE;
 }
 
 /**
@@ -77,7 +114,36 @@ function destinationsFor(client: HubClient): ReviewDestination[] {
   }));
 }
 
-export function ReferralEngine({ client, look }: { client: HubClient; look?: ChatLook }) {
+export function ReferralEngine({
+  client,
+  look,
+  engine = DEFAULT_ENGINE,
+}: {
+  client: HubClient;
+  look?: ChatLook;
+  engine?: ReviewEngine;
+}) {
+  const destinations = destinationsFor(client);
+  // The three props below mean the same thing to both clients and are commented once, here,
+  // rather than twice in two argument lists that would then drift.
+  //
+  // needsSpanish: the spec requires Spanish for the questions and requires it to be checked by a
+  // native speaker, because a machine translation of a deliberately sentiment-neutral question can
+  // land as a leading one, which is the one thing this tool cannot afford. So Spanish is NOT
+  // generated here. English renders until reviewed copy exists.
+  //
+  // language: the RAW value as well, and not a duplicate of the flag. needsSpanish is true for
+  // "both", so using it to pick the DICTATION language would set es-ES recognition for a bilingual
+  // client and garble every English speaker who taps the microphone. Rendering a Spanish note and
+  // listening in Spanish are different decisions.
+  //
+  // ‼️ ONLY v1 IS HANDED IT. The Virtual Agent has no microphone (removed 2026-09-24, Matthew:
+  // the keyboard is enough), so there is no dictation language for it to get wrong. It still
+  // renders the Spanish note, because who is being handed English questions is a separate fact
+  // from what a recogniser would have listened in.
+  const needsSpanish = client.language === "es" || client.language === "both";
+  const language = client.language ?? null;
+
   return (
     <>
       {/*
@@ -90,23 +156,23 @@ export function ReferralEngine({ client, look }: { client: HubClient; look?: Cha
         what a customer notices and nobody testing a single page ever does.
       */}
       <HubLogo client={client} />
-      <ReferralEngineClient
-        businessName={client.displayName}
-        clientId={client.id}
-        destinations={destinationsFor(client)}
-        // The spec requires Spanish for the four questions and requires it to be checked by a
-        // native speaker, because a machine translation of a deliberately sentiment-neutral
-        // question can land as a leading one — the one thing this tool cannot afford. So
-        // Spanish is NOT generated here. English renders until reviewed copy exists, the same
-        // refusal isUnwritten() already makes for an unwritten WhatsApp draft.
-        needsSpanish={client.language === "es" || client.language === "both"}
-        // ‼️ THE RAW VALUE AS WELL, and it is not a duplicate of the flag above. needsSpanish is
-        // true for "both", so using it to pick the DICTATION language would set es-ES recognition
-        // for a bilingual client and garble every English speaker who taps the microphone.
-        // Rendering a Spanish note and listening in Spanish are different decisions.
-        language={client.language ?? null}
-        look={look ?? DEFAULT_LOOK}
-      />
+      {engine === "v1" ? (
+        <ReferralEngineClient
+          businessName={client.displayName}
+          clientId={client.id}
+          destinations={destinations}
+          needsSpanish={needsSpanish}
+          language={language}
+          look={look ?? DEFAULT_LOOK}
+        />
+      ) : (
+        <VirtualAgentClient
+          businessName={client.displayName}
+          clientId={client.id}
+          destinations={destinations}
+          needsSpanish={needsSpanish}
+        />
+      )}
     </>
   );
 }

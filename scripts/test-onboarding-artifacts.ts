@@ -443,7 +443,13 @@ const cardText = pdfText(
 
 ok("the card carries the clinic name", /Acme Med Spa/.test(cardText));
 ok("and the promise", /Ninety seconds/.test(cardText));
-ok("and the four questions come from REVIEW_QUESTIONS", /worried about before you came in/.test(cardText));
+// ‼️ THE GATE'S OWN WORDING, NOT THE FOLLOW-UP'S. The card prints what she is asked without
+// conditions: the three free-text questions plus the three yes/no gates. If this ever matches
+// "What were they?" or "Tell us about it." the card has started printing follow-ups, which read
+// as nonsense in a numbered list on card stock.
+ok("the card names the service question", /What service did you get done with us/.test(cardText));
+ok("and asks the gate, not its follow-up", /Did you have any expectations/.test(cardText));
+ok("and never prints a bare follow-up", !/Tell us about it|What were they/.test(cardText));
 ok("and the reassurance", /Nothing is posted unless you post it/.test(cardText));
 // ‼️ Every one of these is a rule from the build spec, not a style preference.
 ok("no star rating", !/star/i.test(cardText));
@@ -1437,21 +1443,52 @@ eq(
     /function assembleLabelled/.test(src) && /function assemblePlain/.test(src)
   );
 
-  const client = fs.readFileSync(
-    path.join(__dirname, "..", "src", "app", "hub", "[host]", "reviews", "referral-engine-client.tsx"),
-    "utf8"
-  );
-  // The whisper transcriber must never be wired into the customer-facing tool: review_tool_
-  // submissions has nowhere to put an identity and a voice is more identifying than any column
-  // it refuses.
-  //
-  // Matched on the IMPORT LINE ONLY, deliberately. The file header names transcribeAudio() at
-  // length to explain why it is not used, and a check that fired on the mention would force
-  // somebody to delete the explanation to make the test pass — which is how the reasoning gets
-  // lost and the helper gets wired in a year later.
+  // ‼️ BOTH CLIENTS. v2 is a second rendering of the same regulated surface, and a check that
+  // reads only v1 is a check somebody can walk around by writing a new file.
+  for (const file of ["referral-engine-client.tsx", "virtual-agent-client.tsx"]) {
+    const client = fs.readFileSync(
+      path.join(__dirname, "..", "src", "app", "hub", "[host]", "reviews", file),
+      "utf8"
+    );
+    // The whisper transcriber must never be wired into the customer-facing tool: review_tool_
+    // submissions has nowhere to put an identity and a voice is more identifying than any column
+    // it refuses.
+    //
+    // Matched on the IMPORT LINE ONLY, deliberately. The file header names transcribeAudio() at
+    // length to explain why it is not used, and a check that fired on the mention would force
+    // somebody to delete the explanation to make the test pass, which is how the reasoning gets
+    // lost and the helper gets wired in a year later.
+    ok(
+      `${file} never imports the transcriber`,
+      !/^\s*import[^\n]*voice-notes/m.test(client)
+    );
+  }
+}
+
+// ── The assembly order is pinned, because stored rows depend on it ───────────
+//
+// ‼️ THIS IS THE ONE THAT PROTECTS REVIEWS ALREADY WRITTEN. assembleLabelled and assemblePlain
+// iterate ALL_REVIEW_QUESTIONS, so its order decides the order of the sentences a customer copies.
+// v3 rows hold only v3 keys, so as long as the v3 four come FIRST and in their original order, a
+// row written last month comes back byte for byte what its author saw and approved. Reorder the
+// spread and stored reviews silently re-assemble into an order nobody agreed to.
+{
+  const { ALL_REVIEW_QUESTIONS, REVIEW_QUESTIONS, REVIEW_QUESTIONS_V4 } =
+    require("../src/lib/hub/review-assemble") as typeof import("../src/lib/hub/review-assemble");
+
   ok(
-    "the AI Referral Engine never imports the transcriber",
-    !/^\s*import[^\n]*voice-notes/m.test(client)
+    "ALL_REVIEW_QUESTIONS opens with the v3 set, in order",
+    JSON.stringify(ALL_REVIEW_QUESTIONS.slice(0, REVIEW_QUESTIONS.length)) ===
+      JSON.stringify(REVIEW_QUESTIONS)
+  );
+  ok(
+    "and closes with the v4 set, in order",
+    JSON.stringify(ALL_REVIEW_QUESTIONS.slice(REVIEW_QUESTIONS.length)) ===
+      JSON.stringify(REVIEW_QUESTIONS_V4)
+  );
+  ok(
+    "no key appears in both sets",
+    new Set(ALL_REVIEW_QUESTIONS.map((q) => q.key)).size === ALL_REVIEW_QUESTIONS.length
   );
 }
 

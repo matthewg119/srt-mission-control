@@ -269,7 +269,16 @@ async function ownReviewText(clientId: string): Promise<string> {
     .limit(200);
 
   return (data ?? [])
-    .map((r) => JSON.stringify(r.answers ?? {}))
+    // ‼️ HER WORDS, NOT THE KEY NAMES. This used to JSON.stringify the whole bag, which put
+    // "worried", "hoping", "surprised" and "happened" into the haystack that scores
+    // inOwnReviews. It was always slightly wrong and v4 makes it badly wrong: a key called
+    // "service" would match nearly every harvested phrase a clinic has, and the damage would
+    // show up weeks later as page scores nobody could explain.
+    .map((r) =>
+      Object.values((r.answers ?? {}) as Record<string, unknown>)
+        .filter((v): v is string => typeof v === "string")
+        .join(" ")
+    )
     .join(" ")
     .toLowerCase();
 }

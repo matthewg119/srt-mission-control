@@ -217,10 +217,21 @@ for (const key of Object.keys(style)) {
 // "order", and `border: 1px` contains the literal substring `order: 1`, so the naive greps
 // failed on correct CSS. Same discipline as the payment-file grep, which strips comments for
 // the same reason.
-const templateCss = css.slice(css.indexOf("TEMPLATES")).replace(/\/\*[\s\S]*?\*\//g, "");
+//
+// ‼️ ANCHORED ON THE BANNER, NOT ON THE FIRST MENTION OF THE WORD. This used to slice from
+// css.indexOf of the bare string TEMPLATES, which finds the PROSE at the top of the chat-look
+// block, some four hundred lines above the banner itself. Everything written between those two
+// points was being checked as though it were a template, so the Virtual Agent scrim, which is
+// legitimately hidden in the full-screen shell, failed a check about templates deleting the
+// product. The banner line is the section boundary and is what this was always meant to mean.
+const bannerAt = css.search(/^ {3}TEMPLATES$/m);
+const templateCss = css.slice(bannerAt).replace(/\/\*[\s\S]*?\*\//g, "");
 const declares = (prop: string, value: string): RegExp =>
   new RegExp(`(^|[\\s;{])${prop}\\s*:\\s*${value}`, "m");
 
+// The boundary is load bearing now, so assert it exists rather than silently slicing from -1,
+// which would check the WHOLE file and then pass or fail for the wrong reason.
+ok("the TEMPLATES banner is where the template rules start", bannerAt > 0);
 ok("no template sets display:none", !declares("display", "none").test(templateCss));
 ok("no template sets visibility:hidden", !declares("visibility", "hidden").test(templateCss));
 ok("no template inserts content", !declares("content", '"').test(templateCss));

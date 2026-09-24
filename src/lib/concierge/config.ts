@@ -211,6 +211,18 @@ function readQuickActions(raw: unknown): QuickAction[] | null {
  * ‼️ AN OWNER IS OFFERED THE AUDIT AND A PATIENT IS NOT. The free AI visibility audit is something SRT sells
  * to a business; on a med spa's own site the reader is a patient, and an audit button there would pitch our
  * product to our client's customers. The magnet button carries the page's own offer either way.
+ *
+ * ‼️ "booking" IS A VALID KIND AND IS DELIBERATELY NOT A DEFAULT, which is not the same as the
+ * dangling slot it used to be. Until 2026-09-24 the type accepted it, readQuickActions validated
+ * it, and nothing emitted or handled one, so a tenant who configured a booking button got a button
+ * that opened a text box. The frame and /api/concierge/action now implement it properly.
+ *
+ * It stays out of the DEFAULTS because of the stacking rule: bookingGate() will not let the bot
+ * raise the call until two free things have been handed over, and a Book a call button in the very
+ * first bubble is that same ask, one pixel to the left. The call reaches a visitor two ways that
+ * both respect the gate: as a per-turn chip once chipsFor() sees it open, and as a tenant override
+ * in concierge_configs.quick_actions, which is a human deciding for one client rather than a
+ * default deciding for all of them.
  */
 export function quickActionsFor(config: Pick<ConciergeConfig, "audience" | "quickActions">): QuickAction[] {
   if (config.quickActions) return config.quickActions;

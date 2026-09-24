@@ -524,6 +524,7 @@ export const OFFERS: readonly Offer[] = [
       "The words your front desk says at checkout",
       "A one tap request link for the counter",
       "We watch your review profiles weekly",
+      "We turn your reviews into content so AI quotes you",
     ],
     cta: "Start free",
     guarantee: null,
@@ -540,6 +541,13 @@ export const OFFERS: readonly Offer[] = [
       { text: "The words your front desk says at checkout" },
       { text: "A one tap request link for the counter" },
       { text: "We watch your review profiles weekly" },
+      // ‼️ THE ONLY LINE ON THE FREE CARD THAT IS NOT ABOUT COLLECTING A REVIEW, AND IT IS THE
+      // ONE THAT SELLS THE PROGRAM. Everything above it gets them more reviews, which every
+      // reputation tool claims. This one says what we do with them afterwards, which is the
+      // argument for the paid plans made once, free, on the card somebody is about to take for
+      // nothing. It is a real deliverable: page_sources already carries CUSTOMER_REVIEW rows
+      // collected_via 'review_tool', and page-review.ts reads submissions into page quotes.
+      { text: "We turn your reviews into content so AI quotes you", tag: "FREE" },
     ],
   },
   {
