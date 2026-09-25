@@ -25,7 +25,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
-import { ingestLead } from "@/lib/lead-intake";
+import { pageFromRequest, ingestLead } from "@/lib/lead-intake";
 import { clean, normalizePhone, validEmail } from "@/lib/medspa/validate";
 import { normalizeTarget } from "@/lib/scan/normalize";
 import { hashIp, clientIpFrom } from "@/lib/scan/session";
@@ -238,6 +238,7 @@ export async function POST(req: NextRequest) {
       businessName: report.business ?? undefined,
       city: report.city ?? undefined,
       source: "chatgpt-ads",
+      sourcePage: pageFromRequest(req, "/chatgpt-ads"),
       // No RingOut on this funnel. The whole point of Call Me Now is that a human dials, and
       // an automated callback firing alongside it means the lead's phone rings twice from two
       // different numbers before anybody has said anything.

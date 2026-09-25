@@ -94,6 +94,10 @@ jobs:
       # card implying a score per pillar promises a shape the report contradicts a minute later.
       - name: Audit wait probe (it teaches, and claims nothing)
         run: bun --no-env-file run scripts/_probe-audit-wait.ts
+      # Section 2 is the one with teeth: it derives the ingestLead census from the tree, so a twelfth
+      # caller cannot be added without either passing a source page or saying why there is none.
+      - name: Lead card probe (every lead source names its page)
+        run: bun --no-env-file run scripts/_probe-lead-card.ts
 
       - name: Headline probes
         run: |

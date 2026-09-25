@@ -127,6 +127,10 @@ export async function POST(req: NextRequest) {
         ...(phone ? { phone } : {}),
         ...(website ? { website } : {}),
         source: "concierge",
+        // ‼️ THE SAME `where` THAT WAS ALREADY BEING BUILT, NOW ON THE CARD TOO. It went into the
+        // headline and a detailLine, and both of those are the thread reply: the "1 reply" under the card
+        // that nobody opens. The widget is the one lead source that always knows the exact page.
+        sourcePage: where,
         // ‼️ STILL FALSE EVEN THOUGH THERE IS NOW A PHONE, AND THAT IS MATTHEW'S CALL (2026-09-25).
         // It was false before because the concierge collected no number, so it cost nothing either way.
         // The referral walk collects one, which turns this from a leftover into a decision: nothing

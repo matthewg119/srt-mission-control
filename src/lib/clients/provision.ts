@@ -683,6 +683,11 @@ async function linkToCrm(
       businessName: who.legalName,
       city: who.city || undefined,
       source: "aeo_pilot",
+      // ‼️ NO sourcePage: A PILOT START IS NOT A PAGE VISIT. This is the fallback when enrichLead
+      // found no existing contact, and by then the lead came through /onboarding2, which already recorded
+      // its own page when it created them. Writing one here would overwrite the real front door with the
+      // place the paperwork was finished.
+      sourcePage: undefined,
       noteTitle: "Pilot started",
       headline,
       detailLines,

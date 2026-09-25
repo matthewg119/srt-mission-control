@@ -9,6 +9,18 @@ import { supabaseAdmin } from "@/lib/db";
 import { slack, SlackBlock } from "@/lib/slack-bot";
 import { CONTACT_FIELD_MAP, pickTrackedFields, formatValue } from "@/lib/field-map";
 
+/**
+ * Where a link on a lead card points.
+ *
+ * ‼️ THE HOST WAS WRITTEN OUT FIVE TIMES IN THIS FILE, and api/leads/capture/route.ts next door
+ * already read NEXT_PUBLIC_APP_URL for the same links. Five literals is five places to miss on the day
+ * the host changes, and a card is the one surface where a wrong link is invisible until somebody taps it.
+ * The production default is kept so a missing env var cannot produce a relative link in Slack.
+ */
+function appBase(): string {
+  return (process.env.NEXT_PUBLIC_APP_URL || "").trim().replace(/\/+$/, "") || "https://mission.srtagency.com";
+}
+
 export type LeadThreadAction =
   | "create"
   | "update"
@@ -23,7 +35,12 @@ export type LeadThreadAction =
   | "auto_dnq";
 
 /** Subset of fields shown in the initial top-level Slack message.
- *  Empty values are filtered out at render time, so the message stays short. */
+ *  Empty values are filtered out at render time, so the message stays short.
+ *
+ *  ‼️ source_page SITS NEXT TO source DELIBERATELY (2026-09-25). Until today a card said
+ *  "Source: concierge" and nothing about WHICH page, so no lead in this channel was attributable
+ *  without opening a thread reply that nobody opens. The two belong together: one is the origin tag
+ *  every query groups by, the other is the URL a person recognises. */
 const INITIAL_KEY_FIELDS = [
   "first_name",
   "last_name",
@@ -36,6 +53,7 @@ const INITIAL_KEY_FIELDS = [
   "monthly_revenue",
   "credit_score",
   "source",
+  "source_page",
   "application_stage",
   "application_completion_pct",
 ] as const;
@@ -143,12 +161,17 @@ function formatInitialBlocks(contact: ContactRow): SlackBlock[] {
     });
   }
 
+  // ‼️ /dashboard/pipeline DOES NOT EXIST AND NEVER DID (fixed 2026-09-25). Every lead card in the
+  // history of this channel carried it, Slack unfurled it, and the unfurl read
+  // "mission.srtagency.com 404: This page could not be found" under the lead. src/app/dashboard has no
+  // `pipeline` directory. /contacts/[id] does exist and is the page somebody actually wants: this lead,
+  // not a board of all of them.
   blocks.push({
     type: "context",
     elements: [
       {
         type: "mrkdwn",
-        text: `Contact ID: \`${contact.id}\` • <https://mission.srtagency.com/dashboard/pipeline|View in Mission Control>`,
+        text: `Contact ID: \`${contact.id}\` • <${appBase()}/contacts/${contact.id}|View in Mission Control>`,
       },
     ],
   });
@@ -160,8 +183,8 @@ function formatInitialBlocks(contact: ContactRow): SlackBlock[] {
     text: {
       type: "mrkdwn",
       text:
-        `📱 *<https://mission.srtagency.com/api/vcard/${vcardId}|Save to iPhone Contacts>*` +
-        ` · <https://mission.srtagency.com/contacts/${vcardId}|Open contact card>`,
+        `📱 *<${appBase()}/api/vcard/${vcardId}|Save to iPhone Contacts>*` +
+        ` · <${appBase()}/contacts/${vcardId}|Open contact card>`,
     },
   });
 
@@ -172,7 +195,7 @@ function formatInitialBlocks(contact: ContactRow): SlackBlock[] {
         type: "button",
         action_id: "save_contact_vcard",
         text: { type: "plain_text", text: "💾 Save Contact", emoji: true },
-        url: `https://mission.srtagency.com/api/vcard/${vcardId}`,
+        url: `${appBase()}/api/vcard/${vcardId}`,
       },
       {
         type: "button",
@@ -362,8 +385,8 @@ function formatUpdateBlocks(
       text: {
         type: "mrkdwn",
         text:
-          `📱 *<https://mission.srtagency.com/api/vcard/${vcardId}|Save to iPhone Contacts>*` +
-          ` · <https://mission.srtagency.com/contacts/${vcardId}|Open contact card>`,
+          `📱 *<${appBase()}/api/vcard/${vcardId}|Save to iPhone Contacts>*` +
+          ` · <${appBase()}/contacts/${vcardId}|Open contact card>`,
       },
     });
     blocks.push({
@@ -373,7 +396,7 @@ function formatUpdateBlocks(
           type: "button",
           action_id: "save_contact_vcard",
           text: { type: "plain_text", text: "💾 Save Contact", emoji: true },
-          url: `https://mission.srtagency.com/api/vcard/${vcardId}`,
+          url: `${appBase()}/api/vcard/${vcardId}`,
         },
         {
           type: "button",
@@ -440,7 +463,10 @@ export async function postOrThreadLeadUpdate(opts: {
 
       let postedTs: string | null = null;
       try {
-        const res = (await slack.postMessage(channel, fallbackText, blocks)) as {
+        // ‼️ NO UNFURL ON A LEAD CARD, EVER. The card's own blocks ARE the summary; a preview card
+        // underneath it is Slack summarising our summary, and it pushes the buttons off the first screen.
+        // Before this the card drew two of them, one of which rendered a 404 page under the lead.
+        const res = (await slack.postMessage(channel, fallbackText, blocks, { unfurl: false })) as {
           ok?: boolean;
           ts?: string;
           channel?: string;
@@ -488,7 +514,8 @@ export async function postOrThreadLeadUpdate(opts: {
         contact.slack_channel || channel,
         contact.slack_thread_ts,
         headline,
-        blocks
+        blocks,
+        { unfurl: false }
       );
     } catch (err) {
       console.error("[lead-thread] postThreadReply failed:", err);
