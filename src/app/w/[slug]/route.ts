@@ -32,6 +32,7 @@ import { frameAncestorsFor, loadConciergeConfig } from "@/lib/concierge/config";
 import { conciergeAllowed, PREVIEW_TOKEN_PARAM } from "@/lib/concierge/preview-grant";
 import { REFERRAL_NO_TIMES, REFERRAL_SCRIPT, REFERRAL_TIMES_COPY } from "@/lib/concierge/referral-script";
 import { REPORT_PIVOT } from "@/lib/concierge/report-pivot";
+import { AUDIT_WAIT_CARDS, WAIT_CARD_MS, WAIT_FIRST_MS } from "@/lib/concierge/audit-wait";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -158,7 +159,13 @@ body{background:var(--va-bg);color:var(--va-ink);font:15px/1.5 -apple-system,Bli
 .va-err{color:#b91c1c;font-size:13px;min-height:1em}
 .va-progress{height:6px;border-radius:99px;background:var(--va-line);overflow:hidden;margin-top:8px}
 .va-progress i{display:block;height:100%;width:8%;background:var(--va-accent);transition:width .6s}
-@media (prefers-reduced-motion: reduce){.va-typing span{animation:none;opacity:.5}}
+/* The teaching card shown while the audit runs. ONE bubble whose text is swapped, never a third and a
+   fourth appended: on a 375px panel three more bubbles would push the progress bar off the top, and the
+   bar is the thing somebody is actually watching. See src/lib/concierge/audit-wait.ts. */
+.va-teach{opacity:1;transition:opacity .35s}
+.va-teach.is-fading{opacity:0}
+.va-teach b{display:block;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--va-mut);margin-bottom:3px}
+@media (prefers-reduced-motion: reduce){.va-typing span{animation:none;opacity:.5}.va-teach{transition:none}}
 </style></head><body class="va-panel">
 <header class="va-head"><span class="va-avatar" aria-hidden="true">&#9679;</span><span class="va-title">${esc(title)}</span><button class="va-x" id="x" type="button" aria-label="Close">&times;</button></header>
 <div id="log" class="va-msgs" role="log" aria-live="polite"></div>
@@ -175,6 +182,14 @@ body{background:var(--va-bg);color:var(--va-ink);font:15px/1.5 -apple-system,Bli
  var REF_NONE=${JSON.stringify(REFERRAL_NO_TIMES)};
  var REF_TIMES=${JSON.stringify(REFERRAL_TIMES_COPY)};
  var PIVOT=${JSON.stringify(REPORT_PIVOT)};
+ // ‼️ THE THREE PILLARS, WRITTEN IN ONE PLACE AND NOT GENERATED. src/lib/concierge/audit-wait.ts
+ // holds the copy and the timings, every string through copy-guard at build time. The scan is the part of
+ // this conversation where a model knows least, so it is the last place to let one write.
+ var WAIT=${JSON.stringify(AUDIT_WAIT_CARDS)};
+ var WAIT_MS=${WAIT_CARD_MS}, WAIT_FIRST=${WAIT_FIRST_MS};
+ // Read once, like embed.js does. Governs whether the card crossfades or simply changes.
+ var animate=true;
+ try{animate=!window.matchMedia("(prefers-reduced-motion: reduce)").matches}catch(e){}
  function api(p){return PASS?p+(p.indexOf("?")<0?"?":"&")+PASS:p}
  var log=document.getElementById('log'),form=document.getElementById('f'),input=document.getElementById('i'),send=document.getElementById('s');
  var token=null,busy=false,opening='',contact=false,firstName='',pending=null,mode='',turnChips=null;
@@ -462,17 +477,62 @@ body{background:var(--va-bg);color:var(--va-ink);font:15px/1.5 -apple-system,Bli
   }).catch(function(){wait.remove();bubble('a','That did not go through. Type your question below.');startTyping()});
  }
 
+ // ‼️ THE WAIT TEACHES THE THREE THINGS THE REPORT IS ABOUT TO SCORE. Three minutes of a progress
+ // bar and one sentence was three minutes of nothing; somebody who waits it out should come out of it
+ // understanding what they are about to read. It teaches and does not sell, because the sell needs a
+ // finding and there is not one yet.
+ //
+ // ‼️ ONE BUBBLE, TEXT SWAPPED, NEVER APPENDED. Three more bubbles on a 375px panel push the
+ // progress bar off the top, and the bar is the thing being watched. Swapping keeps the height fixed.
+ //
+ // ‼️ AND IT STOPS THE INSTANT THE REPORT LANDS, MID ROTATION. The timer is cleared in the same
+ // branch that draws the report link, so a card can never appear under "your report is ready".
+ function teachWhileWaiting(){
+  var card=el('va-msg is-them va-teach');
+  var name=document.createElement('b');
+  var body=document.createElement('span');
+  card.appendChild(name);card.appendChild(body);
+  var timer=null, fade=null;
+
+  function show(i){
+   name.textContent=WAIT[i].title;
+   body.textContent=WAIT[i].body;
+   height();
+   // The last card stays up for the rest of the scan rather than looping. Somebody who has read all
+   // three does not need them again, and a rotation that came back round reads as a carousel.
+   if(i+1<WAIT.length)timer=setTimeout(function(){swap(i+1)},WAIT_MS);
+  }
+
+  function swap(i){
+   if(!animate){show(i);return}
+   card.className='va-msg is-them va-teach is-fading';
+   fade=setTimeout(function(){card.className='va-msg is-them va-teach';show(i)},350);
+  }
+
+  timer=setTimeout(function(){show(0)},WAIT_FIRST);
+  return {stop:function(){
+   if(timer)clearTimeout(timer);
+   if(fade)clearTimeout(fade);
+   timer=null;fade=null;
+   // ‼️ THE CARD IS REMOVED, NOT LEFT IN THE LOG. It is furniture for the wait, and a visitor
+   // scrolling back through the conversation afterwards should find what they said and what was found,
+   // not a lesson they have already had. It is only ever removed once the wait is over.
+   if(card.parentNode)card.parentNode.removeChild(card);
+  }};
+ }
+
  function watchAudit(scanId,domain){
   var b=bubble('a','Running the audit on '+domain+'. I am asking the AI assistants the questions your customers ask. You can keep browsing; the report will also land in your inbox.');
   var bar=document.createElement('div');bar.className='va-progress';var fill=document.createElement('i');bar.appendChild(fill);b.appendChild(bar);
   var started=Date.now(),done=false;
+  var teach=teachWhileWaiting();
   function tick(){
    if(done)return;
    post('/api/concierge/action',{token:token,action:'audit_status',scanId:scanId}).then(function(d){
     var pct=d.engine&&d.engine.total?Math.round(100*d.engine.done/d.engine.total):Math.min(90,Math.round((Date.now()-started)/2000));
     fill.style.width=Math.max(8,Math.min(100,pct))+'%';
-    if(d.reportUrl){done=true;fill.style.width='100%';var r=bubble('a',PIVOT.ready);link(r,d.reportUrl,'Open my report');afterAudit(d.weakest);height();return}
-    if(d.status==='failed'){done=true;bubble('a',(d.error||'That audit could not finish.')+' Type below and I will help directly.');startTyping();return}
+    if(d.reportUrl){done=true;teach.stop();fill.style.width='100%';var r=bubble('a',PIVOT.ready);link(r,d.reportUrl,'Open my report');afterAudit(d.weakest);height();return}
+    if(d.status==='failed'){done=true;teach.stop();bubble('a',(d.error||'That audit could not finish.')+' Type below and I will help directly.');startTyping();return}
     setTimeout(tick,6000);
    }).catch(function(){setTimeout(tick,9000)});
   }
