@@ -776,7 +776,12 @@ export function strategyLines(
   unplaced: readonly Finalist[],
   byId: Map<string, Finalist>,
   clientName: string,
-  locked: boolean
+  locked: boolean,
+  /**
+   * What a person decided about each STORED cluster, by label. Empty is a legitimate state: a
+   * database without the strategy migration, or a strategy nobody has approved or rejected yet.
+   */
+  verdicts: Map<string, ClusterVerdict> = new Map()
 ): string[] {
   const lines: string[] = [
     `*Keyword strategy for ${clientName}.* ${clusters.length} cluster${clusters.length === 1 ? "" : "s"}${locked ? ", locked" : ", not locked yet"}.`,
@@ -794,6 +799,8 @@ export function strategyLines(
       );
     }
     lines.push(`      ${c.rationale}`);
+    const decided = clusterVerdictLine(verdicts.get(c.label));
+    if (decided) lines.push(decided);
     for (const id of c.memberIds) {
       const m = byId.get(id);
       if (m) lines.push(`      Under it: ${m.phrase}`);
@@ -806,6 +813,20 @@ export function strategyLines(
       `*Not placed:* ${unplaced.length} subject${unplaced.length === 1 ? "" : "s"} with no verdict yet. \`keywords shortlist\` lists them with their numbers.`,
       ""
     );
+  }
+
+  // ‼️ ITS OWN BLOCK, BECAUSE A REJECTED CLUSTER MAY NOT BE IN `clusters` AT ALL. clusterFinalists
+  // re-derives the labels from the keyword verdicts on every run, so a cluster somebody rejected stops
+  // being proposed and would vanish from the card entirely. A rejection that disappears is the same
+  // bug being fixed here, one level down: the decision was recorded and nothing showed it.
+  const proposed = new Set(clusters.map((c) => c.label));
+  const rejected = [...verdicts.entries()].filter(([label, v]) => v.rejectedAt && !proposed.has(label));
+  if (rejected.length) {
+    lines.push(`*Rejected earlier:* ${rejected.length}, and no longer proposed.`);
+    for (const [label, v] of rejected.sort((a, b) => (b[1].rejectedAt ?? "").localeCompare(a[1].rejectedAt ?? ""))) {
+      lines.push(`      ${label}${v.rejectedBy ? `, by ${v.rejectedBy}` : ""}, on ${(v.rejectedAt ?? "").slice(0, 10)}`);
+    }
+    lines.push("`strategy new` re-groups from the verdicts, which is what brings one back.", "");
   }
 
   lines.push(
@@ -1361,6 +1382,67 @@ async function serpCardsCommand(clientId: string): Promise<StrategyReply> {
 }
 
 /** Cluster id by label, so a redraw edits the card it drew last time. */
+/**
+ * What a person DECIDED about each stored cluster, keyed by label.
+ *
+ * ‼️ THE CARD COULD NOT SAY WHICH HAPPENED, WHICH IS WHAT THE COLUMNS EXIST FOR. The migration states
+ * it plainly: "'rejected' is not 'dropped'. Dropped is what a merge does to a cluster that moved under
+ * another one; rejected is a person looking at the pictures and saying no. Keeping them apart is what
+ * lets the card say which happened." All four columns were write-only, so it could not.
+ *
+ * ‼️ KEYED BY LABEL, BECAUSE strategyLines IS FED BY RECOMPUTATION. `strategyCommand` hands it
+ * `ProposedCluster`s derived from the `client_keywords` verdicts, and those carry no id, no status and
+ * no timestamps. The label is the only thing the stored row and the recomputed cluster share. Same
+ * join `storedClusterIds` already makes, which is why this is a sibling of it rather than a widening:
+ * that one's consumer wants a label-to-id map and nothing else.
+ *
+ * ‼️ IT DOES NOT EXCLUDE `rejected`. `storedClusterIds` drops only `dropped`, and a rejection is
+ * precisely what has to survive into the card.
+ */
+export interface ClusterVerdict {
+  status: string;
+  approvedAt: string | null;
+  approvedBy: string | null;
+  rejectedAt: string | null;
+  rejectedBy: string | null;
+}
+
+async function storedClusterVerdicts(clientId: string): Promise<Map<string, ClusterVerdict>> {
+  const out = new Map<string, ClusterVerdict>();
+  // Its own select, tolerant: these columns arrived with the strategy migration, and a database
+  // without it must still draw the card rather than failing the whole command on one unknown name.
+  const { data, error } = await supabaseAdmin
+    .from("keyword_clusters")
+    .select("label, status, approved_at, approved_by, rejected_at, rejected_by")
+    .eq("client_id", clientId);
+  if (error || !data) return out;
+  for (const c of data) {
+    out.set((c.label as string) ?? "", {
+      status: (c.status as string) ?? "proposed",
+      approvedAt: (c.approved_at as string | null) ?? null,
+      approvedBy: (c.approved_by as string | null) ?? null,
+      rejectedAt: (c.rejected_at as string | null) ?? null,
+      rejectedBy: (c.rejected_by as string | null) ?? null,
+    });
+  }
+  return out;
+}
+
+/**
+ * One decision, said the way a person would read it off the card.
+ *
+ * Named `clusterVerdictLine` because this file already imports a `verdictLine` for a KEYWORD's SERP
+ * verdict, which is a different thing entirely: that one describes what a screenshot showed, this one
+ * describes what a person decided about a cluster.
+ */
+function clusterVerdictLine(v: ClusterVerdict | undefined): string | null {
+  if (!v) return null;
+  const day = (ts: string): string => ts.slice(0, 10);
+  if (v.rejectedAt) return `      Rejected${v.rejectedBy ? ` by ${v.rejectedBy}` : ""} on ${day(v.rejectedAt)}. Its keywords are untouched.`;
+  if (v.approvedAt) return `      Approved${v.approvedBy ? ` by ${v.approvedBy}` : ""} on ${day(v.approvedAt)}.`;
+  return null;
+}
+
 async function storedClusterIds(clientId: string): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   const { data, error } = await supabaseAdmin
@@ -1463,7 +1545,8 @@ async function strategyCommand(clientId: string, regroup: boolean): Promise<Stra
 
   const name = await clientNameFor(clientId);
   const locked = await isLocked(clientId);
-  const message = strategyLines(clusters, unplaced, byId, name, locked).join("\n");
+  const verdicts = await storedClusterVerdicts(clientId);
+  const message = strategyLines(clusters, unplaced, byId, name, locked, verdicts).join("\n");
 
   if (!regroup) return { message };
   return { message, after: async () => void (await persistClusters(clientId, clusters, byId)) };
@@ -1558,7 +1641,6 @@ async function persistClusters(
         rank: i + 1,
         status: "proposed",
         origin: "derived",
-        missing_pictures: g.blocked.length,
       })
       .select("id")
       .maybeSingle();

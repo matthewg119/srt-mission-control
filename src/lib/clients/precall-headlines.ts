@@ -105,6 +105,19 @@ export interface EmotionalLayer {
   ownReviews: number;
   /** Necessary beliefs on file for this client's audience. */
   beliefs: number;
+  /**
+   * WHO put the phrases on file, off client_audiences, and when.
+   *
+   * ‼️ `tier` AND `source` ANSWER DIFFERENT QUESTIONS AND THE GATE NEEDS BOTH. The tier is derived
+   * at read time and says WHICH TABLE the count came from. This says WHO DECIDED, and it is the only
+   * thing that can tell a client's own pasted answers from a vertical's inherited bank when both
+   * land in question_bank and both count as `vertical_avatar`. Those two columns were added to record
+   * exactly that distinction and nothing read them, so the emotional gate could not see its own input.
+   *
+   * NULL means nobody has ever looked, which is a different fact from 'preset'.
+   */
+  source: "research" | "pasted" | "reviews" | "preset" | null;
+  checkedAt: string | null;
   ok: boolean;
 }
 
@@ -145,6 +158,8 @@ export async function emotionalLayer(clientId: string): Promise<EmotionalLayer> 
     verticalAll: 0,
     ownReviews,
     beliefs,
+    source: null,
+    checkedAt: null,
     ok: false,
   };
 
@@ -162,6 +177,9 @@ export async function emotionalLayer(clientId: string): Promise<EmotionalLayer> 
   const aud = await audienceFor(clientId);
   const avatar = aud.ok ? aud.audience.researchAvatarSlug : null;
   base.avatar = avatar;
+  // No extra query: audienceFor already returned the row these two live on.
+  base.source = aud.ok ? aud.audience.emotionalSource : null;
+  base.checkedAt = aud.ok ? aud.audience.emotionalCheckedAt : null;
 
   // Tier 2: this vertical AND this avatar. ‼️ THE AVATAR FILTER IS THE FIX, and it is why a
   // legitimately inherited bank no longer satisfies a client whose buyer nobody has researched.
@@ -217,13 +235,42 @@ function decide(base: EmotionalLayer, tiers: Array<[EmotionalTier, number]>): Em
 export function emotionalSourceLine(layer: EmotionalLayer): string {
   switch (layer.tier) {
     case "client_reviews":
-      return `${layer.count} of this client's own customer reviews are on file, so the headlines are written from their buyer's words.`;
+      return `${layer.count} of this client's own customer reviews are on file, so the headlines are written from their buyer's words.${provenance(layer)}`;
     case "vertical_avatar":
-      return `${layer.count} objection${layer.count === 1 ? "" : "s"} on file for *${layer.vertical}* / *${layer.avatar}*, which is this client's buyer but not this client's customers.`;
+      return `${layer.count} objection${layer.count === 1 ? "" : "s"} on file for *${layer.vertical}* / *${layer.avatar}*, which is this client's buyer but not this client's customers.${provenance(layer)}`;
     case "shared_bank":
-      return `${layer.count} quote${layer.count === 1 ? "" : "s"} from the shared brief for *${layer.vertical}* / *${layer.avatar}*. Inherited, not collected here.`;
+      return `${layer.count} quote${layer.count === 1 ? "" : "s"} from the shared brief for *${layer.vertical}* / *${layer.avatar}*. Inherited, not collected here.${provenance(layer)}`;
     default:
-      return "Nothing is on file for this client's buyer.";
+      return `Nothing is on file for this client's buyer.${provenance(layer)}`;
+  }
+}
+
+/**
+ * Who put the phrases there, appended to whichever tier answered.
+ *
+ * ‼️ THIS IS THE HALF THE TIER CANNOT SAY, and the reason `emotional_source` was added. `pasted` and
+ * `preset` both land in `question_bank` and both count as `vertical_avatar`, so before this the card
+ * reported a vertical's inherited bank in exactly the same words as a client's own answers. The gate
+ * is supposed to refuse on that distinction, and it could not see it.
+ *
+ * ‼️ SILENT WHEN NOBODY HAS LOOKED, rather than saying "borrowed". NULL means no `emotional:` paste
+ * has ever been accepted for this audience, which is a different fact from an inherited default, and
+ * the tri-state doctrine `site_signals` and `robots_check` both carry: an absence and a default must
+ * never read the same. The tier sentence already describes where the count came from, so an unstamped
+ * audience gets that and no claim about who decided it.
+ */
+function provenance(layer: EmotionalLayer): string {
+  if (!layer.source) return "";
+  const when = layer.checkedAt ? ` on ${layer.checkedAt.slice(0, 10)}` : "";
+  switch (layer.source) {
+    case "pasted":
+      return ` Pasted by this client${when}.`;
+    case "reviews":
+      return ` Taken from this client's own reviews${when}.`;
+    case "research":
+      return ` Filled from the deep research${when}.`;
+    case "preset":
+      return ` Borrowed from the vertical${when}, never confirmed for this client.`;
   }
 }
 

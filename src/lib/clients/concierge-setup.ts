@@ -182,7 +182,15 @@ export async function provisionConcierge(clientId: string): Promise<AutoResult> 
     .maybeSingle();
 
   const resolved = await verticalFor(clientId);
-  const proposal = proposeAudience(resolved.ok ? resolved.vertical : null);
+  // The vertical's own recorded stance, surfaced on the card as a suggestion. It never decides:
+  // proposeAudience folds it into its REASON and leaves `audience` alone.
+  const { confirmedAvatarFor, defaultStanceFor } = await import("./avatars");
+  const proposalVertical = resolved.ok ? resolved.vertical : null;
+  const briefStance = await defaultStanceFor(
+    proposalVertical,
+    (await confirmedAvatarFor(clientId).catch(() => null))?.slug ?? null
+  );
+  const proposal = proposeAudience(proposalVertical, briefStance);
 
   // ‼️ THE THIRD INDEPENDENT ROUTE TO "THIS CLIENT IS A MED SPA", AND IT WAS THE LIVE ONE.
   // This file's own header records that a `?? "med_spa"` literal was removed from here once

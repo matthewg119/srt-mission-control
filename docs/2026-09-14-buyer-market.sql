@@ -78,10 +78,16 @@ set buyer_market = 'med-spa', updated_at = now()
 where buyer_market is null
   and seeded_from in ('aeo_agency_owner', 'med_spa_patient');
 
-update public.avatar_briefs
-set buyer_market = 'med-spa', updated_at = now()
-where buyer_market is null
-  and preset_key in ('aeo_agency_owner', 'med_spa_patient');
+-- ‼️ THIS UPDATE IS SUPERSEDED, and it is left as a comment rather than deleted so a re-run of this
+-- file does not fail on a column that no longer exists. It keyed on avatar_briefs.preset_key, which
+-- was dropped by docs/2026-09-25-drop-preset-key.sql for having no reader anywhere. Its effect is
+-- already on the rows: the statement above it seeds buyer_market from client_audiences.seeded_from,
+-- which is the per-client answer and the one every reader selects.
+--
+-- update public.avatar_briefs
+-- set buyer_market = 'med-spa', updated_at = now()
+-- where buyer_market is null
+--   and preset_key in ('aeo_agency_owner', 'med_spa_patient');
 
 
 -- =====================================================================
@@ -96,7 +102,7 @@ join public.clients c on c.id = a.client_id
 order by c.slug;
 
 -- The shared preset carries the default a new client in this namespace will be seeded with.
-select vertical, avatar_slug, preset_key, default_stance, buyer_market
+select vertical, avatar_slug, default_stance, buyer_market
 from public.avatar_briefs
 order by vertical;
 

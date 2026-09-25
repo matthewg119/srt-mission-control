@@ -76,6 +76,24 @@ export interface ResolvedAudience {
 
   seededFrom: string | null;
   confirmedAt: string | null;
+
+  /**
+   * WHO put this audience's objection phrases on file, and when.
+   *
+   * ‼️ A DIFFERENT FACT FROM `EmotionalLayer.tier`, AND THAT IS THE WHOLE POINT. The tier answers
+   * WHICH TABLE the count came from and is derived at read time. This answers WHO DECIDED: 'pasted'
+   * means somebody typed this client's buyers' own words, 'preset' means the vertical's inherited
+   * bank that nobody has ever confirmed for this client. "47 objections on file" and "47, confirmed
+   * for this client in March" are different claims, and only the second is a decision.
+   *
+   * ‼️ NULL MEANS NOBODY HAS EVER LOOKED, which is not 'preset'. Same tri-state doctrine as
+   * `site_signals` and `robots_check`: an absence and an inherited default must never read the same.
+   *
+   * Only 'pasted' has a writer today (precall-headlines.ts ingestEmotional). 'research', 'reviews'
+   * and 'preset' are legal in the CHECK constraint and nothing writes them yet.
+   */
+  emotionalSource: "research" | "pasted" | "reviews" | "preset" | null;
+  emotionalCheckedAt: string | null;
 }
 
 export type AudienceResult =
@@ -88,7 +106,7 @@ const COLUMNS =
   "buyer_noun_singular, buyer_noun_plural, offer_noun_singular, offer_noun_plural, " +
   "business_noun, visit_noun, vocabulary, vocabulary_source, vocabulary_confirmed_at, " +
   "lane_name, launcher_label, hard_lines, presence_platform_keys, question_set_preset, " +
-  "seeded_from, confirmed_at, buyer_market";
+  "seeded_from, confirmed_at, buyer_market, emotional_source, emotional_checked_at";
 
 type Row = Record<string, unknown>;
 
@@ -176,6 +194,14 @@ function resolve(row: Row): AudienceResult {
       buyerMarket: str(row.buyer_market),
       seededFrom: str(row.seeded_from),
       confirmedAt: str(row.confirmed_at),
+      // ‼️ VALIDATED AGAINST THE CHECK RATHER THAN CAST. The four words are the migration's CHECK
+      // constraint, and an unrecognised value reads as null, which means "nobody looked". That is
+      // safer than passing a word through: the gate would print it as provenance it cannot vouch for.
+      emotionalSource: ((): ResolvedAudience["emotionalSource"] => {
+        const v = str(row.emotional_source);
+        return v === "research" || v === "pasted" || v === "reviews" || v === "preset" ? v : null;
+      })(),
+      emotionalCheckedAt: str(row.emotional_checked_at),
     },
   };
 }

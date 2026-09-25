@@ -466,6 +466,94 @@ export function categoriesFor(audience: {
   return named ?? genericCategories(audience.vocabulary);
 }
 
+/**
+ * A stored per-vertical category table, compiled back into CategorySpecs.
+ *
+ * `avatar_briefs.keyword_categories` is jsonb and `CategorySpec.match` is a live `RegExp`, which
+ * jsonb cannot carry, so a stored table arrives with `match` as a PATTERN STRING and has to be
+ * compiled. That is the whole reason this is a function rather than a cast.
+ *
+ * ‼️ IT REFUSES THE WHOLE TABLE, NEVER A ROW. A half-applied category table is the worst possible
+ * outcome here: `classifyCategory` would file every phrase belonging to the dropped category into
+ * whatever matched next, the card would count them against the wrong targets, and nothing anywhere
+ * would look broken. Same doctrine as `coerceBatch` in the deck builder, inverted for the same
+ * reason: there, decoration is dropped so good COPY is not thrown away; here the table IS the
+ * contract, so a malformed one is refused and the caller falls back to a table that is known good.
+ *
+ * ‼️ AND IT REPORTS WHY. A silent fallback would make a vertical's own table look applied when it
+ * was rejected, which is the class of bug this file's own probe exists to catch.
+ */
+export function compileCategories(
+  raw: unknown
+): { ok: true; categories: readonly CategorySpec[] } | { ok: false; why: string } {
+  if (raw === null || raw === undefined) return { ok: false, why: "no stored table" };
+  if (!Array.isArray(raw)) return { ok: false, why: "the stored value is not an array" };
+  if (raw.length === 0) return { ok: false, why: "the stored table is empty" };
+
+  const out: CategorySpec[] = [];
+  const keys = new Set<string>();
+  for (const [i, row] of raw.entries()) {
+    const at = `row ${i + 1}`;
+    if (typeof row !== "object" || row === null) return { ok: false, why: `${at} is not an object` };
+    const r = row as Record<string, unknown>;
+
+    const key = typeof r.key === "string" ? r.key.trim() : "";
+    const label = typeof r.label === "string" ? r.label.trim() : "";
+    const shape = typeof r.shape === "string" ? r.shape.trim() : "";
+    if (!key) return { ok: false, why: `${at} has no key` };
+    if (keys.has(key)) return { ok: false, why: `${at} repeats the key "${key}"` };
+    keys.add(key);
+    if (!label) return { ok: false, why: `${at} ("${key}") has no label` };
+    if (!shape) return { ok: false, why: `${at} ("${key}") has no shape, so nothing could be asked for` };
+
+    // A target of 0 would ask the expansion for nothing and still count against the floor.
+    const target = typeof r.target === "number" && Number.isFinite(r.target) ? Math.floor(r.target) : NaN;
+    if (!(target > 0)) return { ok: false, why: `${at} ("${key}") has no usable target` };
+
+    // The same 0 to 3 ladder harvest.ts's commercialIntent uses. Outside it, the scoring is a lie.
+    const intent = typeof r.intent === "number" && Number.isFinite(r.intent) ? Math.floor(r.intent) : NaN;
+    if (!(intent >= 0 && intent <= 3)) return { ok: false, why: `${at} ("${key}") has an intent outside 0 to 3` };
+
+    if (!Array.isArray(r.seeds) || r.seeds.some((s) => typeof s !== "string")) {
+      return { ok: false, why: `${at} ("${key}") has no seed list` };
+    }
+
+    // ‼️ A PATTERN THAT WILL NOT COMPILE REFUSES THE TABLE rather than degrading to null. Null means
+    // "the expansion writes this category and nothing is ever filed into it", which is a different
+    // and load-bearing statement, so it must not be what a typo produces.
+    let match: RegExp | null = null;
+    if (typeof r.match === "string" && r.match.trim()) {
+      try {
+        match = new RegExp(r.match, "i");
+      } catch {
+        return { ok: false, why: `${at} ("${key}") has a match pattern that will not compile` };
+      }
+    } else if (r.match !== null && r.match !== undefined) {
+      return { ok: false, why: `${at} ("${key}") has a match that is neither a pattern nor null` };
+    }
+
+    out.push({
+      key,
+      label,
+      target,
+      intent,
+      naming: r.naming === true,
+      focus: r.focus === true,
+      shape,
+      seeds: r.seeds as readonly string[],
+      match,
+    });
+  }
+
+  // ‼️ EXACTLY ONE NAMING CATEGORY. `vocabFor` takes the FIRST one and the pillar's keyword is chosen
+  // from it, so two would make which phrase becomes the pillar depend on array order, and none would
+  // leave `vocabFor` with nothing to build the offer vocabulary from.
+  const naming = out.filter((c) => c.naming).length;
+  if (naming !== 1) return { ok: false, why: `${naming} naming categories, and there must be exactly one` };
+
+  return { ok: true, categories: out };
+}
+
 /** A category's label, including the evidence-only fallback. */
 export function categoryLabel(categories: readonly CategorySpec[], key: string): string {
   if (key === OTHER_CATEGORY) return "Other, from the market";

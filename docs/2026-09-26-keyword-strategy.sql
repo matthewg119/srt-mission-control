@@ -60,11 +60,12 @@ create table if not exists public.keyword_clusters (
   origin            text not null default 'derived'
                     check (origin in ('derived', 'manual')),
 
-  -- How many keywords in this cluster still owed a picture when the card was last drawn. A CACHE for
-  -- the card only. serp-gate.ts always re-reads keyword_serp_reads before it refuses anything, for
-  -- the reason assertGatePassed re-hashes the body rather than trusting what its caller loaded:
-  -- this is the one place where being convenient is worth less than being right.
-  missing_pictures  integer not null default 0,
+  -- ‼️ missing_pictures WAS HERE AND IS GONE. See docs/2026-09-25-drop-missing-pictures.sql. It was
+  -- described as "a cache for the card only" and nothing ever read it: written on INSERT, never
+  -- updated, so stale the moment a screenshot landed, and persistClusters re-inserts the proposed
+  -- rows anyway. gateClusters() recomputes the number honestly every time. A dead column that looks
+  -- like provenance is worse than no column, which is the verdict _probe-serp-gate.ts already records
+  -- against the device column.
 
   -- 'rejected' is not 'dropped'. Dropped is what a merge does to a cluster that moved under another
   -- one; rejected is a person looking at the pictures and saying no. Keeping them apart is what lets
@@ -92,7 +93,6 @@ create table if not exists public.keyword_clusters (
 -- column added since would be silently missing and persistClusters would fail its insert with a
 -- 42703 that names one column and not the file. Same belt and braces as the serp migration.
 alter table public.keyword_clusters add column if not exists card_ts text;
-alter table public.keyword_clusters add column if not exists missing_pictures integer not null default 0;
 alter table public.keyword_clusters add column if not exists rejected_at timestamptz;
 alter table public.keyword_clusters add column if not exists rejected_by text;
 alter table public.keyword_clusters add column if not exists origin text not null default 'derived';
@@ -229,14 +229,14 @@ alter table public.keyword_runs drop constraint if exists keyword_runs_reason_ch
 alter table public.keyword_runs add constraint keyword_runs_reason_check
   check (reason in ('expansion', 'more', 'reset', 'measurement', 'rerun', 'strategy'));
 
--- ── Verify. Expect ELEVEN rows. Fewer means an alter did not apply. ─────────
+-- ── Verify. Expect TEN rows. Fewer means an alter did not apply. ───────────
 select table_name || '.' || column_name as col, data_type, is_nullable
 from information_schema.columns
 where table_schema = 'public'
   and (
     (table_name = 'client_keywords' and column_name in ('cluster_id', 'intent', 'merged_into', 'serp_verdict')) or
     (table_name = 'page_plan'       and column_name in ('page_kind', 'cluster_id', 'slug')) or
-    (table_name = 'keyword_clusters' and column_name in ('label', 'card_ts', 'origin', 'missing_pictures'))
+    (table_name = 'keyword_clusters' and column_name in ('label', 'card_ts', 'origin'))
   )
 order by col;
 

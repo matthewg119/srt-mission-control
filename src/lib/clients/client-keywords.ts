@@ -75,6 +75,8 @@ export interface KeywordContext extends ExpansionContext {
   /** Which offer an expansion was written for. A different one resets the proposals. */
   fingerprint: string;
   categories: readonly CategorySpec[];
+  /** Which table answered, so the card can say so rather than implying the best case. */
+  categorySource: ResolvedCategories;
 }
 
 /**
@@ -144,22 +146,111 @@ export async function keywordAudience(clientId: string): Promise<{
   };
 }
 
+/** Where a category table came from, so the card can say which rather than implying the best case. */
+export type CategorySource = "vertical_brief" | "preset" | "derived" | "stance";
+
+export interface ResolvedCategories {
+  categories: readonly CategorySpec[];
+  source: CategorySource;
+  /** The avatar slug whose brief answered, when one did. */
+  briefAvatar: string | null;
+  /** Why a stored per-vertical table was REFUSED, when one was found and rejected. */
+  refused: string | null;
+}
+
 /**
  * The category table for whatever keywordAudience could work out.
  *
  * ‼️ THE STANCE TABLE IS THE FALLBACK, NOT THE ANSWER. A client with an audience row gets the
  * table its preset names, or one derived from its own nouns. A client without one falls back to
  * the two written tables, which is what every caller got before audiences existed.
+ *
+ * ‼️ AND `avatar_briefs.keyword_categories` NOW OUT-RANKS ALL OF THEM, which is what that column was
+ * migrated for and never wired to. Keyword categories decide how step 12 sorts every phrase it
+ * writes, what the card counts against its targets and what `keywords more <category>` takes, and
+ * before this they were derived from the AUDIENCE alone. That is why the dentist vertical was
+ * blocked: a dentist's keyword categories are not a med spa's, and there was nowhere for a
+ * per-vertical answer to be read from.
+ *
+ * ‼️ IT IS ASYNC, AND THAT IS NOT AN ACCIDENT OF THE READ. There are three callers, and the previous
+ * synchronous version let two of them keep the derived table while a third read a stored one. Two
+ * implementations of "which categories apply" is the exact drift this whole build exists to remove,
+ * so the read is shared even though it costs the two smaller callers a lookup each.
  */
-function categoriesForAudience(aud: {
-  audience: Audience;
-  seededFrom: string | null;
-  vocabulary: AudienceVocabulary | null;
-}): readonly CategorySpec[] {
-  if (aud.vocabulary) {
-    return categoriesFor({ seededFrom: aud.seededFrom, vocabulary: aud.vocabulary });
+async function resolveCategories(
+  clientId: string,
+  aud: {
+    audience: Audience;
+    seededFrom: string | null;
+    vocabulary: AudienceVocabulary | null;
+    vertical: string | null;
+  },
+  /**
+   * A brief the caller has ALREADY loaded, so step 12's main door does not read the same row twice.
+   * `keywordContext` fetches it for `researchText` anyway; the two smaller callers pass nothing and
+   * this resolves the avatar itself.
+   */
+  known?: { avatarSlug: string | null; brief: { keywordCategories: unknown } | null }
+): Promise<ResolvedCategories> {
+  const fallback = (): ResolvedCategories => ({
+    categories: aud.vocabulary
+      ? categoriesFor({ seededFrom: aud.seededFrom, vocabulary: aud.vocabulary })
+      : KEYWORD_CATEGORIES[aud.audience],
+    source: aud.vocabulary ? (aud.seededFrom ? "preset" : "derived") : "stance",
+    briefAvatar: null,
+    refused: null,
+  });
+
+  if (!aud.vertical) return fallback();
+
+  const { confirmedAvatarFor, avatarBriefFor } = await import("./avatars");
+  const { compileCategories } = await import("./keyword-expansion");
+
+  // The avatar's own brief first, then the vertical's default. `"_default"` is the convention
+  // `sharedBankFor` already uses for a row belonging to a vertical rather than to one buyer.
+  const avatarSlug = known ? known.avatarSlug : ((await confirmedAvatarFor(clientId).catch(() => null))?.slug ?? null);
+
+  let refused: string | null = null;
+  for (const slug of [avatarSlug, "_default"]) {
+    if (!slug) continue;
+    const stored =
+      known && slug === known.avatarSlug
+        ? known.brief?.keywordCategories
+        : (await avatarBriefFor(aud.vertical, slug).catch(() => null))?.keywordCategories;
+    if (stored === null || stored === undefined) continue;
+
+    const compiled = compileCategories(stored);
+    if (compiled.ok) {
+      return { categories: compiled.categories, source: "vertical_brief", briefAvatar: slug, refused: null };
+    }
+    // ‼️ KEEP THE FIRST REFUSAL AND CARRY ON. An unusable avatar table must not hide a usable vertical
+    // default, and the reason still has to reach the card: a refused table and an absent one send
+    // somebody to two different places.
+    refused = refused ?? `${slug}: ${compiled.why}`;
   }
-  return KEYWORD_CATEGORIES[aud.audience];
+
+  return { ...fallback(), refused };
+}
+
+/**
+ * How the card says which table answered.
+ *
+ * ‼️ THE SAME JOB `poolLine` DOES, AND FOR THE SAME REASON. A fallback that does not announce itself
+ * makes a vertical's own table look applied when it was never found, and a REFUSED table look like
+ * no table at all. One is a gap somebody can fill; the other is a typo somebody has to fix.
+ */
+export function categorySourceLine(r: ResolvedCategories, vertical: string | null): string {
+  const refused = r.refused ? ` The stored table was refused (${r.refused}), so it was not used.` : "";
+  switch (r.source) {
+    case "vertical_brief":
+      return `_Categories from the *${vertical}* brief${r.briefAvatar && r.briefAvatar !== "_default" ? ` for *${r.briefAvatar}*` : ""}._`;
+    case "preset":
+      return `_Categories from the *${r.categories.length}*-category preset table for this audience.${refused}_`;
+    case "derived":
+      return `_Categories derived from this audience's own nouns, because no preset names a table for it.${refused}_`;
+    case "stance":
+      return `_Categories from the ${r.categories.length}-category stance table, because this client has no audience row yet.${refused}_`;
+  }
 }
 
 export async function keywordContext(
@@ -181,8 +272,13 @@ export async function keywordContext(
   }
 
   const client = (clientRes.data ?? {}) as Record<string, unknown>;
-  const research =
-    avatar && aud.vertical ? ((await avatarBriefFor(aud.vertical, avatar.slug))?.researchText ?? null) : null;
+
+  // ‼️ ONE READ OF THE BRIEF, NOT TWO. It carries `research_text` AND the per-vertical keyword
+  // category table, and this select is `*`, so both arrive together. Loading it once here and handing
+  // it to `resolveCategories` is what stops step 12's main door reading the same row twice.
+  const brief = avatar && aud.vertical ? await avatarBriefFor(aud.vertical, avatar.slug) : null;
+  const research = brief?.researchText ?? null;
+  const resolved = await resolveCategories(clientId, aud, { avatarSlug: avatar?.slug ?? null, brief });
   const cityRaw = typeof client.city === "string" && client.city.trim() ? client.city.trim() : null;
 
   return {
@@ -203,7 +299,8 @@ export async function keywordContext(
       vertical: aud.vertical,
       website: ((client.website as string | null) || (client.domain as string | null)) ?? null,
       fingerprint: keywordFingerprint(offer.treatment, offer.terms, aud.audience),
-      categories: categoriesForAudience(aud),
+      categories: resolved.categories,
+      categorySource: resolved,
     },
   };
 }
@@ -970,7 +1067,7 @@ export async function keywordCardLines(clientId: string): Promise<string[]> {
     return ["No keyword set has been written yet. It writes itself when this step runs; if this stays empty, Retry on the board."];
   }
   const ctx = c.ctx;
-  return formatKeywordCard(
+  const lines = formatKeywordCard(
     {
       clientName: ctx.clientName,
       treatment: ctx.treatment,
@@ -983,6 +1080,16 @@ export async function keywordCardLines(clientId: string): Promise<string[]> {
     loaded.rows,
     ctx.categories
   );
+
+  // ‼️ THE CARD SAYS WHICH TABLE SORTED IT, the same job `poolLine` does for the keyword pool and for
+  // the same reason: every count below this line is counted against THESE categories' targets, so a
+  // reader who cannot tell a vertical's own table from the stance fallback cannot tell whether the
+  // numbers mean anything. Inserted by the CALLER rather than built into formatKeywordCard, which is
+  // the `poolNote` precedent.
+  const note = categorySourceLine(ctx.categorySource, ctx.vertical);
+  const at = lines.findIndex((l) => l.startsWith("Audience:"));
+  if (at === -1) return [...lines, note];
+  return [...lines.slice(0, at + 1), note, ...lines.slice(at + 1)];
 }
 
 export type KeywordCheck =
@@ -1149,7 +1256,7 @@ export async function approvedKeywordSet(clientId: string): Promise<{
   if (approved.length === 0) return null;
 
   const aud = await keywordAudience(clientId);
-  const categories = categoriesForAudience(aud);
+  const categories = (await resolveCategories(clientId, aud)).categories;
   return {
     vertical: aud.vertical,
     avatar: null,
@@ -1364,7 +1471,7 @@ export async function handleKeywordThreadReply(input: {
   if (!/^\s*[`*_]*keywords\b/i.test(input.text)) return null;
 
   const aud = await keywordAudience(input.clientId);
-  const cmd = parseKeywordCommand(input.text, categoriesForAudience(aud));
+  const cmd = parseKeywordCommand(input.text, (await resolveCategories(input.clientId, aud)).categories);
   if (!cmd) return null;
 
   switch (cmd.kind) {

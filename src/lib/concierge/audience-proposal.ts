@@ -66,8 +66,26 @@ export interface AudienceProposal {
  * vertical_slug then business_type and REFUSES rather than guessing. Its `{ ok: false }` arrives
  * here as `null`, which is the ambiguous case and not a failure.
  */
-export function proposeAudience(vertical: string | null): AudienceProposal {
+export function proposeAudience(
+  vertical: string | null,
+  /**
+   * `avatar_briefs.default_stance` for this vertical, when a brief records one.
+   *
+   * ‼️ IT CHANGES THE REASON AND NEVER THE ANSWER, and that is the whole licence for reading it.
+   * `proposal.audience` is what seeds `concierge_configs.audience`, so adopting a stored value here
+   * would be exactly the automatic default this function exists to refuse. `AUDIENCE_PRESETS.stance`
+   * is nullable for the same stated reason: "NULL MEANS THE PRESET REFUSES TO DECIDE. It is not a
+   * third stance." So the brief's answer is PRINTED for a person to confirm, `unambiguous` stays
+   * false, and `rungOf()`'s owner/patient firewall keeps reading `client_audiences.stance`, which
+   * audiences.ts already refuses to guess.
+   *
+   * ‼️ STILL PURE. The caller loads it (defaultStanceFor in clients/avatars.ts) and passes it in, so
+   * this stays database free and _probe-magnet-drafts.ts keeps proving the whole mapping offline.
+   */
+  briefStance?: string | null
+): AudienceProposal {
   const key = (vertical ?? "").trim().toLowerCase();
+  const hint = briefStance === "owner" || briefStance === "patient" ? briefStance : null;
 
   if (!key) {
     return {
@@ -81,18 +99,28 @@ export function proposeAudience(vertical: string | null): AudienceProposal {
 
   const named = OWNER_VERTICALS[key];
   if (named) {
+    // ‼️ A DISAGREEMENT IS PRINTED, NEVER RECONCILED. Same rule thread-truth.ts applies to
+    // `derivedStage`: the written map wins because somebody wrote it in code, and saying so out loud
+    // is what lets a wrong brief be noticed instead of quietly losing to a constant.
+    const clash =
+      hint && hint !== named
+        ? ` ‼️ The brief for this vertical records \`${hint}\`, which disagrees. The written map wins here, and the disagreement is worth a look.`
+        : "";
     return {
       audience: named,
       unambiguous: true,
-      reason: `\`${key}\` is a business we sell TO, so the widget speaks to an owner.`,
+      reason: `\`${key}\` is a business we sell TO, so the widget speaks to an owner.${clash}`,
     };
   }
 
+  const suggestion = hint
+    ? ` The brief for \`${key}\` records \`${hint}\` as this buyer's stance, which is a suggestion from earlier research rather than a decision.`
+    : "";
   return {
     audience: "patient",
     unambiguous: false,
     reason:
       `\`${key}\` is not one of the verticals whose audience has been written down, so it is ` +
-      `seeded as patient. That is the safe direction, not a measurement: confirm it below.`,
+      `seeded as patient. That is the safe direction, not a measurement: confirm it below.${suggestion}`,
   };
 }

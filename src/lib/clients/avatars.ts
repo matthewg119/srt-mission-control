@@ -424,6 +424,57 @@ export interface AvatarBrief {
   timesReused: number;
   createdAt: string;
   updatedAt: string;
+  /**
+   * The per-vertical keyword category table, raw.
+   *
+   * ‼️ RAW, AND COMPILED BY THE CALLER. It is jsonb and `CategorySpec.match` is a live `RegExp`, so
+   * `compileCategories` in keyword-expansion.ts turns it into specs and REFUSES a malformed table
+   * rather than half-applying it. Typing it as `CategorySpec[]` here would be a cast that claims a
+   * validation nobody ran.
+   *
+   * ‼️ THE COLUMN WAS ALREADY ARRIVING OVER THE WIRE AND BEING THROWN AWAY. This select is `*`, so
+   * every column on the row is fetched; `keyword_categories` was simply absent from this mapper, and
+   * therefore read ZERO times while the migration that added it looked applied. That is the whole
+   * dead-wire class, and the reason `_probe-dead-wires.ts` counts a `select("*")` table by its
+   * property accesses rather than by its select list.
+   */
+  keywordCategories: unknown;
+  /**
+   * Whether this vertical's buyer buys from the CLIENT ("patient") or from us ("owner").
+   *
+   * ‼️ A SUGGESTION, NEVER A DEFAULT, and that distinction is the only reason reading it is allowed.
+   * `proposeAudience` refuses to decide the stance and says so, and `AUDIENCE_PRESETS.stance` is
+   * nullable for the same stated reason: "NULL MEANS THE PRESET REFUSES TO DECIDE. It is not a third
+   * stance." A value here is printed for a person to confirm. Nothing may turn it into
+   * `client_audiences.stance` on its own, and `rungOf()`'s owner/patient firewall keeps reading that
+   * column, which `audiences.ts` already refuses to guess.
+   */
+  defaultStance: string | null;
+}
+
+/**
+ * What stance a vertical's brief records, if one does. A SUGGESTION for a person to confirm.
+ *
+ * ‼️ THE READ IS HERE AND THE DECISION IS NOT. `proposeAudience` takes this as a hint that changes its
+ * REASON and never its answer, so nothing turns it into `client_audiences.stance` on its own. The
+ * invariant it must not break is audience-presets.ts's: "READ EXACTLY ONCE AND THEN WRITTEN TO A ROW.
+ * Nothing in a request path may read this file ... If a read-time fallback is ever added,
+ * client_audiences IS verticals.ts with a nicer table name." A read-time fallback to
+ * avatar_briefs.default_stance would be that same move one table over, so this feeds a card a person
+ * reads, never a value a widget is provisioned from.
+ *
+ * The avatar's own brief first, then `"_default"`, which is the convention `sharedBankFor` uses for a
+ * row belonging to a vertical rather than to one buyer. Null on any miss, and it never throws: a
+ * missing suggestion must not fail the step that was going to ask a person anyway.
+ */
+export async function defaultStanceFor(vertical: string | null, avatarSlug: string | null): Promise<string | null> {
+  if (!vertical) return null;
+  for (const slug of [avatarSlug, "_default"]) {
+    if (!slug) continue;
+    const brief = await avatarBriefFor(vertical, slug).catch(() => null);
+    if (brief?.defaultStance) return brief.defaultStance;
+  }
+  return null;
 }
 
 /**
@@ -460,6 +511,8 @@ export async function avatarBriefFor(vertical: string, avatarSlug: string): Prom
     timesReused: (data.times_reused as number | null) ?? 0,
     createdAt: data.created_at as string,
     updatedAt: data.updated_at as string,
+    keywordCategories: data.keyword_categories ?? null,
+    defaultStance: (data.default_stance as string | null) ?? null,
   };
 }
 

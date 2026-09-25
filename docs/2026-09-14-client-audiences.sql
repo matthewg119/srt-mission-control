@@ -163,7 +163,10 @@ comment on column public.client_audiences.vocabulary_source is
 -- why -- "the whole value is that the second med spa aiming at laser hair removal gets the first
 -- one's research". It is a few columns short of being the audience preset. Renaming a table with
 -- live readers buys nothing.
-alter table public.avatar_briefs add column if not exists preset_key text;
+-- ‼️ preset_key WAS HERE AND IS GONE. See docs/2026-09-25-drop-preset-key.sql. Zero readers ever,
+-- no CHECK and no comment: the per-client answer is client_audiences.seeded_from, which every reader
+-- already selects. default_stance below STAYS and now has a reader (defaultStanceFor in
+-- clients/avatars.ts), where it is printed as a suggestion a person confirms.
 alter table public.avatar_briefs add column if not exists default_stance text;
 alter table public.avatar_briefs add column if not exists buyer_noun_singular text;
 alter table public.avatar_briefs add column if not exists buyer_noun_plural text;
@@ -231,7 +234,6 @@ set approved_numbers = coalesce(approved_numbers, $an$[
   {"value": "web-traffic-to-citation correlation is r=0.02 (Brandlight)", "source_url": null, "approved_by": "config/verticals.ts MEDSPA_OWNER_AI", "approved_at": "2026-09-14"},
   {"value": "42% of searchers click the local pack (the 2005 Google Maps window)", "source_url": null, "approved_by": "config/verticals.ts MEDSPA_OWNER_AI", "approved_at": "2026-09-14"}
 ]$an$::jsonb),
-    preset_key = coalesce(preset_key, 'aeo_agency_owner'),
     default_stance = coalesce(default_stance, 'owner'),
     updated_at = now()
 where vertical = 'aeo-agency-med-spa'
@@ -337,7 +339,7 @@ where a.id is null
 order by c.slug;
 
 -- Expect 20 quotes and 6 approved numbers on the shared preset row.
-select vertical, avatar_slug, preset_key, default_stance,
+select vertical, avatar_slug, default_stance,
        jsonb_array_length(coalesce(voc_quotes, '[]'::jsonb))       as quotes,
        jsonb_array_length(coalesce(approved_numbers, '[]'::jsonb)) as numbers
 from public.avatar_briefs

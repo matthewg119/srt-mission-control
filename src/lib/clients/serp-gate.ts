@@ -91,8 +91,10 @@ export function isSerpGateError(e: unknown): e is SerpGateError {
  *
  * ‼️ IT READS keyword_serp_reads FRESH RATHER THAN TRUSTING ANYTHING THE CALLER LOADED, for the same
  * reason assertGatePassed re-hashes the page body: this is the one place where being convenient is
- * worth less than being right. keyword_clusters.missing_pictures is a cache for drawing a card, and
- * a cache must never be what a refusal is decided on.
+ * worth less than being right. keyword_clusters once carried a missing_pictures column for exactly
+ * this number, and it was DROPPED on 2026-09-25 rather than read: nothing ever selected it, it was
+ * written on insert and never updated, so it was stale the moment a screenshot landed. A cache must
+ * never be what a refusal is decided on, and a cache nobody reads is not a cache at all.
  *
  * ‼️ A FAILED READ BLOCKS EVERYTHING, AND THAT IS THE OPPOSITE OF THE HOUSE DEFAULT. Everywhere else
  * in this lane a missing table reads as "no strategy yet" and degrades to the old behaviour. Here it
