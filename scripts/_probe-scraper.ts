@@ -609,12 +609,42 @@ async function liveMx(): Promise<void> {
     bestEmailTier([cand("info@clinic.com")], site),
     EMAIL_TIER.FRONT_OFFICE
   );
-  check(
-    "scrapeEmail breaks on EMAIL_TIER.OWNER, not on a hand-copied condition",
-    /bestEmailTier\(pool\.values\(\), siteDomain, ownerName\) === EMAIL_TIER\.OWNER/.test(
-      readFileSync("src/lib/email-scrape.ts", "utf8")
-    )
-  );
+  {
+    const src = readFileSync("src/lib/email-scrape.ts", "utf8");
+    // Derived from emailTier, never re-spelled. Named functions rather than a character window, so
+    // the check survives the code moving and still fails if the rule gets duplicated.
+    check(
+      "the crawl's stop condition is derived from bestEmailTier and EMAIL_TIER.OWNER",
+      /bestEmailTier\([\s\S]*?\) === EMAIL_TIER\.OWNER/.test(src)
+    );
+    check(
+      "and nothing re-implements tier 1 by hand alongside it",
+      !/ROLE_LOCAL_PARTS\.has\(localPartOf/.test(src)
+    );
+    // One page walk for both questions. Two walks is the 84-seconds-per-dead-site bug.
+    check("scrapeEmail delegates to crawlSite rather than walking pages itself", /const pass = await crawlSite\(/.test(src));
+    check(
+      "crawlSite stops on a conjunction, so one answer does not end the other's search",
+      /haveOwnerEmail && bestNameScore\(names\) >= NAME_SCORE_CEILING/.test(src)
+    );
+
+    const lane = readFileSync("src/lib/scraper/lane.ts", "utf8");
+    // ‼️ THE BUDGET IS THE WHOLE POINT. sweepEnrich checks its deadline per LEAD, not per page, so a
+    // crawl called without one can overrun a 240 second tick on three dead sites.
+    check("sweepEnrich passes its deadline into the crawl", /crawlSite\(lead\.website, \{ deadline/.test(lane));
+    check(
+      "and a crawl miss is recorded as null so the rung does not re-fetch the site",
+      /siteEmail = pass\.email \? \{[\s\S]*?\} : null;/.test(lane)
+    );
+    // ‼️ COMMENTS STRIPPED FIRST. lane.ts still NAMES scrapeOwnerName in the comment explaining why
+    // the second pass went away, so an absence check over the raw file tests the prose and not the
+    // program. Same lesson as the dispatch block lower down, which strips for the same reason.
+    const laneCode = lane
+      .split("\n")
+      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join("\n");
+    check("the lane no longer runs a second owner-name pass of its own", !/scrapeOwnerName/.test(laneCode));
+  }
 }
 
 // ── Owner names: the title blocklist, and the suppression it undoes ─────────────────────────────

@@ -11,7 +11,15 @@
 // `enrichEmails` at the bottom of this file has no callers at all. Corrected 2026-09-25 rather than
 // left to mislead the next reader into thinking a change here has a blast radius it does not have.
 
-import { fetchText, textFromHtml } from "@/lib/medspa-owner-scrape";
+import {
+  NAME_SCORE_CEILING,
+  bestNameScore,
+  collectNames,
+  fetchText,
+  pickOwnerName,
+  textFromHtml,
+  type NameCandidate,
+} from "@/lib/medspa-owner-scrape";
 // The lane's wider role list. Imported rather than re-spelled: the two lists disagree, and
 // emailTier below needs to know about BOTH kinds of role address to rank them apart. rules.ts
 // imports only a type and a data file, so there is no cycle.
@@ -313,17 +321,62 @@ export function pickBestEmail(
 }
 
 /**
- * Crawl one site's contact paths and return the best published email, or null.
+ * The ordered union of the email paths and the owner-name paths.
  *
- * `ownerName`, when the caller already has one, is what lets `emailTier` promote a named human to
- * tier 1. Without it a same-domain non-role address stays at tier 3, below info@.
+ * Five of the fourteen URLs the two old passes fetched were identical, with no HTTP cache anywhere,
+ * so a site was downloaded twice to answer two questions about the same bytes.
  */
-export async function scrapeEmail(
-  website: string,
-  ownerName?: string | null
-): Promise<{ email: string; source: string } | null> {
-  // Outscraper websites often carry encoded tracking junk ("...%3Futm_source%3D...")
-  // that 404s when fetched verbatim — decode, then drop the query entirely.
+const CRAWL_PATHS = [
+  "", "/contact", "/contact-us", "/about", "/about-us", "/our-team", "/team", "/meet-the-team", "/staff",
+];
+
+export interface SiteCrawl {
+  /** The best owner name found, or the hint passed in if the pages offered nothing better. */
+  ownerName: string | null;
+  email: string | null;
+  source: string | null;
+  /** Pages actually requested, whether or not they answered. */
+  pagesFetched: number;
+  /** Every request failed. Distinguishes "a site with nothing on it" from "a site we cannot read". */
+  blocked: boolean;
+  /** Stopped on the page budget or the deadline rather than because it was finished. */
+  truncated: boolean;
+}
+
+export interface CrawlOptions {
+  /** Stop before fetching another page once Date.now() passes this. */
+  deadline?: number;
+  /** Hard cap on pages for one site. Defaults to every CRAWL_PATHS entry. */
+  maxPages?: number;
+  /** A name the caller already has, from the file or a previous pass. */
+  ownerName?: string | null;
+}
+
+/**
+ * One pass over a site that answers BOTH questions: who owns it, and where to write.
+ *
+ * ‼️ THIS IS A TICK SAFETY FIX BEFORE IT IS AN EFFICIENCY ONE. The two old passes fetched up to 14
+ * URLs at a 6000 ms timeout, so one dead site could burn 84 seconds, and sweepEnrich checks its
+ * deadline per LEAD rather than per page. Three dead sites in a row ate a whole 240 second cron
+ * tick and the batch made no progress. Hence `deadline` and `maxPages`, both honoured BETWEEN pages.
+ *
+ * ‼️ THE NAME AND THE ADDRESS ARE COLLECTED TOGETHER BUT USED SEPARATELY. The name is an INPUT to
+ * the enrichment waterfall (the permutation rung cannot permute without it) and it must be stored
+ * even when the site yields no address at all, so it cannot be folded into a Provider rung that
+ * returns null on "no email found".
+ */
+export async function crawlSite(website: string, opts: CrawlOptions = {}): Promise<SiteCrawl> {
+  const out: SiteCrawl = {
+    ownerName: opts.ownerName ?? null,
+    email: null,
+    source: null,
+    pagesFetched: 0,
+    blocked: false,
+    truncated: false,
+  };
+
+  // Outscraper websites often carry encoded tracking junk ("...%3Futm_source%3D...") that 404s when
+  // fetched verbatim. Decode, then drop the query entirely.
   const raw = website.replace(/%3F/gi, "?").replace(/%26/gi, "&").replace(/%3D/gi, "=");
   const withProto = raw.startsWith("http") ? raw : `https://${raw}`;
   let base: string;
@@ -332,17 +385,26 @@ export async function scrapeEmail(
   try {
     const url = new URL(withProto);
     origin = url.origin;
-    base = origin + url.pathname; // stored page (e.g. a franchise location) minus query
+    base = origin + url.pathname; // the stored page (a franchise location, say) minus the query
     siteDomain = registrableDomain(url.hostname);
   } catch {
-    return null;
+    return out;
   }
-  if (SKIP_SITE_DOMAINS.some((d) => siteDomain === d)) return null;
+  if (SKIP_SITE_DOMAINS.some((d) => siteDomain === d)) return out;
 
+  const paths = CRAWL_PATHS.slice(0, opts.maxPages ?? CRAWL_PATHS.length);
   const pool = new Map<string, EmailCandidate>();
-  for (const path of CONTACT_PATHS) {
+  const names: NameCandidate[] = [];
+  let reached = 0;
+
+  let finished = false;
+  for (const path of paths) {
+    if (opts.deadline !== undefined && Date.now() >= opts.deadline) break;
+    out.pagesFetched++;
     const html = await fetchText(path ? `${origin}${path}` : base);
     if (!html) continue;
+    reached++;
+
     for (const found of extractEmails(html)) {
       const existing = pool.get(found.email);
       if (existing) {
@@ -352,15 +414,42 @@ export async function scrapeEmail(
         pool.set(found.email, { ...found, path, count: 1 });
       }
     }
-    // ‼️ DERIVED FROM emailTier, NEVER RE-SPELLED. This test used to hand-copy tier 1's condition,
-    // and tier 1 used to mean "same-domain role address". Re-ordering the bands without moving this
-    // line with them would have kept stopping the walk on info@ while ranking it second: the same
-    // pick as before, off fewer pages, so /team would never be reached and the whole change would
-    // be a slow no-op. One rule, one expression.
-    if (bestEmailTier(pool.values(), siteDomain, ownerName) === EMAIL_TIER.OWNER) break;
+    names.push(...collectNames(textFromHtml(html), path));
+
+    // ‼️ THE STOP CONDITION IS A CONJUNCTION, AND BOTH HALVES ARE DERIVED. Either question alone
+    // finishing is not a reason to stop asking the other, which is precisely the bug the two
+    // separate passes had: each stopped on its own first answer and neither saw the other's pages.
+    const bestName = pickOwnerName(names) ?? opts.ownerName ?? null;
+    const haveOwnerEmail = bestEmailTier(pool.values(), siteDomain, bestName) === EMAIL_TIER.OWNER;
+    if (haveOwnerEmail && bestNameScore(names) >= NAME_SCORE_CEILING) {
+      finished = true;
+      break;
+    }
   }
 
-  return pickBestEmail(Array.from(pool.values()), siteDomain, ownerName);
+  // Either a budget cut it short, or it ran out of paths without both answers in hand. Both mean
+  // "there may be more on this site", which is what the caller needs to know.
+  out.truncated = !finished && out.pagesFetched < CRAWL_PATHS.length;
+  out.blocked = reached === 0;
+  out.ownerName = pickOwnerName(names) ?? opts.ownerName ?? null;
+  const picked = pickBestEmail([...pool.values()], siteDomain, out.ownerName);
+  out.email = picked?.email ?? null;
+  out.source = picked?.source ?? null;
+  return out;
+}
+
+/**
+ * Crawl one site's contact paths and return the best published email, or null.
+ *
+ * `ownerName`, when the caller already has one, is what lets `emailTier` promote a named human to
+ * tier 1. Without it a same-domain non-role address stays at tier 3, below info@.
+ */
+export async function scrapeEmail(
+  website: string,
+  ownerName?: string | null
+): Promise<{ email: string; source: string } | null> {
+  const pass = await crawlSite(website, { ownerName });
+  return pass.email ? { email: pass.email, source: pass.source ?? "scrape" } : null;
 }
 
 /**

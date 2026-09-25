@@ -29,7 +29,7 @@ import { parseCsv, toCsv } from "./csv";
 import { supabaseAdmin } from "@/lib/db";
 import { filterRows } from "./filter";
 import { hasMx } from "./mx";
-import { scrapeOwnerName } from "@/lib/medspa-owner-scrape";
+import { crawlSite } from "@/lib/email-scrape";
 import { checkMany } from "@/lib/outreach/suppression";
 import { DEFAULT_VERTICAL, icpFor, knownVerticals, resolveVertical } from "./icp";
 import {
@@ -1256,18 +1256,32 @@ async function sweepEnrich(batch: BatchRow, deadline: number): Promise<boolean> 
     for (const lead of batchOf) {
       if (Date.now() >= deadline) break;
 
-      // ‼️ THE NAME BEFORE THE ADDRESS, AND NOT AS A WATERFALL RUNG. scrapeOwnerName returns a
-      // name rather than an email, so it cannot satisfy Provider.find; forcing it in would corrupt
-      // the one abstraction enrich.ts asks to stay clean. It runs first because `ownerName` is an
-      // INPUT the first paid rung will search on, and because first_name is the merge variable the
-      // send list exists to carry.
+      // ‼️ ONE PASS OVER THE SITE, ANSWERING BOTH QUESTIONS. This used to be two: scrapeOwnerName
+      // walked seven paths, then the site-scrape rung walked seven more, five of them the same URLs,
+      // with no HTTP cache between them. At a 6000 ms timeout that is 84 seconds for one dead site,
+      // and the deadline below is checked per LEAD rather than per page, so three dead sites in a
+      // row ate a whole 240 second tick and the batch made no progress.
+      //
+      // ‼️ THE NAME STILL COMES BEFORE THE ADDRESS, AND STILL IS NOT A WATERFALL RUNG. `ownerName`
+      // is an INPUT the later rungs search on (a permutation rung cannot permute without it), it
+      // decides whether a same-domain address ranks as the owner or below info@, and a site that
+      // yields a name but no address must still store the name. A Provider that returns null on
+      // "no email" cannot carry any of that.
       let ownerName = lead.ownerName;
-      if (!ownerName && lead.website) {
+      let siteEmail: { email: string; source: string | null } | null | undefined;
+      if (lead.website) {
         try {
-          ownerName = await scrapeOwnerName(lead.website);
-          if (ownerName) await setOwnerName(lead.id, ownerName);
+          const pass = await crawlSite(lead.website, { deadline, ownerName });
+          if (!ownerName && pass.ownerName) {
+            ownerName = pass.ownerName;
+            await setOwnerName(lead.id, ownerName);
+          }
+          // ‼️ A MISS IS RECORDED AS null, NOT LEFT undefined. Leaving it undefined tells the rung
+          // "nobody has crawled this", and it fetches the whole site again.
+          siteEmail = pass.email ? { email: pass.email, source: pass.source } : null;
         } catch {
-          // A site that refuses a crawl is not a failed lead. The address rung still gets a turn.
+          // A site that refuses a crawl is not a failed lead, and it is not a crawled one either:
+          // leaving siteEmail undefined lets the rung try, which is the old behaviour.
         }
       }
 
@@ -1281,6 +1295,7 @@ async function sweepEnrich(batch: BatchRow, deadline: number): Promise<boolean> 
         state: lead.state,
         website: lead.website,
         fileEmail,
+        siteEmail,
       });
       await recordEnrichment({
         runId,

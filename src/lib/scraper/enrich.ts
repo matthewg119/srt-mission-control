@@ -33,6 +33,19 @@ export interface EnrichTarget {
   website?: string | null;
   /** An address the SOURCE FILE already carried, if it did. Cheapest possible rung. */
   fileEmail?: string | null;
+  /**
+   * What a crawl of this site ALREADY found, so the site-scrape rung does not fetch it again.
+   *
+   * THREE STATES, AND ALL THREE ARE LOAD BEARING:
+   *   undefined  nobody has crawled it, so the rung should crawl.
+   *   null       it HAS been crawled and there was nothing, so the rung must report a miss.
+   *   an object  use this.
+   *
+   * With only two states a pre-crawled miss is indistinguishable from "not crawled yet", so the
+   * rung re-downloads every site that had no address on it, which is the 38% of them that cost the
+   * most to visit. sweepEnrich sets this from one `crawlSite` pass.
+   */
+  siteEmail?: { email: string; source: string | null } | null;
 }
 
 export interface EnrichHit {
@@ -149,12 +162,28 @@ export const PROVIDERS: Provider[] = [
     costPerLookup: 0,
     acceptsRole: true,
     async find(t) {
+      // Already crawled by the caller: reuse the answer, and a null is a real answer meaning
+      // "crawled, nothing there". Re-crawling it would double the fetch budget for the sites that
+      // are slowest to visit.
+      if (t.siteEmail !== undefined) {
+        if (!t.siteEmail) return null;
+        return {
+          email: t.siteEmail.email.toLowerCase(),
+          firstName: firstNameOf(t.ownerName),
+          lastName: lastNameOf(t.ownerName),
+          title: null,
+          provider: "site-scrape",
+          costUsd: 0,
+          sourceDetail: t.siteEmail.source,
+        };
+      }
+
       const site = t.website || (t.domain ? "https://" + t.domain : null);
       if (!site) return null;
       // Imported lazily: email-scrape.ts pulls in the fetch stack, and enrich.ts is imported by an
       // offline probe that must not need it.
       const { scrapeEmail } = await import("@/lib/email-scrape");
-      const found = await scrapeEmail(site);
+      const found = await scrapeEmail(site, t.ownerName);
       if (!found) return null;
       return {
         email: found.email.toLowerCase(),
