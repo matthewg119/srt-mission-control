@@ -61,6 +61,12 @@ jobs:
       - name: Step verify probe
         run: bun --no-env-file run scripts/_probe-step-verify.ts
 
+      # ‼️ THE ONE THAT STOPS DEAD WIRES COMING BACK. It reads docs/*.sql and src/ off disk and
+      # touches no database, which is what makes it gateable: its whole value is that it runs without
+      # anybody remembering to run it. It carries a board-wide baseline count that may only go DOWN.
+      - name: Dead wires (write-only columns, and outputs with no consumer)
+        run: bun --no-env-file run scripts/_probe-dead-wires.ts
+
       - name: Headline probes
         run: |
           bun --no-env-file run scripts/_probe-aeo-headlines.ts

@@ -54,6 +54,29 @@ export const NORTH_STAR = [
   "system currently forgets, so more of the work can become hands off.",
 ].join(" ");
 
+/**
+ * Work that is not merely low value but DECOMMISSIONED, so finding any of it is itself the proposal.
+ *
+ * Matthew, 2026-09-25: "everything regarding funding must be deleted from the code, make sure you
+ * remember this and the code analyzer suggester aswell whenever it runs the scan and finds anything old
+ * regarding to funding srt agency doesnt do any type of business funding".
+ *
+ * ‼️ THIS IS A SUGGESTION AND NOT A GUARANTEE, and the split is structural rather than a choice.
+ * This module CANNOT read the filesystem: `src/` is not in the Vercel serverless bundle, which its own
+ * header records, so it only ever sees whatever files a signal made it fetch through the GitHub API. A
+ * prose rule cannot enforce anything it never looks at. The guarantee is
+ * scripts/_probe-dead-wires.ts, which reads every docs/*.sql and all of src/ off disk, fails on an
+ * unread funding column, and prints the count of files still mentioning funding at all. Same doctrine
+ * this repo applies to the em-dash ban and the price gate: the prompt asks, the code enforces.
+ */
+export const DECOMMISSIONED = [
+  "SRT does NO business funding of any kind, and has not since 2026-08-17. Anything about lenders,",
+  "factor or buy or sell rates, underwriting boxes, bank statements, repayment frequency, positions",
+  "funded or deal submissions is decommissioned: it is to be DELETED, never tidied, never documented,",
+  "and never allowlisted as deliberate. If anything you are shown contains it, that is worth a",
+  "proposal on its own, and the proposal is removal.",
+].join(" ");
+
 export function isoWeek(d: Date): string {
   const t = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
   const day = t.getUTCDay() || 7;
@@ -320,6 +343,9 @@ export async function writeProposal(signals: readonly Signal[], source: string):
     "",
     "THE GOAL EVERY PROPOSAL IS JUDGED AGAINST:",
     NORTH_STAR,
+    "",
+    "DECOMMISSIONED, AND FINDING IT IS ITSELF A PROPOSAL:",
+    DECOMMISSIONED,
     "",
     "‼️ IF NOTHING OBSERVED BELOW MOVES THAT GOAL OR MAKES A WORKFLOW SIMPLER, RETURN worthPosting: false.",
     "A week of silence is a correct outcome. A weekly note that always speaks stops being read.",

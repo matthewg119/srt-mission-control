@@ -854,9 +854,31 @@ if (counted.length < BOARD_BASELINE) {
 /** Funding vocabulary. Deliberately narrow: these are the words no AEO feature has any reason to use. */
 const FUNDING_WORDS = /factor_rate|underwriting|\blenders?\b|buy_rate|sell_rate|statement_months|positions_funded|repayment_frequency/i;
 
+/**
+ * Unread funding columns still declared, measured 2026-09-25.
+ *
+ * ‼️ ITS OWN RATCHET, SEPARATE FROM THE BOARD'S, and it may only go DOWN. Matthew's standing rule is
+ * that funding code is deleted rather than excused, so no funding column may be ADDED, and none of
+ * these may be moved into WRITE_ONLY or OWED: neither of those is available to a lane that should not
+ * exist. Failing on all 116 today would hold this probe red for work that is deliberately a separate
+ * sweep, and a check that is always red is a check nobody reads.
+ *
+ * ‼️ ALL EIGHT TABLES ARE WHOLLY FUNDING, which is the finding worth acting on rather than the count:
+ * standalone_applications, deal_submissions, statement_drops, lenders, email_submissions,
+ * email_submission_funders, deals, deal_events. Dropping 116 individual columns would leave eight
+ * crippled tables, so the real question is whether the funding HISTORY is archived and the tables
+ * dropped. That is Matthew's call, not this probe's.
+ */
+const FUNDING_BASELINE = 116;
+
 const fundingCols = counted.filter((f) => f.lane === "funding");
 console.log(`\n6b. funding: SRT does no business funding. ${fundingCols.length} unread funding column(s) still declared.`);
 if (SHOW_INVENTORY) for (const f of fundingCols.sort(byKey)) console.log(`          ${f.key}`);
+check(
+  `no funding column was added (${fundingCols.length} against a baseline of ${FUNDING_BASELINE})`,
+  fundingCols.length <= FUNDING_BASELINE,
+  "SRT does no business funding. Delete the column rather than declaring it, and never allowlist one."
+);
 
 // ‼️ THE OUTSTANDING FUNDING SWEEP, PRINTED ONCE SO ITS SIZE IS ON THE RECORD. The standing rule is
 // that funding code is deleted, not excused. The funding COLUMNS are in the fail tier above; this
@@ -886,6 +908,126 @@ check(
   "missing_pictures is gone rather than a cache nothing reads",
   STRATEGY_SQL !== "" && !/\bmissing_pictures\b/.test(STRATEGY_SQL),
   "gateClusters recomputes it every time, and serp-gate.ts refuses to decide a refusal on a cache"
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8. Declared outputs have a consumer OUTSIDE the file that writes them
+//
+// ‼️ THE HALF EVERYTHING ABOVE CANNOT FIND, and the reason this section is the point of the file.
+// §5 asks whether any select list names a column. The curated-20 bug PASSES that:
+// `client_keywords.selected_at` was written by keyword-decisions.ts and read back by the card in
+// keyword-decisions.ts, so a column scan sees a healthy write and a healthy read. The gap was that
+// step 21 drew from a different pool, and no amount of column scanning can see that.
+//
+// So the question changes shape: does the symbol that hands this artifact downstream have a call site
+// in a file OTHER than the one that writes it. A reader referenced only by its own writer IS "the card
+// that wrote it".
+// ─────────────────────────────────────────────────────────────────────────────
+
+console.log("\n8. every declared output has a consumer outside its writer");
+
+const { STEP_PRODUCES, allOutputs, stepsProducingNothing, outputsConsumedTooEarly, fieldsNoStepFills } = await import(
+  "../src/lib/clients/step-needs"
+);
+const { DELIVERY_STEPS } = await import("../src/config/delivery-steps");
+
+check(
+  "every step declares what it produces",
+  Object.keys(STEP_PRODUCES).length === DELIVERY_STEPS.length,
+  `${Object.keys(STEP_PRODUCES).length} declared against ${DELIVERY_STEPS.length} steps`
+);
+
+const outputs = allOutputs();
+check("outputs were declared at all", outputs.length > 0, "an empty set turns this whole section green");
+
+for (const { step, output } of outputs) {
+  const writer = READER_FILES.find(([p]) => p === output.writtenIn);
+
+  check(`${step}: ${output.writtenIn} exists`, Boolean(writer), "writtenIn names a file that is not there");
+  if (!writer) continue;
+
+  // The column, in the file that claims to write it. A path that drifted is worse than no path.
+  const col = output.records.split(".")[1] ?? "";
+  check(
+    `${step}: ${output.writtenIn} names ${col}`,
+    new RegExp(`\\b${col}\\b`).test(writer[1]),
+    "the writer does not mention the column it is declared to write"
+  );
+
+  // The artifact is real DDL, so a produces entry cannot name a column that does not exist.
+  check(`${step}: ${output.records} is a declared column`, DECLARED.has(output.records), "no migration declares it");
+
+  // ‼️ THE CHECK. A call site outside the writer.
+  //
+  // ‼️ AND THE DECLARATION FILE IS EXCLUDED, WITHOUT WHICH THIS CHECK IS WORTHLESS. step-needs.ts
+  // contains the reader's NAME, in `reader:` and again in the `feeds` prose, so it matched the grep and
+  // counted as its own consumer. Every output passed, including a deliberately broken one: tested by
+  // pointing `keyword_set` at `selectKeyword`, which has zero references outside its own file, and the
+  // check still went green. A check that its own declaration satisfies is the exact shape of bug this
+  // file exists to catch, one level up.
+  const DECLARATION = "src/lib/clients/step-needs.ts";
+  const elsewhere = READER_FILES.filter(
+    ([p, src]) =>
+      p !== output.writtenIn &&
+      p !== DECLARATION &&
+      p.startsWith("src/") &&
+      new RegExp(`\\b${output.reader}\\b`).test(src)
+  ).map(([p]) => p);
+  check(
+    `${step}: ${output.reader}() is called outside ${output.writtenIn.replace("src/lib/clients/", "")}`,
+    elsewhere.length > 0,
+    "a reader referenced only by its own writer is the curated-20 bug: the card that wrote it is the only thing that reads it"
+  );
+}
+
+// ‼️ THE CHECK ABOVE IS ITSELF CHECKED, because it was green for the wrong reason once. A reader name
+// that exists NOWHERE in src/ must be rejected: if it is not, the grep is matching the declaration or
+// something equally worthless, and every output passes no matter how broken. Proved with a name nothing
+// could ever define rather than by trusting the exclusion list.
+const IMPOSSIBLE = "zzzNoSuchReaderExistsAnywhere";
+const impossibleHits = READER_FILES.filter(
+  ([p, src]) => p.startsWith("src/") && p !== "src/lib/clients/step-needs.ts" && new RegExp(`\\b${IMPOSSIBLE}\\b`).test(src)
+);
+check(
+  "the consumer grep can actually fail",
+  impossibleHits.length === 0,
+  "a name nothing defines was found, so the grep proves nothing"
+);
+
+const tooEarly = outputsConsumedTooEarly();
+for (const b of tooEarly) {
+  check(`${b.step}: ${b.consumer} is later in board order`, false, `${b.records} cannot be consumed by an earlier step`);
+}
+if (tooEarly.length === 0) check("every consumedBy step is real and later in board order", true);
+
+// ‼️ custom_question_set MUST NOT CONSUME THE KEPT KEYWORD SET. It and photograph.ts stay on
+// planKeywords deliberately: they are MEASUREMENT and the Day 0 set is frozen. Another probe asserts
+// they stay broad, and this one must not contradict it.
+const measurementLeak = outputs.filter(
+  (o) => o.output.records.startsWith("client_keywords.") && o.output.consumedBy.includes("custom_question_set")
+);
+check(
+  "custom_question_set is not declared a consumer of the kept keyword set",
+  measurementLeak.length === 0,
+  "step 12's question set is MEASUREMENT and stays on planKeywords; a probe already asserts it stays broad"
+);
+
+// The backlog, printed rather than hidden. Same job stepsWithNothing() does for `needs`.
+const producingNothing = stepsProducingNothing();
+console.log(`\n8b. steps that record no non-field artifact (${producingNothing.length} of ${DELIVERY_STEPS.length})`);
+for (const s of producingNothing) check(`${s.key} says why`, s.why.trim().length > 20, "the sentence is the point");
+
+// ── The interconnection, from dataset-spec's own relation ──────────────────
+//
+// ‼️ NO NEW DECLARATION. dataset-spec.ts already says which step fills each field, and rerun-gaps.ts
+// already consumes it. This inverts that one relation rather than adding a second.
+const holes = fieldsNoStepFills();
+console.log(`\n8c. dataset fields nothing on the board fills yet (${holes.length})`);
+if (SHOW_INVENTORY) for (const h of holes) console.log(`          ${h.ref}: ${h.why}`);
+check(
+  "the unfilled-field list has not grown past what dataset-spec declares",
+  holes.length <= 12,
+  `${holes.length} fields have no built writer. Each is a field a step needs and nothing produces.`
 );
 
 console.log(failures ? `\n${failures} FAILED\n` : "\nAll checks passed.\n");

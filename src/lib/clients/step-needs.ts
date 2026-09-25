@@ -321,6 +321,223 @@ export const STEP_NEEDS: Record<StepKey, StepNeed> = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// The mirror: what a step PRODUCES, and what reads it
+//
+// ‼️ THE HALF A COLUMN SCAN CANNOT FIND. `_probe-dead-wires.ts` asks whether any select list names a
+// column. The curated-20 bug passes that check: `client_keywords.selected_at` WAS read, by the card
+// that wrote it, and the gap was that the next step drew from a different pool. Nothing mechanical
+// notices that, because both halves look correct in isolation.
+//
+// ‼️ IT DELIBERATELY DOES NOT DECLARE WHICH DATASET FIELDS A STEP FILLS. dataset-spec.ts already owns
+// that relation, per field, as `filledBy: { kind: "step", step, how, built }`, and rerun-gaps.ts
+// consumes it to offer the "re-run the earlier step" button. A second copy keyed from the step side
+// would be two sources of truth for one fact, which is the failure this whole file is written against.
+// So `produces` covers only what dataset-spec CANNOT describe: an artifact that is not a dataset
+// field. A column, a pool, a set of rows a later step draws from. If the thing being recorded IS a
+// dataset field, it belongs in dataset-spec and not here.
+//
+// ‼️ A Record<StepKey, StepProduces>, FOR THE SAME REASON `needs` IS ONE. The type is the coverage
+// proof: a 42nd step fails the build until somebody says what it records. That is what would have
+// caught the curated 20 the day `selected_at` was added, because step 12 would have had to declare it
+// and there was no reader to name.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** One artifact a step records, and the thing downstream that reads it. */
+export interface StepOutput {
+  /** What is recorded, as `table.column`. Checked against the SQL scan, so it cannot name nothing. */
+  readonly records: string;
+  /** The file that writes it. The probe asserts it exists and names the column. */
+  readonly writtenIn: string;
+  /**
+   * The exported symbol that hands it to later steps.
+   *
+   * ‼️ THIS IS THE CHECK. The probe demands a call site OUTSIDE `writtenIn`. A reader referenced only
+   * by its own writer is precisely "the card that wrote it", which is the curated-20 bug, and it is
+   * the one thing a column scan cannot see.
+   */
+  readonly reader: string;
+  /** The steps whose work draws on it. Real keys, and LATER in board order. */
+  readonly consumedBy: readonly StepKey[];
+  /** What this output is, in one sentence. */
+  readonly what: string;
+  /** How it travels, in words, so the workflow reads without following the code. */
+  readonly feeds: string;
+}
+
+export type StepProduces =
+  | { kind: "outputs"; outputs: readonly StepOutput[] }
+  /** Why this step records no non-field artifact. Required, and printed by the probe. */
+  | { kind: "nothing"; why: string };
+
+/** dataset-spec.ts owns "which step fills which FIELD". This is only the non-field artifacts. */
+const FIELDS_ONLY = "everything it records is a dataset field, and dataset-spec.ts declares the step that fills each one";
+
+const OBSERVED = "it observes or hands over something outside this system, and records no artifact a later step draws from";
+
+export const STEP_PRODUCES: Record<StepKey, StepProduces> = {
+  // ── Before the call ────────────────────────────────────────────────────────
+  intake_received: { kind: "nothing", why: FIELDS_ONLY },
+  baseline_scan: {
+    kind: "outputs",
+    outputs: [
+      {
+        records: "audit_reports.client_id",
+        writtenIn: "src/lib/clients/baseline-scan.ts",
+        reader: "adoptAuditClassification",
+        consumedBy: ["avatar_harvest", "keyword_set", "custom_question_set"],
+        what: "the link from a finished audit to this client, and the vertical it classified.",
+        feeds:
+          "everything keyed on a vertical. Until it existed, harvest.ts, research-intake.ts, " +
+          "custom-question-set.ts and page-candidates.ts all took their `?? \"med_spa\"` fallback, and a " +
+          "shared corpus was poisoned for every client that ever existed.",
+      },
+    ],
+  },
+  site_dns_intel: { kind: "nothing", why: OBSERVED },
+  nap_sweep: { kind: "nothing", why: "it seeds nap_discrepancies rows the manual tier and step 14 then read by status, not by a column a later step names" },
+  presence_sweep_manual: {
+    kind: "nothing",
+    why: "the artifact is an IMAGE filed against client_docs, and its own STEP_NEEDS entry records why: nothing in it is a value a later step reads",
+  },
+  competitor_shortlist: {
+    kind: "outputs",
+    outputs: [
+      {
+        records: "competitor_candidates.selected",
+        writtenIn: "src/app/api/clients/[id]/competitors/route.ts",
+        reader: "selectedCompetitors",
+        consumedBy: ["review_audit", "call_sheet"],
+        what: "which three competitors a person confirmed off the shortlist.",
+        feeds:
+          "the review-count grid at step 8, the findings document, the call sheet and the closing " +
+          "questions. It had a reader and no writer until 2026-08-24, which is the same class of bug " +
+          "one direction over.",
+      },
+    ],
+  },
+  avatar_confirmed: {
+    kind: "outputs",
+    outputs: [
+      {
+        records: "clients.primary_avatar",
+        writtenIn: "src/lib/clients/avatars.ts",
+        reader: "confirmedAvatarFor",
+        consumedBy: ["avatar_harvest", "keyword_set", "custom_question_set", "page_candidates", "pre_call_pages"],
+        what: "which customer the whole build is aimed at.",
+        feeds:
+          "the deep research, the keyword categories, the question set and the pages. It had a column, " +
+          "a CHECK and a verifier and NO WRITER, so on the first real client the step came out skipped " +
+          "because no human being could tick it.",
+      },
+    ],
+  },
+  review_audit: { kind: "nothing", why: "the counts are read from live listings into review_audit_rows, which step 22's findings document reads by row rather than by a column a later step names" },
+  offer_proposed: { kind: "nothing", why: "the proposal is superseded by offer_locked, and its own STEP_NEEDS entry records that what it loses is a missing history row rather than a field" },
+  offer_locked: { kind: "nothing", why: FIELDS_ONLY },
+  avatar_harvest: { kind: "nothing", why: FIELDS_ONLY },
+  keyword_set: {
+    kind: "outputs",
+    outputs: [
+      {
+        records: "client_keywords.selected_at",
+        writtenIn: "src/lib/clients/keyword-decisions.ts",
+        reader: "selectedKeywords",
+        consumedBy: ["pre_call_pages"],
+        what: "the keywords that survived their screenshot, kept by a reaction on the keyword's own card.",
+        feeds:
+          "the seven pages, the headlines and the anchor ladder. ‼️ THIS IS THE CURATED-20 BUG ITSELF: " +
+          "the column was written and read back by the card that wrote it, while step 21 went on " +
+          "drawing from the approved set, so twenty deliberate decisions reached nothing.",
+      },
+      {
+        records: "keyword_serp_reads.keyword_id",
+        writtenIn: "src/lib/clients/keyword-strategy.ts",
+        reader: "picturedIds",
+        consumedBy: ["pre_call_pages"],
+        what: "which keywords have a screenshot on file, filed against the keyword the picture was of.",
+        feeds:
+          "the cluster gate, which refuses to plan a page off a keyword nobody has looked at. " +
+          "`picturedIds` re-reads these rows fresh on every call rather than trusting a summary, which " +
+          "is exactly why keyword_clusters.missing_pictures was dropped rather than wired: a cache must " +
+          "never be what a refusal is decided on.",
+      },
+      // ‼️ `query_on_screen` IS DELIBERATELY NOT LISTED, and the reason is the rule for this whole map.
+      // It is written and read inside step 12 only: serp-read.ts reads the search box back, and
+      // resolveFromScreen matches it to the shortlist so a screenshot can find its own keyword without
+      // anybody typing a number. No later step draws on it, so declaring it here would claim a
+      // cross-step wire that does not exist, and the probe would then demand a consumer for it.
+    ],
+  },
+  custom_question_set: {
+    kind: "nothing",
+    why:
+      "the tracked set is frozen at Day 0 and is MEASUREMENT. ‼️ It deliberately stays on planKeywords " +
+      "rather than the kept set, a probe asserts it stays broad, so it must never appear as a consumer " +
+      "of keyword_set's selection either",
+  },
+  page_candidates: { kind: "nothing", why: "the candidates are frozen onto the page-studio session row, which the digit picker reads within one thread rather than a later step" },
+  citation_cleanup_list: { kind: "nothing", why: "the ranked list is nap_discrepancies read by status, which step 24 executes and step 25 reports on" },
+  hub_preview: {
+    kind: "outputs",
+    outputs: [
+      {
+        records: "client_hosts.host",
+        writtenIn: "src/lib/hub/vercel-domains.ts",
+        reader: "resolveHost",
+        consumedBy: ["dns_records", "subdomain_live", "first_page"],
+        what: "the hostnames attached to Vercel, which is what was ATTACHED rather than what was intended.",
+        feeds:
+          "middleware's host classification and every hub page. It is also the Vercel ledger, so the " +
+          "routing map and the attachment state cannot disagree.",
+      },
+    ],
+  },
+  referral_engine_preview: { kind: "nothing", why: OBSERVED },
+  concierge_preview: { kind: "nothing", why: FIELDS_ONLY },
+  site_replica: { kind: "nothing", why: "the replica is a crawl filed as client_replica_pages rows, rendered on request and read by no later step" },
+  review_card_pdf: { kind: "nothing", why: "the card is rendered from the review destination already on the client row" },
+  pre_call_pages: { kind: "nothing", why: "the drafts are client_pages rows, and the gate reads them by body hash within the publishing step rather than through a column a later step names" },
+  call_sheet: { kind: "nothing", why: "the call pack is documents stored against output_ref, which the step cards link rather than read" },
+
+  // ── During the call ────────────────────────────────────────────────────────
+  call_booked: { kind: "nothing", why: OBSERVED },
+  call_held: { kind: "nothing", why: "what the call captures is written by offer_locked, not here" },
+  access_granted: { kind: "nothing", why: OBSERVED },
+  dns_records: { kind: "nothing", why: "the records are client_dns_records rows whose `verified` status only checkRecord may write, and subdomain_live re-observes rather than reading it" },
+  agreement_signed: { kind: "nothing", why: OBSERVED },
+
+  // ── After the call ─────────────────────────────────────────────────────────
+  day_zero_archive: {
+    kind: "outputs",
+    outputs: [
+      {
+        records: "clients.day_0_archived_at",
+        writtenIn: "src/lib/clients/day-zero.ts",
+        reader: "assertDay0Archived",
+        consumedBy: ["first_page"],
+        what: "the before photograph, and the one hard rail on the board.",
+        feeds:
+          "page_publish, which refuses while it is NULL. ‼️ `day_0_source` is the honest half: " +
+          "`manual_step` is a person asserting the archive happened, never evidence of it.",
+      },
+    ],
+  },
+  gbp_buildout: { kind: "nothing", why: OBSERVED },
+  citation_cleanup: { kind: "nothing", why: "the confirmed_status it writes is read by the same step's verifier and by step 25's PDF, both of which re-read the rows rather than a summary column" },
+  subdomain_live: { kind: "nothing", why: OBSERVED },
+  first_page: { kind: "nothing", why: "publishing flips client_pages.status, which the hub renders from; nothing later on the board draws from it" },
+  cards_printed: { kind: "nothing", why: OBSERVED },
+  review_request_configured: { kind: "nothing", why: FIELDS_ONLY },
+  referral_engine_handed: { kind: "nothing", why: OBSERVED },
+  concierge_live: { kind: "nothing", why: "the switch is concierge_configs.enabled, read by the widget at request time rather than by a later step" },
+  tracking_installed: { kind: "nothing", why: "a real session in hub_hits proves it, and the weekly report counts sessions rather than reading a flag this step set" },
+  self_report_field: { kind: "nothing", why: OBSERVED },
+  time_log_entries: { kind: "nothing", why: "hours are time_log rows the weekly report counts, not a column a later step names" },
+  weekly_report: { kind: "nothing", why: "the report is assembled from what was measured; ATTRIBUTION_NOT_WIRED says in writing what it cannot count" },
+  day_30_date: { kind: "nothing", why: OBSERVED },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Lookups
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -361,6 +578,67 @@ export function unknownFieldRefs(): FieldRef[] {
     for (const ref of [...need.needs, ...(need.wants ?? [])]) if (!BY_REF.has(ref)) out.push(ref);
   }
   return [...new Set(out)];
+}
+
+/** Every declared output, flattened, with the step that records it. */
+export function allOutputs(): Array<{ step: StepKey; output: StepOutput }> {
+  const out: Array<{ step: StepKey; output: StepOutput }> = [];
+  for (const s of DELIVERY_STEPS) {
+    const p = STEP_PRODUCES[s.key as StepKey];
+    if (p.kind === "outputs") for (const output of p.outputs) out.push({ step: s.key as StepKey, output });
+  }
+  return out;
+}
+
+/** Every step that records no non-field artifact, with its sentence. The backlog, printed. */
+export function stepsProducingNothing(): Array<{ key: StepKey; why: string }> {
+  return DELIVERY_STEPS.map((s) => s.key as StepKey)
+    .map((key) => ({ key, produces: STEP_PRODUCES[key] }))
+    .filter((x): x is { key: StepKey; produces: Extract<StepProduces, { kind: "nothing" }> } => x.produces.kind === "nothing")
+    .map(({ key, produces }) => ({ key, why: produces.why }));
+}
+
+/**
+ * Outputs whose `consumedBy` names a step that is NOT later in board order.
+ *
+ * ‼️ AN EARLIER STEP CANNOT CONSUME A LATER STEP'S OUTPUT, and a declaration that says otherwise is
+ * describing a cycle rather than a workflow. delivery-steps.ts renumbers on every insertion, so this
+ * is derived from array position and never from a literal.
+ */
+export function outputsConsumedTooEarly(): Array<{ step: StepKey; records: string; consumer: StepKey }> {
+  const order = new Map(DELIVERY_STEPS.map((s, i) => [s.key as StepKey, i]));
+  const bad: Array<{ step: StepKey; records: string; consumer: StepKey }> = [];
+  for (const { step, output } of allOutputs()) {
+    const at = order.get(step) ?? -1;
+    for (const consumer of output.consumedBy) {
+      const to = order.get(consumer);
+      if (to === undefined || to <= at) bad.push({ step, records: output.records, consumer });
+    }
+  }
+  return bad;
+}
+
+/**
+ * Dataset fields that no step is declared to fill, and that no prompt or document supplies either.
+ *
+ * ‼️ IT READS dataset-spec's OWN `filledBy`, AND DECLARES NOTHING NEW. That relation already exists
+ * per field and rerun-gaps.ts already consumes it; asking the question from the step side would be a
+ * second source of truth for one fact. A field filled by `research`, `document`, `audit` or `derived`
+ * legitimately comes from outside the board, so only a `step` filler that is `built: false`, or no
+ * usable filler at all, is a hole in the interconnection.
+ */
+export function fieldsNoStepFills(): Array<{ ref: string; why: string }> {
+  const out: Array<{ ref: string; why: string }> = [];
+  for (const f of DATASET_FIELDS) {
+    const ref = `${f.dataset}.${f.key}`;
+    const by = f.filledBy;
+    if (by.kind === "step") {
+      if (!by.built) out.push({ ref, why: `step ${by.step} is declared to fill it and the writer is not built: ${by.how}` });
+      continue;
+    }
+    if (by.kind === "research" && !by.asked) out.push({ ref, why: "a research section that no prompt asks for yet" });
+  }
+  return out;
 }
 
 /** Every step that declares it asks for no dataset field, with its sentence. The backlog, printed. */
