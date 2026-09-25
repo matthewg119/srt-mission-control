@@ -1,5 +1,9 @@
 # From a keyword to a published page: what is wired, what is not, and what to do before testing live
 
+> **Status, 2026-09-25.** Items 1-5 below are BUILT, on `feat/keyword-decisions` at `fb679ba`.
+> The one thing still outstanding is the migration, which is item 1 and has to be run by hand.
+> Jump to "The live test, in order" at the bottom.
+
 Written 2026-09-25, after scanning the whole chain on `feat/keyword-decisions` at `6cb3d57`.
 
 ---
@@ -129,13 +133,17 @@ now knows. The **body** prompt does not, and a task page that does not ship the 
 the one that does. One line into the page brief: *"the results page for this keyword already hands
 over a script; this page has to carry a better one."*
 
-### 5. One number to reconcile
+### 5. One number to reconcile — DONE, as a bucket
 
 `SHORTLIST_SIZE` is 25 and `SELECTION_TARGET` is 20: screenshot 25, keep 20. Coherent. But a
 variation approved by ✅ enters `shortlistOf` on the next read and is capped at 4 per category and 25
-total, so keeping a 26th can silently push another off the numbered list. Either raise the cap when
-selections exist, or have the card say when a keyword has fallen off the shortlist. Worth a decision,
-not worth blocking on.
+total, so keeping a 26th can push another off the numbered list.
+
+**Resolved as a bucket.** A kept keyword that no longer fits the numbered list is printed under
+*"Also kept, off the numbered list"* on the shortlist card. It is not dropped and nothing downstream
+changes: `selectedKeywords()` reads `client_keywords` directly, so step 21 still plans from it. What
+it loses is its NUMBER, and a number is only ever needed for the typed `keywords serp N` override
+now that a screenshot finds its own keyword.
 
 ---
 
