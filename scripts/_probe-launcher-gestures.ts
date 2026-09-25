@@ -103,7 +103,11 @@ check(
 );
 
 // ── 5. The teaser cadence Matthew settled on. ──────────────────────────────
-check(/var pool=lines\.slice\(\), MAX=4;/.test(src), "the teaser stops after four lines");
+check(
+  /MAX=Math\.min\(4,\s*lines\.length\)/.test(src),
+  "the teaser stops after four lines, and sooner when there are fewer",
+  "four is a ceiling rather than a quota: a page carrying only its own CTA line must say it once, not four times"
+);
 check(/setTimeout\(next,4000\);/.test(src), "the first line lands at four seconds");
 check(
   /setTimeout\(next,12000\+Math\.floor\(Math\.random\(\)\*6000\)\);/.test(src),
