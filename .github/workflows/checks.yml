@@ -70,6 +70,11 @@ jobs:
       - name: Virtual Agent grammar probe (one agent, two surfaces)
         run: bun --no-env-file run scripts/_probe-virtual-agent-grammar.ts
 
+      # Section 2 is the one that matters: Findable/Familiar/Fresh exist nowhere in the data, so a wait
+      # card implying a score per pillar promises a shape the report contradicts a minute later.
+      - name: Audit wait probe (it teaches, and claims nothing)
+        run: bun --no-env-file run scripts/_probe-audit-wait.ts
+
       - name: Headline probes
         run: |
           bun --no-env-file run scripts/_probe-aeo-headlines.ts
