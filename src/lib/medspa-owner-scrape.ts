@@ -9,10 +9,150 @@ const TIMEOUT_MS = 6000;
 const ABOUT_PATHS = ["", "/about", "/about-us", "/our-team", "/team", "/meet-the-team", "/staff"];
 
 const NAME = "(?:Dr\\.?\\s+)?([A-Z][a-z]+(?:\\s+[A-Z]\\.)?\\s+[A-Z][a-z]+)";
-const CUE_PATTERNS = [
-  new RegExp(`(?:owner|founder|co-?founder|owned by|founded by|CEO|medical director)[^.<>]{0,40}?${NAME}`, "i"),
-  new RegExp(`${NAME}[^.<>]{0,25}?(?:,?\\s*(?:owner|founder|co-?founder|CEO|medical director))`, "i"),
+
+// A cue that names an OWNER is worth more than one that names a role an employee can hold.
+// "Medical Director" is the title of a hired physician at least as often as it is the founder's,
+// and it was the single biggest source of wrong answers in the 60 site sample.
+const STRONG_CUES = "owner|founder|co-?founder|owned by|founded by";
+const WEAK_CUES = "CEO|medical director";
+const ANY_CUE = `${STRONG_CUES}|${WEAK_CUES}`;
+
+/**
+ * Where the name sits relative to its cue, and which capture group holds which half.
+ *
+ * ‼️ `g` IS LOAD BEARING, NOT TIDINESS. `String.match` without it returns only the FIRST match, so
+ * a page reading "Medical Director Jane Roe ... Owner John Smith" yielded Jane Roe, failed the
+ * shape test, and John Smith was never seen. The junk did not merely get discarded, it SUPPRESSED
+ * the real answer. That is why precision was 12%, and why fixing it should raise RECALL too.
+ */
+interface CueRule {
+  re: RegExp;
+  cueGroup: number;
+  nameGroup: number;
+}
+const CUE_RULES: CueRule[] = [
+  { re: new RegExp(`(${ANY_CUE})[^.<>]{0,40}?${NAME}`, "gi"), cueGroup: 1, nameGroup: 2 },
+  { re: new RegExp(`${NAME}[^.<>]{0,25}?,?\s*(${ANY_CUE})`, "gi"), cueGroup: 2, nameGroup: 1 },
 ];
+
+/**
+ * Words that prove a capture is a TITLE or a nav label rather than a person.
+ *
+ * ‼️ MATCHED PER WHOLE TOKEN, NEVER AS A SUBSTRING. "Newman" has to survive "new" and "Andrawis"
+ * has to survive "and", so a substring test would reject two of the seven names this scraper got
+ * RIGHT. Every entry below was returned as an owner name by the matcher this replaces: the 60 site
+ * sample produced `Nurse Practitioner`, `Medical Director`, `Lead Physician`, `Aesthetic Nurse`,
+ * `Policy Refund` and `Button James`, and med_spa_leads.owner_name still holds `Join Our`,
+ * `Learn More` and `Vision Empower` from the same code.
+ */
+const TITLE_TOKENS = new Set([
+  // Clinical titles.
+  "nurse", "practitioner", "director", "physician", "surgeon", "doctor", "md", "rn", "np", "pa",
+  "aesthetic", "aesthetics", "aesthetician", "esthetician", "injector", "provider", "clinician",
+  "lead", "senior", "chief", "head",
+  // Business titles.
+  "owner", "founder", "cofounder", "ceo", "president", "manager", "coordinator", "specialist",
+  "assistant", "receptionist", "consultant", "staff", "team", "member",
+  // Page furniture that matches "Titlecase Titlecase" and carries a cue nearby by accident.
+  "policy", "refund", "privacy", "terms", "button", "learn", "read", "book", "booking", "schedule",
+  "contact", "our", "your", "meet", "more", "now", "here", "home", "about", "view", "click", "call",
+  "send", "submit", "welcome", "appointment", "appointments", "consultation", "service", "services",
+  "treatment", "treatments", "gallery", "review", "reviews", "before", "after", "free", "join",
+  "vision", "empower", "follow", "share", "search", "menu", "close", "open", "next", "back",
+]);
+
+/** The shape a person's name takes, re-tested after capture. */
+const NAME_SHAPE = /^[A-Z][a-z]+(\s+[A-Z]\.)?\s+[A-Z][a-z]+$/;
+
+/** A strong cue, on an About page, with a Dr. prefix. Nothing beats it, so the crawl may stop. */
+export const NAME_SCORE_CEILING = 4;
+
+export interface NameCandidate {
+  name: string;
+  /** Higher is better. See scoreName. */
+  score: number;
+  /** The cue that introduced it, lowercased, for the card and for the probe. */
+  cue: string;
+  /** The path it was found on, "" for the homepage. */
+  path: string;
+  /** How many distinct pages carried it. A nav label is on all of them. */
+  pages: number;
+}
+
+/** True when any whole token of the capture is a title or a nav word. */
+export function looksLikeTitle(name: string): boolean {
+  return name
+    .split(/\s+/)
+    .map((t) => t.replace(/\.$/, "").toLowerCase())
+    .some((t) => TITLE_TOKENS.has(t));
+}
+
+function scoreName(cue: string, path: string, hadDoctorPrefix: boolean): number {
+  let score = new RegExp(`^(?:${STRONG_CUES})$`, "i").test(cue) ? 2 : 1;
+  // An owner blurb on /about or /our-team is a deliberate statement about who runs the place. The
+  // same words on the homepage are as likely to be a caption under a stock photo.
+  if (path) score += 1;
+  if (hadDoctorPrefix) score += 1;
+  return score;
+}
+
+/**
+ * Every plausible owner name on ONE page, scored. Pure, so the offline probe owns it.
+ *
+ * Both cue rules run over the whole page instead of stopping at the first hit, because the two say
+ * different things ("Owner: John Smith" and "John Smith, Owner") and either can appear further down
+ * the page than a title that matched earlier.
+ */
+export function collectNames(text: string, path: string): NameCandidate[] {
+  const out: NameCandidate[] = [];
+  for (const rule of CUE_RULES) {
+    for (const m of text.matchAll(rule.re)) {
+      const raw = (m[rule.nameGroup] ?? "").trim();
+      const cue = (m[rule.cueGroup] ?? "").trim().toLowerCase();
+      if (!raw || !cue) continue;
+      if (!NAME_SHAPE.test(raw)) continue;
+      if (looksLikeTitle(raw)) continue;
+      out.push({ name: raw, score: scoreName(cue, path, /\bDr\.?\s/.test(m[0])), cue, path, pages: 1 });
+    }
+  }
+  return out;
+}
+
+/**
+ * The best name out of everything every page offered, or null.
+ *
+ * Candidates merge by name and keep their best score. The page count is a TIE BREAK rather than a
+ * subtraction: a nav label appears on every page, but so does a real owner named in a site footer,
+ * and a raw per-page penalty would rank junk carrying one strong cue above them. Breaking a tie
+ * only fires when the cues were equally good, which is precisely when "this one is on fewer pages"
+ * is the only thing left to say.
+ */
+export function pickOwnerName(candidates: NameCandidate[]): string | null {
+  const merged = new Map<string, NameCandidate>();
+  for (const c of candidates) {
+    const existing = merged.get(c.name);
+    if (!existing) {
+      merged.set(c.name, { ...c });
+      continue;
+    }
+    existing.pages += 1;
+    if (c.score > existing.score) {
+      existing.score = c.score;
+      existing.cue = c.cue;
+      existing.path = c.path;
+    }
+  }
+  const ranked = [...merged.values()].sort(
+    (a, b) => b.score - a.score || a.pages - b.pages || a.name.length - b.name.length
+  );
+  return ranked.length ? ranked[0].name : null;
+}
+
+/** The best score any candidate in the list reached, or 0 for an empty list. */
+export function bestNameScore(candidates: NameCandidate[]): number {
+  return candidates.reduce((best, c) => (c.score > best ? c.score : best), 0);
+}
+
 
 /** Strip tags + collapse whitespace so cues and names sit on the same line. */
 export function textFromHtml(html: string): string {
@@ -203,20 +343,29 @@ export async function fetchText(url: string): Promise<string | null> {
   return res.ok ? res.html : null;
 }
 
-function findName(text: string): string | null {
-  for (const re of CUE_PATTERNS) {
-    const m = text.match(re);
-    if (m && m[1]) {
-      const name = m[1].trim();
-      // Reject obvious non-names (all-caps headings, single tokens slipped through).
-      if (/^[A-Z][a-z]+(\s+[A-Z]\.)?\s+[A-Z][a-z]+$/.test(name)) return name;
-    }
-  }
-  return null;
+export interface OwnerScrapeOptions {
+  /** Stop dispatching new pages once Date.now() passes this. Already-started fetches finish. */
+  deadline?: number;
+  /** Hard cap on pages fetched for one site. Defaults to every ABOUT_PATHS entry. */
+  maxPages?: number;
 }
 
-/** Scrape one website for an owner name. Returns null if nothing plausible found. */
-export async function scrapeOwnerName(website: string): Promise<string | null> {
+/**
+ * Scrape one website for an owner name. Returns null if nothing plausible was found.
+ *
+ * ‼️ IT READS EVERY PAGE IT IS ALLOWED TO, RATHER THAN RETURNING ON THE FIRST HIT. The old loop
+ * stopped at the first page that produced any name at all, so a weak homepage caption beat the
+ * founder's bio on /our-team and the better answer was never fetched. Only a ceiling score, which
+ * nothing can outrank, ends the walk early.
+ *
+ * ‼️ THAT MAKES THE WORST CASE SLOWER, WHICH IS WHY THE BUDGET IS A PARAMETER. Seven paths at a
+ * 6000 ms timeout is 42 seconds for one dead site, against a 240 second shared tick budget in
+ * scraper-tick. The caller that runs inside a tick has to pass `deadline`.
+ */
+export async function scrapeOwnerName(
+  website: string,
+  opts: OwnerScrapeOptions = {}
+): Promise<string | null> {
   const base = website.startsWith("http") ? website : `https://${website}`;
   let origin: string;
   try {
@@ -224,14 +373,20 @@ export async function scrapeOwnerName(website: string): Promise<string | null> {
   } catch {
     return null;
   }
-  // Homepage first (most owner blurbs live there); then a couple of About paths.
-  for (const path of ABOUT_PATHS) {
+
+  const paths = ABOUT_PATHS.slice(0, opts.maxPages ?? ABOUT_PATHS.length);
+  const found: NameCandidate[] = [];
+
+  // Homepage first (most owner blurbs live there), then the About family.
+  for (const path of paths) {
+    if (opts.deadline !== undefined && Date.now() >= opts.deadline) break;
     const html = await fetchText(path ? `${origin}${path}` : base);
     if (!html) continue;
-    const name = findName(textFromHtml(html));
-    if (name) return name;
+    found.push(...collectNames(textFromHtml(html), path));
+    if (bestNameScore(found) >= NAME_SCORE_CEILING) break;
   }
-  return null;
+
+  return pickOwnerName(found);
 }
 
 export interface OwnerScrapeTarget {

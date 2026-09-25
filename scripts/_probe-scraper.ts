@@ -18,6 +18,20 @@ import { applyMxVerdicts, filterRows } from "../src/lib/scraper/filter";
 import { formatBreakdown, formatLatePick, formatPickRewind } from "../src/lib/scraper/report";
 import { parseResultLines } from "../src/lib/scraper/millionverifier";
 import { hasMx } from "../src/lib/scraper/mx";
+import {
+  EMAIL_TIER,
+  bestEmailTier,
+  emailTier,
+  pickBestEmail,
+  type EmailCandidate,
+} from "../src/lib/email-scrape";
+import {
+  NAME_SCORE_CEILING,
+  bestNameScore,
+  collectNames,
+  looksLikeTitle,
+  pickOwnerName,
+} from "../src/lib/medspa-owner-scrape";
 
 let passed = 0;
 const failures: string[] = [];
@@ -506,6 +520,166 @@ async function liveMx(): Promise<void> {
     ),
     inFlight
   );
+}
+
+
+// ── The email tiers, owner first ────────────────────────────────────────────────────────────────
+// The two role lists disagree, so "prefer non-role" is not the same instruction as "prefer a
+// person". These checks pin the band ORDER, which is the whole of W2a.
+{
+  const cand = (email: string, viaMailto = false): EmailCandidate => ({
+    email, viaMailto, path: "", count: 1,
+  });
+  const site = "clinic.com";
+
+  eq("a front desk role is tier 2", emailTier(cand("info@clinic.com"), site), EMAIL_TIER.FRONT_OFFICE);
+  eq("a hiring inbox is tier 4, BELOW info@", emailTier(cand("careers@clinic.com"), site), EMAIL_TIER.BACK_OFFICE);
+  eq("so is billing", emailTier(cand("billing@clinic.com"), site), EMAIL_TIER.BACK_OFFICE);
+  eq("so is marketing", emailTier(cand("marketing@clinic.com"), site), EMAIL_TIER.BACK_OFFICE);
+
+  // ‼️ THE REGRESSION THE SIX BANDS EXIST TO PREVENT. careers@ is not in this file's
+  // ROLE_LOCAL_PARTS, so a plain "role loses to non-role" swap would have ranked it FIRST.
+  check(
+    "info@ beats careers@, which a bare tier swap would have inverted",
+    emailTier(cand("info@clinic.com"), site) < emailTier(cand("careers@clinic.com"), site)
+  );
+
+  eq(
+    "a same-domain business inbox is tier 3, below info@",
+    emailTier(cand("zenfuldaymedspa@zenfulday.com"), "zenfulday.com"),
+    EMAIL_TIER.SAME_DOMAIN
+  );
+  check(
+    "so the business inbox does NOT outrank the front desk",
+    emailTier(cand("info@zenfulday.com"), "zenfulday.com") <
+      emailTier(cand("zenfuldaymedspa@zenfulday.com"), "zenfulday.com")
+  );
+
+  // The one true owner address in the 60 site sample, with and without the name in hand.
+  eq(
+    "marina@ is only tier 3 with no owner name to confirm it",
+    emailTier(cand("marina@mmaestheticss.com"), "mmaestheticss.com"),
+    EMAIL_TIER.SAME_DOMAIN
+  );
+  eq(
+    "marina@ is tier 1 once the crawl has found Marina Musalyants",
+    emailTier(cand("marina@mmaestheticss.com"), "mmaestheticss.com", "Marina Musalyants"),
+    EMAIL_TIER.OWNER
+  );
+  eq(
+    "first.last is person-shaped without any name in hand",
+    emailTier(cand("jane.roe@clinic.com"), site),
+    EMAIL_TIER.OWNER
+  );
+  check(
+    "and a person beats the front desk, which is the point of the change",
+    emailTier(cand("jane.roe@clinic.com"), site) < emailTier(cand("info@clinic.com"), site)
+  );
+
+  eq("webmail is tier 5", emailTier(cand("clinic@gmail.com"), site), EMAIL_TIER.WEBMAIL);
+  eq(
+    "a parent group role address via mailto is tier 6",
+    emailTier(cand("info@medgroup.com", true), site),
+    EMAIL_TIER.OTHER_DOMAIN_ROLE
+  );
+  eq(
+    "a web agency footer credit is rejected",
+    emailTier(cand("hello@someagency.com"), site),
+    EMAIL_TIER.REJECT
+  );
+
+  // pickBestEmail must agree with the bands, and the owner name must change the winner.
+  const pool = [cand("info@clinic.com"), cand("careers@clinic.com"), cand("marina@clinic.com")];
+  eq("without a name the front desk wins", pickBestEmail(pool, site)?.email, "info@clinic.com");
+  eq(
+    "with the name, the owner wins",
+    pickBestEmail(pool, site, "Marina Musalyants")?.email,
+    "marina@clinic.com"
+  );
+
+  // ‼️ THE EARLY EXIT MUST FIRE ON TIER 1 AND NOTHING ELSE. If it fires on info@ the crawl stops on
+  // the homepage and never fetches /team, so the ranking change buys nothing.
+  eq(
+    "bestEmailTier says OWNER only for a person",
+    bestEmailTier([cand("info@clinic.com"), cand("jane.roe@clinic.com")], site),
+    EMAIL_TIER.OWNER
+  );
+  eq(
+    "and stays at FRONT_OFFICE for info@ alone, so the walk continues",
+    bestEmailTier([cand("info@clinic.com")], site),
+    EMAIL_TIER.FRONT_OFFICE
+  );
+  check(
+    "scrapeEmail breaks on EMAIL_TIER.OWNER, not on a hand-copied condition",
+    /bestEmailTier\(pool\.values\(\), siteDomain, ownerName\) === EMAIL_TIER\.OWNER/.test(
+      readFileSync("src/lib/email-scrape.ts", "utf8")
+    )
+  );
+}
+
+// ── Owner names: the title blocklist, and the suppression it undoes ─────────────────────────────
+// Every junk string below was returned as an owner name by the matcher this replaces. Every real
+// name below was a genuine hit in the same 60 site sample, so the blocklist must not touch them.
+{
+  const junk = [
+    "Nurse Practitioner", "Medical Director", "Lead Physician",
+    "Aesthetic Nurse", "Policy Refund", "Button James",
+    // Still sitting in med_spa_leads.owner_name from the pre-fix scraper.
+    "Join Our", "Learn More", "Vision Empower",
+  ];
+  for (const j of junk) check("a title is not a name: " + j, looksLikeTitle(j));
+
+  const real = [
+    "Marina Musalyants", "Anya Stassiy", "Nilam Patel", "Kathy Newman",
+    "Ashraf G. Andrawis", "Jennie Evans", "Chidi Uche",
+  ];
+  for (const r of real) check("a real hit survives the blocklist: " + r, !looksLikeTitle(r));
+
+  // ‼️ THE BLOCKLIST IS PER WHOLE TOKEN. "Newman" carries "new" and "Andrawis" carries "and";
+  // a substring test would reject two of the seven names above.
+  check("the test is per token, not substring", !looksLikeTitle("Kathy Newman"));
+
+  // The failure that made precision 12%: a title matched first and ENDED the search.
+  const page = "Our Medical Director Jane Roe leads care. The spa is owned by Dr. Marina Musalyants.";
+  const found = collectNames(page, "/about");
+  eq("the real owner is reached past the weaker cue", pickOwnerName(found), "Marina Musalyants");
+  // Jane Roe IS a person and IS collected. She is a hired medical director, so her cue is weak and
+  // she loses. The point is that the old matcher returned HER and stopped, never reaching the owner.
+  check("the weaker candidate is still seen, just outranked", found.some((c) => c.name === "Jane Roe"));
+  check(
+    "and it is outranked on score, not on luck of position",
+    (found.find((c) => c.name === "Marina Musalyants")?.score ?? 0) >
+      (found.find((c) => c.name === "Jane Roe")?.score ?? 0)
+  );
+
+  // ‼️ THE BLOCKLIST'S OWN PATH: a cue whose NAME capture is itself a title. This is the shape that
+  // produced `Nurse Practitioner` and `Aesthetic Nurse` as owner names.
+  eq(
+    "a title captured as the name is refused outright",
+    pickOwnerName(collectNames("Our Owner Nurse Practitioner will see you now", "")),
+    null
+  );
+
+  // Both cue orders are read, not just the first that matches.
+  eq(
+    "cue-then-name is collected",
+    pickOwnerName(collectNames("Owner Sandra Klein welcomes you.", "")),
+    "Sandra Klein"
+  );
+  eq(
+    "name-then-cue is collected too",
+    pickOwnerName(collectNames("Sandra Klein, founder of the practice.", "")),
+    "Sandra Klein"
+  );
+
+  // A deliberate statement on /our-team outranks a caption on the homepage.
+  const home = collectNames("Owner Sandra Klein welcomes you.", "");
+  const about = collectNames("The clinic was founded by Dr. Priya Raman in 2011.", "/our-team");
+  eq("the About page beats the homepage", pickOwnerName([...home, ...about]), "Priya Raman");
+
+  eq("a strong cue on an About page with a Dr. prefix is the ceiling", bestNameScore(about), NAME_SCORE_CEILING);
+  eq("nothing found is score zero", bestNameScore([]), 0);
+  eq("and nothing found picks nothing", pickOwnerName([]), null);
 }
 
 // Wrapped rather than top-level await: tsx transforms this to CJS and rejects one.
