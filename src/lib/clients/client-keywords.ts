@@ -24,6 +24,7 @@ import {
   EXPANSION_SYSTEM,
   KEYWORD_CATEGORIES,
   categoriesFor,
+  PLAN_KEYWORDS_NEEDED,
   KEYWORD_FLOOR,
   categoryLabel,
   classifyCategory,
@@ -1042,13 +1043,56 @@ export async function verifyKeywordSet(clientId: string): Promise<KeywordCheck> 
     };
   }
 
+  // ‼️ THE CURATION, CHECKED ONLY ONCE IT HAS STARTED. Step 21 plans seven pages, so a set where
+  // somebody has begun keeping keywords and stopped at three leaves the plan drawing four of its
+  // seven from a fallback nobody chose. Asking for PLAN_KEYWORDS_NEEDED is asking for exactly what
+  // the next step consumes.
+  //
+  // ‼️ AND NOT FOR TWENTY. The target is a target, not a cap: refusing Done at nineteen would be the
+  // board arguing with a person about their own market, which is not what a verifier is for.
+  //
+  // ‼️ A CLIENT WHO HAS KEPT NOTHING PASSES, UNCHANGED, and that is the same decision the screenshot
+  // gate above already makes for a client with no locked strategy. Most of this board's history
+  // predates the decision cards, and blocking those clients would refuse a step for not using a
+  // feature that did not exist when it ran.
+  const kept = await selectedCountFor(clientId);
+  if (kept > 0 && kept < PLAN_KEYWORDS_NEEDED) {
+    return {
+      ok: false,
+      broken: false,
+      found: `${kept} keyword${kept === 1 ? " has" : "s have"} been kept, and the plan needs ${PLAN_KEYWORDS_NEEDED}`,
+      todo:
+        `Paste the Google screenshot for a few more of the shortlist in this thread, no caption needed, and :white_check_mark: the ones worth a page. ` +
+        "`keywords shortlist` reprints them.",
+    };
+  }
+
   return {
     ok: true,
     evidence: [
       `${tally.queries} query rows in client_keywords, ${tally.approvedQueries} approved`,
       `${tally.relevantApproved} approved queries are about ${c.ctx.treatment}; the plan needs 9`,
+      kept > 0
+        ? `${kept} kept after looking at their results pages, which is what step 21 plans from`
+        : "none kept yet, so step 21 will plan from the approved set",
     ],
   };
+}
+
+/**
+ * How many keywords survived their screenshot.
+ *
+ * Tolerant: a database without docs/2026-09-27-keyword-decision-cards.sql has kept none, which is
+ * true of every client on it, and must not fail the step's verifier.
+ */
+async function selectedCountFor(clientId: string): Promise<number> {
+  const { count, error } = await supabaseAdmin
+    .from("client_keywords")
+    .select("id", { count: "exact", head: true })
+    .eq("client_id", clientId)
+    .not("selected_at", "is", null)
+    .is("dropped_at", null);
+  return error ? 0 : (count ?? 0);
 }
 
 /**
@@ -1132,6 +1176,78 @@ export async function planKeywords(
   if ("error" in loaded) return { error: `client_keywords could not be read (${loaded.error}). ${TABLE_HINT}` };
   const rows = loaded.rows.filter((r) => r.approved && !r.dropped && r.use === "query");
   return { ctx: c.ctx, rows, vocab: vocabFor(c.ctx, loaded.rows) };
+}
+
+/**
+ * The keywords somebody KEPT after looking at their Google results pages.
+ *
+ * ‼️ THIS IS NOT planKeywords AND THE DIFFERENCE IS THE WHOLE POINT OF STEP 12. planKeywords returns
+ * everything approved, which on a real client is four hundred rows and most of them `expansion`: a
+ * model's proposals, ranked below evidence on purpose. This returns the ones a person screenshotted,
+ * scored, and kept with a reaction. Planning seven pages off the first list when the second exists
+ * throws away the only part of step 12 that required a human being.
+ *
+ * ‼️ IT FALLS BACK TO THE APPROVED SET, AND THE FLAG SAYS WHEN IT DID. Most of this board's history
+ * predates the decision cards entirely, and a client who never screenshotted anything has to keep
+ * working exactly as they do now. Same precedent verifyKeywordSet already sets for the strategy
+ * half: a client with no locked strategy passes, unchanged. `curated: false` is what every caller
+ * prints so a silent fallback can never be mistaken for a curated plan.
+ *
+ * ‼️ MEASUREMENT MUST NOT CALL THIS. custom-question-set.ts and photograph.ts want BREADTH: the Day 0
+ * question set is frozen as the baseline this client is measured against for ninety days, and
+ * narrowing it from four hundred questions to twenty would permanently shrink what we can report on,
+ * after the freeze makes it unfixable. They stay on planKeywords, deliberately.
+ */
+export async function selectedKeywords(clientId: string): Promise<
+  | { ctx: KeywordContext; rows: StoredKeyword[]; vocab: string[]; curated: boolean; approvedTotal: number }
+  | { error: string }
+> {
+  const broad = await planKeywords(clientId);
+  if ("error" in broad) return broad;
+
+  // ‼️ ITS OWN SELECT, because selected_at is not in KW_COLUMNS and must never be: that string is a
+  // flat select whose own comment says a missing column has to fail loudly, and this one arrives
+  // with docs/2026-09-27-keyword-decision-cards.sql. A database without it reports nothing selected,
+  // which is true of every client on it.
+  const { data, error } = await supabaseAdmin
+    .from("client_keywords")
+    .select("id")
+    .eq("client_id", clientId)
+    .not("selected_at", "is", null)
+    .is("dropped_at", null)
+    .range(0, 2999);
+
+  if (error) {
+    if (!/does not exist|schema cache/i.test(error.message)) {
+      console.error("[client-keywords] selected read failed:", error.message);
+    }
+    return { ...broad, curated: false, approvedTotal: broad.rows.length };
+  }
+
+  const kept = new Set((data ?? []).map((r) => r.id as string));
+  const rows = broad.rows.filter((r) => kept.has(r.id));
+
+  // Nothing kept yet: the whole approved set, and the flag says so out loud.
+  if (!rows.length) return { ...broad, curated: false, approvedTotal: broad.rows.length };
+
+  return { ...broad, rows, curated: true, approvedTotal: broad.rows.length };
+}
+
+/**
+ * One line naming which pool a step planned from.
+ *
+ * ‼️ EVERY CALLER PRINTS THIS. Somebody who has just spent an hour screenshotting twenty-five
+ * results pages needs to see that it counted; somebody who skipped it needs to see that seven pages
+ * were chosen by score off four hundred model proposals. A fallback nobody is told about is how you
+ * curate carefully and never find out it was ignored.
+ */
+export function poolLine(pool: { curated: boolean; rows: readonly unknown[]; approvedTotal: number }): string {
+  // ‼️ NO STEP NUMBER IN THIS STRING. delivery-steps.ts renumbers every step whenever one is
+  // inserted, and a hard-coded 12 here would be wrong the next time somebody adds a step before it.
+  // The command names itself, which is what the reader needs anyway.
+  return pool.curated
+    ? `_Planned from the ${pool.rows.length} keyword${pool.rows.length === 1 ? "" : "s"} you kept after looking at their results pages._`
+    : `_Planned from all ${pool.approvedTotal} approved keywords, because none have been kept yet. Paste each Google screenshot in the keyword thread and :white_check_mark: the ones worth a page._`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

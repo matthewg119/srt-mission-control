@@ -704,8 +704,21 @@ function verdictMark(v: Verdict | null): string {
   return ":black_small_square:";
 }
 
-/** The shortlist card: the ~25 subjects worth googling, numbered. */
-export function shortlistLines(list: readonly Finalist[], clientName: string): string[] {
+/**
+ * The shortlist card: the ~25 subjects worth googling, numbered, then the bucket.
+ *
+ * ‼️ THE BUCKET IS WHAT STOPS A KEPT KEYWORD VANISHING. shortlistOf caps at SHORTLIST_SIZE and at
+ * four per category, so a keyword somebody has KEPT can be pushed off the numbered list by the cap
+ * the next time the list is drawn. It has not been dropped and it is not gone: selectedKeywords()
+ * reads client_keywords directly, so step 21 still plans from it. What it loses is its number, and
+ * a number is only ever needed for the typed `keywords serp N` override now that a screenshot finds
+ * its own keyword. So the bucket names them rather than letting them disappear off the bottom.
+ */
+export function shortlistLines(
+  list: readonly Finalist[],
+  clientName: string,
+  bucket: readonly { phrase: string }[] = []
+): string[] {
   const pictures = list.filter((r) => r.pictured).length;
 
   const lines: string[] = [
@@ -733,10 +746,19 @@ export function shortlistLines(list: readonly Finalist[], clientName: string): s
     lines.push(`${mark} \`${n}\` ${r.phrase}${tail}`);
   });
 
+  if (bucket.length) {
+    lines.push(
+      "",
+      `*Also kept, off the numbered list (${bucket.length}).* These did not fit the ${SHORTLIST_SIZE} above, which caps at four per category. They are still yours and step 21 still plans from them; they just have no number.`
+    );
+    for (const b of bucket) lines.push(`  :white_check_mark: ${b.phrase}`);
+  }
+
   lines.push(
     "",
     "*In this thread:*",
-    "  • Google one of them, then paste the screenshot here with `keywords serp 12` in the message.",
+    "  • Google one of them, then paste the screenshot here. No caption needed: it reads the search box and posts that keyword's card.",
+    "  • `keywords serp 12` in the message overrides the match when it cannot tell which row you mean.",
     "  • `keywords serp 12: merge` types the answer instead. It routes the keyword and does NOT clear the picture requirement.",
     "  • `magnet 12: the front desk script` names what we would give away, `magnet 12: none` says there is nothing.",
     "  • `strategy` groups them, `serp cards` puts the pictures and the scores in this thread to approve.",
@@ -866,7 +888,36 @@ async function shortlistCommand(clientId: string): Promise<StrategyReply> {
     };
   }
   const name = await clientNameFor(clientId);
-  return { message: shortlistLines(res.list, name).join("\n") };
+  return { message: shortlistLines(res.list, name, await keptOffList(clientId, res.list)).join("\n") };
+}
+
+/**
+ * Keywords somebody kept that the shortlist's caps pushed off the numbered list.
+ *
+ * ‼️ THEY ARE NOT LOST AND THIS IS ONLY ABOUT DISPLAY. selectedKeywords() reads client_keywords
+ * directly, so every one of these still reaches step 21. Without this they would simply stop
+ * appearing anywhere, and a keyword that silently disappears after somebody deliberately kept it is
+ * the worst thing this lane could do to a decision.
+ *
+ * Tolerant: no selected_at column means nothing has been kept, which is true on that database.
+ */
+async function keptOffList(
+  clientId: string,
+  listed: readonly Finalist[]
+): Promise<Array<{ phrase: string }>> {
+  const { data, error } = await supabaseAdmin
+    .from("client_keywords")
+    .select("id, phrase")
+    .eq("client_id", clientId)
+    .not("selected_at", "is", null)
+    .is("dropped_at", null)
+    .range(0, 2999);
+  if (error || !data) return [];
+
+  const numbered = new Set(listed.map((r) => r.id));
+  return data
+    .filter((r) => !numbered.has(r.id as string))
+    .map((r) => ({ phrase: r.phrase as string }));
 }
 
 async function resolveRow(

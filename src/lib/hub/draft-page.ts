@@ -536,13 +536,20 @@ async function gather(
   };
 }
 
-function userPrompt(g: Grounding): string {
+function userPrompt(g: Grounding, serpBrief: string | null = null): string {
   const lines: string[] = [
     `THE QUESTION THIS PAGE ANSWERS, verbatim as the audit ran it:`,
     g.question,
     "",
     `THE BUSINESS: ${g.clientName}`,
   ];
+
+  // ‼️ WHAT THE RESULTS PAGE ALREADY DOES, WHEN SOMEBODY LOOKED AT IT. A search whose results already
+  // hand over a script or a set of steps is won by shipping a BETTER version of that thing, not by
+  // explaining it again; a search answered by an explanation is won on the evidence this business
+  // has and nobody else does. Somebody made that judgement at step 12 in front of the actual results
+  // page, and before this the body writer never heard about it.
+  if (serpBrief) lines.push("", `WHAT GOOGLE ALREADY SHOWS FOR THIS SEARCH: ${serpBrief}`);
 
   if (g.city) lines.push(`Location: ${[g.city, g.state].filter(Boolean).join(", ")}`);
   if (g.businessType) lines.push(`What they are: ${g.businessType}`);
@@ -740,6 +747,15 @@ export async function draftPage(
     pageId?: string | null;
     magnetKey?: string | null;
     outline?: PageOutline | null;
+    /**
+     * What Google already shows for this page's keyword, read off a screenshot at step 12.
+     *
+     * ‼️ PASSED IN, NOT RESOLVED HERE, because draftPage is called for pages that came off a plan
+     * and for pages that did not, and only the caller knows which keyword a page is aimed at. The
+     * plan lane fills it from page_plan.target_keyword_id; every other caller leaves it null and the
+     * prompt is exactly what it was before.
+     */
+    serpBrief?: string | null;
   }
 ): Promise<{ ok: true; page: DraftedPage } | { ok: false; error: string }> {
   if (!question.trim()) return { ok: false, error: "No question was given." };
@@ -769,7 +785,7 @@ export async function draftPage(
     const res = await callClaudeJSON<DraftedPage>({
       model: "claude-sonnet-4-6",
       system: SYSTEM,
-      user: userPrompt(g),
+      user: userPrompt(g, opts?.serpBrief?.trim() || null),
       maxTokens: 2600,
       temperature: 0.4,
       schemaHint: `{ "title": string, "answerMd": string, "metaDescription": string, "evidenceUsed": [{ "claim": string, "sourceRef": string | null }] }`,

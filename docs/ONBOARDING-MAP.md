@@ -667,7 +667,7 @@ Seven pages drafted before the call: one pillar for the offer, six supports
 | Waits on | `offer_locked`, `keyword_set`, `page_candidates`, `concierge_preview` |
 | Runner | `runPreCallPlan()` in `src/lib/clients/pre-call-pages.ts` |
 | Writes | `client_pages`, `page_plan` |
-| Reads | `clients` |
+| Reads | `clients`, `keyword_serp_reads` |
 | [Done] reads | no table |
 | Dataset fields | 3 needed, 7 wanted |
 | Downstream | step 22 `call_sheet` declares it waits on this; `client_pages` is selected in 15 other file(s), e.g. `src/app/api/clients/[id]/hub/route.ts`, `src/app/dashboard/clients/[id]/page.tsx`, `src/lib/clients/client-reads.ts`; `page_plan` is selected in 15 other file(s), e.g. `src/lib/clients/artifacts/call-sheet.ts`, `src/lib/clients/batch-research.ts`, `src/lib/clients/client-headlines.ts` |

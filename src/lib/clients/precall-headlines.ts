@@ -377,9 +377,12 @@ interface KeywordPool {
  * is which so the model writes to the rung either way.
  */
 async function headlineKeywordPool(clientId: string, stage: AwarenessStage): Promise<KeywordPool> {
-  const { planKeywords } = await import("./client-keywords");
+  // ‼️ THE KEPT SET, NOT EVERY APPROVED ROW. Headlines are written FOR pages, and the pages come
+  // from the keywords somebody screenshotted and kept. Writing them off four hundred approved rows,
+  // most of them a model's proposals, produces headlines for searches nobody chose.
+  const { selectedKeywords } = await import("./client-keywords");
   const { isRelevantKeyword } = await import("./keyword-expansion");
-  const pk = await planKeywords(clientId);
+  const pk = await selectedKeywords(clientId);
   if ("error" in pk) return { rows: [], atRung: 0, naming: null };
   const relevant = [...pk.rows]
     .filter((r) => isRelevantKeyword(r, pk.vocab))

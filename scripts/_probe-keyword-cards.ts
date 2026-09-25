@@ -412,7 +412,52 @@ check("a `fact` SERP is named rather than left to be guessed at", /The results p
 check("it falls back to the phrase when the keyword row has gone", /normalizePhrase\(phrase\)/.test(MAGNETS));
 
 // ─────────────────────────────────────────────────────────────────────────────
-console.log("\n11. the asset vocabulary");
+console.log("\n11. the kept 20 is what step 21 plans from");
+//
+// ‼️ THE POINT OF CURATING IS THAT SOMETHING USES THE CURATION. Before this, selected_at had one
+// writer and one reader, both inside the card lane: you could screenshot twenty-five results pages,
+// keep twenty, and step 21 would plan seven pages off all four hundred approved rows without ever
+// saying so. These greps are what stop a later edit quietly putting it back.
+
+const KW = readFileSync("src/lib/clients/client-keywords.ts", "utf8");
+const PRECALL = readFileSync("src/lib/clients/pre-call-pages.ts", "utf8");
+const HEADLINES = readFileSync("src/lib/clients/precall-headlines.ts", "utf8");
+const LADDER = readFileSync("src/lib/clients/anchor-ladder.ts", "utf8");
+
+check("selectedKeywords exists", /export async function selectedKeywords/.test(KW));
+check("it reads the kept rows", /not\("selected_at", "is", null\)/.test(KW));
+// ‼️ THE FALLBACK IS NOT OPTIONAL. Most of the board's history predates the cards, and a client who
+// never screenshotted anything has to keep working exactly as they do now.
+check("it falls back to the approved set", /curated: false/.test(KW));
+check("and the fallback is announced rather than silent", /export function poolLine/.test(KW));
+
+for (const [name, src] of [["the seven pages", PRECALL], ["the headlines", HEADLINES], ["the ladder", LADDER]] as const) {
+  check(`${name} plan from the kept set`, /selectedKeywords\(/.test(src), "still on planKeywords");
+}
+check("and the plan card says which pool it used", /poolNote/.test(PRECALL));
+
+// ‼️ MEASUREMENT STAYS BROAD, AND THIS IS THE CHECK THAT PROTECTS IT. The Day 0 question set is
+// FROZEN as the baseline this client is measured against; narrowing it from four hundred questions
+// to twenty would permanently shrink what can be reported, and the freeze makes it unfixable.
+const QSET = readFileSync("src/lib/clients/artifacts/custom-question-set.ts", "utf8");
+const PHOTO = readFileSync("src/lib/clients/photograph.ts", "utf8");
+check("the Day 0 question set still measures the BROAD set", /planKeywords\(/.test(QSET) && !/selectedKeywords\(/.test(QSET));
+check("and so does the tracked photograph", /planKeywords\(/.test(PHOTO) && !/selectedKeywords\(/.test(PHOTO));
+
+// ‼️ A KEPT KEYWORD MUST NEVER SILENTLY VANISH. shortlistOf caps at 25 and at four per category, so
+// keeping a 26th can push one off the numbered list. It is still planned from; it just loses its
+// number, and the bucket is what says so out loud.
+const STRAT = readFileSync("src/lib/clients/keyword-strategy.ts", "utf8");
+check("kept keywords off the numbered list are bucketed, not dropped", /keptOffList\(/.test(STRAT));
+check("and the bucket says they still count", /step 21 still plans from them/.test(STRAT));
+
+// The body writer hears what the results page already does.
+const DRAFT = readFileSync("src/lib/hub/draft-page.ts", "utf8");
+check("the body prompt takes a SERP brief", /serpBrief/.test(DRAFT));
+check("and the plan lane fills it", /serpBriefFor\(/.test(PRECALL));
+
+// ─────────────────────────────────────────────────────────────────────────────
+console.log("\n12. the asset vocabulary");
 
 check("every asset kind names a thing with a door on it", ASSET_KINDS.length === 6);
 check(

@@ -128,11 +128,16 @@ async function offerPool(clientId: string): Promise<
       offerId: string | null;
       /** The primary audience that offer is sold to. */
       audienceId: string | null;
+      /** Which keyword pool this plan was built from, so the card can say so. */
+      poolNote: string;
     }
   | { error: string }
 > {
-  const { planKeywords } = await import("./client-keywords");
-  const pk = await planKeywords(clientId);
+  // ‼️ THE KEPT SET, AND THIS IS THE CALLER THAT MATTERS MOST. These seven pages are the whole
+  // point of step 12: the keywords were screenshotted, scored and kept one at a time so that THIS
+  // list would be chosen by a person rather than by a score over a model's proposals.
+  const { selectedKeywords, poolLine } = await import("./client-keywords");
+  const pk = await selectedKeywords(clientId);
   if ("error" in pk) return { error: pk.error };
 
   // ‼️ READ, NEVER REQUIRED. A null id is legitimate on a client whose offer is still the
@@ -199,7 +204,66 @@ async function offerPool(clientId: string): Promise<
     idByPhrase,
     offerId: offer?.id ?? null,
     audienceId: offer?.audienceId ?? null,
+    poolNote: poolLine(pk),
   };
+}
+
+/**
+ * One sentence about what Google already shows for a planned page's keyword.
+ *
+ * ‼️ THE SHAPE, NOT THE SCORES. The body writer does not need click value or citation value; those
+ * decide whether the page is worth writing, and by this point it is being written. What changes the
+ * WRITING is whether the results page already hands over a thing somebody can use, because then the
+ * job is to ship a better one rather than to explain the subject again.
+ *
+ * Its own tolerant read: every column arrives with docs/2026-09-27-keyword-decision-cards.sql, and
+ * without it this is null and the prompt is unchanged.
+ */
+async function serpBriefFor(clientId: string, planRowId: string): Promise<string | null> {
+  const { data: plan } = await supabaseAdmin
+    .from("page_plan")
+    .select("target_keyword_id, target_keyword")
+    .eq("id", planRowId)
+    .eq("client_id", clientId)
+    .maybeSingle();
+  if (!plan) return null;
+
+  const keywordId = (plan.target_keyword_id as string | null) ?? null;
+  const phrase = ((plan.target_keyword as string | null) ?? "").trim();
+  if (!keywordId && !phrase) return null;
+
+  const { normalizePhrase } = await import("./phrase-quality");
+  let q = supabaseAdmin
+    .from("keyword_serp_reads")
+    .select("answer_shape, has_script, has_steps, has_checklist")
+    .eq("client_id", clientId)
+    .order("created_at", { ascending: false })
+    .limit(1);
+  q = keywordId ? q.eq("keyword_id", keywordId) : q.eq("normalized", normalizePhrase(phrase));
+
+  const { data, error } = await q.maybeSingle();
+  if (error || !data) return null;
+
+  const shape = data.answer_shape as string | null;
+  if (!shape) return null;
+
+  if (shape === "fact") {
+    return (
+      "the results page is an explanation, with nothing on it a reader could take away and use. " +
+      "Win it on what this business knows and nobody else does, not by explaining the subject again."
+    );
+  }
+
+  const saw = [
+    data.has_script === true ? "words to say or send" : "",
+    data.has_steps === true ? "a set of steps" : "",
+    data.has_checklist === true ? "a checklist or a printable" : "",
+  ].filter(Boolean);
+
+  return (
+    `the results page already hands over ${saw.length ? saw.join(" and ") : "something a reader can use"}. ` +
+    "This page has to carry a better version of that thing, not a description of it."
+  );
 }
 
 /** Questions a new plan row may not repeat: every plan row, and every page that is not archived. */
@@ -383,7 +447,12 @@ async function proposePreCallPlan(
     ok: true,
     note: [
       `:clipboard: *Plan proposed: ${total} page${total === 1 ? "" : "s"}*, one pillar for the offer and ` +
-        `${total - 1} support${total - 1 === 1 ? "" : "s"}, every keyword from the approved set and about the offer.`,
+        `${total - 1} support${total - 1 === 1 ? "" : "s"}, every keyword about the offer.`,
+      // ‼️ WHICH POOL, SAID OUT LOUD. Somebody who screenshotted twenty-five results pages and kept
+      // twenty needs to see that it counted, and somebody who skipped it needs to see that these
+      // seven were chosen by score off a list of model proposals instead. A fallback nobody is told
+      // about is how you curate carefully and never learn it was ignored.
+      pool.poolNote,
       ...(sel.fix ? [`:warning: ${sel.fix}`] : []),
       // ‼️ SAID OUT LOUD, because a snapshot nobody is told about is one nobody trusts is happening.
       // It also makes a silent failure visible: no line means the insert did not land.
@@ -576,6 +645,9 @@ async function draftOne(
       pageId: page.id,
       magnetKey: page.leadMagnetKey,
       outline,
+      // What somebody saw on this keyword's results page at step 12. Null when nobody screenshotted
+      // it, or when the migration has not run, and the prompt is then what it always was.
+      serpBrief: await serpBriefFor(clientId, row.id),
     });
     if (!drafted.ok) {
       await release(drafted.error);

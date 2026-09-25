@@ -227,9 +227,11 @@ interface PickState {
 }
 
 export async function pickState(clientId: string): Promise<PickState | { error: string }> {
-  const { planKeywords } = await import("./client-keywords");
+  // ‼️ THE KEPT SET. The ladder picks a pillar and six supports, and every one of them becomes a
+  // page: they have to come from the keywords with a picture and a decision behind them.
+  const { selectedKeywords } = await import("./client-keywords");
   const { categoryLabel, isRelevantKeyword } = await import("./keyword-expansion");
-  const pk = await planKeywords(clientId);
+  const pk = await selectedKeywords(clientId);
   if ("error" in pk) return { error: pk.error };
   const naming = pk.ctx.categories.find((c) => c.naming)?.key ?? null;
   const focus = new Set(pk.ctx.categories.filter((c) => c.focus).map((c) => c.key));
