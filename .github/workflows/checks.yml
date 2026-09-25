@@ -70,6 +70,12 @@ jobs:
       - name: Virtual Agent grammar probe (one agent, two surfaces)
         run: bun --no-env-file run scripts/_probe-virtual-agent-grammar.ts
 
+      # The launcher was unclickable for nine days and no check in this file noticed, because the
+      # only thing that could have noticed was somebody tapping it. See the probe's own header for
+      # why it asserts a shape rather than simulating a tap.
+      - name: Launcher gesture probe (a tap opens it, a drag does not)
+        run: bun --no-env-file run scripts/_probe-launcher-gestures.ts
+
       - name: Headline probes
         run: |
           bun --no-env-file run scripts/_probe-aeo-headlines.ts

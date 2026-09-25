@@ -25,7 +25,9 @@
 import { supabaseAdmin } from "@/lib/db";
 import { callClaudeJSON, type ClaudeModel } from "@/lib/claude-calls";
 import { hasBannedDash } from "@/lib/copy-guard";
-import { DEFAULT_MASCOT, MASCOTS, mascotKeys } from "@/lib/concierge/mascot";
+// DEFAULT_MASCOT and MASCOTS left the import with skipMascot on 2026-09-25: nothing in this file
+// reads the built-in default any more, because an unanswered character step now means no character.
+import { mascotKeys } from "@/lib/concierge/mascot";
 import { conciergeTenant } from "@/lib/concierge/for-client";
 import {
   cleanCommand,
@@ -468,15 +470,20 @@ export async function chooseMascot(
  * creates the row long before anybody gets here, so "leave it alone" would mean a client keeps whatever
  * the row happened to be created with. Writing it means the decision is recorded and reads the same in
  * the database as a deliberate pick of the same character.
+ *
+ * ‼️ AND THE DEFAULT IS NOW NO CHARACTER AT ALL (2026-09-25). It wrote DEFAULT_MASCOT until today,
+ * which made "skip the character step" mean "ship a cartoon nobody picked". The launcher is a pill unless
+ * a tenant asks for a mascot, so skipping writes null: the decision is still recorded, and what it
+ * records is the truth. Note DEFAULT_MASCOT stays what the MENU suggests, which is a different question
+ * from what an unanswered step gets.
  */
 export async function skipMascot(clientId: string, by: string): Promise<{ ok: boolean; message: string }> {
-  const err = await writeConfig(clientId, { mascot: DEFAULT_MASCOT });
+  const err = await writeConfig(clientId, { mascot: null });
   if (err) return { ok: false, message: `:warning: Not set: ${err}` };
-  const name = MASCOTS[DEFAULT_MASCOT] ? (await mascotCatalogue(clientId)).find((o) => o.key === DEFAULT_MASCOT)?.name : null;
   await logClient(clientId, by, "mascot skip");
   return {
     ok: true,
-    message: `:white_check_mark: *Kept the default* (${name ?? DEFAULT_MASCOT}), ${by}. Nothing else is blocked. \`mascot\` reopens the menu whenever.`,
+    message: `:white_check_mark: *Kept the default*, ${by}: the plain Help pill, no character. Nothing else is blocked. \`mascot\` reopens the menu whenever.`,
   };
 }
 

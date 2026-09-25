@@ -164,7 +164,12 @@ export async function loadConciergeConfig(slug: string): Promise<ConciergeConfig
     enabled: row.enabled === true && addonStatus !== "declined",
     addonStatus,
     quickActions: readQuickActions(row.quick_actions),
-    mascot: row.mascot === null ? null : str(row.mascot) ?? "wizard-cat",
+    // ‼️ NULL IS THE ANSWER FOR ANYTHING THAT IS NOT A KEY, AND IT USED TO BE THE WIZARD CAT
+    // (inverted 2026-09-25). Between 2026-09-16 and today the column defaulted to 'wizard-cat' AND this
+    // line coerced anything non-null to it, so a tenant got a cartoon on their own homepage through two
+    // separate defaults, neither of which anybody had chosen. The mascot is opt-in now: a key here means
+    // somebody typed `mascot <key>` in step 18's thread, and everything else is the plain pill.
+    mascot: str(row.mascot) ?? null,
     mascotCandidates: Array.isArray(row.mascot_candidates)
       ? (row.mascot_candidates as unknown[])
           .filter((k): k is string => typeof k === "string" && !!k.trim())
