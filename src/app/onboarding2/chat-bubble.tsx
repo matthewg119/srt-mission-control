@@ -135,7 +135,14 @@ export function ChatPanel({
   fullscreen?: boolean;
   demo: boolean;
 }) {
-  const [open, setOpen] = useState(fullscreen);
+  // ‼️ IT STARTS OPEN, AND SEEDING THIS FROM `fullscreen` WAS A BUG I SHIPPED (2026-09-25). This
+  // component is only rendered at stage === "chat", which is the moment the conversation IS the page, so
+  // there is never a reason for it to start collapsed. It used to read `fullscreen`, which was always
+  // true, so the bug was invisible until the panel change made that prop default false: picking an offer
+  // then rendered the 56px circle below instead of the chat, and looked like nothing had happened.
+  //
+  // The circle stays as the way back, because the close button is the only thing that sets this false.
+  const [open, setOpen] = useState(true);
   const [messages, setMessages] = useState<Msg[]>([]);
   const [options, setOptions] = useState<string[]>([]);
   const [otherOption, setOtherOption] = useState<string | null>(null);
@@ -159,9 +166,8 @@ export function ChatPanel({
   const [booking, setBooking] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (fullscreen) setOpen(true);
-  }, [fullscreen]);
+  // The effect that forced it open went with the line above: it can no longer be closed by mistake, and
+  // re-opening on a prop change would fight the close button rather than help it.
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });

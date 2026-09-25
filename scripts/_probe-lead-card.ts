@@ -45,9 +45,14 @@ function read(file: string): string {
  * for an assignment. A probe that can be fooled by an explanation is worse than one that is missing.
  */
 function code(file: string): string {
+  // ‼️ SPLIT ON /\r?\n/, NOT ON "\n", AND THAT IS THE WINDOWS CRLF TRAP THIS REPO ALREADY
+  // KNOWS ABOUT. Splitting on the newline alone leaves a \r at the end of every line, and `.` never matches a
+  // carriage return, so `.*$` cannot reach the end of the line and the comment is left exactly where it
+  // was. The probe then passes on a checkout with LF endings and fails on the same commit with CRLF,
+  // which is what happened the moment these branches were merged in a Windows worktree.
   return read(file)
     .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
+    .split(/\r?\n/)
     .map((l) => l.replace(/(^|\s)\/\/.*$/, ""))
     .join("\n");
 }

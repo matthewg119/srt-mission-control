@@ -193,6 +193,17 @@ const SCRIPT = `(function(){
  btnLabel.textContent="Help";
  btn.appendChild(icon);btn.appendChild(btnLabel);
 
+ // ‼️ WHAT THE PILL SAYS WHILE IT IS SPEAKING, from /api/concierge/config. Matthew, 2026-09-25:
+ // "a combination of help and suggestions for Free AI Referral Engine or Get AI Visibility audit etc as
+ // default". So the corner rests on its resting label and names an offer only while a bubble is up, one
+ // thing at a time rather than a pill and a bubble saying two different things at once.
+ //
+ // ‼️ THESE COME FROM THE DOORS, NOT FROM A MAGNET ROW. The pill used to be pillLabel(magnet), so
+ // after the second door became the AI Referral Engine walk the corner still advertised the magnet it had
+ // replaced and read "Find my weakest pillar" for an offer nothing led to.
+ var offers=[], offerAt=0;
+ function restLabel(){return btn.getAttribute("data-label")||"Help"}
+
  var cat=null, catAssets=null, talkLoaded=false;
  var hide=document.createElement("button");
  hide.type="button";hide.setAttribute("aria-label","Hide the assistant");hide.textContent="\\u00d7";
@@ -316,6 +327,7 @@ const SCRIPT = `(function(){
 
  function say(line){
   if(!line){
+   if(!cat&&panel.style.display==="none")btnLabel.textContent=restLabel();
    bubble.style.opacity="0";bubble.style.transform="translateY(6px)";
    setTimeout(function(){if(bubble.style.opacity==="0")bubble.style.display="none"},260);
    // Not while a gesture is running: the gesture puts idle back itself when it ends, and cutting it
@@ -323,6 +335,9 @@ const SCRIPT = `(function(){
    if(cat&&catAssets&&!reduce&&!flourishing&&cat.getAttribute("data-live"))cat.src=abs(catAssets.idle);
    return;
   }
+  // ‼️ THE PILL FOLLOWS THE BUBBLE. say(null) below puts it back, so the corner is only ever
+  // advertising something while there is something on screen saying it.
+  if(!cat&&offers.length){btnLabel.textContent=offers[offerAt%offers.length];offerAt++}
   bubbleText.textContent=line;
   bubble.style.display="block";
   requestAnimationFrame(function(){bubble.style.opacity="1";bubble.style.transform="translateY(0)"});
@@ -483,6 +498,7 @@ const SCRIPT = `(function(){
     if(d.corner)place(d.corner);
     if(d.mascot&&wantMascot!=="none")useMascot(d.mascot);
     else if(d.ctaLabel){btnLabel.textContent=d.ctaLabel;btn.setAttribute("data-label",d.ctaLabel)}
+    if(d.ctaOffers&&d.ctaOffers.length)offers=d.ctaOffers;
     schedule(d.lines&&d.lines.length?d.lines.slice():(d.headline?[d.headline]:[]),ctaLine||null);
   })
   // ‼️ A PAGE WITH ITS OWN LINE STILL SPEAKS WHEN THE CONFIG IS UNREACHABLE. Every failure in this
