@@ -707,6 +707,12 @@ export async function recordHandoff(
         city: r.city || null,
         phone: r.phone || null,
         source: "listprep",
+        // ‼️ THE COLUMN THAT MAKES THE WHOLE BUILD MEASURABLE, AND THE ONE THING HERE THAT CANNOT BE
+        // BACKFILLED. list_pipeline_runs -> run_id -> contacts -> clients is what answers "what
+        // fraction of the Instagram list converted versus the Maps list". Once a run has been mailed
+        // without it, that run's attribution is gone: `campaign` is free text an operator typed, and
+        // two runs can share it. Everything else in this lane is recoverable by re-running something.
+        run_id: runId,
         campaign,
         first_sent_at: now,
         last_touch_at: now,

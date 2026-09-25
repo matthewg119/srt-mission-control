@@ -90,16 +90,25 @@ async function main() {
       "run_id", "source", "source_query", "source_metro", "place_id", "business_name", "domain",
       "website", "phone", "phone_normalized", "vertical_slug", "business_type", "avatar_slug",
       "found_in_sources", "qualify_keep", "qualify_reason", "qualify_model", "qualified_at",
+      "enriched_at", "enrich_attempts",
     ],
     list_pipeline_runs: [
       "batch_id", "label", "source", "source_queries", "icp_text", "stage", "raw_count",
       "qualified_count", "enriched_count", "verified_count", "sendable_count", "provider_spend",
       "cost_usd", "spend_approved_at", "drop_review_ts",
+      // Were missing from this map while the code already named them, so nothing checked them.
+      "spend_approved_by", "slack_channel_id", "slack_thread_ts", "vertical_slug",
+      // The Maps door: the poll's terminal marker, the request id, and the spend gate.
+      "pull_request_id", "pull_finished_at", "pull_approval_ts",
     ],
     sendable_leads: [
       "run_id", "raw_lead_id", "email", "first_name", "last_name", "title", "provider",
       "provider_cost_usd", "attempts", "email_status", "catchall_rechecked_at", "suppressed_reason",
+      "suppressed_at", "sent_at",
     ],
+    // ‼️ THE ATTRIBUTION COLUMN, AND THE ONLY THING IN THIS BUILD THAT CANNOT BE BACKFILLED. A run
+    // mailed without it can never be traced to the list that produced it.
+    outreach_prospects: ["run_id", "email", "website", "source", "campaign", "confirmed"],
   };
 
   for (const [table, cols] of Object.entries(COLUMNS)) {
@@ -437,6 +446,11 @@ async function main() {
   // Graph nudge sender drains. Confirming these would enrol every handed-off address in a SECOND
   // sequence out of matthew@srtagency.com, from the tenant that carries client mail.
   check("it does NOT confirm the prospect into the Graph sender's worklist", !/confirmed: true/.test(lpsrc));
+  // ‼️ THE CHECK ABOVE READS UN-STRIPPED SOURCE, DELIBERATELY, so no comment in listprep.ts may
+  // quote that literal. The run_id comment says "confirmed is left false" in words for that reason.
+  check("the handoff carries the run, so a send can be attributed to the list that made it",
+    /run_id: runId,/.test(lpsrc));
+
   check(
     "the lane records the handoff before it calls the batch done",
     /recordHandoff[\s\S]{0,400}status: "done"/.test(normalize(readFileSync("src/lib/scraper/lane.ts", "utf8")))
