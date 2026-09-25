@@ -31,6 +31,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { frameAncestorsFor, loadConciergeConfig } from "@/lib/concierge/config";
 import { conciergeAllowed, PREVIEW_TOKEN_PARAM } from "@/lib/concierge/preview-grant";
 import { REFERRAL_NO_TIMES, REFERRAL_SCRIPT, REFERRAL_TIMES_COPY } from "@/lib/concierge/referral-script";
+import { REPORT_PIVOT } from "@/lib/concierge/report-pivot";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -170,6 +171,7 @@ body{background:var(--va-bg);color:var(--va-ink);font:15px/1.5 -apple-system,Bli
  var REF=${JSON.stringify(REFERRAL_SCRIPT)};
  var REF_NONE=${JSON.stringify(REFERRAL_NO_TIMES)};
  var REF_TIMES=${JSON.stringify(REFERRAL_TIMES_COPY)};
+ var PIVOT=${JSON.stringify(REPORT_PIVOT)};
  function api(p){return PASS?p+(p.indexOf("?")<0?"?":"&")+PASS:p}
  var log=document.getElementById('log'),form=document.getElementById('f'),input=document.getElementById('i'),send=document.getElementById('s');
  var token=null,busy=false,opening='',contact=false,firstName='',pending=null,mode='',turnChips=null;
@@ -462,7 +464,7 @@ body{background:var(--va-bg);color:var(--va-ink);font:15px/1.5 -apple-system,Bli
    post('/api/concierge/action',{token:token,action:'audit_status',scanId:scanId}).then(function(d){
     var pct=d.engine&&d.engine.total?Math.round(100*d.engine.done/d.engine.total):Math.min(90,Math.round((Date.now()-started)/2000));
     fill.style.width=Math.max(8,Math.min(100,pct))+'%';
-    if(d.reportUrl){done=true;fill.style.width='100%';var r=bubble('a','Your AI visibility report is ready.');link(r,d.reportUrl,'Open my report');afterAudit();height();return}
+    if(d.reportUrl){done=true;fill.style.width='100%';var r=bubble('a',PIVOT.ready);link(r,d.reportUrl,'Open my report');afterAudit(d.weakest);height();return}
     if(d.status==='failed'){done=true;bubble('a',(d.error||'That audit could not finish.')+' Type below and I will help directly.');startTyping();return}
     setTimeout(tick,6000);
    }).catch(function(){setTimeout(tick,9000)});
@@ -471,7 +473,33 @@ body{background:var(--va-bg);color:var(--va-ink);font:15px/1.5 -apple-system,Bli
   startTyping(true);
  }
 
- function afterAudit(){bubble('a','Want me to walk you through what it found? Ask me anything below.')}
+ // ‼️ THE REPORT IS A HOOK, NOT A HANDOVER. This said "Want me to walk you through what it found?
+ // Ask me anything below.", which hands control back to somebody who has just spent three minutes and
+ // sells nothing. Now it names what was found, says why reviews are the lever, offers the free tool and
+ // asks for the yes, in that order.
+ //
+ // ‼️ THE weakest SENTENCE COMES FINISHED FROM THE SERVER AND THIS FILE MAY NOT ALTER IT. It is built
+ // in the audit_status branch from the report's own block counts, with the denominator in it. When the
+ // server could not produce one honestly it is absent, and the pivot simply runs without a finding: read
+ // without it the sequence still works, which is the test a conditional line has to pass. Nothing here
+ // invents a score, a pillar or a competitor.
+ //
+ // ‼️ AND THE CHIP CALLS THE SAME WALK THE SECOND DOOR OPENS. Not a second copy of it: one script,
+ // one contact capture, one booking source. See src/lib/concierge/referral-script.ts.
+ function afterAudit(weakest){
+  if(weakest)bubble('a',weakest);
+  bubble('a',PIVOT.lever);
+  bubble('a',PIVOT.tool);
+  bubble('a',PIVOT.ask);
+  var box=el('va-chips is-pair');
+  var yes=document.createElement('button');yes.type='button';yes.className='va-chip';yes.textContent=PIVOT.chip;
+  yes.addEventListener('click',function(){box.remove();bubble('u',PIVOT.chip);choose('referral')});
+  var no=document.createElement('button');no.type='button';no.className='va-chip';no.textContent=PIVOT.decline;
+  // The way out is a real way out: it opens the composer rather than asking again.
+  no.addEventListener('click',function(){box.remove();bubble('u',PIVOT.decline);startTyping()});
+  box.appendChild(yes);box.appendChild(no);
+  height();
+ }
 
  function giveMagnet(){
   var wait=el('va-dots','...');
