@@ -73,6 +73,15 @@ const SCRIPT = `(function(){
  // Sliced to 90 to match the cap normalizeCtaLine and the column CHECK both enforce, so a value put
  // into the table by hand cannot render longer here than it does anywhere else.
  var ctaLine=(me.getAttribute("data-cta")||"").slice(0,90);
+ // ‼️ THE RESUME TOKEN, READ OFF THE PAGE'S OWN URL. The welcome email links back to the page the
+ // conversation started on with ?srtc=<signed token> on it, so somebody who closed the widget half way
+ // through can carry on. Reading location.search is not a widening of this file's rules: it already reads
+ // location.pathname and location.host to tell the frame which page it is on.
+ //
+ // ‼️ IT IS PASSED TO THE FRAME AND VERIFIED THERE, NEVER TRUSTED HERE. This script does nothing
+ // with it but hand it on, so a forged one buys a frame that refuses it rather than an open panel.
+ var resume="";
+ try{resume=(new URLSearchParams(location.search).get("srtc")||"").slice(0,400)}catch(e){}
 
  function q(o){return Object.keys(o).filter(function(k){return o[k]}).map(function(k){
    return encodeURIComponent(k)+"="+encodeURIComponent(o[k])}).join("&")}
@@ -103,7 +112,7 @@ const SCRIPT = `(function(){
  function withPass(u){return pass?u+(u.indexOf("?")<0?"?":"&")+pass:u}
 
  var frameSrc=withPass(origin+"/w/"+encodeURIComponent(slug)+"?"+q({
-   category:category,city:city,magnet:magnet,path:location.pathname,host:location.host}));
+   category:category,city:city,magnet:magnet,path:location.pathname,host:location.host,srtc:resume}));
 
  function makeFrame(){
   var f=document.createElement("iframe");
@@ -465,6 +474,12 @@ const SCRIPT = `(function(){
     // has confirmed the tenant is live, so a caller can test for it and render no control when the widget
     // is not there rather than rendering one that does nothing.
     try{window.__srtConciergeOpen=function(){toggle(true)}}catch(err){}
+    // ‼️ A RESUME LINK OPENS THE PANEL BY ITSELF, AND THAT IS THE ONE TIME THIS SCRIPT DOES. The
+    // rest of the time the corner waits to be pressed, because a panel that opens itself on a stranger's
+    // first visit is a popup. Somebody arriving from an email we sent them, on a link they chose to tap,
+    // is not a stranger and is not being interrupted: the conversation IS the point of the link. It runs
+    // only after the config confirmed the tenant is live, so a switched-off widget still opens nothing.
+    if(resume)toggle(true);
     if(d.corner)place(d.corner);
     if(d.mascot&&wantMascot!=="none")useMascot(d.mascot);
     else if(d.ctaLabel){btnLabel.textContent=d.ctaLabel;btn.setAttribute("data-label",d.ctaLabel)}

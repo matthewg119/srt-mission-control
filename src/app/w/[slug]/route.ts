@@ -83,6 +83,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ slug
     .join("&");
   const path = (q.get("path") ?? "").slice(0, 500);
   const host = (q.get("host") ?? "").slice(0, 200);
+  // Forwarded by embed.js, which read it off the page's own URL. Verified by /api/concierge/start and
+  // never here: this route only hands it on, so a forged one buys a normal start rather than a session.
+  const srtc = (q.get("srtc") ?? "").slice(0, 400);
 
   const owner = config.audience === "owner";
   const title = owner ? "Virtual Agent" : `${config.clientName}`;
@@ -161,7 +164,7 @@ body{background:var(--va-bg);color:var(--va-ink);font:15px/1.5 -apple-system,Bli
 <form id="f" class="va-composer" autocomplete="off" hidden><div class="va-bar"><input id="i" placeholder="Type here" aria-label="Your message" maxlength="1200" disabled><button id="s" class="va-send" disabled>Send</button></div></form>
 <script>
 (function(){
- var CFG={slug:${JSON.stringify(slug)},category:${JSON.stringify(category)},magnet:${JSON.stringify(magnet)},city:${JSON.stringify(city)},path:${JSON.stringify(path)},host:${JSON.stringify(host)}};
+ var CFG={slug:${JSON.stringify(slug)},category:${JSON.stringify(category)},magnet:${JSON.stringify(magnet)},city:${JSON.stringify(city)},path:${JSON.stringify(path)},host:${JSON.stringify(host)},srtc:${JSON.stringify(srtc)}};
  var PASS=${JSON.stringify(pass)};
  // ‼️ THE WHOLE WALK, INLINED AS DATA, WITH NO MODEL AND NO FETCH FOR ANY OF ITS WORDS. Every
  // string here was written in src/lib/concierge/referral-script.ts and passed through copy-guard at
@@ -407,6 +410,10 @@ body{background:var(--va-bg);color:var(--va-ink);font:15px/1.5 -apple-system,Bli
 
  function refFill(t,a,b){return t.replace('{a}',a).replace('{b}',b||a)}
 
+ // Where a named step sits in the walk, so a resume starts at one by name rather than by number. A
+ // number here would silently point at the wrong step the first time somebody inserts one.
+ function indexOfStep(id){for(var i=0;i<REF.length;i++){if(REF[i].id===id)return i}return 0}
+
  // ‼️ THE TIMES ARE REAL OR THEY ARE NOT OFFERED, AND THERE IS NO THIRD BRANCH. The server runs the
  // same resolveBooking() the model's offer_booking tool runs, and it answers with what is open, a
  // link, a phone, or nothing. This draws whichever came back and then continues the walk.
@@ -490,10 +497,28 @@ body{background:var(--va-bg);color:var(--va-ink);font:15px/1.5 -apple-system,Bli
  }
 
  fetch(api('/api/concierge/start'),{method:'POST',headers:{'content-type':'application/json'},
-  body:JSON.stringify({slug:CFG.slug,category:CFG.category,magnet:CFG.magnet,city:CFG.city,path:CFG.path,host:CFG.host})})
+  body:JSON.stringify({slug:CFG.slug,category:CFG.category,magnet:CFG.magnet,city:CFG.city,path:CFG.path,host:CFG.host,srtc:CFG.srtc})})
  .then(function(r){return r.ok?r.json():Promise.reject(r.status)})
  .then(function(d){
   token=d.token;opening=d.opening||'';
+
+  // ‼️ COMING BACK FROM THE WELCOME EMAIL. The server reopened the session it already had rather
+  // than minting a new one, so the contact it holds is the contact we captured. What it cannot restore is
+  // the step index, which lived in this frame and went with the tab.
+  //
+  // ‼️ SO IT PICKS UP AT THE TIMES, WHICH IS THE ONE PLACE WORTH PICKING UP. Somebody who filled in
+  // the form and then closed the tab without choosing a slot is exactly who that email is for, and the one
+  // thing they must not be asked for twice is their name and number. With no contact on file there is
+  // nothing to resume into, so they get the doors like anybody else.
+  if(d.resumed){
+   contact=Boolean(d.hasContact);firstName=d.firstName||'';
+   bubble('a',d.greeting||'Welcome back.');
+   if(contact)walkRef(indexOfStep('q_daypart'));
+   else actions([{kind:'type',label:'Type for help'}]);
+   height();
+   return;
+  }
+
   if(d.greeting&&d.actions&&d.actions.length){bubble('a',d.greeting);actions(d.actions)}
   else{bubble('a',opening);startTyping(true)}
   height();

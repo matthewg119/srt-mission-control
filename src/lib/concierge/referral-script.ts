@@ -18,11 +18,11 @@
 // ‼️ EVERY STRING GOES THROUGH guard(). This is read out on a med spa's own website, so it is copy,
 // and copy-guard throws at module evaluation on an em dash, an en dash or a "--".
 
-// ‼️ THIS WALK PROMISES TWO EMAILS AND THIS BRANCH SENDS NEITHER. Step four says "we will send your
-// download link promptly" and the closing line says "plus the email we already sent you". Both are
-// Matthew's exact words and both are true only once the welcome email exists. DO NOT MERGE THIS TO MAIN
-// AHEAD OF THAT: a preview harms nobody, and a live door that promises a prospect an email we never send
-// is the one failure in this lane that costs a real person something.
+// ‼️ THE TWO EMAILS THIS WALK PROMISES ARE SENT AS OF feat/referral-emails. Step four says "we will
+// send your download link promptly" and the closing line says "plus the email we already sent you". Both
+// were false on the lane branch alone, which is why that branch carried a do-not-merge note; the email
+// lands in src/lib/concierge/referral-email.ts and is sent from the contact action. If this file and that
+// one are ever separated again, the promise goes back to being false.
 //
 // ‼️ AND "DOWNLOAD" IS NOT WHAT THE PRODUCT IS, WHICH IS A COPY QUESTION FOR MATTHEW. The AI
 // Referral Engine is a hosted tool: src/config/pitch.ts sells it as "set up on your site", step 17 is

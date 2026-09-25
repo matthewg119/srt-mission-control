@@ -39,6 +39,14 @@ export interface ConciergeSession {
    */
   pageMagnetKey: string | null;
   entryPageId: string | null;
+  /**
+   * The host the widget was opened on, written at /start and read back for the resume link.
+   *
+   * ‼️ IT WAS WRITTEN AND NEVER READ UNTIL NOW. startConciergeSession has always stored entry_host
+   * and SESSION_COLUMNS did not select it, so every loaded session carried a path with no host. The
+   * welcome email's resume link needs both: a path alone cannot name a page on somebody else's domain.
+   */
+  entryHost: string | null;
   entryPath: string | null;
   contactId: string | null;
   firstName: string | null;
@@ -63,7 +71,9 @@ export interface ConciergeSession {
 // in startConciergeSession has always written it, so a database without the column already fails
 // there first and this select adds no new way to break. Confirmed present in production 2026-09-11.
 const SESSION_COLUMNS =
-  "id, client_id, session_token, page_category, page_magnet_key, entry_page_id, entry_path, " +
+  // entry_host joined this list on 2026-09-25, and it is safe for the same reason embed_origin is: the
+  // column has existed since docs/2026-09-01-concierge.sql and the insert has always written it.
+  "id, client_id, session_token, page_category, page_magnet_key, entry_page_id, entry_host, entry_path, " +
   "contact_id, first_name, email, phone, ammo_used, magnets_delivered, turns, outcome, " +
   "booking_clicked_at, embed_origin";
 
@@ -76,6 +86,7 @@ function toSession(row: Record<string, unknown>): ConciergeSession {
     pageCategory: str(row.page_category),
     pageMagnetKey: str(row.page_magnet_key),
     entryPageId: str(row.entry_page_id),
+    entryHost: str(row.entry_host),
     entryPath: str(row.entry_path),
     contactId: str(row.contact_id),
     firstName: str(row.first_name),
@@ -153,6 +164,29 @@ export async function startConciergeSession(args: StartSessionArgs): Promise<Con
     return null;
   }
   return toSession(data as unknown as Record<string, unknown>);
+}
+
+/**
+ * A session by its row id, for the resume link in the welcome email.
+ *
+ * ‼️ THE ID IS NOT A BEARER AND THIS FUNCTION IS NOT A DOOR. loadConciergeSession above takes the
+ * session_token, which IS a bearer: holding it is authority to append to a conversation. An id appears in
+ * Slack cards and dashboard URLs, which is exactly why the schema keeps the two apart
+ * (docs/2026-09-01-concierge.sql: "THE BEARER, AND IT IS NOT THE ID"). So the only caller of this is
+ * /api/concierge/start, and only after verifying a signed resume token that names the id AND checking the
+ * session belongs to the tenant being opened. Nothing else may call it with an id off a URL.
+ */
+export async function loadConciergeSessionById(id: string | null | undefined): Promise<ConciergeSession | null> {
+  const clean = typeof id === "string" ? id.trim() : "";
+  if (!/^[0-9a-f-]{36}$/i.test(clean)) return null;
+
+  const { data } = await supabaseAdmin
+    .from("concierge_sessions")
+    .select(SESSION_COLUMNS)
+    .eq("id", clean)
+    .maybeSingle();
+
+  return data ? toSession(data as unknown as Record<string, unknown>) : null;
 }
 
 export async function loadConciergeSession(token: string | null | undefined): Promise<ConciergeSession | null> {

@@ -81,6 +81,12 @@ jobs:
       - name: Referral lane probe (scripted, and the times are the calendar's)
         run: bun --no-env-file run scripts/_probe-referral-lane.ts
 
+      # A link in an email is the least controlled thing we produce. These checks are about what the
+      # resume link CANNOT do: it is not the session's write bearer, it expires in three days, and it
+      # cannot open another tenant's conversation.
+      - name: Referral resume probe (a grant, not a bearer)
+        run: bun --no-env-file run scripts/_probe-referral-resume.ts
+
       - name: Headline probes
         run: |
           bun --no-env-file run scripts/_probe-aeo-headlines.ts

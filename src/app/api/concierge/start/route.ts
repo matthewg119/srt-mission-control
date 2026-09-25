@@ -75,6 +75,60 @@ export async function POST(req: NextRequest) {
   const token = new URL(req.url).searchParams.get(PREVIEW_TOKEN_PARAM);
   if (!conciergeAllowed(config, token)) return notFound();
 
+  const str = (v: unknown, max: number): string | null => {
+    const s = String(v ?? "").trim().slice(0, max);
+    return s.length > 0 ? s : null;
+  };
+
+  // ── Coming back from the welcome email ────────────────────────────────────
+  //
+  // ‼️ A RESUME REOPENS THE EXISTING SESSION AND MINTS NOTHING. The file header says a session is
+  // minted here and nowhere else, so /turn and /booked can trust a session token as proof a grant was
+  // spent. That still holds: a signed `resume` token IS a grant, spent here, and what comes back is the
+  // session it names rather than a new one. Minting a second session for the same person would give them
+  // two transcripts and lose the contact we already have.
+  //
+  // ‼️ AND IT IS CHECKED AGAINST THIS CONFIG'S OWN clientId, NEVER JUST VERIFIED. preview-grant.ts
+  // makes the same point about the same class of bug: a valid token for clinic A must not open clinic B's
+  // widget. Verifying a signature and forgetting the identity comparison is the one way to get this wrong.
+  //
+  // ‼️ IT DOES NOT SPEND THE PER-IP CONVERSATION CAP, because it starts no conversation. /turn's
+  // MAX_TURNS still bounds what a resumed session can cost, and the token expires in three days.
+  const resumeToken = str(body.srtc, 400);
+  if (resumeToken) {
+    const [{ sessionIdFromResumeToken }, { loadConciergeSessionById }] = await Promise.all([
+      import("@/lib/concierge/resume"),
+      import("@/lib/concierge/session"),
+    ]);
+    const sessionId = sessionIdFromResumeToken(resumeToken);
+    const existing = sessionId ? await loadConciergeSessionById(sessionId) : null;
+
+    // A forged, expired, wrong-scope or wrong-tenant token falls through to a NORMAL start rather than
+    // refusing. There is nothing secret here and the visitor did nothing wrong: they get the widget they
+    // would have got from the corner, which is a better answer than an error about a link they were sent.
+    if (existing && existing.clientId === config.clientId) {
+      return NextResponse.json(
+        {
+          token: existing.sessionToken,
+          resumed: true,
+          firstName: existing.firstName,
+          // ‼️ WHAT THE SERVER KNOWS, NOT WHAT THE BROWSER REMEMBERED. The walk's step index lives in
+          // the frame and is gone once the tab closes, so "where they left off" can only mean what is on
+          // the session row. `hasContact` is the one that matters: somebody who filled in the form and
+          // never picked a time is exactly who this email is for, and they must not be asked for their
+          // name and number a second time.
+          hasContact: Boolean(existing.email),
+          audience: config.audience,
+          greeting: existing.firstName
+            ? `Welcome back, ${existing.firstName}.`
+            : "Welcome back.",
+          actions: [],
+        },
+        { headers: { "cache-control": "no-store" } }
+      );
+    }
+  }
+
   const ipHash = hashIp(clientIpFrom(req));
   if (await overLimit(ipHash)) {
     return NextResponse.json(
@@ -82,11 +136,6 @@ export async function POST(req: NextRequest) {
       { status: 429, headers: { "cache-control": "no-store" } }
     );
   }
-
-  const str = (v: unknown, max: number): string | null => {
-    const s = String(v ?? "").trim().slice(0, max);
-    return s.length > 0 ? s : null;
-  };
 
   const session = await startConciergeSession({
     clientId: config.clientId,
