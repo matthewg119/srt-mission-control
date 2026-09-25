@@ -339,6 +339,31 @@ interface Ground {
    * insert in approveMagnetCandidate.
    */
   postFormat: string | null;
+  /**
+   * What step 12 saw on this keyword's Google results page, and what it decided to build.
+   *
+   * ‼️ THE DECISION IS TAKEN NINE STEPS BEFORE THE PAGE EXISTS, AND THIS IS WHAT CARRIES IT ACROSS.
+   * Somebody screenshots a SERP at step 12, the reader records that the page already hands over a
+   * script, and assetFitFrom scores it a 5; then asset-ideas.ts names the thing worth building. All
+   * of that was stored on keyword_serp_reads and read by NOTHING: step 21 drafted this page's
+   * offers from the keyword and the angle alone, so the judgement somebody made while looking at
+   * the actual results page was thrown away and a model guessed again from less.
+   *
+   * ‼️ IT IS A BRIEF, NOT AN INSTRUCTION, and the prompt says so. The idea was written against a
+   * SERP, before the angle was picked; if the angle has moved the page somewhere else, the drafter
+   * has to be free to say so rather than shipping an offer that fits a page nobody is writing.
+   */
+  serpAssets: SerpAssetBrief | null;
+}
+
+/** The step 12 brief for one planned page, resolved from its target keyword. */
+interface SerpAssetBrief {
+  phrase: string;
+  /** task | fact | mixed. A task has a deliverable on the screen; a fact is an explanation. */
+  shape: string | null;
+  /** 0..5, how much of a thing worth building was already visible on the results page. */
+  fit: number | null;
+  ideas: Array<{ kind: string; title: string; why: string }>;
 }
 
 /** A stored frame, validated. Drop, never repair, same as readOffer. */
@@ -395,6 +420,8 @@ async function gather(
   let angleId: string | null = null;
   // Same branch, same reason: only a planned page has a picked shape behind it.
   let postFormat: string | null = null;
+  // Same branch again: only a planned page has ONE keyword, and so one results page, behind it.
+  let serpAssets: SerpAssetBrief | null = null;
 
   if (pageId) {
     const { data: page } = await supabaseAdmin
@@ -423,12 +450,18 @@ async function gather(
     // body would have been: it says what the page will argue rather than what it happened to say.
     const { data: planRow } = await supabaseAdmin
       .from("page_plan")
-      .select("target_keyword, working_title, question, angle")
+      .select("target_keyword, working_title, question, angle, target_keyword_id")
       .eq("id", planId)
       .eq("client_id", clientId)
       .maybeSingle();
 
     if (!planRow) return { ok: false, error: "That planned page is not on file." };
+
+    serpAssets = await serpAssetsFor(
+      clientId,
+      (planRow.target_keyword_id as string | null) ?? null,
+      ((planRow.target_keyword as string | null) ?? "").trim()
+    );
 
     // Its own select: page_angles is newer than everything around it, and one unknown column fails
     // the WHOLE select rather than costing a field.
@@ -555,8 +588,70 @@ async function gather(
       plannedFrame,
       angleId,
       postFormat,
+      serpAssets,
     },
   };
+}
+
+/**
+ * The step 12 reading for a planned page's target keyword.
+ *
+ * ‼️ RESOLVED ON `normalized`, NOT ON keyword_id, and keyword-strategy.ts's own header says why:
+ * resetForNewOffer hard-deletes keyword rows when the offer changes, so keyword_id goes null while
+ * the reading stays true. The id is tried first because it is exact; the phrase is the fallback that
+ * survives a re-scope, and `keywords delete all` is now a third way for that id to vanish.
+ *
+ * ‼️ ITS OWN SELECT, TOLERANT, AND A FAILURE COSTS NOTHING. Every column it names arrives with
+ * docs/2026-09-27-keyword-decision-cards.sql. On a database without that file this returns null and
+ * the offers are drafted exactly as they were before, which is what they were drafted from for the
+ * whole of this lane's history.
+ */
+async function serpAssetsFor(
+  clientId: string,
+  keywordId: string | null,
+  phrase: string
+): Promise<SerpAssetBrief | null> {
+  if (!keywordId && !phrase) return null;
+
+  const { normalizePhrase } = await import("@/lib/clients/phrase-quality");
+
+  let q = supabaseAdmin
+    .from("keyword_serp_reads")
+    .select("phrase, normalized, answer_shape, asset_fit, asset_ideas, keyword_id")
+    .eq("client_id", clientId)
+    // Newest first: a re-screenshot months later is a second fact about the same page, and the
+    // latest reading is the one the card shows and the one somebody decided against.
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  q = keywordId ? q.eq("keyword_id", keywordId) : q.eq("normalized", normalizePhrase(phrase));
+
+  const { data, error } = await q.maybeSingle();
+  if (error || !data) {
+    // A missing column means the migration has not run; a missing row means nobody screenshotted
+    // this keyword. Neither is worth a line in the log, and neither changes what happens next.
+    return null;
+  }
+
+  const ideas = Array.isArray(data.asset_ideas)
+    ? (data.asset_ideas as unknown[])
+        .filter((r): r is Record<string, unknown> => Boolean(r) && typeof r === "object")
+        .filter((r) => typeof r.kind === "string" && typeof r.title === "string")
+        .map((r) => ({
+          kind: String(r.kind),
+          title: String(r.title),
+          why: typeof r.why === "string" ? r.why : "",
+        }))
+    : [];
+
+  const shape = typeof data.answer_shape === "string" ? data.answer_shape : null;
+  const fit = typeof data.asset_fit === "number" ? data.asset_fit : null;
+
+  // Nothing was read and nothing was proposed: there is no brief here, and saying so with a null is
+  // better than handing the prompt three empty fields to reason about.
+  if (!shape && fit === null && !ideas.length) return null;
+
+  return { phrase: (data.phrase as string | null) ?? phrase, shape, fit, ideas };
 }
 
 // ---------------------------------------------------------------------------
@@ -567,6 +662,49 @@ export interface DraftResult {
   ok: boolean;
   error?: string;
   candidates: MagnetCandidate[];
+}
+
+/**
+ * What somebody saw on this keyword's results page at step 12, as a brief.
+ *
+ * ‼️ IT IS EVIDENCE ABOUT GOOGLE, NOT AN ORDER. The ideas were written against a SERP before this
+ * page's angle was picked, so the prompt is told to prefer them and told, in the same breath, that
+ * it may say the angle has moved past them. An instruction here would let a judgement made about a
+ * results page in September override the idea somebody approved for the page last week, and the
+ * later decision is the better one.
+ *
+ * ‼️ A `fact` SHAPE IS WORTH SAYING OUT LOUD TOO. It means the results page was an explanation with
+ * nothing on it to open, which is exactly when a drafter is most likely to invent a "guide" nobody
+ * would trade an email for. Naming it is what lets the offer come from the business instead.
+ */
+function serpAssetLines(brief: SerpAssetBrief | null): string[] {
+  if (!brief) return [];
+
+  const out = [`WHAT GOOGLE ALREADY SHOWS FOR "${brief.phrase}", looked at and scored at step 12:`];
+
+  if (brief.shape === "fact") {
+    out.push(
+      "The results page is an explanation. There is no deliverable on it to build a better version of,",
+      "so the offer has to come from what this business knows or does, not from beating the page."
+    );
+  } else if (brief.shape) {
+    out.push(
+      `The results page carries a deliverable somebody could use (${brief.shape}), scored ${brief.fit ?? "?"} out of 5`,
+      "for how much of it is already visible. That is the thing to beat: ours has to be the better version."
+    );
+  }
+
+  if (brief.ideas.length) {
+    out.push("", "WHAT WAS PROPOSED WHILE LOOKING AT IT. Prefer these where they still fit:");
+    for (const i of brief.ideas) out.push(`  - ${i.kind}: ${i.title}${i.why ? ` (${i.why})` : ""}`);
+    out.push(
+      "If the angle picked for this page has moved past them, say so in the rationale and write a better one.",
+      "Do not force one of these onto a page that is now arguing something else."
+    );
+  }
+
+  out.push("");
+  return out;
 }
 
 /**
@@ -675,6 +813,7 @@ There is no page yet. These sit on a rebuild of ` +
     "THE CUSTOMER:",
     g.avatarBlock,
     "",
+    ...serpAssetLines(g.serpAssets),
     "THE SOURCES, and there are no others:",
     g.evidenceBlock,
     "",

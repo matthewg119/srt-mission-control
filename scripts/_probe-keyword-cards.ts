@@ -389,6 +389,31 @@ for (const action of ["select", "unselect", "variation", "delete_all"]) {
   check(`keyword_decisions.action accepts '${action}'`, flatSql.includes(`'${action}'`));
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+console.log("\n10. the step 12 decision reaches the drafting prompt");
+//
+// ‼️ THE WHOLE POINT OF DECIDING AT STEP 12 IS THAT STEP 21 USES IT. The ideas are written while
+// somebody is looking at the actual results page, nine steps before the page exists; if the offer
+// drafter does not read them, that judgement is thrown away and a model guesses again from less.
+// This is the wire, grepped, because a wire nothing checks is a wire that gets removed.
+
+const MAGNETS = readFileSync("src/lib/concierge/magnet-drafts.ts", "utf8");
+
+check("the offer drafter resolves the keyword's SERP reading", /serpAssetsFor\(/.test(MAGNETS));
+check("it reads the ideas that were proposed", /asset_ideas/.test(MAGNETS));
+check("and the shape and the fit beside them", /answer_shape/.test(MAGNETS) && /asset_fit/.test(MAGNETS));
+check("the brief reaches the prompt", /serpAssetLines\(g\.serpAssets\)/.test(MAGNETS));
+// ‼️ PREFER, NOT OBEY. An idea written against a SERP in September must not override the angle
+// somebody approved for the page last week, and the prompt has to say so in words.
+check("and it is offered as a preference the drafter may refuse", /Prefer these where they still fit/.test(MAGNETS));
+check("a `fact` SERP is named rather than left to be guessed at", /The results page is an explanation/.test(MAGNETS));
+// ‼️ RESOLVED ON normalized WHEN THE ID HAS GONE. `keywords delete all` and resetForNewOffer both
+// null keyword_id while the reading stays true, and the phrase is what re-attaches it.
+check("it falls back to the phrase when the keyword row has gone", /normalizePhrase\(phrase\)/.test(MAGNETS));
+
+// ─────────────────────────────────────────────────────────────────────────────
+console.log("\n11. the asset vocabulary");
+
 check("every asset kind names a thing with a door on it", ASSET_KINDS.length === 6);
 check(
   "and none of them is a guide or an article",
