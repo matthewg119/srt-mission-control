@@ -1,5 +1,29 @@
 # The dead-wire scan: every column the onboarding writes and never reads
 
+> ## ‼️ BUILT 2026-09-25. FIVE CLAIMS BELOW ARE WRONG, and three of them change the work.
+>
+> Verified against the code while building it. Read this before acting on anything below.
+>
+> | below says | actually |
+> |---|---|
+> | `avatar_briefs.keyword_categories` is write-only, "seeded by the migration's own `update`" | it has **no writer either**. Pure dead DDL, every row NULL. The seeding `update` seeds `voc_quotes`, `approved_numbers`, `preset_key`, `default_stance`, not this. A fix aimed at "find who writes it" finds nobody |
+> | `client_headlines.emotional_source` | the table is **`client_audiences`**. `client_headlines` exists and has no emotional column |
+> | written by `rejectClusterCommand` | the function is **`rejectClusterAction`** |
+> | `strategyLines` "already prints the approval", so mirror it | it prints **neither**. `approved_at` / `approved_by` were write-only too, and its only approval signal is a `locked` boolean from a different table. Scope grew by one pair |
+> | the device-column precedent | is **not** a `drop column`. It is `_probe-serp-gate.ts` asserting the string `device` never appears in the SQL |
+> | `preset_key` / `default_stance` seeded so "every row has a confident-looking value" | the seeding is scoped `where vertical = 'aeo-agency-med-spa' and avatar_slug = 'med-spa-owner'`. **One row** |
+>
+> Also: the table of siblings "read 4 to 15 times" counts reads of those column NAMES on
+> **`client_audiences`**, not on `avatar_briefs`. None of them is ever read from `avatar_briefs`, which
+> is why the probe built for this had to be table-scoped.
+>
+> **What shipped:** `scripts/_probe-dead-wires.ts` (gated in `checks.yml`), A to E fixed, `produces`
+> added beside `needs`. `preset_key` and `missing_pictures` dropped, SQL in
+> `docs/2026-09-25-drop-preset-key.sql` and `-drop-missing-pictures.sql`.
+> `default_stance` was WIRED, not dropped: it feeds `proposeAudience`'s reason as a suggestion a person
+> confirms, which is Matthew's call from 2026-09-25 and preserves the documented refusal to default a
+> stance.
+
 Written 2026-09-25 on `feat/keyword-decisions` at `b743fa1`, after the curated-20 bug turned out to
 be one instance of a class rather than a one-off.
 
