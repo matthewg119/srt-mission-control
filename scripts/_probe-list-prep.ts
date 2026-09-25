@@ -196,6 +196,47 @@ async function main() {
     providerLines.join(" ")
   );
 
+
+  // ── 3b. The free pre-filter, which is where the MillionVerifier money actually is ──────────
+  // MV bills per address UPLOADED, so rejecting junk for $0 first is the saving. These checks exist
+  // because the filter has two ways to be silently worthless.
+  {
+    const lsrc = normalize(readFileSync("src/lib/scraper/lane.ts", "utf8"));
+    const lpsrc2 = normalize(readFileSync("src/lib/scraper/listprep.ts", "utf8"));
+
+    check("a free pre-filter runs in the lane", /async function freeRejects\(/.test(lsrc));
+    check(
+      "it runs BEFORE the upload, not after",
+      lsrc.indexOf("await freeRejects(") < lsrc.indexOf("await uploadEmails("),
+      "freeRejects must precede uploadEmails"
+    );
+    check("and its verdicts are written down", /await applyFreeRejects\(runId, rejects\)/.test(lsrc));
+
+    // ‼️ WITHOUT THE WRITE THE FILTER SAVES NOTHING. unverifiedEmails selects on
+    // `verified_at is null`, so an unwritten reject is re-read next tick and uploaded then.
+    check(
+      "the worklist reader is still the thing the write has to satisfy",
+      /is\("verified_at", null\)/.test(lpsrc2)
+    );
+    check("so a reject stamps verified_at", /email_status: "invalid", verified_at: now/.test(lpsrc2));
+
+    // ‼️ A DUPLICATE IS NOT AN INVALID ADDRESS. Writing invalid there puts a working address into
+    // held-back.csv labelled undeliverable.
+    check(
+      "a duplicate is suppressed, not marked invalid",
+      /suppressed_reason: "duplicate_in_run", suppressed_at: now, verified_at: now/.test(lpsrc2)
+    );
+
+    // ‼️ AN UNDETERMINED MX VERDICT MUST BE UPLOADED, NOT DROPPED. After this filter a false
+    // no-MX does not mislabel a row, it drops a deliverable address.
+    check(
+      "only a definite no-MX is rejected",
+      /verdicts\.get\(k\.domain\) === false/.test(lsrc),
+      "an undetermined MX verdict must not reject"
+    );
+    check("the card reports counts, not rates", /rejected for free/.test(lsrc));
+  }
+
   // ── 4. Verdicts ───────────────────────────────────────────────────────────
   // ── 4. The vertical, decided once and carried ─────────────────────────────
   console.log("\n4. the vertical, resolved from the caption and carried on the run");

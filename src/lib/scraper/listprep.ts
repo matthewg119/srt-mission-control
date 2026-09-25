@@ -348,6 +348,78 @@ export async function unverifiedEmails(runId: string): Promise<SendableRow[]> {
   return (data ?? []) as unknown as SendableRow[];
 }
 
+// Same bounds and the same reasoning as store.ts: supabase-js puts an `.in()` filter in the QUERY
+// STRING, so a read chunk is bounded by URL length rather than by anything Postgres cares about.
+// Deliberately re-declared rather than imported, because store.ts is the batch/row half of the lane
+// and this file is the run half; the two do not otherwise depend on each other.
+const IN_CHUNK = 100;
+const INSERT_CHUNK = 500;
+
+/**
+ * Why an address was thrown away before a credit was spent on it.
+ *
+ * Every one of these is answerable for $0 from data already in hand, which is the whole point:
+ * MillionVerifier bills per address UPLOADED, not per address that comes back OK.
+ */
+export type FreeRejectKind = "bad_syntax" | "disposable" | "no_mx" | "duplicate_in_run";
+
+/**
+ * Write the free rejects down, so they leave the worklist.
+ *
+ * ‼️ WITHOUT THE WRITE, THE FILTER SAVES NOTHING. `unverifiedEmails` selects on
+ * `verified_at is null`, so an address that was merely filtered in memory is read again on the next
+ * cron tick and uploaded then. The card would report a saving that did not happen. Stamping
+ * `verified_at` is what makes the rejection real.
+ *
+ * ‼️ A DUPLICATE IS NOT INVALID, AND THE DIFFERENCE MATTERS DOWNSTREAM. Two locations of one chain
+ * sharing info@chain.com is an ordinary shape and the address is perfectly good; it is the SECOND
+ * row that is redundant. Writing `invalid` there would put a working address into held-back.csv
+ * labelled undeliverable, and an operator reading that would conclude the verifier was wrong.
+ * `sendableRows` already excludes it on `suppressed_reason is null`, so suppression is the honest
+ * field and the status is left alone.
+ */
+export async function applyFreeRejects(
+  runId: string,
+  rejects: ReadonlyArray<{ id: string; kind: FreeRejectKind }>
+): Promise<{ updated: number }> {
+  if (!rejects.length) return { updated: 0 };
+  const now = new Date().toISOString();
+
+  const undeliverable: string[] = [];
+  const duplicates: string[] = [];
+  for (const r of rejects) {
+    (r.kind === "duplicate_in_run" ? duplicates : undeliverable).push(r.id);
+  }
+
+  let updated = 0;
+
+  for (let i = 0; i < undeliverable.length; i += IN_CHUNK) {
+    const slice = undeliverable.slice(i, i + IN_CHUNK);
+    const { data, error } = await supabaseAdmin
+      .from("sendable_leads")
+      .update({ email_status: "invalid", verified_at: now })
+      .eq("run_id", runId)
+      .in("id", slice)
+      .select("id");
+    if (error) throw new Error("applyFreeRejects: " + error.message);
+    updated += data?.length ?? 0;
+  }
+
+  for (let i = 0; i < duplicates.length; i += IN_CHUNK) {
+    const slice = duplicates.slice(i, i + IN_CHUNK);
+    const { data, error } = await supabaseAdmin
+      .from("sendable_leads")
+      .update({ suppressed_reason: "duplicate_in_run", suppressed_at: now, verified_at: now })
+      .eq("run_id", runId)
+      .in("id", slice)
+      .select("id");
+    if (error) throw new Error("applyFreeRejects: " + error.message);
+    updated += data?.length ?? 0;
+  }
+
+  return { updated };
+}
+
 /** MillionVerifier's verdict vocabulary, mapped onto the column's four values. */
 export function mvStatusToEmailStatus(mv: string): "valid" | "catch_all" | "unknown" | "invalid" {
   const v = mv.trim().toLowerCase();
@@ -562,13 +634,6 @@ export async function funnelFor(runId: string): Promise<Funnel> {
 }
 
 // --- Stage 8: the handoff record ----------------------------------------------------------------
-
-// Same bounds and the same reasoning as store.ts: supabase-js puts an `.in()` filter in the QUERY
-// STRING, so a read chunk is bounded by URL length rather than by anything Postgres cares about.
-// Deliberately re-declared rather than imported, because store.ts is the batch/row half of the lane
-// and this file is the run half; the two do not otherwise depend on each other.
-const IN_CHUNK = 100;
-const INSERT_CHUNK = 500;
 
 /**
  * Write down that this run's addresses have been handed off for sending.

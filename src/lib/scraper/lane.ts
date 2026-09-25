@@ -52,6 +52,7 @@ import {
   applyVerification,
   bindRunToBatch,
   dropReasons,
+  applyFreeRejects,
   dropWebsiteless,
   droppedRows,
   funnelFor,
@@ -71,9 +72,12 @@ import {
   unverifiedEmails,
   updateRun,
   writeVerdicts,
+  type FreeRejectKind,
 } from "./listprep";
 import {
   columnVerdict,
+  emailDomain,
+  isDisposableDomain,
   resolveCityColumn,
   resolveStateColumn,
   resolveCompanyColumn,
@@ -1339,6 +1343,90 @@ async function sweepEnrich(batch: BatchRow, deadline: number): Promise<boolean> 
   return false;
 }
 
+/** What the free pre-filter threw away, for the card. Counts, never rates. */
+interface FreeRejectTally {
+  bad_syntax: number;
+  disposable: number;
+  no_mx: number;
+  duplicate_in_run: number;
+}
+
+/**
+ * Throw away everything answerable for $0 before the upload.
+ *
+ * ‼️ MILLIONVERIFIER BILLS PER ADDRESS UPLOADED, NOT PER ADDRESS THAT COMES BACK OK. So a syntax
+ * failure, a disposable domain, a domain with no MX and a duplicate within this run are all things
+ * we currently PAY to be told. 23% of the med spa batch has no MX at all.
+ *
+ * ‼️ AN UNDETERMINED MX VERDICT IS UPLOADED, NOT REJECTED. `resolveMxBatch` returns null for
+ * "could not tell", and mx.ts exists to keep that separate from false. Collapsing the two here is
+ * worse than it looks: after this filter a false no-MX does not merely mislabel a row, it DROPS a
+ * deliverable address before anything can correct it.
+ *
+ * Order is cheapest first: no lookup, then a set membership, then a map lookup, then DNS.
+ */
+async function freeRejects(
+  rows: readonly { id: string; email: string }[],
+  deadline: number
+): Promise<{ rejects: { id: string; kind: FreeRejectKind }[]; tally: FreeRejectTally }> {
+  const tally: FreeRejectTally = { bad_syntax: 0, disposable: 0, no_mx: 0, duplicate_in_run: 0 };
+  const rejects: { id: string; kind: FreeRejectKind }[] = [];
+  const keep: { id: string; email: string; domain: string }[] = [];
+  const seen = new Set<string>();
+
+  for (const row of rows) {
+    const email = row.email.trim().toLowerCase();
+    const domain = emailDomain(email);
+    if (!domain) {
+      rejects.push({ id: row.id, kind: "bad_syntax" });
+      tally.bad_syntax++;
+      continue;
+    }
+    if (isDisposableDomain(domain)) {
+      rejects.push({ id: row.id, kind: "disposable" });
+      tally.disposable++;
+      continue;
+    }
+    // ‼️ THE GRAIN OF sendable_leads IS ONE ROW PER RAW LEAD, so two locations of one chain sharing
+    // info@chain.com are two rows and MillionVerifier bills for both.
+    if (seen.has(email)) {
+      rejects.push({ id: row.id, kind: "duplicate_in_run" });
+      tally.duplicate_in_run++;
+      continue;
+    }
+    seen.add(email);
+    keep.push({ id: row.id, email, domain });
+  }
+
+  // One batched DNS pass over the distinct domains, so a chain's ten locations cost one lookup.
+  const domains = new Set(keep.map((k) => k.domain));
+  const mx = await resolveMxBatch(domains, { deadline });
+  for (const k of keep) {
+    if (mx.verdicts.get(k.domain) === false) {
+      rejects.push({ id: k.id, kind: "no_mx" });
+      tally.no_mx++;
+    }
+  }
+
+  return { rejects, tally };
+}
+
+/** The line that makes the saving visible instead of asserted. */
+function freeRejectLine(tally: FreeRejectTally, uploading: number): string[] {
+  const total = tally.bad_syntax + tally.disposable + tally.no_mx + tally.duplicate_in_run;
+  if (!total) return ["All " + uploading + " addresses cleared the free checks, so none were dropped."];
+  const parts: string[] = [];
+  if (tally.no_mx) parts.push(tally.no_mx + " no MX");
+  if (tally.bad_syntax) parts.push(tally.bad_syntax + " bad syntax");
+  if (tally.disposable) parts.push(tally.disposable + " disposable");
+  if (tally.duplicate_in_run) parts.push(tally.duplicate_in_run + " duplicate in this run");
+  return [
+    ":moneybag: *" + total + " rejected for free* before anything was bought (" + parts.join(", ") + ").",
+    "  Uploading " + uploading + ". MillionVerifier bills per address uploaded, so those " + total +
+      " were the ones worth not sending.",
+  ];
+}
+
 /** Stage 5: MillionVerifier, reusing workflow 1's gate and client. */
 async function pollListPrepVerification(batch: BatchRow): Promise<void> {
   const runId = batch.list_run_id;
@@ -1351,7 +1439,37 @@ async function pollListPrepVerification(batch: BatchRow): Promise<void> {
       await updateBatch(batch.id, { status: "catchall_recheck" });
       return;
     }
-    const info = await uploadEmails(rows.map((r) => r.email), (batch.file_name ?? "sendable") + ".txt");
+
+    // ‼️ THE FREE FILTER RUNS BEFORE THE UPLOAD, AND ITS VERDICTS ARE WRITTEN DOWN. Filtering in
+    // memory alone would save nothing: unverifiedEmails selects on `verified_at is null`, so an
+    // unwritten reject comes back on the next tick and gets uploaded then.
+    const { rejects, tally } = await freeRejects(rows, Date.now() + MX_BUDGET_MS);
+    if (rejects.length) await applyFreeRejects(runId, rejects);
+
+    const rejected = new Set(rejects.map((r) => r.id));
+    const toUpload = rows.filter((r) => !rejected.has(r.id));
+
+    if (!toUpload.length) {
+      await say(
+        batch,
+        [
+          ...freeRejectLine(tally, 0),
+          "",
+          ":warning: *Nothing is left to verify*, so nothing was uploaded and nothing was spent.",
+        ].join("\n")
+      );
+      await updateBatch(batch.id, { status: "catchall_recheck" });
+      const afterAll = await getBatch(batch.id);
+      if (afterAll) await advanceBatch(afterAll);
+      return;
+    }
+
+    if (rejects.length) await say(batch, freeRejectLine(tally, toUpload.length).join("\n"));
+
+    const info = await uploadEmails(
+      toUpload.map((r) => r.email),
+      (batch.file_name ?? "sendable") + ".txt"
+    );
     await updateBatch(batch.id, { mv_file_id: info.file_id, mv_status: info.status });
     return;
   }
@@ -1396,6 +1514,13 @@ async function sweepCatchall(batch: BatchRow, deadline: number): Promise<boolean
     const verdict = await hasMx(domain);
     // null is "we could not tell", which is NOT evidence of anything. Stamped anyway so the row
     // leaves the worklist; it stays catch_all, which is the honest answer.
+    //
+    // ‼️ THE `false` BRANCH IS NOW ALL BUT UNREACHABLE, AND IT IS KEPT ON PURPOSE. The free
+    // pre-filter in pollListPrepVerification drops no-MX domains before the upload, so a row
+    // arriving here as catch_all has already had an MX answer. It can still fire on a domain whose
+    // MX was UNDETERMINED at filter time (uploaded deliberately, see freeRejects) and resolves to a
+    // definite no by the time this runs. Kept rather than deleted, and noted rather than left to
+    // read as dead code the next person removes.
     await recordCatchallRecheck(row.id, verdict === false ? "invalid" : "catch_all");
   }
 
