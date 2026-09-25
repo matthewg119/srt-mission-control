@@ -85,7 +85,7 @@ import {
   resolveWebsiteColumn,
 } from "./rules";
 import { allKeys, countTruncatedNames, dedupeColumns, isKeyActive, splitDuplicates } from "./dedup";
-import { resolveMxBatch } from "./mx";
+import { mailProviderOf, resolveMxBatch } from "./mx";
 import {
   addScoreCost,
   allRows,
@@ -1289,6 +1289,10 @@ async function sweepEnrich(batch: BatchRow, deadline: number): Promise<boolean> 
         }
       }
 
+      // Who runs this domain's mail decides which rungs are worth asking. One cached DNS lookup per
+      // domain, and the free pre-filter before the upload reads the same cache entry.
+      const mailProvider = lead.domain ? await mailProviderOf(lead.domain) : null;
+
       const fileEmail = csvEmailOf(lead.raw, batch.headers ?? []);
       const result = await enrichOne({
         id: lead.id,
@@ -1300,6 +1304,7 @@ async function sweepEnrich(batch: BatchRow, deadline: number): Promise<boolean> 
         website: lead.website,
         fileEmail,
         siteEmail,
+        mailProvider,
       });
       await recordEnrichment({
         runId,

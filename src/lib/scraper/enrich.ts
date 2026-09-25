@@ -46,6 +46,13 @@ export interface EnrichTarget {
    * most to visit. sweepEnrich sets this from one `crawlSite` pass.
    */
   siteEmail?: { email: string; source: string | null } | null;
+  /**
+   * Who runs this domain's mail, from MX. `mailProviderOf` in scraper/mx.ts.
+   *
+   * Undefined means nobody asked, which routes as "unknown" rather than as a refusal: a rung that
+   * needs the answer says so in `appliesTo` and reports why.
+   */
+  mailProvider?: string | null;
 }
 
 export interface EnrichHit {
@@ -112,6 +119,20 @@ export interface Provider {
    * that the crawler is broken.
    */
   acceptsRole?: boolean;
+  /**
+   * Should this rung even be ASKED about this target.
+   *
+   * ‼️ IT IS A DIFFERENT QUESTION FROM acceptsRole, AND CONFLATING THEM WOULD COST MONEY.
+   * `acceptsRole` judges an ANSWER the rung already produced. This decides whether the rung is
+   * worth a call at all, which is where MX routing belongs: on Google Workspace half of all domains
+   * accept every address, so a permuted guess there is unresolvable and a paid lookup is the only
+   * thing that can help. Deciding that inside `find` would mean each rung re-deriving the routing,
+   * and deciding it by rewriting the role gate in `enrichOne` would change the meaning of a rule
+   * that is already correct.
+   *
+   * A refusal is recorded as an ordinary miss with its reason, never as an error.
+   */
+  appliesTo?(target: EnrichTarget): { ok: true } | { ok: false; reason: string };
   find(target: EnrichTarget): Promise<EnrichHit | null>;
 }
 
@@ -196,7 +217,93 @@ export const PROVIDERS: Provider[] = [
       };
     },
   },
+  {
+    key: "permute-guess",
+    label: "the owner's first name at their domain",
+    gate: { kind: "free" },
+    costPerLookup: 0,
+    // A guess coming back as a role address means the guess was wrong, not that the mailbox is good.
+    acceptsRole: false,
+    appliesTo(t) {
+      if (!t.ownerName) return { ok: false, reason: "no owner name to build an address from" };
+      if (!t.domain) return { ok: false, reason: "no domain" };
+      // ‼️ NEVER GUESS ON GOOGLE WORKSPACE, AND THE REASON IS NOT MILLIONVERIFIER'S ACCURACY. Half
+      // of Workspace domains are catch-all (133 of 268 US domains, measured 2026-09-25) and
+      // `sendableRows` admits `catch_all` as sendable. So on those domains a wrong guess is not held
+      // back as unresolvable, it SHIPS, and the bounce lands on a sending domain we need. On
+      // Microsoft 365 the same question gets a decisive answer 93% of the time, so the guess is
+      // testable and the downside is one credit.
+      if (t.mailProvider === "Google Workspace") {
+        return {
+          ok: false,
+          reason: "Google Workspace is catch-all half the time, so a guess here cannot be disproved",
+        };
+      }
+      return { ok: true };
+    },
+    async find(t) {
+      const email = firstNameAddress(t.ownerName, t.domain);
+      if (!email) return null;
+      return {
+        email,
+        firstName: firstNameOf(t.ownerName),
+        lastName: lastNameOf(t.ownerName),
+        title: null,
+        provider: "permute-guess",
+        costUsd: 0,
+        sourceDetail: "guessed from the owner's name, unverified until MillionVerifier runs",
+      };
+    },
+  },
+  {
+    key: "domain-people",
+    label: "a paid domain to people lookup",
+    // ‼️ UNCONFIGURED ON PURPOSE. No vendor is chosen and none may be signed without asking. With no
+    // key this rung is dark: `configuredProviders` puts it in `dark`, `enrichLines` names the env var
+    // once on the card, and `enrichOne` never calls it. That is the doctrine this file already has,
+    // not a new mechanism, and it is why an adapter that compiled and lied was not written.
+    gate: { kind: "env", envKey: "DOMAIN_PEOPLE_API_KEY" },
+    costPerLookup: 0.02,
+    acceptsRole: false,
+    appliesTo(t) {
+      // The one case the free rungs genuinely cannot answer: a catch-all-prone domain, where a guess
+      // cannot be disproved and the site published nothing.
+      if (t.mailProvider !== "Google Workspace") {
+        return { ok: false, reason: "the free rungs can resolve this domain" };
+      }
+      return { ok: true };
+    },
+    async find() {
+      // No vendor, so nothing to call. Returning null keeps the contract: a rung with no credential
+      // returns nothing, never throws, and never pretends to have a key.
+      return null;
+    },
+  },
 ];
+
+/**
+ * `first@domain`, or null when the name cannot carry a guess.
+ *
+ * ‼️ ONE CANDIDATE, NOT THREE, AND THE ARITHMETIC IS THE REASON. A guess cannot be tested here:
+ * MillionVerifier is billed per address uploaded and its upload sits behind a human reaction, which
+ * `millionverifier.ts` states is never called unattended. So emitting three candidates would upload
+ * three addresses per lead, at least two of which are wrong by construction, to buy one answer.
+ * Emitting one costs a single credit, and because this rung is LAST it only runs on leads where the
+ * file and the crawl both found nothing, so the alternative is not a cheaper lead, it is no lead.
+ *
+ * ‼️ first@ RATHER THAN first.last@, FOR THIS ICP SPECIFICALLY. A one-to-three person med spa is a
+ * first-name shop: the only true owner address in the 60 site sample was `marina@mmaestheticss.com`.
+ * `first.last@` is the corporate pattern and would be the better guess for a larger company. This is
+ * a judgement, not a measurement, and it is worth re-deciding once there are verdicts to count:
+ * `sendable_leads.provider` records which rung produced each address, so the win rate of this one is
+ * answerable from the database rather than from an opinion.
+ */
+function firstNameAddress(ownerName: string | null, domain: string): string | null {
+  const first = (firstNameOf(ownerName) ?? "").toLowerCase().replace(/[^a-z]/g, "");
+  const host = domain.trim().toLowerCase().replace(/^www\./, "");
+  if (first.length < 2 || !host.includes(".")) return null;
+  return `${first}@${host}`;
+}
 
 function firstNameOf(owner: string | null): string | null {
   const parts = (owner || "").trim().split(/\s+/).filter(Boolean);
@@ -243,6 +350,16 @@ export async function enrichOne(target: EnrichTarget): Promise<EnrichResult> {
   const { live } = configuredProviders();
 
   for (const p of live) {
+    // ‼️ ASKED BEFORE THE CALL, NOT INSIDE IT, AND THE ROLE GATE BELOW IS DELIBERATELY UNTOUCHED.
+    // Routing decides who to ask; the role test judges what came back. Rewriting the role test to
+    // carry routing would change a rule that is already right, and would break the probe that pins
+    // its exact shape, for no gain.
+    const fit = p.appliesTo?.(target);
+    if (fit && !fit.ok) {
+      attempts.push({ provider: p.key, ok: true, found: false, detail: "not applicable: " + fit.reason, ms: 0 });
+      continue;
+    }
+
     const started = Date.now();
     try {
       const hit = await p.find(target);

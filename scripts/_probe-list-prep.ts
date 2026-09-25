@@ -237,6 +237,60 @@ async function main() {
     check("the card reports counts, not rates", /rejected for free/.test(lsrc));
   }
 
+
+  // ── 3c. MX routing, and the two rungs it decides between ───────────────────────────────────
+  {
+    const msrc = normalize(readFileSync("src/lib/scraper/mx.ts", "utf8"));
+
+    // ‼️ THE CACHE KIND MUST BE VERSIONED. Old entries under `dns.mx` are bare booleans; reading one
+    // back as an object yields undefined, so every cached domain would answer "no MX" for 14 days,
+    // and after the free pre-filter a false no-MX DROPS the address rather than mislabelling it.
+    check("the exchanges cache uses a new kind, not the boolean one", /kind: "dns\.mx\.v2"/.test(msrc));
+    check("nothing still writes the old boolean kind", !/kind: "dns\.mx"/.test(msrc));
+    check("hasMx is derived from the records, not stored twice", /const records = await mxRecords\(domain\)/.test(msrc));
+    check("the one classifier in the repo is reused", /import \{ detectMailProvider \}/.test(msrc));
+
+    const e2 = normalize(readFileSync("src/lib/scraper/enrich.ts", "utf8"));
+    check("routing is asked before the call, not inside it", /const fit = p\.appliesTo\?\.\(target\)/.test(e2));
+    check(
+      "and the role gate it sits next to is untouched",
+      /ROLE_PATTERN\.test\(hit\.email\) && !p\.acceptsRole/.test(e2)
+    );
+
+    const guess = PROVIDERS.find((p) => p.key === "permute-guess");
+    const paid = PROVIDERS.find((p) => p.key === "domain-people");
+    check("a guessing rung exists and is free", guess?.gate.kind === "free");
+    check("a guess is never allowed to be a role address", guess?.acceptsRole !== true);
+    check("the paid rung is gated on a key", paid?.gate.kind === "env");
+    check("and inherits the strict role default", paid?.acceptsRole !== true);
+    check("the paid rung is dark, so no vendor was signed", configuredProviders().dark.some((p) => p.key === "domain-people"));
+
+    const target = {
+      id: "x", businessName: "A Clinic", domain: "clinic.com",
+      ownerName: "Marina Musalyants", city: null, state: null,
+    };
+    // The measured reason for the whole split: Workspace is catch-all half the time, and
+    // sendableRows admits catch_all, so a wrong guess there SHIPS.
+    check(
+      "a guess is refused on Google Workspace",
+      guess?.appliesTo?.({ ...target, mailProvider: "Google Workspace" }).ok === false
+    );
+    check(
+      "and allowed on Microsoft 365, where 93% of answers are decisive",
+      guess?.appliesTo?.({ ...target, mailProvider: "Microsoft 365" }).ok === true
+    );
+    check("a guess needs a name", guess?.appliesTo?.({ ...target, ownerName: null }).ok === false);
+    check(
+      "the paid rung is the mirror image: only where a guess cannot be disproved",
+      paid?.appliesTo?.({ ...target, mailProvider: "Microsoft 365" }).ok === false &&
+        paid?.appliesTo?.({ ...target, mailProvider: "Google Workspace" }).ok === true
+    );
+
+    // One candidate, not three. Three would upload three addresses per lead to buy one answer.
+    const hit = await guess?.find({ ...target, mailProvider: "Microsoft 365" });
+    check("the guess is one address built from the first name", hit?.email === "marina@clinic.com", String(hit?.email));
+  }
+
   // ── 4. Verdicts ───────────────────────────────────────────────────────────
   // ── 4. The vertical, decided once and carried ─────────────────────────────
   console.log("\n4. the vertical, resolved from the caption and carried on the run");
