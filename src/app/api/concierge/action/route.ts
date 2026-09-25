@@ -69,16 +69,52 @@ export async function POST(req: NextRequest) {
   const action = String(body.action ?? "");
 
   // ── contact ────────────────────────────────────────────────────────────────
+  // ‼️ ONE LEAD WRITER, WIDENED, NOT A SECOND ONE. The AI Referral Engine walk asks for a last
+  // name and a phone that the two-field door never collected, and the obvious shape was a
+  // referral_contact action beside this one. That is how a lane ends up with two paths into #hot-leads
+  // that disagree about the owner/patient rule, and this file's header IS that rule. Everything the
+  // walk adds is optional here, so the audit door and the magnet door send what they always sent.
   if (action === "contact") {
     const name = clean(body.name, 60);
     const email = clean(body.email, 120).toLowerCase();
     if (name.length < 2 || /[<>{}]|https?:/i.test(name)) return reply({ ok: false, field: "name", message: "What should we call you?" }, 400);
     if (!isEmail(email)) return reply({ ok: false, field: "email", message: "That email does not look right." }, 400);
 
+    // ‼️ THE SURNAME IS ITS OWN FIELD ON THE WALK'S FORM, AND SPLITTING `name` WOULD LOSE IT. The
+    // two-field door still sends one `name`, so the split below stays as the fallback for it.
+    const lastTyped = clean(body.lastName, 60);
+    if (lastTyped && /[<>{}]|https?:/i.test(lastTyped)) {
+      return reply({ ok: false, field: "lastName", message: "That surname does not look right." }, 400);
+    }
+
+    // ‼️ STRICT, AND THE STRICTNESS IS LOAD BEARING. This route is public and unauthenticated, and
+    // a phone that reaches contacts is a number a person or a dialer will ring. normalizePhone is the
+    // /aivisibility validator: ten digits, no 0 or 1 area code or exchange, no all-same placeholder. A
+    // number that fails is REFUSED rather than stored, because a stored bad number is a call to a
+    // stranger. Empty is fine: every door except the referral walk asks for no phone at all.
+    const phoneTyped = clean(body.phone, 32);
+    let phone: string | null = null;
+    if (phoneTyped) {
+      const { normalizePhone } = await import("@/lib/medspa/validate");
+      phone = normalizePhone(phoneTyped);
+      if (!phone) {
+        return reply({ ok: false, field: "phone", message: "That phone number does not look right." }, 400);
+      }
+    }
+
+    // What the walk asked before the form. Recorded as answers, never interpreted.
+    const reviews = clean(body.reviews, 60);
+    const website = clean(body.website, 200);
+
     const already = session.email === email;
-    await captureLead(session, { firstName: name, email });
+    await captureLead(session, { firstName: name, email, phone });
     const picked = clean(body.picked, 20);
-    await note(session.id, "user", `${name} <${email}>${picked ? ` (picked: ${picked})` : ""}`);
+    await note(
+      session.id,
+      "user",
+      `${name}${lastTyped ? ` ${lastTyped}` : ""} <${email}>${phone ? ` ${phone}` : ""}` +
+        `${picked ? ` (picked: ${picked})` : ""}${reviews ? ` reviews: ${reviews}` : ""}${website ? ` site: ${website}` : ""}`
+    );
 
     if (config.audience === "owner" && !already) {
       const { ingestLead } = await import("@/lib/lead-intake");
@@ -86,13 +122,28 @@ export async function POST(req: NextRequest) {
       const where = [clean(body.host, 200), clean(body.path, 300)].join("");
       const { contactId } = await ingestLead({
         firstName: parts[0] ?? "",
-        lastName: parts.slice(1).join(" "),
+        lastName: lastTyped || parts.slice(1).join(" "),
         email,
+        ...(phone ? { phone } : {}),
+        ...(website ? { website } : {}),
         source: "concierge",
+        // ‼️ STILL FALSE EVEN THOUGH THERE IS NOW A PHONE, AND THAT IS MATTHEW'S CALL (2026-09-25).
+        // It was false before because the concierge collected no number, so it cost nothing either way.
+        // The referral walk collects one, which turns this from a leftover into a decision: nothing
+        // auto-dials somebody who filled in a form on a clinic's website. The number is on the
+        // #hot-leads card and the call is a person's to make. One flag to reverse.
         speedToLead: false,
         noteTitle: "AI concierge conversation",
         headline: `:cat: *Started a conversation with the concierge*${where ? ` on ${where}` : ""} and gave their email.`,
-        detailLines: [picked ? `Picked: ${picked}` : "", where ? `Page: ${where}` : "", "SMS consent: not collected (the concierge asks for email only)"],
+        detailLines: [
+          picked ? `Picked: ${picked}` : "",
+          where ? `Page: ${where}` : "",
+          reviews ? `Reviews they say they have: ${reviews}` : "",
+          website ? `Website: ${website}` : "",
+          phone
+            ? "SMS consent: not collected (the phone was given to book the install call)"
+            : "SMS consent: not collected (the concierge asks for email only)",
+        ],
       }).catch((e) => {
         console.error(`[concierge/action] ingestLead failed: ${(e as Error).message}`);
         return { contactId: null };
@@ -111,7 +162,7 @@ export async function POST(req: NextRequest) {
       //
       // Failure is swallowed on purpose. A missing channel, a Slack outage or a client provisioned before
       // ops channels existed must not turn into a 500 for the person typing their name into a widget.
-      await notifyClientLead({ clientId: session.clientId, name, email, body, picked }).catch((e) =>
+      await notifyClientLead({ clientId: session.clientId, name, email, phone, body, picked }).catch((e) =>
         console.error(`[concierge/action] client lead notice failed: ${(e as Error).message}`)
       );
     }
@@ -120,6 +171,82 @@ export async function POST(req: NextRequest) {
 
   // Everything below hands something over, and nothing is handed over before a way to reach them.
   if (!session.email) return reply({ ok: false, needContact: true }, 400);
+
+  // ── referral_times ─────────────────────────────────────────────────────────
+  //
+  // The install-call step of the AI Referral Engine walk. Two real times, in the half of the day they
+  // asked for, or an honest answer that there are none.
+  //
+  // ‼️ resolveBooking() UNCHANGED, AND NO SECOND SLOT SOURCE. It is what offer_booking and the
+  // `booking` action already use, and it is the only thing in the lane that knows what is actually
+  // open. A scripted walk is exactly where inventing "Tuesday at 10" would be easiest and worst: the
+  // model is not in this path, so nothing downstream would catch a made-up time.
+  //
+  // ‼️ THE OWNER LANE IGNORES THE TENANT'S booking_* COLUMNS, WHICH IS WHY THIS WORKS TODAY. The
+  // brief said SRT has no booking destination set so this step had nothing to offer. Not for this
+  // audience: booking.ts reaches for SRT's own Calendly for `owner` and never reads
+  // concierge_configs.booking_mode. `booking: <link>` in a step thread is for PATIENT tenants.
+  if (action === "referral_times") {
+    if (config.audience !== "owner") return reply({ ok: false, message: "Not available here." }, 404);
+
+    const daypart = body.daypart === "afternoon" ? "afternoon" : "morning";
+    const tz = safeTimeZone(clean(body.tz, 64));
+    const offer = await resolveBooking({
+      config,
+      timeZone: tz,
+      // ‼️ WIDENED FROM THE START, UNLIKE THE `booking` ACTION. That one hardcodes today_tomorrow
+      // and never widens, which is fine for "here are some times" and wrong here: this walk asks for a
+      // half of the day first, so a two-day window that happens to hold only mornings would answer an
+      // afternoon request with nothing at all.
+      window: "extended",
+      fallbackUrl: onboardingUrl(session, null, null),
+    });
+
+    if (offer.mode === "slots") {
+      const wanted = offer.slots.filter((slot) => partOfDay(slot.startTime, tz) === daypart);
+      // Their half of the day first. If it holds none, say so rather than quietly booking the other
+      // half: somebody who asked for mornings and is shown 3pm has been ignored, not helped.
+      const chosen = wanted.slice(0, 2);
+      if (chosen.length > 0) {
+        return reply({
+          ok: true,
+          mode: "slots",
+          daypart,
+          slots: chosen.map((slot) => ({
+            label: slot.label,
+            url: trackedUrl(session, slot.url),
+            startTime: slot.startTime,
+          })),
+          // Only used when their half of the day is empty and the other is not.
+          otherHalf: wanted.length === 0 && offer.slots.length > 0,
+        });
+      }
+      return reply({
+        ok: true,
+        mode: "slots",
+        daypart,
+        slots: offer.slots.slice(0, 2).map((slot) => ({
+          label: slot.label,
+          url: trackedUrl(session, slot.url),
+          startTime: slot.startTime,
+        })),
+        otherHalf: true,
+      });
+    }
+
+    if (offer.mode === "link") {
+      return reply({
+        ok: true,
+        mode: "link",
+        attachments: [{ kind: "booking", key: "link", title: offer.label, url: trackedUrl(session, offer.url) }],
+      });
+    }
+    if (offer.mode === "phone") return reply({ ok: true, mode: "phone", phone: offer.phone });
+
+    // no_slots and callback both mean there is nothing real to put in front of them. Kept apart from
+    // `link` and `phone` so the frame says the callback line rather than drawing an empty row of times.
+    return reply({ ok: true, mode: "callback" });
+  }
 
   // ── magnet ─────────────────────────────────────────────────────────────────
   if (action === "magnet") {
@@ -245,10 +372,38 @@ export async function POST(req: NextRequest) {
  * lead". Nothing here writes to contacts, Zoho or the lead thread: it is a message, and the durable
  * record stays on concierge_sessions where the 24 hour purge can reach it.
  */
+/**
+ * Which half of the day a slot falls in, in the VISITOR'S timezone.
+ *
+ * ‼️ THE TIMEZONE IS THE WHOLE FUNCTION. Calendly returns an instant, and "mornings" is a fact
+ * about where the person asking is standing, not about where our calendar lives. Reading the UTC hour
+ * would offer a 9am Pacific install to somebody in New York as an afternoon.
+ *
+ * ‼️ AND AN UNREADABLE INSTANT IS "afternoon" RATHER THAN A THROW. This runs inside a scheduling
+ * step where the alternative to a bucket is no times at all; the slot's own label is what the visitor
+ * actually reads, and that label came from Calendly, so a mis-bucketed slot shows the right time in the
+ * wrong half rather than a wrong time. safeTimeZone has already rejected a junk zone by this point.
+ */
+function partOfDay(startTime: string, timeZone: string): "morning" | "afternoon" {
+  try {
+    const hour = Number(
+      new Intl.DateTimeFormat("en-US", { hour: "numeric", hour12: false, timeZone }).format(
+        new Date(startTime)
+      )
+    );
+    return Number.isFinite(hour) && hour < 12 ? "morning" : "afternoon";
+  } catch {
+    return "afternoon";
+  }
+}
+
 async function notifyClientLead(args: {
   clientId: string;
   name: string;
   email: string;
+  /** Null on every door but the referral walk, which is owner-only today. Here so that if a patient
+   *  lane ever collects one, the clinic is told the number rather than only that somebody called. */
+  phone: string | null;
   body: { host?: unknown; path?: unknown };
   picked: string;
 }): Promise<void> {
@@ -268,6 +423,7 @@ async function notifyClientLead(args: {
       `:wave: *Somebody left their details with the assistant* on ${(data?.dba_name as string) || (data?.legal_name as string) || "the site"}.`,
       `Name: ${args.name}`,
       `Email: ${args.email}`,
+      args.phone ? `Phone: ${args.phone}` : "",
       args.picked ? `Asked for: ${args.picked}` : "",
       where ? `Page: ${where}` : "",
       "This is the clinic's own enquiry. It is not in our CRM and it has not been contacted.",
