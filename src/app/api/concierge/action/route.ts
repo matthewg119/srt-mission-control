@@ -89,6 +89,10 @@ export async function POST(req: NextRequest) {
         lastName: parts.slice(1).join(" "),
         email,
         source: "concierge",
+        // ‼️ THE SAME `where` THAT WAS ALREADY BEING BUILT, NOW ON THE CARD TOO. It went into the
+        // headline and a detailLine, and both of those are the thread reply: the "1 reply" under the card
+        // that nobody opens. The widget is the one lead source that always knows the exact page.
+        sourcePage: where,
         speedToLead: false,
         noteTitle: "AI concierge conversation",
         headline: `:cat: *Started a conversation with the concierge*${where ? ` on ${where}` : ""} and gave their email.`,

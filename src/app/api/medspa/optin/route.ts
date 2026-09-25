@@ -15,7 +15,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
 import { supabaseAdmin } from "@/lib/db";
-import { ingestLead } from "@/lib/lead-intake";
+import { pageFromRequest, ingestLead } from "@/lib/lead-intake";
 import { hashIp, clientIpFrom } from "@/lib/scan/session";
 import { validateOptin, clean, fieldErrorMessage } from "@/lib/medspa/validate";
 import { sendMedspaGuideEmail } from "@/lib/medspa/guide-email";
@@ -116,6 +116,7 @@ export async function POST(req: NextRequest) {
       // match an existing contact correctly. A guessed value would fork the contact
       // and split the #hot-leads thread.
       source: SOURCE,
+      sourcePage: pageFromRequest(req, "/medspa"),
       noteTitle: "Med Spa AI Training opt-in",
       headline: `New med spa training opt-in: ${result.name}`,
       detailLines: [

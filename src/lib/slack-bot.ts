@@ -134,21 +134,32 @@ export function slackThreadLink(channel: string, ts: string): string {
 }
 
 export const slack = {
-        /** Send a message to a channel or DM */
-        async postMessage(channel: string, text: string, blocks?: SlackBlock[]): Promise<Record<string, unknown>> {
+        /**
+         * Send a message to a channel or DM.
+         *
+         * ‼️ `opts.unfurl: false` TURNS OFF SLACK'S OWN PREVIEW CARDS, AND NOTHING COULD BEFORE
+         * (2026-09-25). There was no parameter for it anywhere in this file, so every post in the app took
+         * Slack's default of unfurling any link in `text`. On a lead card that produced a preview card
+         * under the lead, and the one it drew was a 404 page. A card about a person should not carry a
+         * screenshot of a website, even when the link is right: the card IS the summary.
+         */
+        async postMessage(channel: string, text: string, blocks?: SlackBlock[], opts?: { unfurl?: boolean }): Promise<Record<string, unknown>> {
                   if (!channel) {
                               console.error("[Slack] postMessage called with empty channel");
                               return { ok: false, error: "empty_channel" };
                   }
                   const body: Record<string, unknown> = { channel, text };
                   if (blocks) body.blocks = blocks;
+                  // Only sent when a caller asked, so every existing post keeps Slack's default exactly.
+                  if (opts?.unfurl === false) { body.unfurl_links = false; body.unfurl_media = false; }
                   return slackFetch("chat.postMessage", body);
         },
 
-        /** Reply in a thread */
-        async postThreadReply(channel: string, threadTs: string, text: string, blocks?: SlackBlock[]): Promise<Record<string, unknown>> {
+        /** Reply in a thread. See postMessage above for `opts.unfurl`. */
+        async postThreadReply(channel: string, threadTs: string, text: string, blocks?: SlackBlock[], opts?: { unfurl?: boolean }): Promise<Record<string, unknown>> {
                   const body: Record<string, unknown> = { channel, text, thread_ts: threadTs };
                   if (blocks) body.blocks = blocks;
+                  if (opts?.unfurl === false) { body.unfurl_links = false; body.unfurl_media = false; }
                   return slackFetch("chat.postMessage", body);
         },
 

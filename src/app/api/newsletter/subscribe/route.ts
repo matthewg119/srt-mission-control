@@ -97,7 +97,10 @@ export async function POST(request: NextRequest) {
     const hotLeadsChannel = process.env.SLACK_HOT_LEADS_CHANNEL || "";
     const slackText = `:email: *New newsletter subscriber:* ${email}${sourceUrl ? ` (from ${sourceUrl})` : ""}`;
     if (hotLeadsChannel) {
-      slack.postMessage(hotLeadsChannel, slackText).catch(() => {});
+      // ‼️ THE ONE POST IN THE APP THAT ALWAYS CARRIES A URL IN ITS TEXT, so it is the one Slack was
+      // always going to unfurl: a subscriber from a blog post produced a preview of that blog post in
+      // #hot-leads. The sourceUrl is already in the sentence, which is the part anybody reads.
+      slack.postMessage(hotLeadsChannel, slackText, undefined, { unfurl: false }).catch(() => {});
     } else {
       systemAlert("Newsletter Signup", slackText, "newsletter/subscribe", "info").catch(() => {});
     }
