@@ -26,6 +26,8 @@ import { applyMxVerdicts, filterRows } from "../src/lib/scraper/filter";
 import { formatBreakdown, formatLatePick, formatPickRewind } from "../src/lib/scraper/report";
 import { parseResultLines } from "../src/lib/scraper/millionverifier";
 import { hasMx } from "../src/lib/scraper/mx";
+import { hasBannedDash } from "../src/lib/copy-guard";
+import { COLD_EMAIL_1, COLD_MERGE_FIELDS, renderColdEmail } from "../src/config/cold-email-1";
 import {
   MAPS_LIMIT_DEFAULT,
   MAPS_GRAMMAR,
@@ -864,6 +866,55 @@ async function liveMx(): Promise<void> {
   // The grammar a refusal prints has to be a command that actually parses.
   const example = /`(pull maps [^`]+)`/.exec(MAPS_GRAMMAR.split("For example:")[1] ?? "");
   check("the grammar's own example parses", Boolean(example) && parseMapsCommand(example![1]).ok);
+}
+
+
+// ── Email 1 reads correctly into a shared inbox ─────────────────────────────────────────────────
+// Option A: info@ is an acceptable target, so the copy cannot assume the reader is the owner. And
+// first_name is blank on roughly three quarters of rows, so the blank case is the COMMON one.
+{
+  // Only fields a send list can actually fill.
+  const tokens = [...COLD_EMAIL_1.subject.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1])
+    .concat([...COLD_EMAIL_1.body.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]));
+  check(
+    "every merge field exists in the send list",
+    tokens.every((t) => (COLD_MERGE_FIELDS as readonly string[]).includes(t)),
+    tokens.filter((t) => !(COLD_MERGE_FIELDS as readonly string[]).includes(t)).join(",")
+  );
+
+  // ‼️ THE BLANK CASE, WHICH IS THE MAJORITY CASE. Everything empty except the company name.
+  const bare = renderColdEmail({ company: "Glow Med Spa" });
+  check("it renders with everything blank but the company", bare.body.length > 0);
+  check("no dangling comma or period", !/ ,|\s\.(\s|$)/.test(bare.body), bare.body);
+  check("no double space", !/ {2}/.test(bare.body), bare.body);
+  // ‼️ THE BUG THE FIRST DRAFT SHIPPED AND THE OTHER CHECKS ALL MISSED. An empty {{city}} after a
+  // preposition renders "is not coming up for right now". Tidying spaces and commas cannot fix that,
+  // because the debris is a WORD, so the clause is wrapped in [[ ]] and dropped whole. Checked by
+  // naming the orphans rather than by eyeballing the output.
+  for (const orphan of [" for right", " in right", " for ,", " in ,", " at right"]) {
+    check("no orphaned preposition: " + JSON.stringify(orphan), !bare.body.includes(orphan), bare.body);
+  }
+  check("and the optional clause returns when the value does", renderColdEmail({ company: "X", city: "Dallas" }).body.includes("for Dallas right now"));
+  check("no unrendered optional-clause markers", !/\[\[|\]\]/.test(bare.body + bare.subject));
+  check("no empty parentheses", !/\(\s*\)/.test(bare.body));
+  check("no unfilled token survives", !/\{\{/.test(bare.body + bare.subject));
+  check("the subject still names the business", bare.subject.includes("Glow Med Spa"));
+  check("and there is no greeting to leave hanging", !/^(hi|hello|hey)\b/i.test(bare.body.trim()));
+
+  // The pass-along is the FIRST thing said, because the reader is usually not the decision maker.
+  const firstLine = bare.body.split("\n")[0];
+  check("the first line offers the pass-along", /pass this along/i.test(firstLine), firstLine);
+
+  // A fully populated render must also be clean.
+  const full = renderColdEmail({ company: "Glow Med Spa", city: "Dallas", first_name: "Marina" });
+  check("a populated render is clean too", !/\{\{/.test(full.body) && !/ {2}/.test(full.body));
+  check("and the city lands where it belongs", full.body.includes("Dallas"));
+
+  // ‼️ THE HOUSE RULE, MADE STRUCTURAL. guard() throws at module evaluation, so an em dash here
+  // fails `next build` rather than reaching an inbox. This asserts the rule still holds after edits.
+  check("no banned dash in the subject", !hasBannedDash(COLD_EMAIL_1.subject));
+  check("no banned dash in the body", !hasBannedDash(COLD_EMAIL_1.body));
+  check("no links in a first touch", !/https?:\/\//.test(COLD_EMAIL_1.body));
 }
 
 // Wrapped rather than top-level await: tsx transforms this to CJS and rejects one.
