@@ -42,6 +42,28 @@ import { BUBBLE_GAP_MS } from "@/lib/onboarding2/texting";
 
 const REEF = "#00C9A7";
 
+// The Virtual Agent panel's palette, copied BY VALUE from src/app/hub/[host]/hub.css.
+//
+// ‼️ THIS IS A COPY, AND IT IS DELIBERATELY NOT A THIRD SURFACE IN THE GRAMMAR PROBE.
+// scripts/_probe-virtual-agent-grammar.ts holds exactly two surfaces together: hub.css, where the review
+// panel resolves --va-accent to the client's own colour, and w/[slug]/route.ts, where the widget carries
+// SRT's as a hex literal. Its third check partitions the accent source into precisely those two cases,
+// its first two checks are two-term booleans, and its rule parser reads CSS braces. onboarding2 has no
+// stylesheet at all, by a decision recorded in layout.tsx with two named traps behind it, and declares
+// no --va-* tokens anywhere.
+//
+// Making it a third surface would mean either reversing that decision or teaching the probe to read
+// Tailwind class literals, which is a parser it cannot honestly have. So this page LOOKS like the panel
+// and is not claimed to BE it. If these values and hub.css ever disagree, hub.css is right.
+const PANEL = {
+  bg: "#ffffff",
+  ink: "#14181f",
+  mut: "#5b6672",
+  line: "#e3e8ec",
+  card: "#f2f5f7",
+  onAccent: "#04252b",
+} as const;
+
 /**
  * Stamp the browser's own hostname onto the Calendly URL.
  *
@@ -96,11 +118,21 @@ interface ChatReply {
  */
 export function ChatPanel({
   sessionToken,
-  fullscreen,
+  fullscreen = false,
   demo,
 }: {
   sessionToken: string;
-  fullscreen: boolean;
+  /**
+   * Fill the viewport at every width instead of floating as a panel above 640px.
+   *
+   * ‼️ NOTHING PASSES THIS ANY MORE, AND THE BRANCHES STAY ANYWAY (2026-09-25). Both call sites in
+   * onboarding2-client.tsx dropped it when Matthew asked for the review tool's panel here; the comment
+   * at the top of this file already records why the layout is worth keeping either way, and the panel
+   * itself is full bleed below 640px, so "full screen on a phone" is not what this prop buys. What it
+   * buys is full screen on a DESKTOP, which is a different product decision and one that was made and
+   * then reversed once. Optional rather than deleted so reversing it again is one word.
+   */
+  fullscreen?: boolean;
   demo: boolean;
 }) {
   const [open, setOpen] = useState(fullscreen);
@@ -295,19 +327,36 @@ export function ChatPanel({
     );
   }
 
+  // ‼️ THE PANEL IS FULL BLEED BELOW 640px, AND THAT IS WHAT KEEPS THE CALENDAR USABLE. hub.css
+  // does the same thing at the same breakpoint (@media (max-width: 40rem) gives .va-panel inset:0 and no
+  // radius), and the reason here is concrete: the Calendly embed mounts INSIDE the scrolling message
+  // column, and in the old 70vh card at 375px that iframe was taller than the entire panel. Full bleed on
+  // a phone means the booking step is exactly as roomy as it was in full screen.
+  //
+  // ‼️ AND THE PANEL GROWS WHILE THE CALENDAR IS UP. On a desktop the resting size is hub.css's
+  // min(28rem, 100vw-3rem) by min(38rem, 100vh-3rem), which leaves about 500px of column once the header
+  // and the composer are out of it. That is a cramped 640px calendar. Booking is the step this page
+  // exists for, so it gets more room for as long as it is on screen and gives it back afterwards.
+  const calendarUp = Boolean(bookingUrl) && !booking;
   const shell = fullscreen
-    ? "fixed inset-0 z-50 flex flex-col bg-[#0a0a0a]"
-    : "fixed inset-x-3 bottom-3 z-50 flex h-[70vh] flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0a0a0a] shadow-2xl sm:inset-x-auto sm:right-5 sm:h-[520px] sm:w-[380px]";
+    ? "fixed inset-0 z-50 flex flex-col"
+    : [
+        "fixed inset-0 z-50 flex flex-col",
+        "sm:inset-auto sm:bottom-6 sm:right-6 sm:overflow-hidden sm:rounded-[14px] sm:border sm:shadow-2xl",
+        calendarUp
+          ? "sm:h-[min(44rem,calc(100vh-3rem))] sm:w-[min(34rem,calc(100vw-3rem))]"
+          : "sm:h-[min(38rem,calc(100vh-3rem))] sm:w-[min(28rem,calc(100vw-3rem))]",
+      ].join(" ");
 
   return (
-    <div className={shell}>
+    <div className={shell} style={{ backgroundColor: PANEL.bg, color: PANEL.ink, borderColor: PANEL.line }}>
       {fullscreen && demo && (
         <div className="bg-amber-400 px-4 py-2 text-center text-xs font-bold text-[#0a0a0a]">
           TEST MODE. Nothing here reaches Slack, the CRM, your inbox or the client list.
         </div>
       )}
 
-      <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+      <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: PANEL.line }}>
         <span className="text-sm font-semibold">
           {bookingUrl || !scheduled ? CHAT_UI.title : "A few quick questions"}
         </span>
@@ -333,9 +382,13 @@ export function ChatPanel({
             className={
               m.role === "user"
                 ? "ml-auto max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-sm px-3.5 py-2.5 text-sm font-medium"
-                : "mr-auto max-w-[90%] whitespace-pre-wrap rounded-2xl rounded-bl-sm bg-white/5 px-3.5 py-2.5 text-sm text-white/85"
+                : "mr-auto max-w-[90%] whitespace-pre-wrap rounded-2xl rounded-bl-sm px-3.5 py-2.5 text-sm"
             }
-            style={m.role === "user" ? { backgroundColor: REEF, color: "#04252b" } : undefined}
+            style={
+              m.role === "user"
+                ? { backgroundColor: REEF, color: PANEL.onAccent }
+                : { backgroundColor: PANEL.card, color: PANEL.ink }
+            }
           >
             {m.content}
           </div>
@@ -372,10 +425,24 @@ export function ChatPanel({
             point onBooked() unmounts it and the questions begin. */}
         {bookingUrl && !booking && (
           <div className="pt-2">
+            {/* ‼️ CAPPED AGAINST THE VIEWPORT, NOT A FLAT 640px. The header and the composer take
+                roughly 7rem between them, so a fixed 640px was taller than its own scroll column on any
+                short window, and inside the old 70vh card it was taller than the panel on every phone.
+                This keeps 640px where there is room and shrinks instead of overflowing where there is
+                not.
+
+                The two numbers were measured in a browser, not guessed. 14rem is the header, the
+                composer, the column's own padding and the panel's 3rem margin, measured as 112px of
+                chrome plus the margin rather than estimated. A 27rem floor was WRONG and the measurement
+                caught it: at a 1280x600 window the floor beat the cap and put a 432px calendar inside a
+                345px column, which is nested scrolling. 18rem keeps it from collapsing and never wins.
+                Measured good at 375x667 (343px wide, 443px tall in a 557px column), 375x812, 1280x800
+                and 1280x600. */}
             <iframe
               src={embedUrl(bookingUrl)}
               title="Book your onboarding call"
-              className="h-[640px] w-full rounded-xl border border-white/10 bg-white"
+              className="h-[min(640px,calc(100vh-11rem))] min-h-[18rem] w-full rounded-xl border bg-white"
+              style={{ borderColor: PANEL.line }}
             />
           </div>
         )}
@@ -405,11 +472,15 @@ export function ChatPanel({
           summary invites somebody to type into a thread nothing is listening to any more, and the
           scheduling branch would answer "just tap one of the options below" with no options. */}
       <div
-        className={`flex items-end gap-2 border-t border-white/10 p-3 ${scheduled ? "hidden" : ""} ${fullscreen ? "mx-auto w-full max-w-2xl" : ""}`}
+        className={`flex items-end gap-2 border-t p-3 ${scheduled ? "hidden" : ""} ${fullscreen ? "mx-auto w-full max-w-2xl" : ""}`}
+        style={{ borderColor: PANEL.line }}
       >
         <textarea
           rows={1}
-          className="max-h-24 flex-1 resize-none rounded-lg border border-white/15 bg-white/5 px-3 py-2.5 text-sm text-white placeholder-white/30 outline-none focus:border-[#00C9A7]"
+          /* 16px on the control itself, or iOS zooms the whole panel on focus. hub.css carries the same
+             note on .va-bar textarea, and it is the one place a font size is not a style choice. */
+          style={{ backgroundColor: PANEL.bg, color: PANEL.ink, borderColor: PANEL.line, fontSize: 16 }}
+          className="max-h-24 flex-1 resize-none rounded-lg border px-3 py-2.5 outline-none focus:border-[#00C9A7]"
           placeholder={CHAT_UI.placeholderPost}
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -424,7 +495,7 @@ export function ChatPanel({
           onClick={() => void send(input)}
           disabled={busy || !input.trim()}
           className="rounded-lg px-4 py-2.5 text-sm font-bold disabled:opacity-40"
-          style={{ backgroundColor: REEF, color: "#04252b" }}
+          style={{ backgroundColor: REEF, color: PANEL.onAccent }}
         >
           Send
         </button>

@@ -474,8 +474,24 @@ export function Onboarding2Funnel({
   // !! FULL SCREEN FROM THE MOMENT IDENTITY IS IN. Not a corner bubble with a form behind it.
   // The conversation IS the page: it books the call first and asks the questions second, and it
   // reads like a texting thread because that is what it is.
+  //
+  // ‼️ OVERRIDDEN 2026-09-25, AND THE REASONING ABOVE STILL STANDS. Matthew asked for this chat to
+  // be the same chatbox panel the review tool opens in, so that the three places a person meets the
+  // assistant (the widget on a client's site, the review tool on their hub, and this) are recognisably
+  // one product rather than three. That is the argument that beat the one above: "the conversation IS
+  // the page" was about not burying it behind a form, and a panel that fills the screen on a phone and
+  // floats on a desktop does not bury anything.
+  //
+  // What the old comment was right about is still honoured. Nothing sits behind this on a phone, where
+  // the panel is full bleed at every width below 640px, and there is no form to go back to: the close
+  // button only exists above that breakpoint, where there is a page to return to.
+  //
+  // ‼️ AND IT IS NOW LIGHT WHERE IT WAS NEAR BLACK, which is the visible half of the change on a
+  // live conversion surface. The review panel is a floating light card on every client including the dark
+  // ones, for the reason hub.css gives: a panel that inherited the page's ground would be a near-black
+  // rectangle on a white clinic page and a white one on a dark page, which is two products.
   if (stage === "chat" && sessionToken) {
-    return <ChatPanel sessionToken={sessionToken} fullscreen demo={demo} />;
+    return <ChatPanel sessionToken={sessionToken} demo={demo} />;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -526,7 +542,10 @@ export function Onboarding2Funnel({
           TEST MODE. Nothing here reaches Slack, the CRM, your inbox or the client list.
         </div>
       )}
-      <ChatPanel sessionToken={sessionToken} fullscreen demo={demo} />
+      {/* Unreachable in practice, because the branch above catches the same condition first. Kept in
+          step with it anyway: the day one of them changes and the other does not is the day this page
+          renders two different chats depending on which line ran. */}
+      <ChatPanel sessionToken={sessionToken} demo={demo} />
     </>
   );
 }

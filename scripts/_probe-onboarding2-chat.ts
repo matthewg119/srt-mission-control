@@ -939,6 +939,50 @@ async function main(): Promise<void> {
     ""
   );
 
+  // ── The panel (2026-09-25) ───────────────────────────────────
+  //
+  // The chat is the same chatbox panel the review tool opens in, which overrode "FULL SCREEN FROM THE
+  // MOMENT IDENTITY IS IN". Two things are worth holding still.
+  console.log("\nThe panel");
+  {
+    const client = fs.readFileSync(path.join(process.cwd(), "src/app/onboarding2/onboarding2-client.tsx"), "utf8");
+    const panel = fs.readFileSync(path.join(process.cwd(), "src/app/onboarding2/chat-bubble.tsx"), "utf8");
+
+    const renders = client.match(/<ChatPanel[^/]*\/>/g) ?? [];
+    check("both ChatPanel call sites agree", renders.length === 2 && renders.every((r) => !r.includes("fullscreen")),
+      renders.join("  |  "));
+    check(
+      "the override is recorded rather than the old reasoning deleted",
+      client.includes("FULL SCREEN FROM THE MOMENT IDENTITY IS IN") && client.includes("OVERRIDDEN 2026-09-25"),
+      "a reversed decision with its argument removed is a decision nobody can reverse back"
+    );
+
+    // ‼️ THE DECISION NOT TO JOIN THE GRAMMAR PROBE, HELD IN PLACE. onboarding2 has no stylesheet by a
+    // decision in its layout.tsx, and _probe-virtual-agent-grammar.ts is structurally two-surface: its
+    // accent check partitions into exactly two cases and its parser reads CSS braces. So this page COPIES
+    // the panel's values and does not claim to be a third surface. A half migration, where some va-* names
+    // appear here and the probe still does not know about them, is the outcome to prevent.
+    check("onboarding2 declares no --va-* token", !/--va-[a-z-]+\s*:/.test(panel), "it is a copy, not a third surface");
+    check("and uses no va-* class name", !/va-[a-z]/.test(panel), "");
+    check(
+      "the copy says which file it copied and who wins on a disagreement",
+      panel.includes("hub.css") && panel.includes("hub.css is right"),
+      ""
+    );
+
+    // The calendar cap. The floor must never beat the cap, or it overflows its own scroll column: at a
+    // 1280x600 window a 27rem floor put a 432px calendar inside a 345px column.
+    const cap = panel.match(/h-\[min\(640px,calc\(100vh-(\d+)rem\)\)\]/);
+    const floor = panel.match(/min-h-\[(\d+)rem\]/);
+    check("the calendar is capped against the viewport", Boolean(cap), cap ? `100vh minus ${cap[1]}rem` : "no cap found");
+    check("and has a floor", Boolean(floor), floor ? `${floor[1]}rem` : "no floor found");
+    check(
+      "the floor cannot beat the cap on a short window",
+      Boolean(cap && floor) && Number(floor![1]) * 16 <= 505 - Number(cap![1]) * 16 + 48,
+      "measured against the shortest window checked in a browser, 1280x600"
+    );
+  }
+
   console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) FAILED.`);
   process.exit(failures === 0 ? 0 : 1);
 }
