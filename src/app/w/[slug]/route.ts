@@ -30,6 +30,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { frameAncestorsFor, loadConciergeConfig } from "@/lib/concierge/config";
 import { conciergeAllowed, PREVIEW_TOKEN_PARAM } from "@/lib/concierge/preview-grant";
+import { REFERRAL_NO_TIMES, REFERRAL_SCRIPT, REFERRAL_TIMES_COPY } from "@/lib/concierge/referral-script";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -162,6 +163,13 @@ body{background:var(--va-bg);color:var(--va-ink);font:15px/1.5 -apple-system,Bli
 (function(){
  var CFG={slug:${JSON.stringify(slug)},category:${JSON.stringify(category)},magnet:${JSON.stringify(magnet)},city:${JSON.stringify(city)},path:${JSON.stringify(path)},host:${JSON.stringify(host)}};
  var PASS=${JSON.stringify(pass)};
+ // ‼️ THE WHOLE WALK, INLINED AS DATA, WITH NO MODEL AND NO FETCH FOR ANY OF ITS WORDS. Every
+ // string here was written in src/lib/concierge/referral-script.ts and passed through copy-guard at
+ // build time. The two appointment times are the only text that is not fixed, and they come from
+ // resolveBooking() through /api/concierge/action, which is the only thing that knows what is open.
+ var REF=${JSON.stringify(REFERRAL_SCRIPT)};
+ var REF_NONE=${JSON.stringify(REFERRAL_NO_TIMES)};
+ var REF_TIMES=${JSON.stringify(REFERRAL_TIMES_COPY)};
  function api(p){return PASS?p+(p.indexOf("?")<0?"?":"&")+PASS:p}
  var log=document.getElementById('log'),form=document.getElementById('f'),input=document.getElementById('i'),send=document.getElementById('s');
  var token=null,busy=false,opening='',contact=false,firstName='',pending=null,mode='',turnChips=null;
@@ -230,8 +238,16 @@ body{background:var(--va-bg);color:var(--va-ink);font:15px/1.5 -apple-system,Bli
  function choose(kind){
   mode=kind;
   // ‼️ NAME AND EMAIL FIRST, ON EVERY DOOR. Matthew: "always ask for email in case we lose connection".
-  if(!contact){pending=kind;askContact(kind);return}
+  //
+  // ‼️ EXCEPT THE REFERRAL WALK, WHICH ASKS FOR THEM ITSELF, TWO QUESTIONS IN. Matthew wrote that
+  // script as an exact sequence and the form is step four of it, after the review count and the
+  // website. Routing it through askContact would ask for a name, then ask for it again inside the
+  // walk's own form. The window this opens is two short answers wide, and the walk's form collects
+  // more than askContact does (a surname and a phone), so the intent behind the rule survives: nobody
+  // reaches anything we hand over without leaving a way to be reached.
+  if(!contact&&kind!=='referral'){pending=kind;askContact(kind);return}
   if(kind==='audit')askWebsite();
+  else if(kind==='referral')walkRef(0);
   else if(kind==='magnet')giveMagnet();
   else if(kind==='booking')askBooking();
   else startTyping();
@@ -281,6 +297,144 @@ body{background:var(--va-bg);color:var(--va-ink);font:15px/1.5 -apple-system,Bli
   go.addEventListener('click',submit);
   w.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();submit()}});
   height();
+ }
+
+ // ── the AI Referral Engine, as a scripted walk ───────────────────────────
+ //
+ // ‼️ NO MODEL IS IN THIS PATH AT ALL. REF is a step array inlined above; this walks it. The two round
+ // trips it makes are the contact capture and the appointment times, and neither returns prose: one
+ // returns ok, the other returns real slots. Every sentence read here was written by a person and
+ // checked by copy-guard at build time.
+ //
+ // ‼️ AND IT NEVER SKIPS FORWARD ON ITS OWN. Each step advances only when its own answer lands, so a
+ // failed post leaves the visitor on the step they were on with the error under it, rather than
+ // halfway down a script that believes it collected something.
+ var refAnswers={};
+
+ function walkRef(i){
+  var step=REF[i];
+  if(!step)return;
+
+  if(step.kind==='say'){
+   bubble('a',step.text);height();
+   setTimeout(function(){walkRef(i+1)},600);
+   return;
+  }
+
+  if(step.kind==='end'){
+   bubble('a',step.text);startTyping(true);height();
+   return;
+  }
+
+  if(step.kind==='ask'){
+   bubble('a',step.prompt);
+   var c=el('va-form');
+   var f=document.createElement('input');f.placeholder=step.placeholder;f.maxLength=200;
+   var err=document.createElement('div');err.className='va-err';
+   var go=document.createElement('button');go.type='button';go.textContent='Next';
+   c.appendChild(f);c.appendChild(err);c.appendChild(go);f.focus();
+   var submit=function(){
+    var v=(f.value||'').trim();
+    if(!v){err.textContent='Type an answer and I will carry on.';return}
+    refAnswers[step.key]=v;
+    c.remove();bubble('u',v);
+    walkRef(i+1);
+   };
+   go.addEventListener('click',submit);
+   f.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();submit()}});
+   height();
+   return;
+  }
+
+  if(step.kind==='form'){
+   bubble('a',step.prompt);
+   var fc=el('va-form');
+   var fn=document.createElement('input');fn.placeholder='First name';fn.autocomplete='given-name';fn.maxLength=60;
+   var ln=document.createElement('input');ln.placeholder='Last name';ln.autocomplete='family-name';ln.maxLength=60;
+   var em=document.createElement('input');em.placeholder='Email';em.type='email';em.autocomplete='email';em.maxLength=120;
+   var ph=document.createElement('input');ph.placeholder='Phone';ph.type='tel';ph.autocomplete='tel';ph.maxLength=20;
+   // ‼️ FORMATTED AS IT IS TYPED, STORED AS E.164. The standing rule: live format, absorb a leading +1,
+   // and reach the database as +1XXXXXXXXXX. The server normalises and REFUSES rather than trusting any
+   // of this, because the route is public and a bad number stored is a call to a stranger. This exists
+   // only so the person typing can see what they typed.
+   ph.addEventListener('input',function(){
+    var d=(ph.value||'').replace(/[^0-9]/g,'');
+    if(d.length===11&&d.charAt(0)==='1')d=d.slice(1);
+    d=d.slice(0,10);
+    ph.value=d.length>6?'('+d.slice(0,3)+') '+d.slice(3,6)+'-'+d.slice(6):d.length>3?'('+d.slice(0,3)+') '+d.slice(3):d;
+   });
+   var ferr=document.createElement('div');ferr.className='va-err';
+   var fgo=document.createElement('button');fgo.type='button';fgo.textContent=step.cta;
+   fc.appendChild(fn);fc.appendChild(ln);fc.appendChild(em);fc.appendChild(ph);fc.appendChild(ferr);fc.appendChild(fgo);
+   fn.focus();
+   var fsubmit=function(){
+    fgo.disabled=true;ferr.textContent='';
+    post('/api/concierge/action',{token:token,action:'contact',name:fn.value,lastName:ln.value,email:em.value,phone:ph.value,picked:'referral',reviews:refAnswers.reviews||'',website:refAnswers.website||'',host:CFG.host,path:CFG.path})
+    .then(function(d){
+     fgo.disabled=false;
+     if(!d.ok){ferr.textContent=d.message||'Check those and try again.';return}
+     contact=true;firstName=d.firstName||'';
+     fc.remove();
+     bubble('u',fn.value+' '+ln.value+' · '+em.value);
+     walkRef(i+1);
+    }).catch(function(){fgo.disabled=false;ferr.textContent='That did not go through. Try once more.'});
+   };
+   fgo.addEventListener('click',fsubmit);
+   ph.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();fsubmit()}});
+   height();
+   return;
+  }
+
+  if(step.kind==='chips'){
+   bubble('a',step.prompt);
+   var box=el('va-chips is-pair');
+   step.options.forEach(function(o){
+    var b=document.createElement('button');b.type='button';b.className='va-chip';b.textContent=o.label;
+    b.addEventListener('click',function(){
+     box.remove();bubble('u',o.label);
+     refAnswers[step.key]=o.value;
+     refTimes(o.value,i+1);
+    });
+    box.appendChild(b);
+   });
+   height();
+   return;
+  }
+
+  // A slots step is never walked into directly: refTimes draws it, then continues past it.
+  if(step.kind==='slots'){walkRef(i+1);return}
+ }
+
+ function refFill(t,a,b){return t.replace('{a}',a).replace('{b}',b||a)}
+
+ // ‼️ THE TIMES ARE REAL OR THEY ARE NOT OFFERED, AND THERE IS NO THIRD BRANCH. The server runs the
+ // same resolveBooking() the model's offer_booking tool runs, and it answers with what is open, a
+ // link, a phone, or nothing. This draws whichever came back and then continues the walk.
+ //
+ // ‼️ THE WALK CONTINUES IN EVERY BRANCH, THE FAILURES INCLUDED. The download link does not depend on
+ // the install call being booked, so a rotated Calendly token must not strand somebody halfway down a
+ // script they completed their half of.
+ function refTimes(daypart,next){
+  var wait=el('va-dots','...');
+  post('/api/concierge/action',{token:token,action:'referral_times',daypart:daypart,tz:tz})
+  .then(function(d){
+   wait.remove();
+   if(!d.ok){bubble('a',REF_NONE.callback);height();walkRef(next);return}
+
+   if(d.mode==='slots'&&d.slots&&d.slots.length){
+    if(d.otherHalf)bubble('a',REF_TIMES.otherHalf);
+    var text=d.slots.length>1?refFill(REF_TIMES.two,d.slots[0].label,d.slots[1].label):refFill(REF_TIMES.one,d.slots[0].label);
+    var b=bubble('a',text);
+    attach(b,d.slots.map(function(x){return {kind:'slot',title:x.label,url:x.url}}));
+    height();walkRef(next);return;
+   }
+
+   if(d.mode==='link'){var lb=bubble('a',REF_NONE.link);attach(lb,d.attachments);height();walkRef(next);return}
+   if(d.mode==='phone'){bubble('a',REF_NONE.phone+' '+d.phone);height();walkRef(next);return}
+
+   bubble('a',REF_NONE.callback);height();walkRef(next);
+  })
+  .catch(function(){wait.remove();bubble('a',REF_NONE.callback);height();walkRef(next)});
  }
 
  // ── the call ─────────────────────────────────────────────────────────────

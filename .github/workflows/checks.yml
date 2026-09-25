@@ -70,6 +70,12 @@ jobs:
       - name: Virtual Agent grammar probe (one agent, two surfaces)
         run: bun --no-env-file run scripts/_probe-virtual-agent-grammar.ts
 
+      # Importing referral-script.ts is itself the copy-guard check, and section 3 is the one that
+      # matters: a scripted walk is where inventing "Tuesday at 10" is easiest and worst, because the
+      # model is not in that path and nothing downstream would catch it.
+      - name: Referral lane probe (scripted, and the times are the calendar's)
+        run: bun --no-env-file run scripts/_probe-referral-lane.ts
+
       - name: Headline probes
         run: |
           bun --no-env-file run scripts/_probe-aeo-headlines.ts
