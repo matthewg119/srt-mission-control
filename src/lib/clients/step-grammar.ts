@@ -690,6 +690,17 @@ const HEADLINES_PICK: CommandSpec = {
   implementedIn: "src/lib/clients/precall-headlines.ts",
 };
 
+const CTA: CommandSpec = {
+  label: "cta 3: <sentence>",
+  test: /^cta(?:\s+([0-9]{1,2})\s*:\s*(.+))?$/i,
+  unmistakable: /^\s*[`*_]*cta(?:\s+([0-9]{1,2})\s*:\s*(.+))?[`*_]*\s*$/i,
+  pointAt: "pre_call_pages",
+  what: "What each page says to offer its magnet",
+  implementedIn: "src/lib/clients/page-plan.ts",
+  gatedIn: "src/lib/clients/pre-call-pages.ts",
+  mustBeOnTheCard: true,
+};
+
 const PLAN: CommandSpec = {
   label: "plan approve",
   test: /^plan(?:\s+(new|approve|draft|(?:drop|swap)\s+[0-9]{1,2}|edit\s+[0-9]{1,2}\s*:\s*.+))?$/i,
@@ -817,6 +828,7 @@ export const STEP_COMMANDS: Record<StepKey, readonly CommandSpec[]> = {
     HEADLINES_PICK,
     EMOTIONAL,
     PLAN,
+    CTA,
     ANCHOR,
     HEADLINE_BATCH,
     SKELETON,

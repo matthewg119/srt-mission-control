@@ -59,6 +59,20 @@ export const PLAN_COMMAND =
 export const ANCHOR_COMMAND = /^anchor(?:\s*:\s*(\S+))?$/i;
 
 /**
+ * `cta` to see every page's sentence, `cta N: <sentence>` to write one, `cta N: none` to clear it.
+ *
+ * ‼️ THE NUMBER IS REQUIRED FOR A WRITE, AND THAT IS NOT TIDINESS. A per-tenant CTA is what this
+ * replaces: the widget's teaser lines were templated from the magnet's title, so every page on a hub
+ * said the same words even after 09e1699 made the magnet a per-page decision. A `cta: <sentence>` form
+ * with no number would rebuild the thing it is here to undo.
+ *
+ * ‼️ AND IT IS ANCHORED, like PLAN_COMMAND, because this thread also takes pasted documents.
+ * "CTA: book now" at the top of a pasted brief would otherwise be read as a command; the number is
+ * what makes the two impossible to confuse.
+ */
+export const CTA_COMMAND = /^cta(?:\s+([0-9]{1,2})\s*:\s*(.+))?$/i;
+
+/**
  * No theme may take more than this many of the twenty.
  *
  * ‼️ A SPREAD RULE, NOT A QUOTA. The backlog's own PDF tells the call to "pick from the top of
@@ -112,6 +126,18 @@ export interface PlanRow {
    * and on every row before docs/2026-09-18-post-formats.sql. Merged by withPostFormat.
    */
   postFormat: PostFormatId | null;
+  /**
+   * The one sentence this page uses to offer its magnet, chosen before the page is drafted.
+   *
+   * ‼️ IT LIVES ON THE PLAN AND IS COPIED TO THE PAGE, NOT THE OTHER WAY ROUND. The decision is
+   * made while the plan is being approved, which is before client_pages has a row to hold it, and a
+   * redraft must not lose a sentence somebody wrote. draftOne copies it onto the page; from then on
+   * `cta N:` writes both, so the two cannot drift.
+   *
+   * Null means the widget falls back to the magnet-templated lines, and means the step still wants
+   * an answer. Merged by withCtaLine.
+   */
+  ctaLine: string | null;
   /** Null on a studio row, and on every row before docs/2026-09-11-one-strategy.sql. */
   role: PlanRole | null;
   /** Which pillar a support belongs to. A client may one day have more than one offer. */
@@ -667,6 +693,8 @@ function toPlanRow(r: Record<string, unknown>): PlanRow {
     pageStatus: null,
     // Merged on afterwards by withPostFormat.
     postFormat: null,
+    // Merged on afterwards by withCtaLine.
+    ctaLine: null,
     role: null,
     pillarId: null,
     keywordCategory: null,
@@ -788,6 +816,61 @@ async function withStrategy(rows: PlanRow[]): Promise<PlanRow[]> {
   return rows;
 }
 
+/**
+ * The CTA sentences, merged onto rows already read.
+ *
+ * ‼️ ITS OWN SELECT, NOT PLAN_COLUMNS, and the reason is the one withRoles gives above:
+ * docs/2026-09-25-page-cta-line.sql lands after this file deploys in the worst case, and PostgREST
+ * fails a WHOLE select on one unknown column. In PLAN_COLUMNS an unrun migration would blank the
+ * entire plan in the studio and in step 21. Here it reads as a plan where nobody has written a
+ * sentence yet, which is exactly what it is.
+ */
+async function withCtaLine(rows: PlanRow[]): Promise<PlanRow[]> {
+  if (rows.length === 0) return rows;
+  const { data, error } = await supabaseAdmin
+    .from("page_plan")
+    .select("id, cta_line")
+    .in("id", rows.map((r) => r.id));
+  if (error) return rows;
+  const byId = new Map(((data ?? []) as Array<Record<string, unknown>>).map((r) => [String(r.id), r]));
+  for (const row of rows) {
+    const extra = byId.get(row.id);
+    if (!extra) continue;
+    row.ctaLine = typeof extra.cta_line === "string" && extra.cta_line.trim() ? extra.cta_line.trim() : null;
+  }
+  return rows;
+}
+
+/**
+ * Write one plan row's CTA sentence, and the page's too once it has one.
+ *
+ * ‼️ BOTH, OR THEY DRIFT. Before a page exists the plan row is the only place to put it; after
+ * it exists the widget and the rendered page read client_pages, so writing only the plan would store a
+ * decision that changes nothing visible. Writing only the page would lose it on the next redraft.
+ */
+export async function setPlanCtaLine(
+  clientId: string,
+  row: PlanRow,
+  line: string | null
+): Promise<{ ok: true; stored: string | null } | { ok: false; error: string }> {
+  const { normalizeCtaLine, setPageCtaLine } = await import("@/lib/hub/pages");
+  const stored = normalizeCtaLine(line);
+
+  const { error } = await supabaseAdmin
+    .from("page_plan")
+    .update({ cta_line: stored, updated_at: new Date().toISOString() })
+    .eq("id", row.id)
+    .eq("client_id", clientId);
+  if (error) return { ok: false, error: error.message };
+
+  if (row.pageId) {
+    const onPage = await setPageCtaLine(clientId, row.pageId, stored);
+    if (!onPage.ok) return { ok: false, error: onPage.error };
+  }
+
+  return { ok: true, stored };
+}
+
 async function withPostFormat(rows: PlanRow[]): Promise<PlanRow[]> {
   if (rows.length === 0) return rows;
   const { data, error } = await supabaseAdmin
@@ -832,10 +915,12 @@ export async function loadPlan(clientId: string): Promise<{ rows: PlanRow[] } | 
   // from the keyword before the page exists" mechanism was inert, silently, while the column filled
   // up correctly underneath it. A merge helper with no caller is the one kind of dead code that
   // leaves the data looking right.
-  const rows = await withStrategy(
-    await withPostFormat(
-      await withAwareness(
-        await withHeadlines(await withRoles(((data ?? []) as Array<Record<string, unknown>>).map(toPlanRow)))
+  const rows = await withCtaLine(
+    await withStrategy(
+      await withPostFormat(
+        await withAwareness(
+          await withHeadlines(await withRoles(((data ?? []) as Array<Record<string, unknown>>).map(toPlanRow)))
+        )
       )
     )
   );

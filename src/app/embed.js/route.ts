@@ -61,6 +61,18 @@ const SCRIPT = `(function(){
  // INSTEAD of the tenant's, which only /preview/[token] ever sets and which the config route only
  // honours alongside a valid preview token. See src/app/api/concierge/config/route.ts.
  var wantMascot=me.getAttribute("data-mascot")||"";
+ // The one sentence THIS page uses to offer its magnet, from client_pages.cta_line.
+ //
+ // ‼️ IT ARRIVES ON THE TAG AND IS NEVER FETCHED, WHICH IS THE WHOLE REASON IT IS HERE. The
+ // obvious design was to send it to /api/concierge/config and let that route answer with it, and that
+ // route's own comments say why not: it is fetched once per page view from a third party's page and is
+ // unstable_cached on (slug, category, magnetKey). A per-page sentence in that cache key gives the
+ // busiest endpoint in the lane a fourth dimension; a per-page sentence NOT in that key serves one
+ // page's line on every other page for five minutes. The page already knows the answer, so it says it.
+ //
+ // Sliced to 90 to match the cap normalizeCtaLine and the column CHECK both enforce, so a value put
+ // into the table by hand cannot render longer here than it does anywhere else.
+ var ctaLine=(me.getAttribute("data-cta")||"").slice(0,90);
 
  function q(o){return Object.keys(o).filter(function(k){return o[k]}).map(function(k){
    return encodeURIComponent(k)+"="+encodeURIComponent(o[k])}).join("&")}
@@ -402,20 +414,31 @@ const SCRIPT = `(function(){
   try{el.animate([{transform:"scale(1)"},{transform:"scale(1.09)"},{transform:"scale(1)"}],{duration:420,easing:"ease-out"})}catch(err){}
  }
 
- function schedule(lines){
-  if(!lines||!lines.length)return;
+ // ‼️ THE PAGE'S OWN LINE GOES FIRST, AND IT IS THE ONE PICK THAT IS NOT RANDOM. The rest are
+ // shuffled so the corner reads as a character rather than a playlist. This one is the sentence somebody
+ // wrote for this page, about the offer standing at the end of it, so leading with anything else would
+ // make the per-page decision a one-in-nine chance of being seen.
+ function schedule(lines,lead){
+  lines=lines&&lines.length?lines.slice():[];
+  if(lead&&lines.indexOf(lead)<0)lines.unshift(lead);
+  if(!lines.length)return;
   // ‼️ FOUR LINES, FIRST AT FOUR SECONDS, THEN ONE EVERY TWELVE TO EIGHTEEN (2026-09-25).
   // Matthew asked for a line every six seconds. That is eight bubbles inside a minute on a clinic's
   // live website, which is a popup wearing an assistant's clothes and the kind of thing that gets the
   // whole widget taken off the site by the client. Four seconds to the first one is the part of the
   // ask that matters, because a visitor who scrolls past in eight seconds never saw the old six. The
   // hard stop at four is what keeps the rest of it from being nagging: there is no fifth.
-  var pool=lines.slice(), MAX=4;
+  // ‼️ NEVER MORE SHOWINGS THAN THERE ARE LINES. Four is the ceiling, not a quota: a page that
+  // has only its own sentence, because the config could not be reached, would otherwise say the same
+  // words four times, which reads worse than saying them once.
+  var pool=lines.slice(), MAX=Math.min(4,lines.length);
   function next(){
    if(dismissed||!document.body||!document.body.contains(wrap)||shown>=MAX)return;
    if(panel.style.display!=="none"||document.hidden){setTimeout(next,8000);return}
    if(!pool.length)pool=lines.slice();
-   var line=pool.splice(Math.floor(Math.random()*pool.length),1)[0];
+   var line;
+   if(shown===0&&lead){line=lead;pool.splice(pool.indexOf(lead),1)}
+   else line=pool.splice(Math.floor(Math.random()*pool.length),1)[0];
    shown++;
    if(catAssets&&!talkLoaded&&!reduce){var t=new Image();t.onload=function(){talkLoaded=true};t.src=abs(catAssets.talk)}
    say(line);
@@ -436,12 +459,24 @@ const SCRIPT = `(function(){
   .then(function(r){return r.json()})
   .then(function(d){
     if(!d||!d.enabled){wrap.remove();return}
+    // ‼️ A GLOBAL, NOT A DOM SEARCH, AND THE HEADER RULE IS WHY. This file "never reads the host
+    // page's DOM beyond the element it created", so it cannot go looking for a button to wire up. A page
+    // that wants to open the panel from its own copy calls this instead. Published only once the config
+    // has confirmed the tenant is live, so a caller can test for it and render no control when the widget
+    // is not there rather than rendering one that does nothing.
+    try{window.__srtConciergeOpen=function(){toggle(true)}}catch(err){}
     if(d.corner)place(d.corner);
     if(d.mascot&&wantMascot!=="none")useMascot(d.mascot);
     else if(d.ctaLabel){btnLabel.textContent=d.ctaLabel;btn.setAttribute("data-label",d.ctaLabel)}
-    schedule(d.lines&&d.lines.length?d.lines:(d.headline?[d.headline]:[]));
+    schedule(d.lines&&d.lines.length?d.lines.slice():(d.headline?[d.headline]:[]),ctaLine||null);
   })
-  .catch(function(){});
+  // ‼️ A PAGE WITH ITS OWN LINE STILL SPEAKS WHEN THE CONFIG IS UNREACHABLE. Every failure in this
+  // file is deliberately silent, and this one has already happened once: before 2026-09-16 the config
+  // answered with no allow-origin header, the browser threw it away, and every embedded page showed a
+  // bare pill and no teaser. The sentence on the tag needs no network, so a lost config costs the
+  // mascot and the label and no longer costs the offer as well. A DISABLED tenant is a different
+  // branch above and still removes the widget outright.
+  .catch(function(){if(ctaLine)schedule([],ctaLine)});
 
  if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",mount)}else{mount()}
 

@@ -185,6 +185,53 @@ body:has(.hub-root) {
 .hub-part { font-size: 0.9375rem; color: var(--hub-muted); }
 .hub-links { margin-top: 3rem; }
 
+/* ── The offer, after the answer ──────────────────────────────────────────────
+   The one block on a page that asks for anything. It is NOT part of answer_md and must never be
+   moved into it: draft-page.ts forbids the drafter from writing a call to action, the same prompt
+   forbids links, and page-gate.ts fails the publish gate on a markdown link in the body. The body
+   exists to be quoted by an assistant, and a pitch inside the answer is what stops it being quoted.
+
+   It takes the client's accent, because on their domain under their name it is their offer. Quiet
+   on purpose: a banner would be the thing the page is about, and the answer is the thing the page
+   is about. See src/components/hub/hub-cta.tsx. */
+
+.hub-cta {
+  margin-top: 2.5rem;
+  padding: 1.1rem 1.25rem;
+  border: 1px solid var(--hub-accent);
+  border-left-width: 3px;
+  border-radius: 10px;
+  background: var(--hub-accent-soft);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1rem;
+  align-items: center;
+  justify-content: space-between;
+}
+.hub-cta-line {
+  margin: 0;
+  font-weight: 600;
+  /* Room to be a sentence rather than a headline, and to wrap before the button on a phone. */
+  flex: 1 1 18rem;
+  min-width: 0;
+}
+.hub-cta-open {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 999px;
+  padding: 0.6rem 1.1rem;
+  background: var(--hub-accent);
+  color: var(--hub-on-accent);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.hub-cta-open:hover { filter: brightness(1.08); }
+
+@media (prefers-reduced-motion: reduce) {
+  .hub-cta-open:hover { filter: none; }
+}
+
 /* ── The AI Referral Engine ───────────────────────────────────────────────────────── */
 
 .rev-field { margin: 1.75rem 0 0; }

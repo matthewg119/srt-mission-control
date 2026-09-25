@@ -76,6 +76,7 @@ export default async function HubPage({ params }: Props) {
       <ConciergeEmbed
         clientId={client.id}
         magnetKey={page.leadMagnetKey}
+        ctaLine={page.ctaLine}
         category={await pageCategoryFor(client.id, page.id)}
       />
     </>

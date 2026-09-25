@@ -38,6 +38,8 @@ import { planLinksFor, orderIndexPages, type PlanLinkRow, type PublishedPageRef 
 import { breadcrumbJsonLd } from "@/lib/hub/jsonld";
 import { MAP, layoutPlanMap, relatedPairs, wrapLabel, type MapNode } from "@/lib/clients/plan-map";
 import { hasBannedDash } from "@/lib/copy-guard";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 let failures = 0;
 
@@ -360,6 +362,7 @@ const row: PlanRow = {
   pageId: null,
   pageStatus: null,
   postFormat: null,
+  ctaLine: null,
   role: null,
   pillarId: null,
   keywordCategory: null,
@@ -612,6 +615,25 @@ const mapNodes: MapNode[] = linkPlan.map((r) => ({
 const pairs = relatedPairs(mapNodes);
 check("sibling links are drawn once per pair, never to itself", pairs.every(([a, b]) => a !== b) && new Set(pairs.map((p) => p.slice().sort().join())).size === pairs.length);
 check("and match planLinksFor: support S1 links S2 and S3", pairs.some((p) => p.includes("S1") && p.includes("S2")) && pairs.some((p) => p.includes("S1") && p.includes("S3")));
+
+// ‼️ Every tolerant merge helper is actually called.
+//
+// THIS IS THE ONE KIND OF DEAD CODE THAT LEAVES THE DATA LOOKING RIGHT, and page-plan.ts records it
+// happening: withStrategy was written, exported and never called, so every PlanRow carried the
+// `slug: null` that toPlanRow hardcodes while the column filled up correctly underneath. Nothing
+// failed and nothing logged, and the whole "decide the URL before the page exists" mechanism was
+// inert for twelve days. Each helper reads a late-added column in its own tolerant select, which is
+// exactly what makes a missing caller look like an empty column rather than a bug.
+console.log("\n12. every withX merge helper is in loadPlan's chain");
+{
+  const planSrc = readFileSync(join(process.cwd(), "src/lib/clients/page-plan.ts"), "utf8");
+  const declared = [...planSrc.matchAll(/^async function (with[A-Za-z]+)\(/gm)].map((m) => m[1]);
+  check("there are merge helpers to check", declared.length > 0, declared.join(", "));
+  const chain = planSrc.slice(planSrc.indexOf("const rows = await with"), planSrc.indexOf("const pageIds"));
+  for (const name of declared) {
+    check(`${name} is called by loadPlan`, chain.includes(`${name}(`), "declared, but absent from loadPlan's chain");
+  }
+}
 
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}`);
 process.exit(failures === 0 ? 0 : 1);

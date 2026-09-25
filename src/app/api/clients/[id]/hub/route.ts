@@ -6,6 +6,7 @@
 // every /api path there except the AI Referral Engine's submit endpoint.
 
 import { NextResponse } from "next/server";
+import { hasBannedDash } from "@/lib/copy-guard";
 import { auth } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/db";
 import { registerClientHosts, loadClientHosts, hostsFor } from "@/lib/hub/vercel-domains";
@@ -195,6 +196,19 @@ export async function POST(
     }
 
     case "page_save": {
+      // ‼️ REFUSED, NOT STRIPPED. The CTA sentence is rendered on the client's live page and read out
+      // by the widget, so it is copy, and copy-guard is a throw everywhere else in this repo. Rewriting
+      // somebody's words quietly would teach them the rule has exceptions here. savePage caps the
+      // length, which is arithmetic; a dash is a decision and belongs back with whoever typed it.
+      if (typeof body.ctaLine === "string" && hasBannedDash(body.ctaLine)) {
+        return NextResponse.json({
+          ok: false,
+          error:
+            'That call to action has an em dash, an en dash or a "--" in it. SRT copy uses commas, ' +
+            "periods and single hyphens.",
+        });
+      }
+
       const result = await savePage({
         clientId,
         id: typeof body.id === "string" ? body.id : undefined,
@@ -226,6 +240,9 @@ export async function POST(
                 actor
               )
             : undefined,
+        // Checked for a banned dash at the top of this case. Undefined leaves the stored sentence
+        // alone; an empty string clears it back to the magnet-templated lines.
+        ctaLine: typeof body.ctaLine === "string" ? body.ctaLine : undefined,
       });
 
       if (!result.ok) return NextResponse.json({ ok: false, error: result.error });

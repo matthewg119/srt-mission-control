@@ -116,6 +116,7 @@ const BLANK = {
   metaDescription: "",
   sourceReportId: "",
   leadMagnetKey: "",
+  ctaLine: "",
 };
 
 /**
@@ -337,6 +338,7 @@ export function HubForm({
           answerMd?: string;
           metaDescription?: string | null;
           leadMagnetKey?: string | null;
+          ctaLine?: string | null;
         }>;
       };
       const found = json.pages?.find((x) => x.id === pageId);
@@ -352,6 +354,7 @@ export function HubForm({
         metaDescription: found.metaDescription ?? "",
         sourceReportId: "",
         leadMagnetKey: found.leadMagnetKey ?? "",
+        ctaLine: found.ctaLine ?? "",
       });
       // A saved page's map lives in the database and is not re-sent on an ordinary save. See
       // SavePageInput.evidenceMap: an undefined map leaves the stored one alone, which is what
@@ -1078,6 +1081,36 @@ export function HubForm({
             )}
           </div>
 
+          {/* ── How this page asks for it ─────────────────────────── */}
+          {/*
+            ‼️ IT IS RENDERED AFTER THE ANSWER AND IS NEVER PART OF IT. Three rails keep the body free
+            of a pitch (draft-page.ts twice, page-gate.ts once), because the body exists to be quoted
+            by an assistant and a pitch inside the answer is what stops it being quoted. This is the
+            sentence under the page, and the widget's first line on the page. Also settable in step 21's
+            thread with `cta 3: <sentence>`, which is where it is normally chosen.
+          */}
+          <div className="mt-3">
+            <label className="mb-1 block text-xs text-[rgba(255,255,255,0.5)]">
+              How this page asks for it: one sentence, shown under the answer and in the assistant
+            </label>
+            <input
+              className="w-full rounded border border-white/15 bg-transparent px-2 py-1.5 text-sm"
+              value={draft.ctaLine}
+              maxLength={90}
+              placeholder={
+                chosenCandidate?.ctaLabel
+                  ? `Free: ${chosenCandidate.ctaLabel}`
+                  : "Free: the five questions to ask before you book."
+              }
+              onChange={(e) => setDraft((d) => ({ ...d, ctaLine: e.target.value }))}
+            />
+            <p className="mt-1 text-xs text-[rgba(255,255,255,0.35)]">
+              {draft.ctaLine.trim()
+                ? `${draft.ctaLine.trim().length} of 90 characters. The speech bubble cuts at 90.`
+                : "Empty means every page on this hub asks in the same words, taken from the magnet's title."}
+            </p>
+          </div>
+
           <Field
             label="Title"
             value={draft.title}
@@ -1311,6 +1344,9 @@ export function HubForm({
                   // clears the key, which is a real thing to want: it hands the page back to
                   // the ladder. See SavePageInput.leadMagnetKey.
                   leadMagnetKey: draft.leadMagnetKey,
+                  // Always sent too, same reasoning: an empty string clears the sentence and hands
+                  // the page back to the lines the widget templates from the magnet's title.
+                  ctaLine: draft.ctaLine,
                   // Sent ONLY when this save is carrying a fresh draft. An ordinary edit sends
                   // nothing here and savePage leaves the stored map alone, or drops it if the
                   // body actually changed. See SavePageInput.evidenceMap for why undefined and

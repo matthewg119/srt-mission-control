@@ -21,6 +21,7 @@ import remarkGfm from "remark-gfm";
 import type { HubClient } from "@/lib/hub/resolve";
 import { localBusinessJsonLd, questionAnswerJsonLd, breadcrumbJsonLd, jsonLdScript } from "@/lib/hub/jsonld";
 import { NO_PLAN_LINKS, type PlanLinks } from "@/lib/hub/plan-links";
+import { HubCta } from "./hub-cta";
 
 export interface HubBodyPage {
   id: string;
@@ -35,6 +36,13 @@ export interface HubAnswerPage {
   question: string;
   answerMd: string;
   publishedAt: string | null;
+  /**
+   * The one sentence this page uses to offer its magnet, from `client_pages.cta_line`.
+   *
+   * Optional because three preview renderers build a page shape by hand, and a page with no
+   * sentence simply draws no block. It is never part of `answerMd`: see HubCta for why.
+   */
+  ctaLine?: string | null;
 }
 
 /**
@@ -272,6 +280,12 @@ export function HubAnswerBody({
         */}
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{page.answerMd}</ReactMarkdown>
       </div>
+
+      {/*
+        The offer, after the answer. Same rule as the links below: the template draws what the body is
+        not allowed to say. See src/components/hub/hub-cta.tsx.
+      */}
+      {page.ctaLine ? <HubCta line={page.ctaLine} /> : null}
 
       {/*
         ‼️ THE TEMPLATE DRAWS THESE, NEVER THE BODY. draft-page.ts bans links in answer_md so a
