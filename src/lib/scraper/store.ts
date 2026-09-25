@@ -34,16 +34,26 @@ export type BatchStatus =
   | "qualified"
   | "enriching"
   | "catchall_recheck"
-  | "suppressing";
+  | "suppressing"
+  // The 4️⃣ Maps door's spend gate, before a single record is bought from Outscraper. A guarded card
+  // post and a return, nothing else, which is what makes it safe in ACTIVE_STATUSES.
+  | "awaiting_pull_approval";
 
 /**
- * 1️⃣ filter and verify, 2️⃣ score first, 3️⃣ build a send list. Null until somebody reacts.
+ * 1️⃣ filter and verify, 2️⃣ score first, 3️⃣ build a send list, 4️⃣ pull from Google Maps.
+ * Null until somebody reacts, except on 4️⃣, which is set at birth.
  *
  * ‼️ WIDENING THIS IS THE POINT: every `Record<Workflow, …>` in the lane fails to compile until it
  * accounts for the new arm, which is how the four `else → score` fall-throughs were found. Never
  * dispatch on it with an if/else; use an exhaustive `switch` with a `never` default.
+ *
+ * ‼️ mapspull IS NOT REACHABLE FROM THE PICKER, AND THAT IS NOT AN OVERSIGHT. The picker is a
+ * reaction on a DROPPED FILE. A Maps pull has no file, so it has no columns to check and no keycap:
+ * PICK and KEYCAPS in lane.ts deliberately stop at three, because a PICK[4] entry would let a 4️⃣
+ * reaction on a CSV picker card start a paid Outscraper pull against that file. `FILE_WORKFLOWS` in
+ * rules.ts is the list of arms a file can actually choose between, and this one is absent from it.
  */
-export type Workflow = "filter" | "score" | "listprep";
+export type Workflow = "filter" | "score" | "listprep" | "mapspull";
 
 /**
  * The gate cards, one per `*_ts` column.
@@ -57,7 +67,8 @@ export type GateKind =
   | "scoring_approval"
   | "cutoff_confirm"
   | "mv_approval"
-  | "drop_review";
+  | "drop_review"
+  | "pull_approval";
 
 export interface BatchRow {
   id: string;
@@ -189,6 +200,10 @@ const GATE_COLUMNS: Array<{ gate: GateKind; column: string; table: "batches" | "
   { gate: "cutoff_confirm", column: "cutoff_confirm_ts", table: "batches" },
   { gate: "mv_approval", column: "mv_approval_ts", table: "batches" },
   { gate: "drop_review", column: "drop_review_ts", table: "runs" },
+  // ‼️ ON THE RUN, NOT THE BATCH, for the reason stated above this list: scraper_batches does not
+  // grow a fifth *_ts. batchByGateTs is already generic over the runs table, so this row is the
+  // whole change on the lookup side.
+  { gate: "pull_approval", column: "pull_approval_ts", table: "runs" },
 ];
 
 // Supabase-js issues selects and filtered updates as GET/PATCH with the filter in the QUERY STRING,
@@ -313,6 +328,10 @@ const ACTIVE_STATUSES: BatchStatus[] = [
   "enriching",
   "catchall_recheck",
   "suppressing",
+  // Workflow 4️⃣'s spend gate, listed for exactly the reason `qualified` is: its card is guarded by
+  // `list_pipeline_runs.pull_approval_ts`, so a re-entry re-reads one row and does nothing, and a
+  // card whose Slack post failed gets retried instead of the batch sitting silent forever.
+  "awaiting_pull_approval",
 ];
 
 export async function activeBatches(): Promise<BatchRow[]> {

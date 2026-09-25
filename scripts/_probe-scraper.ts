@@ -12,12 +12,26 @@
 
 import { readFileSync } from "node:fs";
 import { parseCsv, parseCsvRows, toCsv } from "../src/lib/scraper/csv";
-import { columnVerdict, emailDomain, isDisposableDomain, isRoleAccount, resolveEmailColumn, runnableWorkflows } from "../src/lib/scraper/rules";
+import {
+  FILE_WORKFLOWS,
+  columnVerdict,
+  emailDomain,
+  isDisposableDomain,
+  isRoleAccount,
+  resolveEmailColumn,
+  runnableWorkflows,
+} from "../src/lib/scraper/rules";
 import type { Workflow } from "../src/lib/scraper/store";
 import { applyMxVerdicts, filterRows } from "../src/lib/scraper/filter";
 import { formatBreakdown, formatLatePick, formatPickRewind } from "../src/lib/scraper/report";
 import { parseResultLines } from "../src/lib/scraper/millionverifier";
 import { hasMx } from "../src/lib/scraper/mx";
+import {
+  MAPS_LIMIT_DEFAULT,
+  MAPS_GRAMMAR,
+  looksLikeMapsCommand,
+  parseMapsCommand,
+} from "../src/lib/scraper/maps-command";
 import {
   EMAIL_TIER,
   bestEmailTier,
@@ -292,7 +306,11 @@ eq(
 // ================================================================================================
 {
   const COLS = { email: "Email", company: "Company", website: "Website" } as const;
-  const ARMS: Workflow[] = ["filter", "score", "listprep"];
+  // ‼️ READ FROM THE SOURCE LIST, NOT RETYPED. This block's whole claim is that the proof is
+  // COMPLETE rather than exemplary. A hardcoded triple makes that claim expire silently the next time
+  // an arm is added: `Workflow[]` accepts a subset, so neither the compiler nor this probe would
+  // notice the enumeration had stopped covering everything.
+  const ARMS: readonly Workflow[] = FILE_WORKFLOWS;
   let cells = 0;
   let ok = true;
   const fails: string[] = [];
@@ -340,7 +358,11 @@ eq(
       }
     }
   }
-  eq("all 8 header subsets x 3 arms enumerated", cells, 24);
+  eq(
+    "all 8 header subsets x every file arm enumerated",
+    cells,
+    8 * FILE_WORKFLOWS.length
+  );
   check("the rewind bound holds on every cell" + (fails.length ? ": " + fails.join("; ") : ""), ok);
 }
 
@@ -356,7 +378,7 @@ eq(
 );
 check(
   "no headers can produce a rewind in any direction",
-  (["filter", "score", "listprep"] as const).every((w) =>
+  FILE_WORKFLOWS.every((w) =>
     [[], ["first_name"], ["phone", "zip"]].every((h) => columnVerdict(w, h).kind !== "rewind")
   )
 );
@@ -738,6 +760,110 @@ async function liveMx(): Promise<void> {
   eq("a strong cue on an About page with a Dr. prefix is the ceiling", bestNameScore(about), NAME_SCORE_CEILING);
   eq("nothing found is score zero", bestNameScore([]), 0);
   eq("and nothing found picks nothing", pickOwnerName([]), null);
+}
+
+
+// ── The fourth arm is a command, not a keycap ───────────────────────────────────────────────────
+// 4️⃣ has no file, so it has no columns and must never be offered by the picker. These checks are
+// what stop somebody "completing" PICK later and turning a 4️⃣ on a CSV card into a paid pull.
+{
+  const lane = readFileSync("src/lib/scraper/lane.ts", "utf8");
+  const laneCode = lane
+    .split("\n")
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join("\n");
+
+  check("mapspull is not a file workflow", !FILE_WORKFLOWS.includes("mapspull" as Workflow));
+  check(
+    "so no header set ever offers it as a pick",
+    [[], ["Company"], ["Company", "Website"], ["Email", "Company", "Website"]].every(
+      (h) => !runnableWorkflows(h).includes("mapspull" as Workflow)
+    )
+  );
+  // ‼️ AND ITS EMPTY REQUIREMENT LIST IS WHY THAT MATTERS. Zero required columns is satisfied by every
+  // header set including none, so listing it in FILE_WORKFLOWS would make columnVerdict's terminal
+  // branch unreachable and a junk file would rewind forever, offering a paid pull as the way out.
+  eq("a junk file is still terminal", columnVerdict("filter", ["first_name", "phone"]).kind, "terminal");
+  eq("and no headers at all leaves nothing runnable", runnableWorkflows([]).length, 0);
+
+  check("PICK still stops at three entries", (laneCode.match(/const PICK: Record<number, Workflow> = \{[^}]*\}/)?.[0].match(/\d+:/g) ?? []).length === 3);
+  check("KEYCAPS still stops at three", (laneCode.match(/const KEYCAPS: Record<string, number> = \{[^}]*\}/)?.[0].match(/:/g) ?? []).length === 4);
+
+  // The stage machine dispatches on the arm with a never default, in both places.
+  check("the pull stage dispatches exhaustively", /_never: never = batch\.workflow/.test(laneCode));
+  check("and never infers the door from a missing file id", !/slack_file_id === null/.test(laneCode));
+  check("a fileless batch is refused by name at the parsing arm", /has no dropped file to re-read/.test(lane));
+
+  // ‼️ awaiting_pull_approval IS IN ACTIVE_STATUSES AND NOT IN IN_FLIGHT, and the compiler checks
+  // neither: both are plain BatchStatus[].
+  const store = readFileSync("src/lib/scraper/store.ts", "utf8");
+  const active = store.match(/const ACTIVE_STATUSES: BatchStatus\[\] = \[[\s\S]*?\];/)?.[0] ?? "";
+  check("the spend gate is polled, so a failed card post is retried", active.includes("awaiting_pull_approval"));
+  const rep = readFileSync("src/lib/scraper/report.ts", "utf8");
+  const inFlight = rep.match(/const IN_FLIGHT: BatchStatus\[\] = \[[\s\S]*?\];/)?.[0] ?? "";
+  check(
+    "but it is NOT in flight: nothing is inserted and nothing is bought",
+    !inFlight.includes("awaiting_pull_approval"),
+    inFlight
+  );
+
+  // Nothing is bought before the reaction.
+  check("the submit lives behind the gate, not in the door", /async function releaseMapsPull/.test(lane));
+  // Extracted by its own braces rather than by counting characters: a window would pass or fail on
+  // how much unrelated code sits nearby, which is not a property anybody should have to hold.
+  const doorBody = lane.slice(
+    lane.indexOf("async function beginMapsPull"),
+    lane.indexOf("async function postPullEstimate")
+  );
+  check("the door itself buys nothing", doorBody.length > 0 && !doorBody.includes("submitMapsSearch"));
+  check("it posts the estimate and stops there", doorBody.includes("await postPullEstimate("));
+  check(
+    "and the batch is born waiting for a reaction",
+    doorBody.includes('status: "awaiting_pull_approval"')
+  );
+  check("the new door has its own switch", /LISTPREP_MAPS_ENABLED/.test(lane));
+  // ‼️ NAMED IN THE OPERATOR COPY ON PURPOSE, SO THE TEST IS ON THE READ, NOT THE MENTION. The
+  // refusal card tells you which switch you did NOT set, which is the whole point of having two.
+  check("the paused lane's switch is never read here", !/process\.env\.MAPS_PULL_ENABLED/.test(laneCode));
+  check("but the copy still names it, so the two are not confused", /`MAPS_PULL_ENABLED`/.test(lane));
+}
+
+// ── The pull command: it refuses rather than guesses ────────────────────────────────────────────
+{
+  const ok = parseMapsCommand("pull maps medspa | Dallas TX | med spa");
+  check("a well formed command parses", ok.ok);
+  if (ok.ok) {
+    eq("the vertical is kept", ok.command.vertical, "medspa");
+    eq("the metro is kept", ok.command.metro, "Dallas TX");
+    eq("the metro is appended for Outscraper", ok.command.searchQuery, "med spa Dallas TX");
+    eq("the limit defaults rather than being unbounded", ok.command.limit, MAPS_LIMIT_DEFAULT);
+  }
+
+  const limited = parseMapsCommand("pull maps dentist | Phoenix AZ | implants | limit 40");
+  check("an explicit limit is taken", limited.ok && limited.command.limit === 40);
+
+  // ‼️ 4️⃣ REFUSES ON AN UNKNOWN VERTICAL WHERE 3️⃣ ONLY WARNS, and the asymmetry is the point: 3️⃣ has
+  // the file already and free, so a wrong default wastes a sweep over rows we own. 4️⃣ decides before
+  // Outscraper is billed, so the same default buys the wrong list.
+  const unknown = parseMapsCommand("pull maps plumbers | Dallas TX | plumber");
+  check("an unknown vertical is refused", !unknown.ok);
+  check("and the refusal names the ones that exist", !unknown.ok && /medspa/.test(unknown.reason));
+
+  check("a missing metro is refused", !parseMapsCommand("pull maps medspa | med spa").ok);
+  check("an empty command is refused", !parseMapsCommand("pull maps").ok);
+  check("a limit above the cap is refused", !parseMapsCommand("pull maps medspa | Dallas TX | med spa | limit 5000").ok);
+  check("a fourth part that is not a limit is refused", !parseMapsCommand("pull maps medspa | Dallas TX | med spa | nonsense").ok);
+  check("a fifth part is refused", !parseMapsCommand("pull maps medspa | A | B | limit 5 | more").ok);
+
+  // The anchor must not swallow ordinary chat, because returning true hides the message from the
+  // general assistant.
+  check("it claims only messages that start with the command", looksLikeMapsCommand("pull maps medspa | A | B"));
+  check("not a sentence that merely mentions it", !looksLikeMapsCommand("can you pull maps for dallas"));
+  check("and not a status check", !looksLikeMapsCommand("status"));
+
+  // The grammar a refusal prints has to be a command that actually parses.
+  const example = /`(pull maps [^`]+)`/.exec(MAPS_GRAMMAR.split("For example:")[1] ?? "");
+  check("the grammar's own example parses", Boolean(example) && parseMapsCommand(example![1]).ok);
 }
 
 // Wrapped rather than top-level await: tsx transforms this to CJS and rejects one.

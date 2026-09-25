@@ -154,7 +154,24 @@ const REQUIRED_COLUMNS: Record<
     { label: "company", resolve: resolveCompanyColumn },
     { label: "website", resolve: resolveWebsiteColumn },
   ],
+  // ‼️ EMPTY BECAUSE 4️⃣ HAS NO FILE, AND EMPTY IS EXACTLY WHY IT MUST NOT BE IN FILE_WORKFLOWS. A
+  // requirement list of zero columns is satisfied by EVERY header set, including no headers at all,
+  // so listing this arm in `runnableWorkflows` would make `columnVerdict`'s terminal branch
+  // (`runnable.length === 0`) unreachable: a junk file would stop being terminal and rewind forever,
+  // offering a paid Maps pull as the way out. The entry exists so this Record stays exhaustive and
+  // the compiler keeps forcing a decision here; FILE_WORKFLOWS is what decides who can be picked.
+  mapspull: [],
 };
+
+/**
+ * The arms a DROPPED FILE can choose between.
+ *
+ * ‼️ NOT `Workflow`, AND NOT DERIVED FROM Object.keys(REQUIRED_COLUMNS). 4️⃣ is started by typing a
+ * command, not by reacting to a picker card, and it requires no columns because it has no file. Any
+ * list built from the full union would offer it as a pick, and picking it would be a paid pull
+ * against whatever CSV happened to be in the thread.
+ */
+export const FILE_WORKFLOWS: readonly Workflow[] = ["filter", "score", "listprep"];
 
 /**
  * Every workflow that could run on these headers, in picker order.
@@ -165,8 +182,7 @@ const REQUIRED_COLUMNS: Record<
  * `WRITE_KEY_TYPES` in store.ts: the drift is prevented by there being nowhere for it to happen.
  */
 export function runnableWorkflows(headers: string[]): Workflow[] {
-  const all: Workflow[] = ["filter", "score", "listprep"];
-  return all.filter((w) => REQUIRED_COLUMNS[w].every((c) => c.resolve(headers)));
+  return FILE_WORKFLOWS.filter((w) => REQUIRED_COLUMNS[w].every((c) => c.resolve(headers)));
 }
 
 /** The columns a workflow wants but these headers do not have. */

@@ -127,8 +127,20 @@ async function main() {
   const [cons] = await sql`select pg_get_constraintdef(oid) as def from pg_constraint
     where conname = 'scraper_batches_status_check'`;
   const def = String(cons?.def ?? "");
-  for (const stage of ["pulling", "qualifying", "qualified", "enriching", "catchall_recheck", "suppressing"]) {
+  for (const stage of [
+    "pulling", "qualifying", "qualified", "enriching", "catchall_recheck", "suppressing",
+    // The 4️⃣ door's spend gate. Postgres refuses the status until the constraint is widened, which
+    // is the trap that has already cost this lane one session.
+    "awaiting_pull_approval",
+  ]) {
     check(`${stage} is a legal stage`, def.includes(`'${stage}'`));
+  }
+
+  const [wfCons] = await sql`select pg_get_constraintdef(oid) as def from pg_constraint
+    where conname = 'scraper_batches_workflow_check'`;
+  const wfDef = String(wfCons?.def ?? "");
+  for (const arm of ["filter", "score", "listprep", "mapspull"]) {
+    check(`${arm} is a legal workflow`, wfDef.includes(`'${arm}'`), "widened, never narrowed");
   }
   for (const old of ["awaiting_workflow", "parsing", "mx", "filtered", "verifying", "done", "error", "scoring", "scored"]) {
     check(`${old} still legal, widened not narrowed`, def.includes(`'${old}'`), "an in-flight batch would fail its own check");

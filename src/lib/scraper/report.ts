@@ -9,7 +9,7 @@
 
 import { toCsv } from "./csv";
 import type { DedupeMatch, DuplicateRow } from "./dedup";
-import { JUNK_REASON_ORDER, missingColumns, runnableWorkflows, type JunkReason } from "./rules";
+import { FILE_WORKFLOWS, JUNK_REASON_ORDER, missingColumns, runnableWorkflows, type JunkReason } from "./rules";
 import type { BatchStatus, StoredRow, Workflow } from "./store";
 import type { CutoffPlan, ScoreResult } from "./score";
 import {
@@ -354,7 +354,7 @@ export function formatWorkflowPicker(input: {
   const headers = input.headers ?? [];
   const runnable = headers.length ? runnableWorkflows(headers) : null;
   if (runnable) {
-    const blocked = (["filter", "score", "listprep"] as Workflow[]).filter(
+    const blocked = FILE_WORKFLOWS.filter(
       (w) => !runnable.includes(w)
     );
     if (runnable.length === 1) {
@@ -389,11 +389,14 @@ const KEYCAP: Record<Workflow, string> = {
   filter: ":one:",
   score: ":two:",
   listprep: ":three:",
+  // The operator does say "four", even though it is never a reaction on a picker card.
+  mapspull: ":four:",
 };
 const WORKFLOW_NAME: Record<Workflow, string> = {
   filter: "filter and verify",
   score: "score first",
   listprep: "build a send list",
+  mapspull: "pull from Google Maps",
 };
 
 /**

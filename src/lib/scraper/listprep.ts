@@ -41,6 +41,17 @@ export interface RunRow {
   sendable_count: number;
   drop_review_ts: string | null;
   error: string | null;
+  /** Where these leads came from. 'csv' for a drop, 'outscraper' for a Maps pull. */
+  source: string | null;
+  /** Outscraper's request id, so a dropped or replayed webhook can be named rather than guessed. */
+  pull_request_id: string | null;
+  /** When the pull webhook landed. THE MARKER the pulling poll ends on. Zero rows is a real answer. */
+  pull_finished_at: string | null;
+  /** Slack ts of the spend-estimate card. */
+  pull_approval_ts: string | null;
+  /** Set by the check mark on that card, and only then is Outscraper called. */
+  spend_approved_at: string | null;
+  started_at: string | null;
 }
 
 // ‼️ A COLUMN MISSING FROM THIS STRING IS SILENTLY `undefined`, NOT AN ERROR. Same trap as
@@ -49,7 +60,10 @@ export interface RunRow {
 // true forever. Add to both or neither.
 const RUN_COLUMNS =
   "id, batch_id, label, icp_text, vertical_slug, stage, raw_count, qualified_count, " +
-  "enriched_count, verified_count, sendable_count, drop_review_ts, error";
+  "enriched_count, verified_count, sendable_count, drop_review_ts, error, " +
+  // The Maps door. Every one of these is read by a guard, so omitting any makes that guard true
+  // forever, which is the trap the comment above states.
+  "source, pull_request_id, pull_finished_at, pull_approval_ts, spend_approved_at, started_at";
 
 export async function getRun(runId: string): Promise<RunRow | null> {
   const { data, error } = await supabaseAdmin

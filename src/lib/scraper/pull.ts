@@ -201,6 +201,11 @@ export interface StoreResult {
   error?: string;
 }
 
+// Same bound and the same reasoning as store.ts and listprep.ts: a PostgREST write is one HTTP
+// request, so the chunk is bounded by what a body can carry rather than by anything Postgres
+// cares about.
+const INSERT_CHUNK = 500;
+
 /**
  * Write a pull into raw_leads.
  *
@@ -240,22 +245,32 @@ export async function storeRawLeads(rows: readonly RawLeadInput[]): Promise<Stor
     raw: r.raw,
   }));
 
-  const { data, error } = await supabaseAdmin
-    .from("raw_leads")
-    .upsert(payload, { onConflict: "run_id,place_id", ignoreDuplicates: true })
-    .select("id");
+  // ‼️ CHUNKED, BECAUSE THIS PATH HAD NEVER RUN. `fromOutscraper` had no production caller until the
+  // 4️⃣ door, so every real call here came from a CSV that sweepPull had already trimmed. A Maps pull
+  // of twenty queries at a 500 limit is ten thousand rows, and this was one PostgREST POST. Same
+  // bound and same reasoning as INSERT_CHUNK in store.ts and listprep.ts.
+  let inserted = 0;
+  for (let i = 0; i < payload.length; i += INSERT_CHUNK) {
+    const slice = payload.slice(i, i + INSERT_CHUNK);
+    const { data, error } = await supabaseAdmin
+      .from("raw_leads")
+      .upsert(slice, { onConflict: "run_id,place_id", ignoreDuplicates: true })
+      .select("id");
 
-  if (error) {
-    return {
-      inserted: 0,
-      skipped: rows.length,
-      error:
-        `${error.message}. If that names raw_leads, ` +
-        "docs/2026-09-17-list-prep-pipeline.sql has not been run on this database.",
-    };
+    if (error) {
+      // ‼️ PARTIAL SUCCESS IS REPORTED AS SUCH. The rows already committed are real, and a caller
+      // told "0 inserted" would re-drive the whole pull to find them again.
+      return {
+        inserted,
+        skipped: rows.length - inserted,
+        error:
+          `${error.message}. If that names raw_leads, ` +
+          "docs/2026-09-17-list-prep-pipeline.sql has not been run on this database.",
+      };
+    }
+    inserted += data?.length ?? 0;
   }
 
-  const inserted = data?.length ?? 0;
   return { inserted, skipped: rows.length - inserted };
 }
 
