@@ -113,6 +113,49 @@ And the non-role addresses are almost all **business webmail, not people**:
 Only `marina@mmaestheticss.com` was a true owner-name address. This is the evidence behind
 Option A: expect a shared inbox, and write for it.
 
+### Re-measured after W2, paired, on a frozen sample (2026-09-25, on top of 577b109)
+
+The block above came from a sample whose 60 ids were never written down, so a fresh run cannot be
+compared to it: any difference could be the change or could be the sites. The sample is now frozen in
+`docs/2026-09-25-crawl-sample.txt` (60 ids by md5 order over the 425 rows carrying a website), and
+`scripts/_probe-crawl-sample.ts` runs the **pre-fix matcher and the fixed one over the same fetched
+HTML in one pass**. Both columns below are the same 60 clinics, same bytes.
+
+```
+                          before   after
+EMAIL   any found          35 58%   35 58%
+        role (info@ etc)   19 32%   19 32%
+        non-role           16 27%   16 27%
+        nothing            25 42%   25 42%
+        tier 1, a person    n/a      1  2%
+
+NAME    returned           23 38%   17 28%
+        genuinely a person  9 15%   16 27%    <- inspected by hand, both columns
+        title or nav junk  14 23%    1  2%
+        precision            39%      94%
+
+FETCH   pages, two passes   548
+        pages, merged pass  495              <- 10% fewer, simulated. W2c has not landed yet.
+```
+
+**The name fix worked, and the headline count is the wrong way to read it.** Fewer names come back
+(23 to 17) because 14 of the old 23 were junk. Real people found went **9 to 16**, junk returned went
+**14 to 1**, precision went **39% to 94%**. Recall rose for exactly the predicted reason: a junk first
+match used to *suppress* the real name further down the page, so removing it finds people rather than
+merely refusing titles. `Adriana Martino` and `Albert Yang` are both names the old matcher lost to
+junk that outranked them.
+
+The one survivor is `Sapphira Priv`, a brand truncation on priveglowkaty.com. Left alone
+deliberately: blocking it needs the site's own brand, which `collectNames` does not have.
+
+**The email re-ranking changed exactly one pick in 60, and that is worth saying plainly.** Hit rate,
+role share and non-role share are all identical. Only equinox.com moved, `pr@equinox.com` to
+`coco.cohen@equinox.com` (tier 1). Two reasons: tier 1 needs a confirmed owner name, and most
+clinics publish exactly one address, so there is nothing to re-rank. Its value here is **defensive**
+rather than a lift: it is what stops `careers@` and `hr@` outranking `info@`, which is what the
+naive tier swap the plan asked for would have shipped. Expect it to matter more once W2c feeds owner
+names into it.
+
 ### Ground truth: MX, and why routing is per-domain
 
 MX of the 60-site med spa sample:

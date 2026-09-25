@@ -32,7 +32,9 @@ interface CueRule {
 }
 const CUE_RULES: CueRule[] = [
   { re: new RegExp(`(${ANY_CUE})[^.<>]{0,40}?${NAME}`, "gi"), cueGroup: 1, nameGroup: 2 },
-  { re: new RegExp(`${NAME}[^.<>]{0,25}?,?\s*(${ANY_CUE})`, "gi"), cueGroup: 2, nameGroup: 1 },
+  // String.raw so the \s survives: inside a PLAIN template literal `\s` is an invalid escape and
+  // collapses to a bare "s", which quietly turns this into a match on the letter s.
+  { re: new RegExp(String.raw`${NAME}[^.<>]{0,25}?,?\s*(${ANY_CUE})`, "gi"), cueGroup: 2, nameGroup: 1 },
 ];
 
 /**
@@ -59,7 +61,25 @@ const TITLE_TOKENS = new Set([
   "send", "submit", "welcome", "appointment", "appointments", "consultation", "service", "services",
   "treatment", "treatments", "gallery", "review", "reviews", "before", "after", "free", "join",
   "vision", "empower", "follow", "share", "search", "menu", "close", "open", "next", "back",
+  "story", "speaker", "personal", "registered", "vascular", "interventional", "medical", "illness",
+  // Treatments and brand words. A capitalised treatment beside a cue reads as "Titlecase Titlecase"
+  // and cannot be a surname: measured on the frozen sample, these produced `Chemical Peels`,
+  // `Amazing Hydrafacial` and `Illness Breast`.
+  "amazing", "chemical", "peel", "peels", "botox", "filler", "fillers", "laser", "facial",
+  "hydrafacial", "microneedling", "coolsculpting", "injectable", "injectables", "dermal",
+  "wrinkle", "wrinkles", "skincare", "medspa", "wellness", "breast", "body", "skin",
 ]);
+
+/**
+ * A capture whose two halves are the same word is a nav artefact, not a person.
+ *
+ * med_spa_leads still holds `Marianne Marianne` from the pre-fix scraper, which is what a repeated
+ * heading looks like after the tags are stripped. No blocklist can enumerate this, so it is a rule.
+ */
+function isRepeatedToken(name: string): boolean {
+  const t = name.split(/\s+/).map((x) => x.replace(/\.$/, "").toLowerCase());
+  return t.length >= 2 && t[0] === t[t.length - 1];
+}
 
 /** The shape a person's name takes, re-tested after capture. */
 const NAME_SHAPE = /^[A-Z][a-z]+(\s+[A-Z]\.)?\s+[A-Z][a-z]+$/;
@@ -81,6 +101,7 @@ export interface NameCandidate {
 
 /** True when any whole token of the capture is a title or a nav word. */
 export function looksLikeTitle(name: string): boolean {
+  if (isRepeatedToken(name)) return true;
   return name
     .split(/\s+/)
     .map((t) => t.replace(/\.$/, "").toLowerCase())

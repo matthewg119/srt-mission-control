@@ -639,6 +639,19 @@ async function liveMx(): Promise<void> {
   // a substring test would reject two of the seven names above.
   check("the test is per token, not substring", !looksLikeTitle("Kathy Newman"));
 
+  // Measured on the frozen sample, 2026-09-25. Every one of these was returned as an owner name by
+  // the FIXED matcher on its first run, which is how the blocklist earned these entries. Skinney
+  // Story is the important one: it outranked the real owner, Adriana Martino, until "story" landed.
+  for (const j of [
+    "Amazing Hydrafacial", "Chemical Peels", "Illness Breast", "Sherif Medical",
+    "Skinney Story", "Speaker In", "Personal Care", "Registered Nurse",
+  ]) {
+    check("measured junk is refused: " + j, looksLikeTitle(j));
+  }
+  // A heading repeated after the tags come off. No list can enumerate this, so it is a rule.
+  check("a name whose halves are the same word is not a name", looksLikeTitle("Marianne Marianne"));
+  check("but a real repeated-initial name is fine", !looksLikeTitle("Adriana Martino"));
+
   // The failure that made precision 12%: a title matched first and ENDED the search.
   const page = "Our Medical Director Jane Roe leads care. The spa is owned by Dr. Marina Musalyants.";
   const found = collectNames(page, "/about");
@@ -669,6 +682,21 @@ async function liveMx(): Promise<void> {
   eq(
     "name-then-cue is collected too",
     pickOwnerName(collectNames("Sandra Klein, founder of the practice.", "")),
+    "Sandra Klein"
+  );
+
+  // The cue rules are built with new RegExp over a template literal, where a lone backslash-s is an
+  // invalid escape that collapses to the LETTER s. That shipped once: the rule silently stopped
+  // matching whitespace and started matching "s", and every test using exactly one space still
+  // passed. These two only pass when the character class survived.
+  eq(
+    "the name-then-cue rule matches across several spaces",
+    pickOwnerName(collectNames("Sandra Klein    founder", "")),
+    "Sandra Klein"
+  );
+  eq(
+    "and across a tab",
+    pickOwnerName(collectNames("Sandra Klein	founder", "")),
     "Sandra Klein"
   );
 
