@@ -62,7 +62,17 @@ export function hashToken(token: string): string {
 // billing_status, and can be refused outright by the seat cap, none of which should happen
 // because somebody tapped a button on an ad page. The scope check is what stops a lead link
 // being pasted into /onboarding and reaching a real client's business data, and vice versa.
-export type TokenScope = "onboarding" | "preview" | "chatgpt_ads";
+export type TokenScope = "onboarding" | "preview" | "chatgpt_ads" | "resume";
+
+// ‼️ `resume` CARRIES A concierge_sessions ID, NOT A CLIENT ID, and chatgpt_ads already set that
+// precedent: the id slot is an id, and the scope says what kind. It is what the welcome email's "carry on
+// where we left off" link is signed with.
+//
+// ‼️ AND IT IS NOT THE SESSION'S OWN session_token. That column is a WRITE bearer for /turn,
+// /action and /booked, it is unique with no expiry anywhere, and loadConciergeSession compares it with a
+// plain .eq(). A bearer like that in an email gets forwarded, sits in a mailbox for years and is logged by
+// every scanner on the way. A signed scope with a short TTL is a different object: it proves we minted a
+// link about that session recently, and the route exchanges it server side for the real one.
 
 /**
  * The signed body for a scope.

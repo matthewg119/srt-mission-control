@@ -57,6 +57,15 @@ const SCRIPT = `(function(){
  // INSTEAD of the tenant's, which only /preview/[token] ever sets and which the config route only
  // honours alongside a valid preview token. See src/app/api/concierge/config/route.ts.
  var wantMascot=me.getAttribute("data-mascot")||"";
+ // ‼️ THE RESUME TOKEN, READ OFF THE PAGE'S OWN URL. The welcome email links back to the page the
+ // conversation started on with ?srtc=<signed token> on it, so somebody who closed the widget half way
+ // through can carry on. Reading location.search is not a widening of this file's rules: it already reads
+ // location.pathname and location.host to tell the frame which page it is on.
+ //
+ // ‼️ IT IS PASSED TO THE FRAME AND VERIFIED THERE, NEVER TRUSTED HERE. This script does nothing
+ // with it but hand it on, so a forged one buys a frame that refuses it rather than an open panel.
+ var resume="";
+ try{resume=(new URLSearchParams(location.search).get("srtc")||"").slice(0,400)}catch(e){}
 
  function q(o){return Object.keys(o).filter(function(k){return o[k]}).map(function(k){
    return encodeURIComponent(k)+"="+encodeURIComponent(o[k])}).join("&")}
@@ -87,7 +96,7 @@ const SCRIPT = `(function(){
  function withPass(u){return pass?u+(u.indexOf("?")<0?"?":"&")+pass:u}
 
  var frameSrc=withPass(origin+"/w/"+encodeURIComponent(slug)+"?"+q({
-   category:category,city:city,magnet:magnet,path:location.pathname,host:location.host}));
+   category:category,city:city,magnet:magnet,path:location.pathname,host:location.host,srtc:resume}));
 
  function makeFrame(){
   var f=document.createElement("iframe");
@@ -381,6 +390,12 @@ const SCRIPT = `(function(){
   .then(function(r){return r.json()})
   .then(function(d){
     if(!d||!d.enabled){wrap.remove();return}
+    // ‼️ A RESUME LINK OPENS THE PANEL BY ITSELF, AND THAT IS THE ONE TIME THIS SCRIPT DOES. The
+    // rest of the time the corner waits to be pressed, because a panel that opens itself on a stranger's
+    // first visit is a popup. Somebody arriving from an email we sent them, on a link they chose to tap,
+    // is not a stranger and is not being interrupted: the conversation IS the point of the link. It runs
+    // only after the config confirmed the tenant is live, so a switched-off widget still opens nothing.
+    if(resume)toggle(true);
     if(d.corner)place(d.corner);
     if(d.mascot&&wantMascot!=="none")useMascot(d.mascot);
     else if(d.ctaLabel){btn.textContent=d.ctaLabel;btn.setAttribute("data-label",d.ctaLabel)}

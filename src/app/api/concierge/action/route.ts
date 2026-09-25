@@ -166,6 +166,36 @@ export async function POST(req: NextRequest) {
         console.error(`[concierge/action] client lead notice failed: ${(e as Error).message}`)
       );
     }
+    // ‼️ THE WALK PROMISED AN EMAIL, SO THIS IS WHERE IT IS SENT. Step four of the script says "we
+    // will send your download link promptly" and its closing line says "plus the email we already sent
+    // you". Both were false until this existed. Only the referral walk asks for it, which is what `picked`
+    // distinguishes: the audit and magnet doors send no email from here and never did.
+    //
+    // ‼️ AWAITED, NOT FIRED AND FORGOTTEN. A floating promise after the response has been returned
+    // may never run at all in a serverless function, and "we will send it promptly" is not a claim to
+    // leave to whether the container survives. Graph adds about a second to a form submit that already
+    // waits for ingestLead and Slack.
+    //
+    // ‼️ AND A MAIL FAILURE NEVER FAILS THE FORM. Somebody who has just typed their name and number
+    // into a widget must not be told it did not go through because our mailbox is down: the lead is
+    // already written, the walk carries on to the install call, and the missing email is ours to notice.
+    if (picked === "referral") {
+      try {
+        const [{ sendReferralWelcome }, { resumeUrl }] = await Promise.all([
+          import("@/lib/concierge/referral-email"),
+          import("@/lib/concierge/resume"),
+        ]);
+        await sendReferralWelcome({
+          to: email,
+          firstName: name.split(" ")[0],
+          resumeUrl: resumeUrl(session),
+          onboardingUrl: onboardingUrl(session, null, null),
+        });
+      } catch (e) {
+        console.error(`[concierge/action] referral welcome email failed: ${(e as Error).message}`);
+      }
+    }
+
     return reply({ ok: true, firstName: name.split(" ")[0] });
   }
 
