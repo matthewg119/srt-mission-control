@@ -86,6 +86,10 @@ jobs:
       # cannot open another tenant's conversation.
       - name: Referral resume probe (a grant, not a bearer)
         run: bun --no-env-file run scripts/_probe-referral-resume.ts
+      # The pivot is a sales pitch that cites a measurement about somebody's own business. A made-up
+      # number there is a false claim about a real company, in writing, so this one has teeth.
+      - name: Report pivot probe (it cites the report or cites nothing)
+        run: bun --no-env-file run scripts/_probe-report-pivot.ts
 
       - name: Headline probes
         run: |

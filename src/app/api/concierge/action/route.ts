@@ -379,12 +379,46 @@ export async function POST(req: NextRequest) {
       if (claimed.ok) reportUrl = claimed.reportUrl;
     }
     const payload = await buildStatusPayload(scan);
+
+    // ‼️ THE FINDING IS BUILT HERE AND HANDED OVER FINISHED, AND THE MODEL NEVER SEES THE REPORT.
+    // The pivot that follows the report link needs one true sentence about what was found. The other way
+    // to get it was to feed the report into the prompt, which widens what the model may say about a real
+    // business and would need tools.ts's header rewritten ("THE MODEL IS HANDED NO BUSINESS NAMES AND NO
+    // NUMBERS. Not in the prompt, not in the config, nowhere."). Nothing here reaches a model at all, so
+    // that rule stands untouched. Same precedent as openingFor() in engine.ts.
+    //
+    // ‼️ IT NAMES A BLOCK WITH ITS DENOMINATOR, NEVER A PILLAR. Findable, Familiar and Fresh are
+    // sales prose and exist in no column. See src/lib/concierge/report-pivot.ts for the whole argument.
+    //
+    // ‼️ AND IT IS WRAPPED, WITH THE LINK EMITTED EITHER WAY. This is the moment somebody has spent
+    // three minutes and our money to reach. loadReportView reads every audit_runs row for the report, so
+    // it is the one thing in this branch that can be slow or throw, and losing the report link to a
+    // failed sales line would be the worst trade in the lane. No finding is a supported state.
+    let weakest: string | null = null;
+    if (reportUrl && scan.report_id) {
+      try {
+        const [{ loadReportView }, { weakestFinding }, { supabaseAdmin: db }] = await Promise.all([
+          import("@/lib/audit-engine/report-view"),
+          import("@/lib/concierge/report-pivot"),
+          import("@/lib/db"),
+        ]);
+        const { data: report } = await db.from("audit_reports").select("*").eq("id", scan.report_id).maybeSingle();
+        if (report) weakest = weakestFinding((await loadReportView(report)).blockStats);
+      } catch (e) {
+        console.error(`[concierge/action] weakest finding skipped: ${(e as Error).message}`);
+      }
+    }
+
     // A subset: the stepped page's payload also carries competitor names and prompts, which belong on the
     // report the email unlocks, not in a chat bubble before it.
+    //
+    // `weakest` is the one exception, and it is a finished sentence rather than data: one count and its
+    // denominator, about their own business, which is what they just asked us to measure.
     return reply({
       ok: true,
       status: payload.status,
       reportUrl,
+      weakest,
       step: payload.activeStep,
       engine: payload.engine,
       error: payload.error,
