@@ -19,6 +19,7 @@
 // it is reviewed and deployed rather than typed into Slack.
 
 import type { Audience } from "@/lib/concierge/magnets";
+import { PRODUCT_CONCIERGE } from "./pitch";
 
 export interface AudiencePreset {
   /**
@@ -103,7 +104,11 @@ export const AUDIENCE_PRESETS: Readonly<Record<string, AudiencePreset>> = {
     offer: ["treatment", "treatments"],
     business: "clinic",
     visit: "consultation",
-    laneName: "AI Skin Concierge",
+    // ‼️ RENAMED WITH EVERYTHING ELSE ON 2026-09-26. conciergeLaneName() no longer reads this
+    // field at all, so it is the seed for new audience rows rather than something anybody renders. It is
+    // kept in step anyway: the day that function goes back to reading the row, a stale name here would
+    // come straight back with it.
+    laneName: PRODUCT_CONCIERGE,
     launcher: "Start my free scan",
     hardLines: [NOT_A_DOCTOR, NO_TREATMENT_PRICE, NO_OTHER_CLINIC],
     presence: ["google", "apple", "bing", "yelp", "realself", "facebook"],

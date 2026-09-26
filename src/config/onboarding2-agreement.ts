@@ -109,6 +109,7 @@ import {
   GUARANTEE_WINDOW_DAY,
   OFFER_INCLUDES,
   PRICE_CONCIERGE,
+  PRODUCT_CONCIERGE,
   PRICE_MONTH_AMOUNT,
   PRICE_YEAR_AMOUNT,
   PRICE_YEAR_EQUIV,
@@ -140,8 +141,20 @@ import {
  *     yearly and monthly documents are word for word what they were under v6. Their stamp moved
  *     anyway, because VERSION is shared and a per-variant bump would need three constants to
  *     stay in step by hand, which is the drift this file exists to refuse.
+ * v8: the AI Skin Concierge was renamed the AI Booking Bot in all ten clauses that name it, and
+ *     the yearly and monthly deliverables gained Custom Search Engine Optimization and Custom AI
+ *     Engine Optimization, which were being done and were not being promised. The name now comes
+ *     from PRODUCT_CONCIERGE in config/pitch.ts rather than being typed here.
+ *
+ *     ‼️ RENAMING A TERM OF ART IN A SIGNED DOCUMENT WAS RAISED AND CHOSEN. lane-name.ts said
+ *     the old name was "not a copy surface" because clients had agreed to it. Matthew's call on
+ *     2026-09-26, and it is safe for the reason the header above gives: the full text is stored on
+ *     every signing, so documents already executed keep rendering exactly as they were signed and
+ *     this stamp is what tells the two apart. The photo disclosure is untouched: it is the only
+ *     sentence in the document that says what happens to a picture of somebody's face, and a
+ *     rename is no reason to go near it.
  */
-const VERSION = "v7";
+const VERSION = "v8";
 
 export const TEMPLATE_VERSIONS: Record<OfferKey, string> = {
   review_free: `${VERSION}-free`,
@@ -228,10 +241,20 @@ const CORE_WORK_BULLETS = [
     "s1 l3",
     "Fix every NAP (Name / Address / Phone) mismatch across every directory we can find you on"
   )} (${value("We fix any NAP mismatches online")})`,
-  `${guard(
-    "s1 l5",
-    "Send you a monthly AI Visibility Report showing your score, your competitors' scores, and what we did that month"
-  )} (${value("Your monthly AI Visibility Report")})`,
+  // ‼️ ADDED 2026-09-26 BECAUSE THE CARD STARTED PROMISING THEM. The pricing card names Custom
+  // Search Engine Optimization and Custom AI Engine Optimization in its value stack, and a deliverable
+  // advertised on the page a client buys from and absent from the document they sign is the gap that
+  // matters most: it is the one a client points at later. They carry no value() figure yet, which is
+  // why they are written without the parenthetical the four above have. Matthew is pricing them; when
+  // he does, they gain an OFFER_INCLUDES entry and the same `(${value(...)})` suffix as the rest.
+  guard(
+    "s1 l6",
+    "Build and run your Custom Search Engine Optimization, the keyword and page work that makes you findable in ordinary search"
+  ),
+  guard(
+    "s1 l7",
+    "Build and run your Custom AI Engine Optimization, the same work aimed at what the assistants read rather than at what a search engine ranks"
+  ),
 ];
 
 // ‼️ THE CONCIERGE DISCLOSURE. THIS SENTENCE IS THE ONLY PLACE IN THE ENTIRE AGREEMENT THAT SAYS
@@ -246,7 +269,7 @@ const CONCIERGE_DISCLOSURE = guard(
 
 const CONCIERGE_WHAT = guard(
   "s1 what",
-  "Install our AI Skin Concierge tool on your website, an AI-powered skin analysis widget that captures high-intent visitors, delivers personalized skin assessments, and books qualified consultations directly into your calendar."
+  `Install our ${PRODUCT_CONCIERGE} tool on your website, an AI-powered skin analysis widget that captures high-intent visitors, delivers personalized skin assessments, and books qualified consultations directly into your calendar.`
 );
 
 const SECTIONS: Record<string, SectionBody> = {
@@ -357,7 +380,7 @@ const SECTIONS: Record<string, SectionBody> = {
     body: [
       guard(
         "s3by b1",
-        "As part of what we are doing for you, we install the AI Skin Concierge on your website. We need it to be the primary way a new patient books from your website and from the new pages we write for you. This is the one requirement in this agreement that is not about the work itself. It is about being able to count the work."
+        `As part of what we are doing for you, we install the ${PRODUCT_CONCIERGE} on your website. We need it to be the primary way a new patient books from your website and from the new pages we write for you. This is the one requirement in this agreement that is not about the work itself. It is about being able to count the work.`
       ),
       // ‼️ REWRITTEN FROM v5. The old sentence said "You do not pay us until 5 qualified
       // appointments land", which described the pay-on-performance arrangement that this plan
@@ -408,7 +431,7 @@ const SECTIONS: Record<string, SectionBody> = {
       ),
       guard(
         "s3bm l3",
-        "If you add the AI Skin Concierge, it asks the question itself and logs every answer with a timestamp"
+        `If you add the ${PRODUCT_CONCIERGE}, it asks the question itself and logs every answer with a timestamp`
       ),
       guard(
         "s3bm l4",
@@ -463,7 +486,7 @@ const SECTIONS: Record<string, SectionBody> = {
     after: [
       guard(
         "s4i a1",
-        "Beyond that one requirement, we will send you written recommendations from time to time, by email or in a scheduled conversation. Past examples include reactivation campaigns to your existing patient list, installing the AI Skin Concierge, changes to how your booking flow is worded, and which services to put in front of which audience. You agree to give each of them a fair reading and to tell us yes or no within a reasonable time."
+        `Beyond that one requirement, we will send you written recommendations from time to time, by email or in a scheduled conversation. Past examples include reactivation campaigns to your existing patient list, installing the ${PRODUCT_CONCIERGE}, changes to how your booking flow is worded, and which services to put in front of which audience. You agree to give each of them a fair reading and to tell us yes or no within a reasonable time.`
       ),
       // ‼️ THE LIMIT IS THE POINT OF THIS PARAGRAPH. Without it the clause above reads as an
       // open instruction to obey, which is not what anybody intends and is not enforceable in
@@ -489,7 +512,7 @@ const SECTIONS: Record<string, SectionBody> = {
     ],
     bullets: [
       guard("s5y l1", "Ongoing page updates, reviews and NAP maintenance"),
-      guard("s5y l2", "AI Skin Concierge hosting and improvements, at no extra charge"),
+      guard("s5y l2", `${PRODUCT_CONCIERGE} hosting and improvements, at no extra charge`),
       guard("s5y l3", "Your monthly AI Visibility Report"),
       guard("s5y l4", "No setup fee, no per-page fee and no hidden costs"),
     ],
@@ -516,7 +539,7 @@ const SECTIONS: Record<string, SectionBody> = {
       guard("s5m l3", "No setup fee and no cancellation fee"),
       guard(
         "s5m l4",
-        `The AI Skin Concierge is not included. If you want it, it is ${PRICE_CONCIERGE} on top, and you can add or drop it at any time`
+        `The ${PRODUCT_CONCIERGE} is not included. If you want it, it is ${PRICE_CONCIERGE} on top, and you can add or drop it at any time`
       ),
     ],
     after: [
@@ -552,7 +575,7 @@ const SECTIONS: Record<string, SectionBody> = {
       guard("s3 l1", "A person books an appointment with your business, AND"),
       guard(
         "s3 l2",
-        "They tell you (via your intake form, in person, on the phone, or via the AI Skin Concierge conversation logs) that they found you through ChatGPT, an AI recommendation, an AI search, or a similar phrase, AND"
+        `They tell you (via your intake form, in person, on the phone, or via the ${PRODUCT_CONCIERGE} conversation logs) that they found you through ChatGPT, an AI recommendation, an AI search, or a similar phrase, AND`
       ),
       guard("s3 l3", "They actually show up"),
     ],
@@ -613,7 +636,7 @@ const SECTIONS: Record<string, SectionBody> = {
     body: [
       guard(
         "s9 b1",
-        "Anything you share with us that isn't already public, your revenue, patient data, internal processes, stays confidential. Same goes the other way: our systems, prompts, scripts, AI Skin Concierge internals, and methods stay confidential."
+        `Anything you share with us that isn't already public, your revenue, patient data, internal processes, stays confidential. Same goes the other way: our systems, prompts, scripts, ${PRODUCT_CONCIERGE} internals, and methods stay confidential.`
       ),
     ],
   },
@@ -653,7 +676,7 @@ const SECTIONS: Record<string, SectionBody> = {
       ),
       guard(
         "s11y b3",
-        "You can stop the work at any time by telling us in writing, and we will stop. That does not return the fee for the months remaining. On termination the AI Skin Concierge widget is deactivated from your site within 5 business days, and you keep everything else: the pages, the profiles, the review workflow, and all lead and booking data captured during the engagement."
+        `You can stop the work at any time by telling us in writing, and we will stop. That does not return the fee for the months remaining. On termination the ${PRODUCT_CONCIERGE} widget is deactivated from your site within 5 business days, and you keep everything else: the pages, the profiles, the review workflow, and all lead and booking data captured during the engagement.`
       ),
       guard(
         "s11y b4",
@@ -672,7 +695,7 @@ const SECTIONS: Record<string, SectionBody> = {
       ),
       guard(
         "s11m b2",
-        "Months already served are not refunded. On termination, the AI Skin Concierge widget, if you added it, is deactivated from your site within 5 business days, but you keep all lead and booking data captured during the engagement, along with the pages, the profiles and the review workflow."
+        `Months already served are not refunded. On termination, the ${PRODUCT_CONCIERGE} widget, if you added it, is deactivated from your site within 5 business days, but you keep all lead and booking data captured during the engagement, along with the pages, the profiles and the review workflow.`
       ),
       guard(
         "s11m b3",

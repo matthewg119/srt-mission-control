@@ -334,7 +334,9 @@ export async function buildSiteReplica(clientId: string): Promise<AutoResult> {
         "re-run this step."
     );
   } else if (!conf) {
-    // ‼️ "AI Concierge", NOT "AI Skin Concierge", AND conciergeLaneName() CANNOT BE USED HERE.
+    // ‼️ "AI Concierge" GENERICALLY, AND conciergeLaneName() CANNOT BE USED HERE. The product is
+    // the AI Booking Bot since 2026-09-26 and there is now only one name for it, so the old reason for
+    // the generic wording (two lanes, two names) is gone. The other reason below still stands.
     // This is the no-`concierge_configs`-row arm, which is precisely the state in which this
     // client has no `audience` to read: lane-name.ts takes an Audience and there is none to
     // give it. Defaulting to one would be the exact failure docs/2026-09-04-magnet-lane.sql

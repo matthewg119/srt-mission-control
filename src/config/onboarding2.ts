@@ -24,6 +24,7 @@ import {
   GUARANTEE_COUNT,
   GUARANTEE_WINDOW,
   PRICE_CONCIERGE,
+  PRODUCT_CONCIERGE,
   PRICE_MONTH,
   PRICE_YEAR_AMOUNT,
   PRICE_YEAR_EQUIV,
@@ -386,7 +387,7 @@ export const DAYPART_OPTIONS = {
  *
  * ‼️ THE WORK LIST IS COMPOSED FROM OFFER_INCLUDES, NOT RETYPED. config/pitch.ts is the only place
  * a figure of ours may live, and the agreement's section 1 already composes from the same array
- * for the same reason. The AI Skin Concierge line carries NO figure because OFFER_INCLUDES does
+ * for the same reason. The ${PRODUCT_CONCIERGE} line carries NO figure because OFFER_INCLUDES does
  * not price it, and inventing a fifth figure to fill that gap is exactly what pitch.ts forbids.
  */
 export const CLOSING_SUMMARY = {
@@ -400,7 +401,7 @@ export const CLOSING_SUMMARY = {
   /** The one deliverable OFFER_INCLUDES does not price. Listed without a figure, on purpose. */
   conciergeLine: guard(
     "sum concierge",
-    "Install the AI Skin Concierge on your site, so high-intent visitors get a personalized skin assessment and book themselves in"
+    `Install the ${PRODUCT_CONCIERGE} on your site, so high-intent visitors get a personalized skin assessment and book themselves in`
   ),
   callHeading: guard("sum call heading", "Your onboarding call"),
   callFallback: guard("sum call fallback", "We will confirm a time with you shortly."),
@@ -645,8 +646,8 @@ export interface Faq {
  */
 export const CHAT_FAQS: Faq[] = [
   // ── What we do. One per variant, because the Concierge differs. ──
-  { sectionKey: "what_we_do_yearly", q: guard("faq11qy", "What exactly do you do for me?"), a: guard("faq11ay", "Section {s:what_we_do_yearly} lists five things: rewrite key pages so ChatGPT can quote them, turn happy patients into review evidence, fix NAP mismatches across directories, install the AI Skin Concierge on your site at no extra charge, and send a monthly AI Visibility Report.") },
-  { sectionKey: "what_we_do_monthly", q: guard("faq11qm", "What exactly do you do for me?"), a: guard("faq11am", "Section {s:what_we_do_monthly} lists five things: rewrite key pages so ChatGPT can quote them, turn happy patients into review evidence, fix NAP mismatches across directories, the AI Skin Concierge if you choose to add it, and send a monthly AI Visibility Report.") },
+  { sectionKey: "what_we_do_yearly", q: guard("faq11qy", "What exactly do you do for me?"), a: guard("faq11ay", `Section {s:what_we_do_yearly} lists five things: rewrite key pages so ChatGPT can quote them, turn happy patients into review evidence, fix NAP mismatches across directories, install the ${PRODUCT_CONCIERGE} on your site at no extra charge, and send a monthly AI Visibility Report.`) },
+  { sectionKey: "what_we_do_monthly", q: guard("faq11qm", "What exactly do you do for me?"), a: guard("faq11am", `Section {s:what_we_do_monthly} lists five things: rewrite key pages so ChatGPT can quote them, turn happy patients into review evidence, fix NAP mismatches across directories, the ${PRODUCT_CONCIERGE} if you choose to add it, and send a monthly AI Visibility Report.`) },
   { sectionKey: "what_we_do_yearly", q: guard("faq12qy", "What is NAP?"), a: guard("faq12ay", "Name, Address and Phone. Section {s:what_we_do_yearly} says we fix every mismatch across every directory we can find you on.") },
   { sectionKey: "what_we_do_monthly", q: guard("faq12qm", "What is NAP?"), a: guard("faq12am", "Name, Address and Phone. Section {s:what_we_do_monthly} says we fix every mismatch across every directory we can find you on.") },
 
@@ -656,8 +657,8 @@ export const CHAT_FAQS: Faq[] = [
   // what-we-do disclosure bullet says, which is less than old section 5 said. Anything beyond it
   // (HIPAA posture, transcript ownership, who owns the software) is no longer in the document and
   // the assistant must fall through to flag_for_human rather than answer from memory.
-  { sectionKey: "what_we_do_yearly", q: guard("faq16qy", "What is the AI Skin Concierge?"), a: guard("faq16ay", "Section {s:what_we_do_yearly}. A skin analysis widget we install on your site. It captures high-intent visitors, gives them a personalized skin assessment, and books qualified consultations into your calendar. On this plan it is included at no extra charge.") },
-  { sectionKey: "what_we_do_monthly", q: guard("faq16qm", "What is the AI Skin Concierge?"), a: guard("faq16am", `Section {s:what_we_do_monthly}. A skin analysis widget we install on your site. It captures high-intent visitors, gives them a personalized skin assessment, and books qualified consultations into your calendar. On this plan it is optional and billed separately at ${PRICE_CONCIERGE}.`) },
+  { sectionKey: "what_we_do_yearly", q: guard("faq16qy", `What is the ${PRODUCT_CONCIERGE}?`), a: guard("faq16ay", "Section {s:what_we_do_yearly}. A skin analysis widget we install on your site. It captures high-intent visitors, gives them a personalized skin assessment, and books qualified consultations into your calendar. On this plan it is included at no extra charge.") },
+  { sectionKey: "what_we_do_monthly", q: guard("faq16qm", `What is the ${PRODUCT_CONCIERGE}?`), a: guard("faq16am", `Section {s:what_we_do_monthly}. A skin analysis widget we install on your site. It captures high-intent visitors, gives them a personalized skin assessment, and books qualified consultations into your calendar. On this plan it is optional and billed separately at ${PRICE_CONCIERGE}.`) },
   { sectionKey: "what_we_do_yearly", q: guard("faq17qy", "Is the Concierge a medical device?"), a: guard("faq17ay", "No. Section {s:what_we_do_yearly} states it is not a medical device and it does not diagnose or treat.") },
   { sectionKey: "what_we_do_monthly", q: guard("faq17qm", "Is the Concierge a medical device?"), a: guard("faq17am", "No. Section {s:what_we_do_monthly} states it is not a medical device and it does not diagnose or treat.") },
   { sectionKey: "what_we_do_yearly", q: guard("faq18qy", "What happens to the photos?"), a: guard("faq18ay", "Section {s:what_we_do_yearly}: any facial photo a visitor submits is used only for that analysis and deleted within 24 hours.") },
@@ -666,8 +667,8 @@ export const CHAT_FAQS: Faq[] = [
   // ── The money. Interpolated, never typed. ──
   { sectionKey: "fee_yearly", q: guard("faq5qy", "What does this cost?"), a: guard("faq5ay", `Section {s:fee_yearly}. ${PRICE_YEAR_AMOUNT} for twelve months, due on signing. That works out at ${PRICE_YEAR_EQUIV}, and there is nothing else to pay for the rest of the year.`) },
   { sectionKey: "fee_monthly", q: guard("faq5qm", "What does this cost?"), a: guard("faq5am", `Section {s:fee_monthly}. ${PRICE_MONTH}, billed on the same day each month. No setup fee and no cancellation fee.`) },
-  { sectionKey: "fee_yearly", q: guard("faq6qy", "What does that cover?"), a: guard("faq6ay", "Section {s:fee_yearly}: ongoing page updates, reviews, NAP maintenance, AI Skin Concierge hosting and improvements, and the monthly report. No setup fee, no per-page fee and no hidden costs.") },
-  { sectionKey: "fee_monthly", q: guard("faq6qm", "What does that cover?"), a: guard("faq6am", `Section {s:fee_monthly}: ongoing page updates, reviews, NAP maintenance and the monthly report. The AI Skin Concierge is not included. If you want it, it is ${PRICE_CONCIERGE} on top and you can add or drop it at any time.`) },
+  { sectionKey: "fee_yearly", q: guard("faq6qy", "What does that cover?"), a: guard("faq6ay", `Section {s:fee_yearly}: ongoing page updates, reviews, NAP maintenance, ${PRODUCT_CONCIERGE} hosting and improvements, and the monthly report. No setup fee, no per-page fee and no hidden costs.`) },
+  { sectionKey: "fee_monthly", q: guard("faq6qm", "What does that cover?"), a: guard("faq6am", `Section {s:fee_monthly}: ongoing page updates, reviews, NAP maintenance and the monthly report. The ${PRODUCT_CONCIERGE} is not included. If you want it, it is ${PRICE_CONCIERGE} on top and you can add or drop it at any time.`) },
   { sectionKey: "fee_yearly", q: guard("faq8qy", "Am I locked into a year?"), a: guard("faq8ay", "Yes, and that is the trade. Section {s:fee_yearly} is a twelve month arrangement paid once up front, which is what pays for the guarantee. If you would rather not commit, the month to month plan has no term and no guarantee.") },
   { sectionKey: "fee_monthly", q: guard("faq8qm", "Am I locked into a year?"), a: guard("faq8am", "No. Section {s:fee_monthly}: no annual contract, and you can cancel with 30 days written notice at any time.") },
 

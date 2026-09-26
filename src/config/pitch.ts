@@ -87,6 +87,27 @@ export const PRICE_RETAINER = "$499 / month";
 export const PRICE_RETAINER_AMOUNT = PRICE_RETAINER.split("/")[0].trim();
 
 /**
+ * What the concierge widget is CALLED, everywhere a person reads it.
+ *
+ * ‼️ ONE CONSTANT, BECAUSE IT WAS SPELLED OUT IN SIXTEEN FILES AND IT HAS NOW BEEN RENAMED TWICE.
+ * It was the AI Skin Concierge until 2026-09-26. Matthew's call: a clinic owner buying it is buying
+ * bookings, and "skin concierge" describes the mechanism to somebody who has not bought it yet.
+ *
+ * ‼️ THE RENAME WENT ALL THE WAY INTO THE AGREEMENT, DELIBERATELY AND ON HIS INSTRUCTION. I raised
+ * that lane-name.ts called the old name "a term of art in an executed agreement" and that a signed
+ * document is not a copy surface; he chose the full rename anyway, and that is his to choose. It is safe
+ * because the agreement stores its full text per signing, so every document already signed keeps
+ * rendering exactly as it was signed, and the template version bumps to v8 so the two are told apart.
+ * v7 was itself a rename (the free offer became the AI Referral Engine), so this is the same move again.
+ *
+ * ‼️ WHAT IT DOES NOT RENAME IS ANY IDENTIFIER. concierge_configs, concierge_sessions,
+ * concierge_preview, concierge_live, the /api/concierge routes and the lane's own file names are what the
+ * system routes on, not what anybody reads. Renaming those would be a migration with no reader-visible
+ * effect, which is all risk and no gain.
+ */
+export const PRODUCT_CONCIERGE = "AI Booking Bot";
+
+/**
  * What they get every month, and what each piece is worth.
  *
  * ‼️ THESE ARE VALUES, NOT PRICES, AND THE DISTINCTION IS THE WHOLE REASON EACH ENTRY CARRIES THE
@@ -106,7 +127,7 @@ export const OFFER_INCLUDES = [
   // figure was that inventing a fifth one to fill the gap is what the note above forbids. It has
   // a figure now because Matthew set one, not because the gap was filled. See PRICE_CONCIERGE,
   // and note the SMS Live Agent gave this number up rather than sharing it.
-  { work: "Install the AI Skin Concierge on your site", value: "$199 / month value" },
+  { work: `Install the ${PRODUCT_CONCIERGE} on your site`, value: "$199 / month value" },
   { work: "Your monthly AI Visibility Report", value: "$400 / month value" },
 ] as const;
 
@@ -594,7 +615,7 @@ export const OFFERS: readonly Offer[] = [
       "Findable: your key pages rewritten so AI can quote them",
       "Findable: every NAP mismatch across the web, fixed",
       "Fresh: your monthly AI Visibility Report",
-      `AI Skin Concierge included free, normally ${PRICE_CONCIERGE}`,
+      `${PRODUCT_CONCIERGE} included free, normally ${PRICE_CONCIERGE}`,
       `${GUARANTEE_COUNT} qualified appointments in ${GUARANTEE_WINDOW}, or your first 3 months back`,
     ],
     cta: "Take the year",
@@ -621,7 +642,7 @@ export const OFFERS: readonly Offer[] = [
       // them on the card and the other in the document they sign, is the same class of drift the header of
       // this file was written about. Raised with Matthew; renaming it in the contract is his call and not
       // something to do quietly underneath a signature.
-      { text: "AI Booking Bot on your site", was: PRICE_CONCIERGE, tag: "FREE" },
+      { text: `${PRODUCT_CONCIERGE} on your site`, was: PRICE_CONCIERGE, tag: "FREE" },
       { text: "The AI Referral Engine", tag: "FREE" },
       {
         text: `${GUARANTEE_COUNT} booked appointments in ${GUARANTEE_WINDOW}, or your money back`,
@@ -641,7 +662,7 @@ export const OFFERS: readonly Offer[] = [
       "Findable: your key pages rewritten so AI can quote them",
       "Findable: every NAP mismatch across the web, fixed",
       "Fresh: your monthly AI Visibility Report",
-      `AI Skin Concierge available at ${PRICE_CONCIERGE}`,
+      `${PRODUCT_CONCIERGE} available at ${PRICE_CONCIERGE}`,
       "No guarantee and no refunds",
     ],
     cta: "Go month to month",
@@ -660,7 +681,7 @@ export const OFFERS: readonly Offer[] = [
     funnelCta: "Go month to month",
     funnelIncludes: [
       { text: "ChatGPT Client Optimization, all three pillars", tag: VALUE_PROGRAM_YEAR },
-      { text: "No AI Skin Concierge" },
+      { text: `No ${PRODUCT_CONCIERGE}` },
       { text: "No appointments guaranteed" },
     ],
   },
