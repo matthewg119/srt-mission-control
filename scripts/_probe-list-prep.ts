@@ -28,7 +28,7 @@ import {
   checkSuppression,
 } from "@/lib/outreach/suppression";
 import { configuredProviders, estimateCost, enrichLines, summarize, PROVIDERS } from "@/lib/scraper/enrich";
-import { funnelLines, extractInstagram, fromOutscraper } from "@/lib/scraper/pull";
+import { funnelLines, extractInstagram, fromOutscraper, storeRawLeads } from "@/lib/scraper/pull";
 import {
   DEFAULT_VERTICAL,
   DENTIST_ICP,
@@ -120,10 +120,70 @@ async function main() {
     );
   }
 
+
   // ── 2. The stage machine, and the order that is the whole point ───────────
   console.log("\n2. the stages, and that qualifying comes before enriching");
 
   const sql = new SQL(process.env.DATABASE_URL!) as unknown as TxSQL;
+  // ── 1b. raw_leads can actually be WRITTEN, which is not what the column check proves ──────
+  // ‼️ THIS WHOLE BLOCK EXISTS BECAUSE THE SCHEMA CHECKS ABOVE PASSED WHILE EVERY INSERT FAILED.
+  // raw_leads_run_place was a PARTIAL unique index (where place_id is not null), and Postgres will
+  // not use a partial index for ON CONFLICT unless the statement repeats the predicate, which
+  // PostgREST's on_conflict parameter cannot express. So storeRawLeads returned "no unique or
+  // exclusion constraint matching the ON CONFLICT specification" on every call and inserted nothing,
+  // for BOTH the CSV arm and the Maps webhook. Reading the columns back could never have caught it.
+  {
+    const [idx] = await sql`select indexdef from pg_indexes
+      where schemaname = 'public' and tablename = 'raw_leads' and indexname = 'raw_leads_run_place'`;
+    const def = String(idx?.indexdef ?? "");
+    check("the idempotency index exists", def.length > 0);
+    check(
+      "and is NOT partial, or ON CONFLICT cannot target it",
+      def.length > 0 && !/where/i.test(def),
+      def
+    );
+
+    // The behavioural half: go through storeRawLeads itself, the way both arms do.
+    const { data: made } = await supabaseAdmin
+      .from("list_pipeline_runs")
+      .insert({ label: "_probe write path", source: "outscraper", icp_text: "probe", stage: "pulling", vertical_slug: "medspa" })
+      .select("id")
+      .single();
+    const probeRunId = (made as { id: string } | null)?.id ?? null;
+    check("a probe run could be opened", Boolean(probeRunId));
+    if (probeRunId) {
+      const one = fromOutscraper(
+        { name: "Probe Write Path Spa", site: "https://probewritepath.example", place_id: "probe_write_1" },
+        { runId: probeRunId, sourceQuery: "probe", sourceMetro: "Nowhere", verticalSlug: "medspa" }
+      );
+      check("fromOutscraper maps a record", Boolean(one));
+      if (one) {
+        const first = await storeRawLeads([one]);
+        check("storeRawLeads INSERTS, rather than erroring on ON CONFLICT", first.inserted === 1, JSON.stringify(first));
+        const again = await storeRawLeads([one]);
+        check("and the same place twice is skipped, not duplicated", again.inserted === 0, JSON.stringify(again));
+
+        // A record with no place_id must still be idempotent, or a re-driven pull duplicates it.
+        const placeless = fromOutscraper(
+          { name: "Probe Placeless Spa", site: "https://probeplaceless.example" },
+          { runId: probeRunId, sourceQuery: "probe", sourceMetro: "Nowhere", verticalSlug: "medspa" }
+        );
+        check("a placeless record gets a synthetic id", Boolean(placeless?.placeId), String(placeless?.placeId));
+        if (placeless) {
+          await storeRawLeads([placeless]);
+          const twice = await storeRawLeads([placeless]);
+          check("so a re-driven pull does not duplicate it", twice.inserted === 0, JSON.stringify(twice));
+        }
+      }
+      await supabaseAdmin.from("raw_leads").delete().eq("run_id", probeRunId);
+      await supabaseAdmin.from("list_pipeline_runs").delete().eq("id", probeRunId);
+      const { count } = await supabaseAdmin
+        .from("raw_leads")
+        .select("id", { count: "exact", head: true })
+        .eq("run_id", probeRunId);
+      check("the probe cleaned up after itself", (count ?? 0) === 0);
+    }
+  }
   const [cons] = await sql`select pg_get_constraintdef(oid) as def from pg_constraint
     where conname = 'scraper_batches_status_check'`;
   const def = String(cons?.def ?? "");

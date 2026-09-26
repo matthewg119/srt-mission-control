@@ -93,7 +93,12 @@ export function fromOutscraper(
     source: "outscraper",
     sourceQuery: ctx.sourceQuery,
     sourceMetro: ctx.sourceMetro,
-    placeId: str(rec.place_id) ?? str(rec.google_id),
+    // ‼️ A SYNTHETIC ID WHEN MAPS GIVES NONE, THE SAME WAY fromCsv DOES. Null place_ids are DISTINCT
+    // in the unique index, so a re-driven pull inserts every placeless row again: measured on a
+    // synthetic payload where one record in four had no place_id. Falling back to the domain makes
+    // those rows idempotent too, and the domain is already this lane's identity rule, which is what
+    // ACTIVE_KEYS in dedup.ts narrows to. The prefix keeps the value greppably NOT a Google id.
+    placeId: str(rec.place_id) ?? str(rec.google_id) ?? (normalizeDomain(website) ? "site:" + normalizeDomain(website) : null),
     businessName,
     domain: normalizeDomain(website),
     website,
