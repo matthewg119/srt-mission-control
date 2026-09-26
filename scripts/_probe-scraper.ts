@@ -824,6 +824,16 @@ async function liveMx(): Promise<void> {
     doorBody.includes('status: "awaiting_pull_approval"')
   );
   check("the new door has its own switch", /LISTPREP_MAPS_ENABLED/.test(lane));
+  // The base URL is derived from the one the deployment already has, so turning the door on is one
+  // env var rather than two. A pull submitted with no webhook is bought and then lost.
+  check(
+    "the webhook base falls back to OUTSCRAPER_WEBHOOK_URL",
+    /OUTSCRAPER_WEBHOOK_URL[\s\S]{0,120}outscraper-listprep/.test(lane)
+  );
+  check(
+    "and a missing base refuses before anything is bought",
+    lane.indexOf("have nowhere to deliver") < lane.indexOf("await submitMapsSearch(")
+  );
   // ‼️ NAMED IN THE OPERATOR COPY ON PURPOSE, SO THE TEST IS ON THE READ, NOT THE MENTION. The
   // refusal card tells you which switch you did NOT set, which is the whole point of having two.
   check("the paused lane's switch is never read here", !/process\.env\.MAPS_PULL_ENABLED/.test(laneCode));

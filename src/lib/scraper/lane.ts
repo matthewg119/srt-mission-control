@@ -1147,9 +1147,18 @@ function mapsPullEnabled(): boolean {
   return process.env.LISTPREP_MAPS_ENABLED === "1";
 }
 
-/** Where Outscraper delivers. The run id rides in the query string so a replay finds its own row. */
+/**
+ * Where Outscraper delivers. The run id rides in the query string so a replay finds its own row.
+ *
+ * Derived from OUTSCRAPER_WEBHOOK_URL when its own var is unset, the same way pull-medspa and
+ * pull-trt derive theirs. That is worth the three lines: the deployment already has the base URL, so
+ * turning this door on is one new env var (LISTPREP_MAPS_ENABLED) rather than two, and one fewer
+ * thing to get wrong is one fewer pull that dies six hours later holding a batch open.
+ */
 function pullWebhookUrl(runId: string): string | null {
-  const base = (process.env.LISTPREP_MAPS_WEBHOOK_URL ?? "").trim();
+  const base =
+    (process.env.LISTPREP_MAPS_WEBHOOK_URL ?? "").trim() ||
+    (process.env.OUTSCRAPER_WEBHOOK_URL ?? "").trim().replace(/\/outscraper(-[a-z]+)?$/, "/outscraper-listprep");
   if (!base) return null;
   const token = (process.env.OUTSCRAPER_WEBHOOK_SECRET ?? "").trim();
   const sep = base.includes("?") ? "&" : "?";
@@ -1285,7 +1294,11 @@ async function releaseMapsPull(batch: BatchRow): Promise<void> {
 
   const webhook = pullWebhookUrl(runId);
   if (!webhook) {
-    return fail(batch, "no `LISTPREP_MAPS_WEBHOOK_URL` is set, so Outscraper would have nowhere to deliver.");
+    return fail(
+      batch,
+      "neither `LISTPREP_MAPS_WEBHOOK_URL` nor `OUTSCRAPER_WEBHOOK_URL` is set, so Outscraper would " +
+        "have nowhere to deliver and the pull would be bought and lost."
+    );
   }
 
   const now = new Date().toISOString();
