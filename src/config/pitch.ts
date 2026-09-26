@@ -355,6 +355,33 @@ export const PRICE_MONTH = "$349 / month";
 export const PRICE_MONTH_AMOUNT = "$349";
 
 /**
+ * What taking the year saves against paying monthly for twelve months.
+ *
+ * ‼️ BOTH WRITTEN OUT, NEITHER COMPUTED, for the reason the header of this file gives and the
+ * reason PRICE_YEAR_EQUIV and REFUND_AMOUNT are written out one block above. $4,188 is PRICE_MONTH
+ * twelve times, $888 is that minus PRICE_YEAR, and 21% is $888 of $4,188. Every one of those is exactly
+ * the shape the no-arithmetic rule forbids deriving at render time, because a percentage that silently
+ * moves when somebody edits a price is a discount nobody decided to give.
+ *
+ * ‼️ AND THE PERCENTAGE IS ROUNDED DOWN. $888 of $4,188 is 21.2%. Rounding a saving UP is the one
+ * direction that overstates it, so it is floored here and the exact figure sits beside it.
+ *
+ * If PRICE_YEAR or PRICE_MONTH changes, change both of these BY HAND and say the new numbers out loud.
+ */
+export const SAVE_YEARLY_PCT = "21%";
+export const SAVE_YEARLY_AMOUNT = "$888";
+
+/**
+ * Why the guarantee is not on the month-to-month plan.
+ *
+ * Matthew, 2026-09-26: "guarantee only available with 6 month commitment (organic customers take from
+ * 30-90 days to start showing up)". It is shown beside the struck-through guarantee line, where the
+ * reader is looking at the thing being taken away, rather than as small print underneath.
+ */
+export const GUARANTEE_COMMITMENT_NOTE =
+  "The guarantee needs a 6 month commitment. Organic customers take 30 to 90 days to start showing up.";
+
+/**
  * The AI Concierge, priced for the first time.
  *
  * ‼️ IT USED TO BE THE ONE DELIVERABLE WITH NO FIGURE, DELIBERATELY. config/onboarding2.ts said
@@ -553,7 +580,12 @@ export const OFFERS: readonly Offer[] = [
   {
     key: "year_3300",
     name: "Full AI Visibility, Yearly",
-    tagline: "All three pillars, and we carry the risk.",
+    // ‼️ IT STOPPED SAYING "ALL THREE PILLARS" ON 2026-09-26, ON MATTHEW'S INSTRUCTION: "dont say
+    // the 3 pillars just add the value stack that we have". The pillars are the METHOD and they are
+    // explained in the Loom, on the call and in the report. On a card whose job is to be scanned in four
+    // seconds they are a vocabulary the reader has not been taught yet, and a list of named deliverables
+    // is what a buyer can price. The pillar language stays everywhere it is explained.
+    tagline: "Everything below, and we carry the risk.",
     price: PRICE_YEAR,
     anchor: PRICE_YEAR_ANCHOR,
     priceNote: `Works out at ${PRICE_YEAR_EQUIV}.`,
@@ -574,10 +606,22 @@ export const OFFERS: readonly Offer[] = [
     funnelCta: "Get my 5 appointments guaranteed",
     funnelIncludes: [
       // ‼️ THE VALUE SITS ON THE OPTIMIZATION LINE AND IS NOT CALLED A TOTAL. See the note over
-      // VALUE_PROGRAM_YEAR: $4,188 excludes the Concierge, so the two lines below it are additions
-      // on top rather than components of it.
-      { text: "ChatGPT Client Optimization, all three pillars", tag: VALUE_PROGRAM_YEAR },
-      { text: "AI Skin Concierge on your site", was: PRICE_CONCIERGE, tag: "FREE" },
+      // VALUE_PROGRAM_YEAR: $4,188 excludes the Concierge, so the lines below it are additions on top
+      // rather than components of it.
+      { text: "ChatGPT Client Optimization", tag: VALUE_PROGRAM_YEAR },
+      // Added 2026-09-26. Two deliverables that were being done and not being said.
+      { text: "Custom Search Engine Optimization" },
+      { text: "Custom AI Engine Optimization" },
+      // ‼️ "AI BOOKING BOT" IS THE SAME PRODUCT AS THE AI SKIN CONCIERGE, RENAMED ON THIS CARD ONLY
+      // (Matthew, 2026-09-26). `was: PRICE_CONCIERGE` is what makes this line tappable and what records
+      // Concierge interest on the lead, so the rename must not touch it: the label is what a buyer reads,
+      // the constant is what the system routes on.
+      //
+      // ‼️ THE AGREEMENT STILL CALLS IT THE AI SKIN CONCIERGE. One product under two names, one of
+      // them on the card and the other in the document they sign, is the same class of drift the header of
+      // this file was written about. Raised with Matthew; renaming it in the contract is his call and not
+      // something to do quietly underneath a signature.
+      { text: "AI Booking Bot on your site", was: PRICE_CONCIERGE, tag: "FREE" },
       { text: "The AI Referral Engine", tag: "FREE" },
       {
         text: `${GUARANTEE_COUNT} booked appointments in ${GUARANTEE_WINDOW}, or your money back`,
@@ -621,6 +665,79 @@ export const OFFERS: readonly Offer[] = [
     ],
   },
 ] as const;
+
+/**
+ * The two billing states of the paid card, and everything that differs between them.
+ *
+ * ‼️ ONE CARD WITH A TOGGLE, NOT A THIRD CARD, AND month_349's OWN COMMENT SAYS WHY. It is
+ * `inFunnel: false` because "a cheaper option with no guarantee, offered before anybody has explained
+ * the guarantee, only splits the decision". A toggle is the answer to that objection rather than an
+ * exception to it: the guaranteed year is what the card argues for and is selected by default, and the
+ * monthly price is available to somebody who goes looking for it without ever competing for the glance.
+ *
+ * ‼️ EACH STATE NAMES A REAL OfferKey, SO NOTHING DOWNSTREAM LEARNS A NEW WORD. "yearly" and
+ * "monthly" are what a visitor sees and what analytics records; `year_3300` and `month_349` are what the
+ * contract, the Slack card and the delivery board already read. Both agreements already exist and
+ * already differ on the guarantee (see the header of config/onboarding2-agreement.ts), so this screen is
+ * a presentation of two offers that were both already sold, not a new commercial arrangement.
+ *
+ * ‼️ AND THE PRICE NOTES ARE THE CONTRACT'S WORDS. The brief for this screen asked the monthly
+ * note to read "cancel anytime". The agreement says thirty days notice, so "anytime" would be a promise
+ * on the pricing card that the document underneath it withdraws. It says what the contract says.
+ */
+export interface BillingState {
+  /** What a visitor sees, and what analytics records. */
+  plan: "yearly" | "monthly";
+  /** The offer this state actually selects. */
+  offer: OfferKey;
+  /** The toggle's own label. */
+  label: string;
+  /** The large price. */
+  price: string;
+  /** The small line under it. */
+  priceNote: string;
+  /** The badge on the toggle, or null. */
+  save: string | null;
+  headline: string;
+  name: string;
+  tagline: string;
+  cta: string;
+  /** Whether the guarantee line is a promise or a struck-through one. */
+  guaranteed: boolean;
+}
+
+export const PAID_BILLING: readonly BillingState[] = [
+  {
+    plan: "yearly",
+    offer: "year_3300",
+    label: "Yearly",
+    price: PRICE_YEAR,
+    priceNote: `Works out to ${PRICE_YEAR_EQUIV}.`,
+    save: `Save ${SAVE_YEARLY_PCT}`,
+    headline: `${GUARANTEE_COUNT} booked appointments guaranteed in ${GUARANTEE_WINDOW}`,
+    name: "Full AI Visibility, Yearly",
+    tagline: "Everything below, and we carry the risk.",
+    cta: "Get my 5 appointments guaranteed",
+    guaranteed: true,
+  },
+  {
+    plan: "monthly",
+    offer: "month_349",
+    label: "Monthly",
+    price: PRICE_MONTH,
+    // The contract's words. See the note above.
+    priceNote: "Billed monthly. Cancel with 30 days notice.",
+    save: null,
+    headline: "Full AI Visibility",
+    name: "Full AI Visibility, Monthly",
+    tagline: "Everything below, month to month.",
+    cta: "Start monthly",
+    guaranteed: false,
+  },
+] as const;
+
+/** The state a visitor lands on. The guaranteed year is what this card argues for. */
+export const DEFAULT_BILLING: BillingState = PAID_BILLING[0];
 
 /**
  * What the /onboarding2 picker offers, in order.
