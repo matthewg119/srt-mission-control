@@ -33,8 +33,10 @@ import {
   MAPS_LIMIT_DEFAULT,
   MAPS_RADIUS_KM_DEFAULT,
   MAPS_SOURCE_DEFAULT,
+  laneHelp,
   looksLikeMapsCommand,
   parseMapsCommand,
+  parseNaturalPull,
 } from "../src/lib/scraper/maps-command";
 import { cityNameFrom, locationVerdict, stateNameFrom } from "../src/lib/scraper/geo";
 import { knownVerticals } from "../src/lib/scraper/icp";
@@ -900,6 +902,35 @@ async function liveMx(): Promise<void> {
   check("a one-line fence keeps its limit", oneLine.ok && oneLine.command.limit === 50);
   // Unwrapping must not turn ordinary chat into a command.
   check("wrapping something else does not make it a command", !looksLikeMapsCommand("`status`"));
+
+  // ‼️ HELP HAS TO COME FROM THE LANE. Asked "workflows", the general assistant answered "I do not
+  // have a pull maps or lead scrape workflow" and offered to search the CRM. Honest and wrong: it
+  // cannot see this channel. A command surface that does not describe itself gets described by
+  // something that has never heard of it.
+  const help = laneHelp();
+  for (const must of ["pull maps", "get me med spa leads", ":one:", ":two:", ":three:", "sendable.csv", "status"]) {
+    check("the help card explains " + must, help.includes(must));
+  }
+  check("and says what :three: is for, which is the one people forget", /build a send list/.test(help));
+  check("no em dash in the help card", !help.includes("—"));
+
+  // Plain English produces the SAME estimate card, which is what makes loose parsing safe here:
+  // nothing is bought until a reaction.
+  const nat = parseNaturalPull("get me some med spa leads from google maps in Dallas TX");
+  check("a plain-English ask parses", nat !== null && nat.ok);
+  if (nat && nat.ok) {
+    eq("into the right vertical", nat.command.vertical, "medspa");
+    eq("and the right metro", nat.command.locationName, "Dallas,Texas,United States");
+  }
+  const withN = parseNaturalPull("find 100 med spa leads near Seattle WA");
+  check("a number in the sentence becomes the limit", withN !== null && withN.ok && withN.command.limit === 100);
+
+  // ‼️ IT REFUSES RATHER THAN DEFAULTING. "Some leads" must never inherit the last city anybody used.
+  const noWhere = parseNaturalPull("get me some med spa leads");
+  check("a missing city is asked for, not assumed", noWhere !== null && !noWhere.ok);
+  check("an unrelated sentence is left alone", parseNaturalPull("how is the weather in Dallas TX") === null);
+  check("and so is a bare ask with no vertical", parseNaturalPull("get me some leads") === null);
+  check("the typed command is not double-handled", parseNaturalPull("pull maps medspa | Dallas TX | med spa") === null);
   check("not a sentence that merely mentions it", !looksLikeMapsCommand("can you pull maps for dallas"));
   check("and not a status check", !looksLikeMapsCommand("status"));
 

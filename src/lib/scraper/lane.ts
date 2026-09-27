@@ -87,7 +87,15 @@ import {
 } from "./rules";
 import { allKeys, countTruncatedNames, dedupeColumns, isKeyActive, splitDuplicates } from "./dedup";
 import { mailProviderOf, resolveMxBatch } from "./mx";
-import { MAPS_GRAMMAR, looksLikeMapsCommand, parseMapsCommand, type MapsCommand } from "./maps-command";
+import {
+  MAPS_GRAMMAR,
+  laneHelp,
+  looksLikeMapsCommand,
+  parseMapsCommand,
+  parseNaturalPull,
+  unwrapCodeText,
+  type MapsCommand,
+} from "./maps-command";
 // The default source. Its endpoint is synchronous, so this half needs no webhook at all.
 import { isConfigured as dfsPlacesConfigured, searchListings } from "@/lib/dataforseo-places";
 // The listings endpoint honours a coordinate and silently ignores a name, so this is not optional.
@@ -391,6 +399,28 @@ export async function handleScraperEvent(event: ScraperEvent): Promise<boolean> 
   // fires on a message starting with "pull maps", and anything that starts that way and is then
   // malformed gets the grammar back rather than a guess. Returning false here instead would send
   // "pull maps ..." to the chat assistant, which would answer it conversationally and buy nothing.
+  // ‼️ HELP COMES FROM THE LANE, NOT THE ASSISTANT. Asked "workflows" on 2026-09-27 the general
+  // assistant answered "I don't have a pull maps or lead scrape workflow", which was honest and
+  // wrong: it cannot see this channel's features. A command surface has to describe itself.
+  if (/^\s*(help|workflows?|commands?|\?)\s*$/i.test(unwrapCodeText(event.text))) {
+    await slack.postMessage(event.channel, laneHelp());
+    return true;
+  }
+
+  // A plain-English ask becomes the same estimate card, which is what makes guessing safe: it
+  // shows back everything it inferred and buys nothing until somebody reacts.
+  {
+    const natural = parseNaturalPull(event.text);
+    if (natural) {
+      if (!natural.ok) {
+        await slack.postMessage(event.channel, [":no_entry: " + natural.reason, "", MAPS_GRAMMAR].join("\n"));
+        return true;
+      }
+      await beginMapsPull(event, natural.command);
+      return true;
+    }
+  }
+
   if (looksLikeMapsCommand(event.text)) {
     const parsed = parseMapsCommand(event.text);
     if (!parsed.ok) {
@@ -1204,7 +1234,12 @@ async function beginMapsPull(event: ScraperEvent, command: MapsCommand): Promise
 
   const started = await startRun({
     label: command.searchQuery,
-    source: "outscraper",
+    // ‼️ THE SOURCE COMES FROM THE COMMAND, NOT A LITERAL. This was hardcoded "outscraper" before a
+    // second source existed, and it survived the source dispatch being added: a DataForSEO pull
+    // recorded itself as an Outscraper one. That is the exact column the attribution this build exists
+    // for reads, so "which vendor produced the leads that converted" would have answered wrongly and
+    // confidently. raw_leads.source was right the whole time, which is what made it invisible.
+    source: command.source,
     queries: [command.searchQuery],
     icp,
     vertical: command.vertical,
