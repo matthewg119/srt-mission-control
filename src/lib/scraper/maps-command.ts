@@ -147,6 +147,17 @@ export function parseMapsCommand(text: string): MapsParse {
   }
 
   const parts = body.split("|").map((p) => p.trim()).filter((p) => p.length > 0);
+  // ‼️ AN ALL-OPTIONS COMMAND IS THE QUEUE FORM, NOT A MALFORMED EXPLICIT ONE. Refusing it here with
+  // "I need three parts" would tell the operator to add a metro to a command whose entire point is
+  // not having one.
+  if (parts.length >= 1 && parts.slice(1).every(isOptionToken)) {
+    return {
+      ok: false,
+      reason:
+        "that is the queue form (`pull maps " + parts[0] + "`), which takes the next metro on the " +
+        "list. It is handled elsewhere, so reaching this is a bug.",
+    };
+  }
   if (parts.length < 3) {
     return {
       ok: false,
@@ -323,9 +334,14 @@ export function laneHelp(): string {
     "*Two ways to start.*",
     "",
     "*A. Pull businesses from Google Maps.* Nothing is bought until you react.",
-    "  `pull maps medspa | Dallas TX | med spa | limit 50`",
+    "  `pull maps medspa | limit 500`  takes the NEXT metro that vertical has not had yet, working " +
+      "down a list of 50 US metros. This is the one to use to cover a market: run it, work the batch, " +
+      "run it again.",
+    "  `pull maps medspa | Dallas TX | med spa | limit 500`  names the metro yourself.",
     "  Or just ask: `get me med spa leads in Dallas TX`",
+    "  `metros` shows how far through the list each vertical is.",
     "  `limit`, `radius <km>` and `via <source>` are optional, in any order.",
+    "  Only one pull runs at a time, so the crawl and the verifier are not fighting for the same tick.",
     "",
     "*B. Drop a CSV.* It needs a company column and a website column. The caption says which " +
       "vertical it is, which decides who the rows are judged against.",
@@ -345,4 +361,148 @@ export function laneHelp(): string {
     "",
     "*Other things you can type:* `status` for the latest batch, `help` or `workflows` for this.",
   ].join("\n");
+}
+
+/**
+ * The metro list a campaign walks, largest first.
+ *
+ * ‼️ ORDER IS THE PLAN. A campaign has no queue table: "what is next" is "the first of these that has
+ * no batch yet", which makes it idempotent, crash-safe and inspectable with one query. Reordering
+ * this list reorders the campaign; removing an entry skips it; adding one appends to the end.
+ *
+ * Written as "City ST" because that is what `stateNameFrom` reads and what an operator would type.
+ */
+export const US_METROS: readonly string[] = [
+  "New York NY", "Los Angeles CA", "Chicago IL", "Dallas TX", "Houston TX",
+  "Atlanta GA", "Washington DC", "Philadelphia PA", "Miami FL", "Phoenix AZ",
+  "Boston MA", "Riverside CA", "San Francisco CA", "Detroit MI", "Seattle WA",
+  "Minneapolis MN", "San Diego CA", "Tampa FL", "Denver CO", "Baltimore MD",
+  "St Louis MO", "Orlando FL", "Charlotte NC", "San Antonio TX", "Portland OR",
+  "Sacramento CA", "Pittsburgh PA", "Austin TX", "Las Vegas NV", "Cincinnati OH",
+  "Kansas City MO", "Columbus OH", "Indianapolis IN", "Cleveland OH", "Nashville TN",
+  "San Jose CA", "Virginia Beach VA", "Providence RI", "Jacksonville FL", "Milwaukee WI",
+  "Raleigh NC", "Oklahoma City OK", "Memphis TN", "Richmond VA", "Louisville KY",
+  "New Orleans LA", "Salt Lake City UT", "Hartford CT", "Buffalo NY", "Birmingham AL",
+];
+
+/**
+ * Is this pipe-separated part an OPTION rather than a metro or a query?
+ *
+ * ‼️ THIS IS WHAT SEPARATES THE TWO COMMAND FORMS, AND COUNTING PARTS DOES NOT.
+ * `pull maps medspa | limit 500 | radius 50` and `pull maps medspa | Dallas TX | med spa` both have
+ * three parts and mean completely different things. What tells them apart is whether the parts after
+ * the vertical are options, so that is the test.
+ */
+function isOptionToken(part: string): boolean {
+  return /^(limit\s+\d{1,4}|radius\s+\d{1,4}|via\s+[a-z]+)$/i.test(part.trim());
+}
+
+export interface NextMetroCommand {
+  vertical: string;
+  limit: number;
+  radiusKm: number;
+  source: MapsSource;
+}
+
+export type NextMetroParse =
+  | { ok: true; command: NextMetroCommand }
+  | { ok: false; reason: string };
+
+/**
+ * `pull maps medspa`, with no metro: take the next one that has not been pulled.
+ *
+ * ‼️ IT IS A SEPARATE PARSE, NOT A LOOSER VERSION OF THE OTHER ONE. `parseMapsCommand` refuses a
+ * missing metro on purpose, because a pull that guesses its own location buys the wrong city. This
+ * does not guess: it reads an ordered list and takes the first unclaimed entry, which is a different
+ * thing and has to look different at the call site.
+ *
+ * Returns null when the text is not this shape at all, so the caller can fall through.
+ */
+export function parseNextMetroCommand(text: string): NextMetroParse | null {
+  const t = unwrapCode(text);
+  if (!looksLikeMapsCommand(t)) return null;
+
+  const body = t.replace(/^\s*pull\s+maps\b/i, "").trim();
+  const parts = body.split("|").map((p) => p.trim()).filter(Boolean);
+  // Every part after the vertical must be an option. A part that is not one is a metro, and the
+  // explicit parser owns that shape.
+  if (parts.length === 0) return null;
+  if (!parts.slice(1).every(isOptionToken)) return null;
+
+  const vertical = parts[0].toLowerCase().replace(/\s+/g, "");
+  if (!knownVerticals().includes(vertical)) {
+    return {
+      ok: false,
+      reason:
+        "`" + parts[0] + "` is not a vertical I have a buyer profile for. Known: " +
+        knownVerticals().map((v) => "`" + v + "`").join(", ") +
+        ". Add one in `src/lib/scraper/icp.ts` first, because a pull that cannot be judged is money " +
+        "spent for nothing.",
+    };
+  }
+
+  let limit = MAPS_LIMIT_DEFAULT;
+  let radiusKm = MAPS_RADIUS_KM_DEFAULT;
+  let source: MapsSource = MAPS_SOURCE_DEFAULT;
+  for (const tail of parts.slice(1)) {
+    const via = /^via\s+([a-z]+)$/i.exec(tail);
+    if (via) {
+      const want = via[1].toLowerCase();
+      if (want !== "dataforseo" && want !== "outscraper") {
+        return { ok: false, reason: "`" + via[1] + "` is not a source I have. Use `dataforseo` or `outscraper`." };
+      }
+      source = want;
+      continue;
+    }
+    const rad = /^radius\s+(\d{1,4})$/i.exec(tail);
+    if (rad) {
+      radiusKm = Number(rad[1]);
+      if (radiusKm < 1 || radiusKm > MAPS_RADIUS_KM_MAX) {
+        return { ok: false, reason: "a radius of " + radiusKm + "km is outside 1 to " + MAPS_RADIUS_KM_MAX + "km." };
+      }
+      continue;
+    }
+    const lim = /^limit\s+(\d{1,4})$/i.exec(tail);
+    if (!lim) {
+      return {
+        ok: false,
+        reason: "I did not understand `" + tail + "`. After the vertical you can add `limit <n>`, `radius <km>` or `via <source>`.",
+      };
+    }
+    limit = Math.max(1, Math.min(MAPS_LIMIT_MAX, Number(lim[1])));
+  }
+  return { ok: true, command: { vertical, limit, radiusKm, source } };
+}
+
+/**
+ * The first metro with no pull yet, given the labels of every pull that has happened.
+ *
+ * ‼️ DONE-NESS IS DERIVED FROM THE COMMANDS THEMSELVES, NOT FROM A QUEUE TABLE. Every Maps batch
+ * stores its command verbatim in `scraper_batches.batch_label`, so re-parsing those answers "which
+ * metros has this vertical had" exactly, with no second copy of the truth to drift. A campaign that
+ * dies halfway resumes correctly because nothing was ever written down about its intent.
+ */
+export function nextMetro(vertical: string, pastLabels: readonly string[]): string | null {
+  const done = new Set<string>();
+  for (const label of pastLabels) {
+    const parsed = parseMapsCommand(label);
+    if (parsed.ok && parsed.command.vertical === vertical) done.add(parsed.command.metro.toLowerCase());
+  }
+  return US_METROS.find((m) => !done.has(m.toLowerCase())) ?? null;
+}
+
+/** How far through the list this vertical is. For the progress card. */
+export function metroProgress(
+  vertical: string,
+  pastLabels: readonly string[]
+): { done: string[]; remaining: string[] } {
+  const seen = new Set<string>();
+  for (const label of pastLabels) {
+    const parsed = parseMapsCommand(label);
+    if (parsed.ok && parsed.command.vertical === vertical) seen.add(parsed.command.metro.toLowerCase());
+  }
+  return {
+    done: US_METROS.filter((m) => seen.has(m.toLowerCase())),
+    remaining: US_METROS.filter((m) => !seen.has(m.toLowerCase())),
+  };
 }
