@@ -139,9 +139,56 @@ const SCRIPT_FILES: Array<[string, string]> = readdirSync("scripts")
 
 const READER_FILES = [...SRC_FILES, ...SCRIPT_FILES].map(([p, c]) => [p, stripTsComments(c)] as [string, string]);
 
+/**
+ * Migrations this census could not read as UTF-8. Named and failed in §1.
+ *
+ * ‼️ A MIGRATION THE PARSER CANNOT READ IS A MIGRATION WHOSE COLUMNS DO NOT EXIST AS FAR AS THIS PROBE
+ * IS CONCERNED, AND IT SAID "All checks passed" ANYWAY. Found on 2026-09-27 while proving the ratchet
+ * works: `echo "alter table ..." > docs/x.sql` in PowerShell writes **UTF-16LE with a BOM**, because
+ * that is what `>` does in Windows PowerShell 5.1. readFileSync(..., "utf8") then yields
+ * `a\0l\0t\0e\0r\0`, no regex matches, and the file contributes nothing. The deliberately-planted test
+ * column was invisible and the probe went green — the exact "green for the wrong reason" failure §8
+ * exists to catch, arriving through the file reader instead of the grep.
+ *
+ * It is DECODED so the census is complete, AND reported so the encoding gets fixed, rather than one or
+ * the other. Decoding alone would hide a real defect: a UTF-16 .sql file also breaks psql and the
+ * Supabase editor, so it is worth somebody's attention even though this probe can now cope with it.
+ * Same shape as the strategy card printing the disagreement instead of silently correcting it.
+ */
+/**
+ * ‼️ `String.fromCharCode(0)`, NEVER a backslash-u escape written into this file. An editor that
+ * resolves the escape puts a REAL NUL byte in the source, which makes grep treat the whole file as
+ * binary and skip it silently. Measured here on 2026-09-27. Same reason _step-wiring.ts declares CR
+ * this way rather than writing the character.
+ */
+const NUL = String.fromCharCode(0);
+
+const BAD_ENCODING: string[] = [];
+
+function readSql(path: string): string {
+  const buf = readFileSync(path);
+  // UTF-16LE (ff fe) and UTF-16BE (fe ff) byte-order marks. Anything else is assumed UTF-8, and a
+  // stray BOM on a UTF-8 file is harmless to these regexes.
+  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) {
+    BAD_ENCODING.push(`${path} (UTF-16LE)`);
+    return buf.subarray(2).toString("utf16le");
+  }
+  if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) {
+    BAD_ENCODING.push(`${path} (UTF-16BE)`);
+    return buf.subarray(2).swap16().toString("utf16le");
+  }
+  const text = buf.toString("utf8");
+  // A BOM-less UTF-16 file has no marker, so fall back to the symptom: NUL bytes do not occur in SQL.
+  if (text.includes(NUL)) {
+    BAD_ENCODING.push(`${path} (NUL bytes, probably UTF-16 with no BOM)`);
+    return buf.toString("utf16le");
+  }
+  return text;
+}
+
 const SQL_FILES: Array<[string, string]> = readdirSync("docs")
   .filter((f) => /\.sql$/.test(f))
-  .map((f) => [`docs/${f}`, readFileSync(join("docs", f), "utf8")]);
+  .map((f) => [`docs/${f}`, readSql(join("docs", f))]);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. The SQL side: every column this repo declares, attributed to its table
@@ -298,6 +345,15 @@ for (const d of declared) {
 
 console.log("\n1. the SQL census");
 check("every docs/*.sql was read", SQL_FILES.length >= 195, `${SQL_FILES.length} files`);
+// ‼️ "READ" AND "READ CORRECTLY" ARE DIFFERENT CLAIMS, AND ONLY THE FIRST WAS BEING MADE. The check
+// above counts files; this one says the bytes were text this parser understands. A UTF-16 migration
+// counts toward the number, contributes zero columns, and takes the probe green with it.
+check(
+  "and every one of them was readable as UTF-8",
+  BAD_ENCODING.length === 0,
+  `${BAD_ENCODING.join(", ")}. Re-save as UTF-8. In PowerShell, \`>\` writes UTF-16: use ` +
+    `\`Set-Content -Encoding utf8\`, or write the file from an editor.`
+);
 check("columns were found at all", DECLARED.size > 1500, `${DECLARED.size} table.column pairs`);
 check("drop column is subtracted", dropped.size >= 4, `${dropped.size} dropped`);
 check(

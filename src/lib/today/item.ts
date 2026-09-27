@@ -159,11 +159,26 @@ export function compareDayItems(a: DayItem, b: DayItem): number {
  * ‼️ A LANE WITH NOTHING IN IT IS NOT RENDERED. An empty "Outreach" heading every morning teaches
  * somebody to skim past the headings, and then a real one is missed.
  */
-export function groupByRole(items: readonly DayItem[], roleOrder: readonly DayRole[], labels: Record<DayRole, string>): {
+export function groupByRole(
+  items: readonly DayItem[],
+  roleOrder: readonly DayRole[],
+  labels: Record<DayRole, string>,
+  /**
+   * "Now", so a test can state it instead of racing the wall clock.
+   *
+   * ‼️ IT WAS `Date.now()` INSIDE, AND THAT MADE _probe-today A TIME BOMB. The probe builds its
+   * fixtures around a frozen `NOW = 2026-09-23T15:00:00Z` and defers an item to `NOW + 1 day`, but
+   * this function read the REAL clock, so the moment the real date passed 2026-09-24 that "future"
+   * deferral was in the past and two checks failed. Nobody changed anything; it broke by the calendar
+   * turning over, which is the worst kind of red because it teaches people the probe is unreliable.
+   *
+   * Defaulting to Date.now() keeps every existing caller unchanged.
+   */
+  now: number = Date.now()
+): {
   groups: DayGroup[];
   later: DayItem[];
 } {
-  const now = Date.now();
   const later: DayItem[] = [];
   const live: DayItem[] = [];
 

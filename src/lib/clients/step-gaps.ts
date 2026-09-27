@@ -215,6 +215,10 @@ const MAX_BULLETS = 5;
  * twenty bullets is the wall this function was written to stop being. The tail line is still
  * emitted, so a truncated list always says how much it truncated.
  */
+/** A separator that cannot occur in a remedy sentence. `String.fromCharCode(0)` rather than an
+ *  escape, so no real NUL byte is ever written into this source. */
+const GROUP_SEP = String.fromCharCode(0);
+
 export function gapLines(g: StepGaps, max: number = MAX_BULLETS): string[] {
   if (g.nothingWhy) {
     return [`*Step ${g.number}* asks for nothing from the datasets: ${g.nothingWhy}.`];
@@ -249,7 +253,7 @@ export function gapLines(g: StepGaps, max: number = MAX_BULLETS): string[] {
   // is what readinessFor reads, so this was the card disagreeing with the gate it explains.
   const groups = new Map<string, Gap[]>();
   for (const gap of g.gaps) {
-    const key = `${gap.blocking ? "needs" : "wants"} ${gap.fill.text}`;
+    const key = `${gap.blocking ? "needs" : "wants"}${GROUP_SEP}${gap.fill.text}`;
     const list = groups.get(key) ?? [];
     list.push(gap);
     groups.set(key, list);

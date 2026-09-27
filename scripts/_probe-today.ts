@@ -147,12 +147,15 @@ const g1 = groupByRole([unpinnedHigh, pinnedLow], ROLE_ORDER, ROLE_LABEL);
 check("a pin beats a score", g1.groups[0].items[0].key === "a", g1.groups[0].items.map((i) => i.key).join(","));
 
 const future = new Date(NOW + 86_400_000).toISOString();
-const g2 = groupByRole([item({ key: "c" }), item({ key: "d", deferredUntil: future })], ROLE_ORDER, ROLE_LABEL);
+// ‼️ NOW IS PASSED IN, NOT READ OFF THE CLOCK. `future` and `past` are relative to the frozen NOW
+// above, so without this the deferral checks below start failing on their own the day the real date
+// passes NOW + 1, which is exactly what happened on 2026-09-25.
+const g2 = groupByRole([item({ key: "c" }), item({ key: "d", deferredUntil: future })], ROLE_ORDER, ROLE_LABEL, NOW);
 check("a deferred item leaves the lanes", g2.groups[0].items.every((i) => i.key !== "d"));
 check("and is still shown under Not today", g2.later.some((i) => i.key === "d"));
 
 const past = new Date(NOW - 86_400_000).toISOString();
-const g3 = groupByRole([item({ key: "e", deferredUntil: past })], ROLE_ORDER, ROLE_LABEL);
+const g3 = groupByRole([item({ key: "e", deferredUntil: past })], ROLE_ORDER, ROLE_LABEL, NOW);
 check("a defer that has expired comes back", g3.groups.some((g) => g.items.some((i) => i.key === "e")));
 
 // ‼️ AN EMPTY LANE EVERY MORNING TEACHES SOMEBODY TO SKIM PAST THE HEADINGS.
