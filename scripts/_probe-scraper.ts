@@ -36,8 +36,12 @@ import {
   MAPS_SOURCE_DEFAULT,
   laneHelp,
   looksLikeMapsCommand,
+  US_METROS,
+  metroProgress,
+  nextMetro,
   parseMapsCommand,
   parseNaturalPull,
+  parseNextMetroCommand,
 } from "../src/lib/scraper/maps-command";
 import { cityNameFrom, locationVerdict, stateNameFrom } from "../src/lib/scraper/geo";
 import { knownVerticals } from "../src/lib/scraper/icp";
@@ -1105,6 +1109,72 @@ async function liveMx(): Promise<void> {
   check("punctuation in a name does not reach the address", !permutations("Ashraf G. Andrawis", "clinic.com").some((e) => /[^a-z0-9@._-]/.test(e)));
 }
 
+// ── The metro queue ─────────────────────────────────────────────────────────────────────────────
+// ‼️ TWO COMMAND FORMS THAT LOOK ALIKE AND MEAN DIFFERENT THINGS. `pull maps medspa | limit 500 |
+// radius 50` and `pull maps medspa | Dallas TX | med spa` both have three pipe-separated parts.
+// Counting parts cannot tell them apart; whether the parts after the vertical are OPTIONS can.
+{
+  const queueForms = [
+    "pull maps medspa",
+    "pull maps medspa | limit 500",
+    "pull maps medspa | limit 500 | radius 50",
+    "pull maps medspa | limit 500 | radius 50 | via outscraper",
+  ];
+  for (const t of queueForms) {
+    const q = parseNextMetroCommand(t);
+    check("the queue form claims: " + t, q !== null && q.ok);
+    check("and the explicit parser does not take it: " + t, !parseMapsCommand(t).ok);
+  }
+  const explicitForms = [
+    "pull maps medspa | Dallas TX | med spa",
+    "pull maps medspa | Dallas TX | med spa | limit 500",
+    "pull maps dentist | Phoenix AZ | implants",
+  ];
+  for (const t of explicitForms) {
+    check("the explicit form claims: " + t, parseMapsCommand(t).ok);
+    check("and the queue parser declines it: " + t, parseNextMetroCommand(t) === null);
+  }
+
+  const q = parseNextMetroCommand("pull maps medspa | limit 500 | radius 50 | via outscraper");
+  if (q && q.ok) {
+    eq("options carry through: limit", q.command.limit, 500);
+    eq("options carry through: radius", q.command.radiusKm, 50);
+    eq("options carry through: source", q.command.source, "outscraper");
+  }
+  check("an unknown vertical is still refused", parseNextMetroCommand("pull maps plumbers")?.ok === false);
+  check("ordinary chat is not a queue command", parseNextMetroCommand("metros") === null);
+
+  // ‼️ DONE-NESS IS DERIVED FROM THE COMMANDS THEMSELVES. No queue table means nothing to drift, and
+  // a campaign that dies halfway resumes by asking the same question again.
+  eq("with no history, the first metro is next", nextMetro("medspa", []), US_METROS[0]);
+  eq(
+    "a pulled metro is skipped",
+    nextMetro("medspa", ["pull maps medspa | " + US_METROS[0] + " | med spa"]),
+    US_METROS[1]
+  );
+  eq(
+    "another vertical's history does not count",
+    nextMetro("dentist", ["pull maps medspa | " + US_METROS[0] + " | med spa"]),
+    US_METROS[0]
+  );
+  eq(
+    "an unreadable label is ignored rather than crashing",
+    nextMetro("medspa", ["some nonsense somebody typed"]),
+    US_METROS[0]
+  );
+  const prog = metroProgress("medspa", ["pull maps medspa | " + US_METROS[0] + " | med spa"]);
+  eq("progress counts what is done", prog.done.length, 1);
+  eq("and what is left", prog.remaining.length, US_METROS.length - 1);
+
+  // The list itself has to be usable by the geocoder, or a campaign buys nothing 50 times.
+  check("every metro resolves a state", US_METROS.every((m) => stateNameFrom(m) !== null));
+  check("and a city", US_METROS.every((m) => (cityNameFrom(m) ?? "").length > 1));
+  check("no duplicates in the list", new Set(US_METROS.map((m) => m.toLowerCase())).size === US_METROS.length);
+  check(
+    "every metro round-trips through the explicit parser",
+    US_METROS.every((m) => parseMapsCommand("pull maps medspa | " + m + " | med spa").ok)
+  );
+}
 // Wrapped rather than top-level await: tsx transforms this to CJS and rejects one.
 async function main(): Promise<void> {
   await liveMx();

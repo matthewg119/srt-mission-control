@@ -90,7 +90,12 @@ import { allKeys, countTruncatedNames, dedupeColumns, isKeyActive, splitDuplicat
 import { mailProviderOf, resolveMxBatch } from "./mx";
 import {
   MAPS_GRAMMAR,
+  US_METROS,
   laneHelp,
+  metroProgress,
+  nextMetro,
+  parseNextMetroCommand,
+  type NextMetroCommand,
   looksLikeMapsCommand,
   parseMapsCommand,
   parseNaturalPull,
@@ -105,6 +110,8 @@ import { geocodeMetro } from "@/lib/geocode";
 // it never had.
 import { submitMapsSearch } from "@/lib/outscraper";
 import {
+  activeMapsPull,
+  mapsCommandLabels,
   addScoreCost,
   allRows,
   applyMvResults,
@@ -420,6 +427,27 @@ export async function handleScraperEvent(event: ScraperEvent): Promise<boolean> 
       await beginMapsPull(event, natural.command);
       return true;
     }
+  }
+
+  // ‼️ THE QUEUE FORM IS TRIED BEFORE THE EXPLICIT ONE, because `pull maps medspa` with no metro is
+  // not a malformed explicit command, it is a different command. parseNextMetroCommand returns null
+  // for anything carrying a metro, so the two cannot both claim a message.
+  {
+    const queued = parseNextMetroCommand(event.text);
+    if (queued) {
+      if (!queued.ok) {
+        await slack.postMessage(event.channel, [":no_entry: " + queued.reason, "", MAPS_GRAMMAR].join("\n"));
+        return true;
+      }
+      await startNextMetro(event, queued.command);
+      return true;
+    }
+  }
+
+  // `metros` on its own: how far through the list each vertical is.
+  if (/^\s*metros?\s*(medspa|dentist)?\s*$/i.test(unwrapCodeText(event.text))) {
+    await postMetroProgress(event.channel, unwrapCodeText(event.text));
+    return true;
   }
 
   if (looksLikeMapsCommand(event.text)) {
@@ -1256,6 +1284,83 @@ async function beginMapsPull(event: ScraperEvent, command: MapsCommand): Promise
 
   const fresh = (await getBatch(batch.id)) ?? batch;
   await postPullEstimate(fresh, command);
+}
+
+
+/**
+ * Start the next metro this vertical has not had yet.
+ *
+ * ‼️ IT REFUSES WHILE ANOTHER PULL IS RUNNING, and that is the whole campaign mechanism. Two pulls in
+ * flight means two qualification sweeps, two crawls and two MillionVerifier uploads competing for one
+ * cron budget, and no way to say which metro the lane is on. So a campaign is not a scheduler: it is
+ * a command you give again, which each time takes the next unclaimed metro and refuses if the last
+ * one has not finished. Nothing to start, nothing to stop, nothing to leave running by accident.
+ */
+async function startNextMetro(event: ScraperEvent, want: NextMetroCommand): Promise<void> {
+  const running = await activeMapsPull();
+  if (running) {
+    const where = parseMapsCommand(running.batch_label ?? "");
+    await slack.postMessage(
+      event.channel,
+      ":hourglass: *A pull is already running*" +
+        (where.ok ? " for `" + where.command.metro + "`" : "") +
+        " at stage `" + running.status + "`. One at a time, so the crawl and the verifier are not " +
+        "fighting each other for the same cron budget. Ask again when it lands."
+    );
+    return;
+  }
+
+  const labels = await mapsCommandLabels();
+  const metro = nextMetro(want.vertical, labels);
+  if (!metro) {
+    const progress = metroProgress(want.vertical, labels);
+    await slack.postMessage(
+      event.channel,
+      ":checkered_flag: *Every metro on the list has been pulled for `" + want.vertical + "`* (" +
+        progress.done.length + " of " + progress.done.length + "). Add more to `US_METROS` in " +
+        "`src/lib/scraper/maps-command.ts`, or name a city directly."
+    );
+    return;
+  }
+
+  // Rebuilt as a normal command string so there is exactly ONE parser, and so the batch label that
+  // gets stored is the same shape a human would have typed. That label is what `nextMetro` reads
+  // back, so it has to round-trip.
+  const text =
+    "pull maps " + want.vertical + " | " + metro + " | " + want.vertical +
+    " | limit " + want.limit + " | radius " + want.radiusKm + " | via " + want.source;
+  const parsed = parseMapsCommand(text);
+  if (!parsed.ok) {
+    await slack.postMessage(event.channel, ":no_entry: I built a command for `" + metro + "` that I cannot read back: " + parsed.reason);
+    return;
+  }
+
+  const progress = metroProgress(want.vertical, labels);
+  await slack.postMessage(
+    event.channel,
+    ":round_pushpin: Next up: *" + metro + "*  (" + (progress.done.length + 1) + " of " +
+      US_METROS.length + " metros for `" + want.vertical + "`)"
+  );
+  await beginMapsPull({ ...event, text }, parsed.command);
+}
+
+/** How far through the metro list each vertical is. */
+async function postMetroProgress(channel: string, text: string): Promise<void> {
+  const asked = /medspa|dentist/i.exec(text)?.[0]?.toLowerCase();
+  const labels = await mapsCommandLabels();
+  const lines: string[] = [];
+  for (const vertical of knownVerticals()) {
+    if (asked && vertical !== asked) continue;
+    const p = metroProgress(vertical, labels);
+    lines.push(
+      "*" + vertical + "*: " + p.done.length + " of " + US_METROS.length + " metros pulled." +
+        (p.remaining.length ? "  Next: `" + p.remaining[0] + "`" : "  Done.")
+    );
+    if (p.done.length) lines.push("  _pulled: " + p.done.slice(0, 12).join(", ") + (p.done.length > 12 ? ", ..." : "") + "_");
+  }
+  lines.push("");
+  lines.push("`pull maps <vertical>` takes the next one. `pull maps <vertical> | <metro> | <query>` names it yourself.");
+  await slack.postMessage(channel, lines.join("\n"));
 }
 
 /**

@@ -334,6 +334,48 @@ const ACTIVE_STATUSES: BatchStatus[] = [
   "awaiting_pull_approval",
 ];
 
+/**
+ * Every Maps command this lane has ever been given, verbatim.
+ *
+ * ‼️ THIS IS THE CAMPAIGN'S ONLY MEMORY, AND IT IS DELIBERATELY NOT A QUEUE TABLE. A campaign asks
+ * "which metros has this vertical had" and answers it by re-parsing the commands themselves, so
+ * there is no second copy of the intent to drift, nothing to reconcile after a crash, and a resumed
+ * campaign is simply the same question asked again.
+ *
+ * Failed batches COUNT as claimed. A metro whose pull errored should not be silently re-bought by
+ * the next `pull maps medspa`; somebody should look at why it failed and re-run it by name.
+ */
+export async function mapsCommandLabels(): Promise<string[]> {
+  const { data, error } = await supabaseAdmin
+    .from("scraper_batches")
+    .select("batch_label")
+    .eq("workflow", "mapspull")
+    .not("batch_label", "is", null)
+    .order("created_at", { ascending: true });
+  if (error) throw new Error("mapsCommandLabels: " + error.message);
+  return (data ?? []).map((r) => String((r as { batch_label?: unknown }).batch_label ?? "")).filter(Boolean);
+}
+
+/**
+ * A Maps pull that is still going, if there is one.
+ *
+ * ‼️ ONE AT A TIME, ON PURPOSE. Two pulls in flight means two qualification sweeps, two crawls and
+ * two MillionVerifier uploads competing for the same cron budget, and a campaign that cannot say
+ * which metro it is on. The gate is cheap: a campaign simply waits its turn.
+ */
+export async function activeMapsPull(): Promise<BatchRow | null> {
+  const { data, error } = await supabaseAdmin
+    .from("scraper_batches")
+    .select(BATCH_COLUMNS)
+    .eq("workflow", "mapspull")
+    .in("status", ACTIVE_STATUSES)
+    .order("created_at", { ascending: true })
+    .limit(1);
+  if (error) throw new Error("activeMapsPull: " + error.message);
+  const rows = (data ?? []) as unknown as BatchRow[];
+  return rows[0] ?? null;
+}
+
 export async function activeBatches(): Promise<BatchRow[]> {
   const { data, error } = await supabaseAdmin
     .from("scraper_batches")

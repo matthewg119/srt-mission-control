@@ -19,7 +19,22 @@
 
 import { callClaudeJSON } from "@/lib/claude-calls";
 
-const MODEL = "claude-sonnet-4-6" as const;
+/**
+ * ‼️ HAIKU, AND IT WAS MEASURED RATHER THAN ASSUMED. Swapping a model to save money is only a saving
+ * if it judges the same way, so both were run over the SAME 35 Dallas rows that reached the model on
+ * 2026-09-27: they agreed on 34 of 35, which is 97%.
+ *
+ * The single disagreement is the reassuring part. Haiku kept `VIO Med Spa | Richardson`, a franchise
+ * Sonnet dropped, and that is the SAFE direction to be wrong in: a false keep costs a crawl, which is
+ * free, and at worst one MillionVerifier credit. A false drop loses a lead nobody will ever look at
+ * again. Rule 3 of the system prompt already asks for exactly that bias.
+ *
+ * Cost, at the published rates: $2.56 per 10,000 businesses against $7.69 on sonnet-4-6.
+ *
+ * Re-measure before assuming this holds for a new vertical. Telling a med spa from a nail salon is
+ * not the same task as telling a plumber from a handyman.
+ */
+const MODEL = "claude-haiku-4-5-20251001" as const;
 
 /**
  * Stamped onto every verdict as `raw_leads.qualify_model`.
