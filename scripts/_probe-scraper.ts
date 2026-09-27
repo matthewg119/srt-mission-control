@@ -874,6 +874,32 @@ async function liveMx(): Promise<void> {
   // The anchor must not swallow ordinary chat, because returning true hides the message from the
   // general assistant.
   check("it claims only messages that start with the command", looksLikeMapsCommand("pull maps medspa | A | B"));
+
+  // ‼️ SLACK CODE FORMATTING COST A REAL PULL ON 2026-09-27. The operator typed the command as code,
+  // which is the natural thing to do with something that looks like a command, so the text arrived
+  // wrapped in backticks, the anchor missed, handleScraperEvent returned false, and the message fell
+  // through to the general assistant, which answered it from the existing database. It LOOKED like the
+  // command had run and returned 25 leads. Nothing ran and nothing was bought.
+  //
+  // A command surface that is also a chat surface has to be generous about formatting, because the
+  // fallback is not an error, it is a different bot answering plausibly.
+  const wrapped: Array<[string, string]> = [
+    ["inline backticks", "`pull maps medspa | Dallas TX | med spa | limit 50`"],
+    ["double backticks", "``pull maps medspa | Dallas TX | med spa``"],
+    ["one-line fence", "```pull maps medspa | Dallas TX | med spa | limit 50```"],
+    ["fence with newlines", "```\npull maps medspa | Dallas TX | med spa | limit 50\n```"],
+    ["fence with a language", "```sh\npull maps medspa | Dallas TX | med spa\n```"],
+  ];
+  for (const [label, text] of wrapped) {
+    check("a command wrapped in " + label + " is still claimed", looksLikeMapsCommand(text));
+    const parsed = parseMapsCommand(text);
+    check("and still parses: " + label, parsed.ok, parsed.ok ? "" : parsed.reason);
+  }
+  // The one-line fence is the case a lazy language-tag matcher gets wrong by eating the word "pull".
+  const oneLine = parseMapsCommand("```pull maps medspa | Dallas TX | med spa | limit 50```");
+  check("a one-line fence keeps its limit", oneLine.ok && oneLine.command.limit === 50);
+  // Unwrapping must not turn ordinary chat into a command.
+  check("wrapping something else does not make it a command", !looksLikeMapsCommand("`status`"));
   check("not a sentence that merely mentions it", !looksLikeMapsCommand("can you pull maps for dallas"));
   check("and not a status check", !looksLikeMapsCommand("status"));
 
