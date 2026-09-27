@@ -28,7 +28,16 @@ import {
   checkSuppression,
 } from "@/lib/outreach/suppression";
 import { configuredProviders, estimateCost, enrichLines, summarize, PROVIDERS } from "@/lib/scraper/enrich";
-import { funnelLines, extractInstagram, fromOutscraper } from "@/lib/scraper/pull";
+import { funnelLines, extractInstagram, fromOutscraper, storeRawLeads } from "@/lib/scraper/pull";
+import {
+  DEFAULT_VERTICAL,
+  DENTIST_ICP,
+  ICP_BY_VERTICAL,
+  MED_SPA_ICP,
+  icpFor,
+  knownVerticals,
+  resolveVertical,
+} from "@/lib/scraper/icp";
 
 type Row = Record<string, unknown>;
 interface TxSQL {
@@ -81,16 +90,25 @@ async function main() {
       "run_id", "source", "source_query", "source_metro", "place_id", "business_name", "domain",
       "website", "phone", "phone_normalized", "vertical_slug", "business_type", "avatar_slug",
       "found_in_sources", "qualify_keep", "qualify_reason", "qualify_model", "qualified_at",
+      "enriched_at", "enrich_attempts",
     ],
     list_pipeline_runs: [
       "batch_id", "label", "source", "source_queries", "icp_text", "stage", "raw_count",
       "qualified_count", "enriched_count", "verified_count", "sendable_count", "provider_spend",
       "cost_usd", "spend_approved_at", "drop_review_ts",
+      // Were missing from this map while the code already named them, so nothing checked them.
+      "spend_approved_by", "slack_channel_id", "slack_thread_ts", "vertical_slug",
+      // The Maps door: the poll's terminal marker, the request id, and the spend gate.
+      "pull_request_id", "pull_finished_at", "pull_approval_ts",
     ],
     sendable_leads: [
       "run_id", "raw_lead_id", "email", "first_name", "last_name", "title", "provider",
       "provider_cost_usd", "attempts", "email_status", "catchall_rechecked_at", "suppressed_reason",
+      "suppressed_at", "sent_at",
     ],
+    // ‼️ THE ATTRIBUTION COLUMN, AND THE ONLY THING IN THIS BUILD THAT CANNOT BE BACKFILLED. A run
+    // mailed without it can never be traced to the list that produced it.
+    outreach_prospects: ["run_id", "email", "website", "source", "campaign", "confirmed"],
   };
 
   for (const [table, cols] of Object.entries(COLUMNS)) {
@@ -102,15 +120,87 @@ async function main() {
     );
   }
 
+
   // ── 2. The stage machine, and the order that is the whole point ───────────
   console.log("\n2. the stages, and that qualifying comes before enriching");
 
   const sql = new SQL(process.env.DATABASE_URL!) as unknown as TxSQL;
+  // ── 1b. raw_leads can actually be WRITTEN, which is not what the column check proves ──────
+  // ‼️ THIS WHOLE BLOCK EXISTS BECAUSE THE SCHEMA CHECKS ABOVE PASSED WHILE EVERY INSERT FAILED.
+  // raw_leads_run_place was a PARTIAL unique index (where place_id is not null), and Postgres will
+  // not use a partial index for ON CONFLICT unless the statement repeats the predicate, which
+  // PostgREST's on_conflict parameter cannot express. So storeRawLeads returned "no unique or
+  // exclusion constraint matching the ON CONFLICT specification" on every call and inserted nothing,
+  // for BOTH the CSV arm and the Maps webhook. Reading the columns back could never have caught it.
+  {
+    const [idx] = await sql`select indexdef from pg_indexes
+      where schemaname = 'public' and tablename = 'raw_leads' and indexname = 'raw_leads_run_place'`;
+    const def = String(idx?.indexdef ?? "");
+    check("the idempotency index exists", def.length > 0);
+    check(
+      "and is NOT partial, or ON CONFLICT cannot target it",
+      def.length > 0 && !/where/i.test(def),
+      def
+    );
+
+    // The behavioural half: go through storeRawLeads itself, the way both arms do.
+    const { data: made } = await supabaseAdmin
+      .from("list_pipeline_runs")
+      .insert({ label: "_probe write path", source: "outscraper", icp_text: "probe", stage: "pulling", vertical_slug: "medspa" })
+      .select("id")
+      .single();
+    const probeRunId = (made as { id: string } | null)?.id ?? null;
+    check("a probe run could be opened", Boolean(probeRunId));
+    if (probeRunId) {
+      const one = fromOutscraper(
+        { name: "Probe Write Path Spa", site: "https://probewritepath.example", place_id: "probe_write_1" },
+        { runId: probeRunId, sourceQuery: "probe", sourceMetro: "Nowhere", verticalSlug: "medspa" }
+      );
+      check("fromOutscraper maps a record", Boolean(one));
+      if (one) {
+        const first = await storeRawLeads([one]);
+        check("storeRawLeads INSERTS, rather than erroring on ON CONFLICT", first.inserted === 1, JSON.stringify(first));
+        const again = await storeRawLeads([one]);
+        check("and the same place twice is skipped, not duplicated", again.inserted === 0, JSON.stringify(again));
+
+        // A record with no place_id must still be idempotent, or a re-driven pull duplicates it.
+        const placeless = fromOutscraper(
+          { name: "Probe Placeless Spa", site: "https://probeplaceless.example" },
+          { runId: probeRunId, sourceQuery: "probe", sourceMetro: "Nowhere", verticalSlug: "medspa" }
+        );
+        check("a placeless record gets a synthetic id", Boolean(placeless?.placeId), String(placeless?.placeId));
+        if (placeless) {
+          await storeRawLeads([placeless]);
+          const twice = await storeRawLeads([placeless]);
+          check("so a re-driven pull does not duplicate it", twice.inserted === 0, JSON.stringify(twice));
+        }
+      }
+      await supabaseAdmin.from("raw_leads").delete().eq("run_id", probeRunId);
+      await supabaseAdmin.from("list_pipeline_runs").delete().eq("id", probeRunId);
+      const { count } = await supabaseAdmin
+        .from("raw_leads")
+        .select("id", { count: "exact", head: true })
+        .eq("run_id", probeRunId);
+      check("the probe cleaned up after itself", (count ?? 0) === 0);
+    }
+  }
   const [cons] = await sql`select pg_get_constraintdef(oid) as def from pg_constraint
     where conname = 'scraper_batches_status_check'`;
   const def = String(cons?.def ?? "");
-  for (const stage of ["pulling", "qualifying", "qualified", "enriching", "catchall_recheck", "suppressing"]) {
+  for (const stage of [
+    "pulling", "qualifying", "qualified", "enriching", "catchall_recheck", "suppressing",
+    // The 4️⃣ door's spend gate. Postgres refuses the status until the constraint is widened, which
+    // is the trap that has already cost this lane one session.
+    "awaiting_pull_approval",
+  ]) {
     check(`${stage} is a legal stage`, def.includes(`'${stage}'`));
+  }
+
+  const [wfCons] = await sql`select pg_get_constraintdef(oid) as def from pg_constraint
+    where conname = 'scraper_batches_workflow_check'`;
+  const wfDef = String(wfCons?.def ?? "");
+  for (const arm of ["filter", "score", "listprep", "mapspull"]) {
+    check(`${arm} is a legal workflow`, wfDef.includes(`'${arm}'`), "widened, never narrowed");
   }
   for (const old of ["awaiting_workflow", "parsing", "mx", "filtered", "verifying", "done", "error", "scoring", "scored"]) {
     check(`${old} still legal, widened not narrowed`, def.includes(`'${old}'`), "an in-flight batch would fail its own check");
@@ -138,17 +228,195 @@ async function main() {
 
   const est = estimateCost(1000);
   check("a spend estimate exists before the gate", typeof est.usd === "number");
-  check("with no provider configured it estimates zero", est.live === 0 ? est.usd === 0 : true);
-  check("PROVIDERS is empty and honest about it", PROVIDERS.length === 0 || configuredProviders().live.length >= 0);
-  const noProviderLines = enrichLines(summarize([]));
+
+  // ‼️ THESE THREE CHECKS ASSERTED THE UN-WIRED STATE AND HAD TO CHANGE WHEN IT WAS WIRED. Worth
+  // noting that the old "PROVIDERS is empty and honest about it" was
+  // `PROVIDERS.length === 0 || configuredProviders().live.length >= 0`, whose right half is
+  // vacuously true, so it would have gone on passing whatever landed in the array. Replaced with
+  // assertions that can actually fail.
+  const live = configuredProviders().live;
+  const dark = configuredProviders().dark;
+  check("the waterfall has at least one live rung", live.length > 0, `live=${live.length}`);
   check(
-    "an unconfigured waterfall says so rather than reporting 0%",
-    noProviderLines.some((l) => /No enrichment provider is configured/.test(l)),
-    noProviderLines.join(" ")
+    "every free rung is live and none of them is dark",
+    PROVIDERS.filter((p) => p.gate.kind === "free").every((p) => live.includes(p)) &&
+      dark.every((p) => p.gate.kind === "env"),
+    `dark=${dark.map((p) => p.key).join(",")}`
+  );
+  check(
+    "a free waterfall estimates zero even with rungs live",
+    est.live > 0 && est.usd === 0,
+    `live=${est.live} usd=${est.usd}`
   );
 
+  // ‼️ THE ROLE-ADDRESS RULE IS A PROPERTY OF THE SOURCE, AND IT IS THE HIGHEST-SEVERITY SILENT
+  // BUG AVAILABLE HERE. `pickBestEmail` ranks a same-domain role address FIRST, so a crawl rung
+  // that treated one as a miss would report "0 found, N role address" on a list it actually
+  // solved, and the obvious reading is that the crawler is broken.
+  check(
+    "the site-crawl rung accepts a role address",
+    PROVIDERS.find((p) => p.key === "site-scrape")?.acceptsRole === true
+  );
+  // The gate is still there and still defaults to rejecting: `acceptsRole` is opt-in, so a paid
+  // database added later inherits the strict behaviour without anybody remembering to ask for it.
+  check(
+    "a rung must opt in; the role gate still guards the ones that have not",
+    /ROLE_PATTERN\.test\(hit\.email\) && !p\.acceptsRole/.test(esrc),
+    "enrichOne no longer gates role addresses at all"
+  );
+
+  const providerLines = enrichLines(summarize([]));
+  check(
+    "a configured waterfall reports coverage rather than claiming nothing is configured",
+    !providerLines.some((l) => /No enrichment provider is configured/.test(l)),
+    providerLines.join(" ")
+  );
+  check(
+    "no rung is ever reported dark for want of a key it does not have",
+    !providerLines.some((l) => /undefined/.test(l)),
+    providerLines.join(" ")
+  );
+
+
+  // ── 3b. The free pre-filter, which is where the MillionVerifier money actually is ──────────
+  // MV bills per address UPLOADED, so rejecting junk for $0 first is the saving. These checks exist
+  // because the filter has two ways to be silently worthless.
+  {
+    const lsrc = normalize(readFileSync("src/lib/scraper/lane.ts", "utf8"));
+    const lpsrc2 = normalize(readFileSync("src/lib/scraper/listprep.ts", "utf8"));
+
+    check("a free pre-filter runs in the lane", /async function freeRejects\(/.test(lsrc));
+    check(
+      "it runs BEFORE the upload, not after",
+      lsrc.indexOf("await freeRejects(") < lsrc.indexOf("await uploadEmails("),
+      "freeRejects must precede uploadEmails"
+    );
+    check("and its verdicts are written down", /await applyFreeRejects\(runId, rejects\)/.test(lsrc));
+
+    // ‼️ WITHOUT THE WRITE THE FILTER SAVES NOTHING. unverifiedEmails selects on
+    // `verified_at is null`, so an unwritten reject is re-read next tick and uploaded then.
+    check(
+      "the worklist reader is still the thing the write has to satisfy",
+      /is\("verified_at", null\)/.test(lpsrc2)
+    );
+    check("so a reject stamps verified_at", /email_status: "invalid", verified_at: now/.test(lpsrc2));
+
+    // ‼️ A DUPLICATE IS NOT AN INVALID ADDRESS. Writing invalid there puts a working address into
+    // held-back.csv labelled undeliverable.
+    check(
+      "a duplicate is suppressed, not marked invalid",
+      /suppressed_reason: "duplicate_in_run", suppressed_at: now, verified_at: now/.test(lpsrc2)
+    );
+
+    // ‼️ AN UNDETERMINED MX VERDICT MUST BE UPLOADED, NOT DROPPED. After this filter a false
+    // no-MX does not mislabel a row, it drops a deliverable address.
+    check(
+      "only a definite no-MX is rejected",
+      /verdicts\.get\(k\.domain\) === false/.test(lsrc),
+      "an undetermined MX verdict must not reject"
+    );
+    check("the card reports counts, not rates", /rejected for free/.test(lsrc));
+  }
+
+
+  // ── 3c. MX routing, and the two rungs it decides between ───────────────────────────────────
+  {
+    const msrc = normalize(readFileSync("src/lib/scraper/mx.ts", "utf8"));
+
+    // ‼️ THE CACHE KIND MUST BE VERSIONED. Old entries under `dns.mx` are bare booleans; reading one
+    // back as an object yields undefined, so every cached domain would answer "no MX" for 14 days,
+    // and after the free pre-filter a false no-MX DROPS the address rather than mislabelling it.
+    check("the exchanges cache uses a new kind, not the boolean one", /kind: "dns\.mx\.v2"/.test(msrc));
+    check("nothing still writes the old boolean kind", !/kind: "dns\.mx"/.test(msrc));
+    check("hasMx is derived from the records, not stored twice", /const records = await mxRecords\(domain\)/.test(msrc));
+    check("the one classifier in the repo is reused", /import \{ detectMailProvider \}/.test(msrc));
+
+    const e2 = normalize(readFileSync("src/lib/scraper/enrich.ts", "utf8"));
+    check("routing is asked before the call, not inside it", /const fit = p\.appliesTo\?\.\(target\)/.test(e2));
+    check(
+      "and the role gate it sits next to is untouched",
+      /ROLE_PATTERN\.test\(hit\.email\) && !p\.acceptsRole/.test(e2)
+    );
+
+    const guess = PROVIDERS.find((p) => p.key === "permute-guess");
+    const paid = PROVIDERS.find((p) => p.key === "domain-people");
+    check("a guessing rung exists and is free", guess?.gate.kind === "free");
+    check("a guess is never allowed to be a role address", guess?.acceptsRole !== true);
+    check("the paid rung is gated on a key", paid?.gate.kind === "env");
+    check("and inherits the strict role default", paid?.acceptsRole !== true);
+    check("the paid rung is dark, so no vendor was signed", configuredProviders().dark.some((p) => p.key === "domain-people"));
+
+    const target = {
+      id: "x", businessName: "A Clinic", domain: "clinic.com",
+      ownerName: "Marina Musalyants", city: null, state: null,
+    };
+    // The measured reason for the whole split: Workspace is catch-all half the time, and
+    // sendableRows admits catch_all, so a wrong guess there SHIPS.
+    check(
+      "a guess is refused on Google Workspace",
+      guess?.appliesTo?.({ ...target, mailProvider: "Google Workspace" }).ok === false
+    );
+    check(
+      "and allowed on Microsoft 365, where 93% of answers are decisive",
+      guess?.appliesTo?.({ ...target, mailProvider: "Microsoft 365" }).ok === true
+    );
+    check("a guess needs a name", guess?.appliesTo?.({ ...target, ownerName: null }).ok === false);
+    check(
+      "the paid rung is the mirror image: only where a guess cannot be disproved",
+      paid?.appliesTo?.({ ...target, mailProvider: "Microsoft 365" }).ok === false &&
+        paid?.appliesTo?.({ ...target, mailProvider: "Google Workspace" }).ok === true
+    );
+
+    // One candidate, not three. Three would upload three addresses per lead to buy one answer.
+    const hit = await guess?.find({ ...target, mailProvider: "Microsoft 365" });
+    check("the guess is one address built from the first name", hit?.email === "marina@clinic.com", String(hit?.email));
+  }
+
   // ── 4. Verdicts ───────────────────────────────────────────────────────────
-  console.log("\n4. the qualify verdicts");
+  // ── 4. The vertical, decided once and carried ─────────────────────────────
+  console.log("\n4. the vertical, resolved from the caption and carried on the run");
+
+  check("the med spa profile is registered", icpFor("medspa") === MED_SPA_ICP);
+  check("the dentist profile is registered", icpFor("dentist") === DENTIST_ICP);
+
+  // ‼️ THE CHECK THAT WOULD HAVE CAUGHT THE OLD BEHAVIOUR. icpFor used to return MED_SPA_ICP for
+  // any unknown key, so a typo in a caption alias silently judged the list against the wrong buyer
+  // and the drop reasons read like a bad list. Four separate `?? "medspa"` defaults have shipped in
+  // this codebase; this is the assertion that stops a fifth landing here.
+  check("an unknown vertical has no profile rather than the med spa one", icpFor("plumber") === null);
+  check("a blank vertical has no profile", icpFor(null) === null && icpFor("") === null);
+
+  check("a caption naming dentists resolves to dentist", resolveVertical("Dallas dentists batch 3").slug === "dentist");
+  check("a caption naming med spas resolves to medspa", resolveVertical("Phoenix med spa pull").slug === "medspa");
+  check("case and punctuation do not matter", resolveVertical("  MED-SPA / Tampa ").slug === "medspa");
+
+  // The longest alias wins, so a two word alias cannot be beaten by a one word alias that happens
+  // to appear later in the object. Insertion order is not a contract anybody should have to hold.
+  check("the longest alias wins", resolveVertical("cosmetic dentistry, Austin").slug === "dentist");
+
+  // An unmatched caption still yields a vertical so a drop never dead ends, but `matched` has to
+  // come back false or the card cannot warn and the default becomes invisible.
+  const unnamed = resolveVertical("Dallas batch 3");
+  check("an unnamed caption falls back to the default", unnamed.slug === DEFAULT_VERTICAL);
+  check("and says it did not match", unnamed.matched === false);
+  check("a named caption says it matched", resolveVertical("dentist list").matched === true);
+  check("a missing caption does not throw", resolveVertical(null).slug === DEFAULT_VERTICAL);
+
+  check(
+    "every registered vertical is reachable from some caption alias",
+    knownVerticals().every((v) => ICP_BY_VERTICAL[v] !== undefined),
+    knownVerticals().join(",")
+  );
+
+  // The run has to carry it, or sweepPull re-derives it a tick later from an editable alias table.
+  const listprepSrc = readFileSync("src/lib/scraper/listprep.ts", "utf8");
+  check("the run row carries the vertical", /vertical_slug/.test(listprepSrc));
+  check(
+    "and RUN_COLUMNS asks for it, or it reads as undefined on every row",
+    /RUN_COLUMNS[\s\S]{0,400}vertical_slug/.test(listprepSrc)
+  );
+
+  console.log("\n5. the qualify verdicts");
 
   const ids = ["a", "b"];
   const good = { verdicts: [{ id: "a", keep: true, reason: "owner operated med spa" }, { id: "b", keep: false, reason: "national chain" }] };
@@ -163,7 +431,7 @@ async function main() {
   check("the chunk size is sane", QUALIFY_CHUNK >= 5 && QUALIFY_CHUNK <= 50, String(QUALIFY_CHUNK));
 
   // ── 5. Drop reasons group on meaning, not on wording ──────────────────────
-  console.log("\n5. the bulk drop review, which is the human checkpoint");
+  console.log("\n6. the bulk drop review, which is the human checkpoint");
 
   const drops = [
     { id: "1", keep: false as const, reason: "chain, not owner operated", businessName: "Ideal Image" },
@@ -186,7 +454,7 @@ async function main() {
   check("it asks for the reaction", review.some((l) => /React :white_check_mark:/.test(l)));
 
   // ── 6. Suppression ────────────────────────────────────────────────────────
-  console.log("\n6. suppression, by domain as well as by email");
+  console.log("\n7. suppression, by domain as well as by email");
 
   check("www is stripped", normalizeDomain("https://www.Clinic.com/about?x=1") === "clinic.com");
   check("a co.uk is kept whole", normalizeDomain("clinic.co.uk") === "clinic.co.uk");
@@ -206,12 +474,66 @@ async function main() {
   check("the summary reports counts, not rates", lines[0].includes("88 of 100"));
   check("an opt-out is named before a stale touch", lines.findIndex((l) => /not to be contacted/.test(l)) < lines.findIndex((l) => /mailed before/.test(l)));
 
+  // ‼️ THE BRANCH THAT USED TO BE BACKWARDS. It read `state.includes("CLOSED")` and reported it as
+  // "an open conversation (CLOSED)", so the one state that is definitively not open was the only
+  // one it caught, and the four that ARE open fell through. The row was still suppressed, which is
+  // why nothing looked broken; but the card read as nonsense, and deleting the branch to tidy that
+  // up would have un-suppressed every opt-out that reached us by email.
+  // ‼️ ASSERTED AS CODE SHAPE, NOT AS THE ABSENCE OF A STRING. The obvious check here is
+  // `!/includes\("CLOSED"\)/`, and it fails: the comment in suppression.ts quotes the old broken
+  // test on purpose so nobody reinstates it. `normalize` only fixes CRLF, it does not strip
+  // comments, so an absence check over a commented file tests the prose and not the program.
+  check("CLOSED is matched exactly, not by substring", /state === "CLOSED"/.test(ssrc));
+  check(
+    "and active_deal is reached only from the open states",
+    /REPLIED_INTERESTED[\s\S]{0,200}found\.set\("active_deal"/.test(ssrc)
+  );
+  check("an opt-out close outranks a plain close", /OPT_OUT_CLOSE/.test(ssrc));
+  check("and closed_reason is actually selected", /closed_reason/.test(ssrc));
+
+  // The writer that makes contacts.do_not_contact more than a read. It was a gate nothing but the
+  // CRM stage picker ever set, so an emailed opt-out stopped one ladder and no others.
+  const osrc = normalize(readFileSync("src/lib/outreach/opt-out.ts", "utf8"));
+  check("an opt-out writes the flag suppression reads", /do_not_contact: true/.test(osrc));
+  check("it only ever flips rows that are currently false", /eq\("do_not_contact", false\)/.test(osrc));
+  check("it never unsets the flag", !/do_not_contact: false/.test(osrc));
+  check(
+    "the reply sweep calls it when somebody asks out",
+    /wantsOut[\s\S]{0,200}markDoNotContact/.test(
+      normalize(readFileSync("src/lib/followup-operator/reply-sweep.ts", "utf8"))
+    )
+  );
+
+  // The handoff record. Without it `already_contacted` can never fire, because the only thing that
+  // has ever minted an outreach_prospects row for a ReachInbox lead is a REPLY.
+  const lpsrc = normalize(readFileSync("src/lib/scraper/listprep.ts", "utf8"));
+  check("publishing records the handoff", /export async function recordHandoff/.test(lpsrc));
+  check("it writes the board suppression reads", /from\("outreach_prospects"\)[\s\S]{0,200}insert/.test(lpsrc));
+  check(
+    "it carries a website, or domain_contacted silently narrows to exact address",
+    /website: r\.website/.test(lpsrc)
+  );
+  // ‼️ THE ONE THAT MATTERS MOST. outreach_prospects_due_idx is
+  // `where state <> 'CLOSED' and paused = false and confirmed = true`, and it is the worklist the
+  // Graph nudge sender drains. Confirming these would enrol every handed-off address in a SECOND
+  // sequence out of matthew@srtagency.com, from the tenant that carries client mail.
+  check("it does NOT confirm the prospect into the Graph sender's worklist", !/confirmed: true/.test(lpsrc));
+  // ‼️ THE CHECK ABOVE READS UN-STRIPPED SOURCE, DELIBERATELY, so no comment in listprep.ts may
+  // quote that literal. The run_id comment says "confirmed is left false" in words for that reason.
+  check("the handoff carries the run, so a send can be attributed to the list that made it",
+    /run_id: runId,/.test(lpsrc));
+
+  check(
+    "the lane records the handoff before it calls the batch done",
+    /recordHandoff[\s\S]{0,400}status: "done"/.test(normalize(readFileSync("src/lib/scraper/lane.ts", "utf8")))
+  );
+
   // A real lookup against production, read only. An unknown address must not be suppressed.
   const none = await checkSuppression({ email: "nobody-abc123@example-not-real-domain.test" });
   check("an address we have never touched is not suppressed", none === null, JSON.stringify(none));
 
   // ── 7. The pull maps a Maps record ────────────────────────────────────────
-  console.log("\n7. the raw pull");
+  console.log("\n8. the raw pull");
 
   const rec = { name: "A Clinic", site: "https://www.aclinic.com", phone: "(336) 331-8066", city: "Austin", us_state: "TX", rating: "4.8", reviews: "212", place_id: "p1", instagram: "https://instagram.com/aclinic" };
   const mapped = fromOutscraper(rec, { runId: "r1", sourceQuery: "med spa 78701", sourceMetro: "austin" });
@@ -227,7 +549,7 @@ async function main() {
   check("0.7 is labelled a planning number", funnelLines({ raw: 1, qualified: 1, enriched: 1, verified: 1, sendable: 1 }).some((l) => /not a promise/.test(l)));
 
   // ── 8. The writes, rolled back ────────────────────────────────────────────
-  console.log("\n8. what the code inserts, actually inserted, then rolled back");
+  console.log("\n9. what the code inserts, actually inserted, then rolled back");
 
   const before = await sql`select count(*)::int as n from public.raw_leads`;
   try {

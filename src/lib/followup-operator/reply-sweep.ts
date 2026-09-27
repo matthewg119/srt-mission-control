@@ -27,6 +27,7 @@ import { excludedDomains, isExcluded } from "./sent-sweep";
 import { classifyReply, isAutomated, isBounce } from "./classify-reply";
 import { outreachMailboxes, toGraphMailbox } from "@/config/outreach-mailboxes";
 import { isCampaignMailbox, createCampaignProspect, announceCampaignReply } from "./campaign-replies";
+import { markDoNotContact } from "@/lib/outreach/opt-out";
 import type { OutreachProspectRow } from "./types";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -268,6 +269,21 @@ export async function runReplyMailSweep(opts?: {
           conversation_id: prospect.conversation_id ?? msg.conversationId ?? null,
           thread_subject: prospect.thread_subject ?? msg.subject ?? null,
         });
+
+        // ‼️ AN OPT-OUT HAS TO LEAVE THE LANE IT ARRIVED ON. Closing the prospect stops THIS
+        // ladder and nothing else: contacts.do_not_contact is what the sequence engine, both
+        // directors, the SMS import, the touch policy and the worklist's hard drop all read, and
+        // until now the only thing that ever set it was the CRM stage picker. Somebody who replied
+        // "take me off your list" stayed fully contactable everywhere except here.
+        if (classification.wantsOut) {
+          try {
+            await markDoNotContact(prospect.email, classification.summary);
+          } catch (err) {
+            // Never abort the sweep: the watermark would go unwritten and every mailbox would be
+            // re-scanned. The prospect is already CLOSED, so the address is suppressed either way.
+            console.error(`[followup] do_not_contact failed for ${prospect.email}:`, err);
+          }
+        }
 
         // Only the campaign lane announces. The follow-up ladder stays silent here and reports
         // through the 09:00 digest exactly as it always has -- this must not become a second
