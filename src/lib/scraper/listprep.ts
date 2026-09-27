@@ -643,7 +643,27 @@ export async function sendableRows(runId: string): Promise<SendableExportRow[]> 
     .is("suppressed_reason", null)
     .in("email_status", ["valid", "catch_all"]);
   if (error) throw new Error("sendableRows: " + error.message);
-  return (data ?? []).map((r) => {
+
+  // ‼️ A GUESS MUST BE PROVEN. CATCH-ALL IS NOT PROOF. `catch_all` means the server accepts every
+  // address, so it is evidence about the DOMAIN and none at all about the MAILBOX.
+  //
+  // For an address the crawl FOUND that distinction does not matter: somebody published it, so the
+  // mailbox exists and catch-all only means the verifier could not add to what the page already
+  // said. For an address the permutation rung INVENTED it is the whole question, and shipping one
+  // is mailing a mailbox nobody has evidence exists. That is the bounce, and bounces are charged to
+  // the sending domain's reputation rather than to the guess that caused them.
+  //
+  // So the rule is per SOURCE, not per status: a found address may be catch_all, a guessed one must
+  // be `valid`. GUESSING_PROVIDERS is the list, and it is a list rather than a boolean because the
+  // paid domain-people rung will join it the day it gets a key.
+  const GUESSING_PROVIDERS = new Set(["permute-guess", "domain-people"]);
+  const proven = (data ?? []).filter((r) => {
+    const row = r as unknown as Record<string, unknown>;
+    if (!GUESSING_PROVIDERS.has(String(row.provider ?? ""))) return true;
+    return String(row.email_status ?? "") === "valid";
+  });
+
+  return proven.map((r) => {
     const row = r as unknown as Record<string, unknown>;
     const j = (row.raw_leads as unknown as Record<string, unknown>) ?? {};
     const owner = String(j.owner_name ?? "");

@@ -353,6 +353,19 @@ async function main() {
     );
     check("six patterns are offered", permutations("Marina Musalyants", "clinic.com").length === 6);
 
+    // ‼️ A GUESS MUST BE PROVEN, AND CATCH-ALL IS NOT PROOF. catch_all says the SERVER accepts every
+    // address; it says nothing about the mailbox. For an address the crawl found that is fine, the
+    // page published it. For one the permutation rung invented it is the whole question, and sending
+    // it is mailing a mailbox nobody has evidence exists. The bounce is charged to the sending
+    // domain, not to the guess.
+    check("the send list knows which rungs guess", /GUESSING_PROVIDERS/.test(lpsrcPerm));
+    check("and requires a guessed address to be valid, not merely catch_all",
+      /GUESSING_PROVIDERS\.has[\s\S]{0,120}=== "valid"/.test(lpsrcPerm));
+    check("while a found address may still be catch_all",
+      /in\("email_status", \["valid", "catch_all"\]\)/.test(lpsrcPerm));
+    check("and the paid rung inherits the same rule when it gets a key",
+      /GUESSING_PROVIDERS = new Set\(\["permute-guess", "domain-people"\]\)/.test(lpsrcPerm));
+
     const guess = PROVIDERS.find((p) => p.key === "permute-guess");
     const paid = PROVIDERS.find((p) => p.key === "domain-people");
     check("a guessing rung exists and is free", guess?.gate.kind === "free");
