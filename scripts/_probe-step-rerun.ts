@@ -1,7 +1,13 @@
 // The re-run command's grammar, and that the two generated board docs still describe the board.
-// No network.
+// No network, no database, no env: it reads source off disk and calls pure functions, which is what
+// makes it gateable in CI. Its two `supabase` mentions are assertions that OTHER files contain no
+// query; the transitive @/lib/db import is the placeholder client checks.yml already relies on.
 //
-//   bunx tsx scripts/_probe-step-rerun.ts
+//   bun --no-env-file run scripts/_probe-step-rerun.ts     the gated form, same as every other entry
+//
+// ‼️ THIS IS THE ONLY THING THAT STOPS THE GENERATED DOCS GOING STALE ON main. It is the drift check:
+// it shells out to `_step-wiring.ts --check` below, and until 2026-09-27 it was not in checks.yml, so
+// the map Matthew reads before touching the board could drift with nothing saying so.
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -98,8 +104,14 @@ check("the generator has a --live arm", generator.includes(`"--live"`));
 // in here and a live number can reach a --check'ed doc, which is how this probe starts crying drift.
 check("no database call in the generator itself", !/supabaseAdmin|\.from\(/.test(generator));
 
+// ‼️ `bun run`, NOT `bunx tsx`, AND THAT IS WHAT MAKES THIS PROBE GATEABLE. `tsx` is not a dependency
+// of this repo: its only appearance in bun.lock is an uninstalled optional peer of
+// postcss-load-config, so `bunx tsx` DOWNLOADS tsx and esbuild from the registry at run time. In CI
+// that is an unpinned network fetch inside a workflow whose whole premise is that it needs no secrets
+// and reads nothing but source, and it happens after `bun install --frozen-lockfile` has already run.
+// `_step-wiring.ts` has no top-level await, so `bun run` executes it directly.
 try {
-  execFileSync("bunx", ["tsx", WIRING, "--check"], { stdio: "pipe", shell: process.platform === "win32" });
+  execFileSync("bun", ["run", WIRING, "--check"], { stdio: "pipe", shell: process.platform === "win32" });
   check("both generated docs are current", true);
 } catch (e) {
   check("both generated docs are current", false, (e as Error).message.split("\n")[0]);

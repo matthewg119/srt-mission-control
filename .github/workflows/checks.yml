@@ -67,6 +67,14 @@ jobs:
       - name: Dead wires (write-only columns, and outputs with no consumer)
         run: bun --no-env-file run scripts/_probe-dead-wires.ts
 
+      # ‼️ THE DRIFT CHECK. It shells out to `_step-wiring.ts --check`, so this is what stops
+      # docs/STEP-WIRING.md and docs/ONBOARDING-MAP.md going stale on main. Without it the memory layer
+      # is a document that was correct on the day it was written, and the two docs are the ones the
+      # board's own instructions say to read before touching a step. Offline: no database, no env, no
+      # network, and the shell-out is `bun run` rather than `bunx tsx` precisely so it fetches nothing.
+      - name: Step re-run grammar, and the generated docs still describe the board
+        run: bun --no-env-file run scripts/_probe-step-rerun.ts
+
       - name: Headline probes
         run: |
           bun --no-env-file run scripts/_probe-aeo-headlines.ts
