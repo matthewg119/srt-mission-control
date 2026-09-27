@@ -1089,6 +1089,14 @@ const OWED: Record<string, string> = {
   // even see each other". It carried no foreign key (docs/2026-08-17-crm-core.sql:134 says so
   // deliberately), so nothing cascaded; what it DID need was crm_read.clients dropped and recreated,
   // because a view naming a column blocks the drop and `create or replace view` cannot remove one.
+  // ‼️ CAUGHT BY THIS PROBE ON THE MERGE OF main, 2026-09-27, WHICH IS THE FIRST TIME THE NAMED LIST
+  // EARNED ITS KEEP. It arrived with docs/2026-09-25-front-doors.sql and has NO writer and NO reader:
+  // the migration's own comment describes the chain it is meant to complete,
+  // `list_pipeline_runs -> outreach_prospects.run_id -> contacts -> clients`, which is what would answer
+  // "which list run produced this client". `run_id` IS read on raw_leads (listprep.ts), so the name
+  // looks wired until you scope it to the right table — the exact confusion table-scoping exists for.
+  "outreach_prospects.run_id":
+    "the attribution chain's missing link, added 2026-09-25 with no writer and no reader. Wire it where prospects are minted, or drop it: an empty join key silently answers 'no run' for every client.",
   "client_pages.audience_id": "which buyer a page is aimed at. Owed its writer: the migration deliberately landed first so the reader could not 500 the hub on deploy.",
   "client_headlines.audience_id": "which buyer a headline is aimed at, from the same audience model. Owed the same writer.",
   "page_magnet_candidates.audience_id": "which buyer a magnet is aimed at, from the same audience model. Owed the same writer.",
@@ -1101,6 +1109,14 @@ const OWED: Record<string, string> = {
 const READ_DYNAMICALLY: Record<string, string> = {
   "page_dataset.magnet_candidates":
     "page-dataset.ts reads it through readOne(table, column), whose column argument is a runtime string.",
+  // ‼️ IT IS READ, AND CALLING IT WRITE-ONLY WOULD HAVE BEEN A FALSE POSITIVE. lead-thread.ts selects
+  // contacts with `select("*")` and renders each field by walking CONTACT_FIELD_MAP, so the access is
+  // `row[entry.supabase]` with a runtime key rather than a literal `.source_page`. The star rule needs
+  // a literal property access, which is the one shape a field-map renderer never writes. Its own
+  // comment at lead-thread.ts:40 says it sits next to `source` deliberately, and `"source_page"` is in
+  // that file's tracked-fields list. Arrived with the lead-engine front doors on 2026-09-25.
+  "contacts.source_page":
+    "written by lead-intake.ts and rendered beside Source on the lead card, through lead-thread.ts's CONTACT_FIELD_MAP loop over a select(\"*\") row. The key is a runtime string, so no literal property access exists for the star rule to find.",
 };
 
 /**
@@ -1120,7 +1136,7 @@ const READ_DYNAMICALLY: Record<string, string> = {
  * every one of them, so a new column fails by name and with the migration that declared it. This
  * number is kept because it is the thing a person reads, and §6c asserts the two cannot disagree.
  */
-const BOARD_BASELINE = 547;
+const BOARD_BASELINE = 503;
 
 type Verdict = "write_only" | "never_touched";
 interface Finding {
