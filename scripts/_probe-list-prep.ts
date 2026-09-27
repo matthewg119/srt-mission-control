@@ -27,7 +27,7 @@ import {
   suppressionLines,
   checkSuppression,
 } from "@/lib/outreach/suppression";
-import { configuredProviders, estimateCost, enrichLines, summarize, PROVIDERS } from "@/lib/scraper/enrich";
+import { configuredProviders, estimateCost, enrichLines, summarize, permutations, PROVIDERS } from "@/lib/scraper/enrich";
 import { funnelLines, extractInstagram, fromOutscraper, storeRawLeads } from "@/lib/scraper/pull";
 import {
   DEFAULT_VERTICAL,
@@ -337,6 +337,21 @@ async function main() {
       "and the role gate it sits next to is untouched",
       /ROLE_PATTERN\.test\(hit\.email\) && !p\.acceptsRole/.test(e2)
     );
+
+    const lpsrcPerm = normalize(readFileSync("src/lib/scraper/listprep.ts", "utf8"));
+    // ‼️ SIX CANDIDATE ROWS PER COMPANY UNTIL A VERIFIER RULES. Without the resolver a guessed lead
+    // would be counted six times in the funnel and mailed six times.
+    check("runners-up are written as their own rows", /for \(const alt of args\.hit\.alternates/.test(lpsrcPerm));
+    check("and a resolver exists to cut them back to one", /export async function resolvePermutations/.test(lpsrcPerm));
+    check("which suppresses rather than deletes", /suppressed_reason: "lost_permutation"/.test(lpsrcPerm));
+    check(
+      "the resolver runs after verification, not before",
+      (() => {
+        const lane = normalize(readFileSync("src/lib/scraper/lane.ts", "utf8"));
+        return lane.indexOf("await applyVerification(") < lane.indexOf("await resolvePermutations(");
+      })()
+    );
+    check("six patterns are offered", permutations("Marina Musalyants", "clinic.com").length === 6);
 
     const guess = PROVIDERS.find((p) => p.key === "permute-guess");
     const paid = PROVIDERS.find((p) => p.key === "domain-people");

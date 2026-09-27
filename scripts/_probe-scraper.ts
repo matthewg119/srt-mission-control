@@ -26,6 +26,7 @@ import { applyMxVerdicts, filterRows } from "../src/lib/scraper/filter";
 import { formatBreakdown, formatLatePick, formatPickRewind } from "../src/lib/scraper/report";
 import { parseResultLines } from "../src/lib/scraper/millionverifier";
 import { hasMx } from "../src/lib/scraper/mx";
+import { permutations } from "../src/lib/scraper/enrich";
 import { hasBannedDash } from "../src/lib/copy-guard";
 import { COLD_EMAIL_1, COLD_MERGE_FIELDS, renderColdEmail } from "../src/config/cold-email-1";
 import {
@@ -1076,6 +1077,32 @@ async function liveMx(): Promise<void> {
     "and refuses when the metro cannot be found",
     /I could not find `" \+ command\.metro \+ "` on the map/.test(lane)
   );
+}
+
+// ── The guess patterns ──────────────────────────────────────────────────────────────────────────
+// ‼️ SIX, AND THE ARITHMETIC IS THE REASON. MillionVerifier is $0.00178 an address, so six guesses is
+// about a cent a lead, against $0.017 per address a finder API FINDS. This rung is also LAST in the
+// waterfall, so it only fires where the file and the crawl both found nothing: a wrong guess costs a
+// credit on a lead that otherwise had no address at all.
+{
+  const perms = permutations("Marina Musalyants", "clinic.com");
+  eq("six patterns in total", perms.length, 6);
+  eq("first@ leads, the pattern a one-to-three person clinic uses", perms[0], "marina@clinic.com");
+  check("the corporate pattern is present but lower", perms.indexOf("marina.musalyants@clinic.com") > 0);
+  check("every one is on the right domain", perms.every((e) => e.endsWith("@clinic.com")));
+  check("none is duplicated", new Set(perms).size === perms.length);
+  // Order is the tie-break when more than one verifies, so it is load bearing rather than cosmetic.
+  check("the order is stable", permutations("Marina Musalyants", "clinic.com").join() === perms.join());
+
+  eq("a one-word name yields only first@", permutations("Cher", "clinic.com").length, 1);
+  eq("no name yields nothing at all", permutations(null, "clinic.com").length, 0);
+  eq("no domain yields nothing at all", permutations("Marina Musalyants", "").length, 0);
+  eq(
+    "www is stripped, or the guess is wrong by a prefix",
+    permutations("Marina Musalyants", "www.clinic.com")[0],
+    "marina@clinic.com"
+  );
+  check("punctuation in a name does not reach the address", !permutations("Ashraf G. Andrawis", "clinic.com").some((e) => /[^a-z0-9@._-]/.test(e)));
 }
 
 // Wrapped rather than top-level await: tsx transforms this to CJS and rejects one.
