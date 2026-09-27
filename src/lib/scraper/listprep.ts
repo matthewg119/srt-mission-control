@@ -338,6 +338,75 @@ export async function recordEnrichment(args: {
   // 23505 is a second hit for the same raw lead, which a re-driven tick can produce. The first one
   // stands; re-inserting would give one company two send rows.
   if (error && error.code !== "23505") throw new Error("recordEnrichment(sendable): " + error.message);
+
+  // ‼️ THE RUNNERS-UP GO IN TOO, AND THEY CANNOT SHIP UNTIL A VERIFIER RULES ON THEM. A guessing rung
+  // has six patterns and no way to tell which is right, so all of them are written, verified in the
+  // same upload as everything else, and `resolvePermutations` keeps the winner and suppresses the
+  // rest. This is safe only because `sendableRows` admits `valid` and `catch_all` alone, and a row
+  // nobody has verified is neither: an unresolved candidate is invisible to the send list by default.
+  for (const alt of args.hit.alternates ?? []) {
+    const { error: altErr } = await supabaseAdmin.from("sendable_leads").insert({
+      run_id: args.runId,
+      raw_lead_id: args.rawLeadId,
+      email: alt,
+      first_name: args.hit.firstName,
+      last_name: args.hit.lastName,
+      title: args.hit.title,
+      provider: args.hit.provider,
+      // The cost sits on the primary row only, so a funnel that sums this column stays honest.
+      provider_cost_usd: 0,
+      attempts: args.attempts,
+    });
+    if (altErr && altErr.code !== "23505") throw new Error("recordEnrichment(alternate): " + altErr.message);
+  }
+}
+
+/**
+ * One address per company, once the verdicts are in.
+ *
+ * ‼️ WITHOUT THIS, A GUESSED LEAD SHIPS SIX TIMES. The permutation rung writes every pattern it wants
+ * tested, so a company can hold six candidate rows. After verification exactly one should survive:
+ * a `valid` beats a `catch_all`, and among equals the SHORTEST local part wins, which is `first@`,
+ * the pattern a one-to-three person clinic actually uses.
+ *
+ * ‼️ AND IT ONLY TOUCHES ROWS THAT SHARE A raw_lead_id. A company with one address is left alone,
+ * so this is a no-op for every lead the crawl or the file already solved.
+ */
+export async function resolvePermutations(runId: string): Promise<{ kept: number; suppressed: number }> {
+  const { data, error } = await supabaseAdmin
+    .from("sendable_leads")
+    .select("id, raw_lead_id, email, email_status, suppressed_reason")
+    .eq("run_id", runId)
+    .is("suppressed_reason", null);
+  if (error) throw new Error("resolvePermutations: " + error.message);
+
+  const byLead = new Map<string, Array<{ id: string; email: string; email_status: string | null }>>();
+  for (const r of (data ?? []) as Array<{ id: string; raw_lead_id: string; email: string; email_status: string | null }>) {
+    const list = byLead.get(r.raw_lead_id) ?? [];
+    list.push({ id: r.id, email: r.email, email_status: r.email_status });
+    byLead.set(r.raw_lead_id, list);
+  }
+
+  const rank = (s: string | null): number => (s === "valid" ? 0 : s === "catch_all" ? 1 : s === "unknown" ? 2 : 3);
+  const losers: string[] = [];
+  let kept = 0;
+  for (const rows of byLead.values()) {
+    if (rows.length < 2) continue;
+    rows.sort((a, b) => rank(a.email_status) - rank(b.email_status) || a.email.length - b.email.length);
+    kept++;
+    for (const r of rows.slice(1)) losers.push(r.id);
+  }
+
+  const now = new Date().toISOString();
+  for (let i = 0; i < losers.length; i += IN_CHUNK) {
+    const slice = losers.slice(i, i + IN_CHUNK);
+    const { error: upErr } = await supabaseAdmin
+      .from("sendable_leads")
+      .update({ suppressed_reason: "lost_permutation", suppressed_at: now })
+      .in("id", slice);
+    if (upErr) throw new Error("resolvePermutations(suppress): " + upErr.message);
+  }
+  return { kept, suppressed: losers.length };
 }
 
 // --- Stage 5 and 6: verification, catch-all, suppression ---------------------------------------
