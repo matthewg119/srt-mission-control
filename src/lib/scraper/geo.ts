@@ -28,12 +28,18 @@ const STATE_NAMES = [
 /**
  * The postal codes, DC included, in the SAME ORDER as STATE_NAMES.
  *
- * ‼️ "WA" WAS MISSING UNTIL 2026-09-27, AND IT DELETED EVERY WASHINGTON ROW. This list is read by
- * `hasStateCode`, and a code that is absent makes `locationVerdict` return `not_us`, not `unknown`:
- * Seattle, Spokane, Tacoma and Bellevue were classified as foreign and dropped from every list built
- * from a file that wrote the state as an abbreviation. Exactly the failure this file's header names,
- * "a wrong answer here does not produce a bad score, it produces a MISSING ROW", and it went unnoticed
- * because a deleted row leaves nothing behind to look at.
+ * ‼️ "WA" WAS MISSING UNTIL 2026-09-27. This list is read by `hasStateCode`, and an absent code makes
+ * `locationVerdict` return `not_us`, not `unknown`, so Seattle, Spokane, Tacoma and Bellevue would be
+ * classified foreign and DROPPED BEFORE INSERT from any file that wrote the state as an abbreviation.
+ * Exactly the failure this file's header names: "a wrong answer here does not produce a bad score, it
+ * produces a MISSING ROW".
+ *
+ * ‼️ AND IT COST NOTHING, WHICH IS LUCK RATHER THAN DESIGN. The geo filter runs only in
+ * `beginScoreWorkflow`, four batches have ever used it, and all four files were re-read on 2026-09-27
+ * and contain ZERO Washington rows. So the bug was latent for its whole life. That is worth writing
+ * down precisely because the opposite was assumed first: a dropped row leaves nothing behind, so
+ * "this could have deleted rows" is very easy to state as "this deleted rows". It did not. Checking
+ * cost one read of four files.
  *
  * Found by asserting this list and STATE_NAMES are the same length, which is now done below. The
  * order matters for the same reason: CODE_TO_STATE pairs them positionally.
