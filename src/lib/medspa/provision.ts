@@ -163,6 +163,9 @@ async function onFirstPayment(order: OrderRow): Promise<void> {
       email,
       website,
       source: "medspa_paid",
+      // ‼️ NO sourcePage, for the reason clients/provision.ts gives: this runs after a Stripe
+      // payment, and the page that earned the lead was recorded when /medspa first captured them.
+      sourcePage: undefined,
       noteTitle: "Paid the $39 audit",
       headline: `:moneybag: PAID ${dollars(amount)} audit: ${name || email}`,
       detailLines,

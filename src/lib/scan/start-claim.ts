@@ -190,6 +190,11 @@ export async function claimScan(args: {
     businessName: report?.client_name ?? undefined,
     city: report?.city ?? undefined,
     source,
+    // ‼️ THE FUNNEL STRING IS THE BEST THIS PATH HAS, AND IT IS NOT A URL. There is no request
+    // object here: a scan is claimed from /api/scan/[id]/claim and from the concierge widget, and the
+    // caller passes what it knows ("/scan", or "concierge (srt-agency-llc)"). Prefixing a host would be
+    // inventing one for the concierge case, which arrives from a client's own domain.
+    sourcePage: funnel,
     // No phone was collected, so there is nothing to dial and nothing to promise.
     speedToLead: false,
     noteTitle: "Self-serve AI visibility scan",

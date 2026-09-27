@@ -79,7 +79,7 @@ import {
   CLOSING_MESSAGES,
   TIMEZONE_OPTIONS,
   DAYPART_OPTIONS,
-  SCHEDULING_INTRO,
+  DAYPART_PROMPT,
   SCHEDULING_UI,
 } from "@/config/onboarding2";
 import { MAX_MESSAGE_CHARS, MIN_TURN_GAP_MS, chatEnabled } from "@/lib/onboarding2/constants";
@@ -552,7 +552,7 @@ function promptFor(
 ): string {
   if (step === "timezone") return SCHEDULING_UI.askZone;
   if (step === "day") return SCHEDULING_UI.askDay;
-  if (step === "daypart") return SCHEDULING_INTRO[SCHEDULING_INTRO.length - 1];
+  if (step === "daypart") return DAYPART_PROMPT;
   if (step) return INTAKE_COPY[step].prompt;
   // Unreachable in practice: the day step is the last one and it returns above.
   void row;

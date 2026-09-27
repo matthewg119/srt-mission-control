@@ -1,7 +1,7 @@
 // The SRT first-party pixel, as a string. Served by src/app/px.js/route.ts.
 //
 // ‼️ ONE SNIPPET DOES BOTH JOBS. The agreement asks the client for site access once, for the AI
-// Skin Concierge and for this, and a second tag on every page would be a second ask and a second
+// Booking Bot and for this, and a second tag on every page would be a second ask and a second
 // thing to go missing. This file is the pixel; the Concierge frame is loaded by the same script
 // when the client has one.
 //

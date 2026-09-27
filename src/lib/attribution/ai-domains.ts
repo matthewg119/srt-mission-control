@@ -199,7 +199,7 @@ export function isAiSelfReport(answer: SelfReportSlug | null): boolean {
 /**
  * How we know where a booking came from.
  *
- *   assistant      the AI Skin Concierge took the booking. We hold the conversation log.
+ *   assistant      the AI Booking Bot took the booking. We hold the conversation log.
  *   self_reported  a booking form asked and the patient answered.
  *   pixel_only     the pixel saw a booking and nobody was asked. CORROBORATION, NEVER A COUNT.
  */

@@ -247,8 +247,11 @@ const STEP_LIST = [
   // create the config row and seed the embed allowlist; auto_then_manual because the half that
   // matters is somebody walking it on the call, which no runner can assert happened.
   //
-  // ‼️ THE LABEL SAYS "AI Concierge" AND NOT "AI Skin Concierge", BECAUSE IT IS ONE ENGINE WITH
-  // TWO AUDIENCES. The patient lane reads a photo and is the AI Skin Concierge; the owner lane
+  // ‼️ THE LABEL SAYS "AI Concierge" AND THE PRODUCT IS NOW THE "AI Booking Bot" (renamed
+  // 2026-09-26). It used to say neither of two names because one engine served two audiences under two;
+  // there is one name now, from PRODUCT_CONCIERGE. This label is deliberately still the generic one: a
+  // static step label is evaluated once for every client at once, so it cannot be specific, which is the
+  // original reason below and is unchanged. The patient lane reads a photo; the owner lane
   // has no camera at all and is the AI Visibility Concierge. A constant in this array is
   // evaluated once for every client at once, so it cannot know which it is describing and must
   // not claim. The card body and the instruction arm both hold a client and do say which:

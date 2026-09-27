@@ -441,6 +441,18 @@ export function Onboarding2Funnel({
   // `error` renders above the cards rather than replacing them: a failed /start must leave the
   // three buttons on screen and tappable, because the only recovery available to the visitor is
   // to tap one again.
+  // ‼️ THE WAIT GETS A SCREEN OF ITS OWN, AND THE ONLY REASON IS THE REFRESH. /start mints the
+  // signing row, the lead and the Slack card, and on a cold instance it is a few seconds. A disabled
+  // button that says "One moment" looks like a page that did not respond, and the thing somebody does
+  // to a page that did not respond is reload it, which abandons the row that was just created and
+  // starts a second one. So it says what is happening and asks them not to.
+  //
+  // ‼️ IT REPLACES THE CARDS RATHER THAN OVERLAYING THEM, which is also why `error` above must
+  // still put the cards back: if /start fails, the only recovery a visitor has is to tap a card again.
+  if (stage === "offer" && starting) {
+    return <Starting />;
+  }
+
   if (stage === "offer") {
     return (
       <>
@@ -474,8 +486,24 @@ export function Onboarding2Funnel({
   // !! FULL SCREEN FROM THE MOMENT IDENTITY IS IN. Not a corner bubble with a form behind it.
   // The conversation IS the page: it books the call first and asks the questions second, and it
   // reads like a texting thread because that is what it is.
+  //
+  // ‼️ OVERRIDDEN 2026-09-25, AND THE REASONING ABOVE STILL STANDS. Matthew asked for this chat to
+  // be the same chatbox panel the review tool opens in, so that the three places a person meets the
+  // assistant (the widget on a client's site, the review tool on their hub, and this) are recognisably
+  // one product rather than three. That is the argument that beat the one above: "the conversation IS
+  // the page" was about not burying it behind a form, and a panel that fills the screen on a phone and
+  // floats on a desktop does not bury anything.
+  //
+  // What the old comment was right about is still honoured. Nothing sits behind this on a phone, where
+  // the panel is full bleed at every width below 640px, and there is no form to go back to: the close
+  // button only exists above that breakpoint, where there is a page to return to.
+  //
+  // ‼️ AND IT IS NOW LIGHT WHERE IT WAS NEAR BLACK, which is the visible half of the change on a
+  // live conversion surface. The review panel is a floating light card on every client including the dark
+  // ones, for the reason hub.css gives: a panel that inherited the page's ground would be a near-black
+  // rectangle on a white clinic page and a white one on a dark page, which is two products.
   if (stage === "chat" && sessionToken) {
-    return <ChatPanel sessionToken={sessionToken} fullscreen demo={demo} />;
+    return <ChatPanel sessionToken={sessionToken} demo={demo} />;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -526,11 +554,46 @@ export function Onboarding2Funnel({
           TEST MODE. Nothing here reaches Slack, the CRM, your inbox or the client list.
         </div>
       )}
-      <ChatPanel sessionToken={sessionToken} fullscreen demo={demo} />
+      {/* Unreachable in practice, because the branch above catches the same condition first. Kept in
+          step with it anyway: the day one of them changes and the other does not is the day this page
+          renders two different chats depending on which line ran. */}
+      <ChatPanel sessionToken={sessionToken} demo={demo} />
     </>
   );
 }
 
 function Shell({ children }: { children: React.ReactNode }) {
   return <div className="mx-auto w-full max-w-2xl px-4 py-8 sm:py-12">{children}</div>;
+}
+
+/**
+ * The few seconds between tapping a card and the assistant opening.
+ *
+ * ‼️ IT ASKS THEM NOT TO REFRESH, AND THAT SENTENCE IS THE POINT OF THE SCREEN. /start creates
+ * the signing row, the lead and the Slack card in one request. A reload halfway through abandons all
+ * three and starts a second set, so the visitor most likely to do it is the one who has just committed.
+ *
+ * ‼️ NO PERCENTAGE AND NO PROGRESS BAR. Neither would be measuring anything: there is one request
+ * and it either returns or it does not, and a bar that fills at a rate we invented is a claim about how
+ * long something will take that we cannot make. The spinner says "working" and nothing else.
+ */
+function Starting() {
+  return (
+    <Shell>
+      <div className="flex flex-col items-center py-16 text-center">
+        <span
+          aria-hidden="true"
+          className="mb-5 h-8 w-8 animate-spin rounded-full border-2 border-white/15"
+          style={{ borderTopColor: "#00C9A7" }}
+        />
+        <p className="text-lg font-semibold text-white" role="status" aria-live="polite">
+          Setting up your account.
+        </p>
+        <p className="mt-2 max-w-sm text-sm text-white/60">
+          This takes a few seconds. Please do not refresh this page or go back, we are getting your
+          virtual assistant ready.
+        </p>
+      </div>
+    </Shell>
+  );
 }

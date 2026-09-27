@@ -1,4 +1,4 @@
-// Where is the AI Skin Concierge up to, per client, and can the step run yet?
+// Where is the AI Booking Bot up to, per client, and can the step run yet?
 //
 // Read-only by default. Run it before and after docs/2026-09-01-concierge.sql:
 //

@@ -12,6 +12,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { isLauncherCorner, type LauncherCorner } from "@/lib/clients/mascot-grammar";
 import { isAudience, type Audience } from "./magnets";
+import { REFERRAL_DOOR_LABEL } from "./referral-script";
 import { audienceById, type AudienceVocabulary } from "@/lib/clients/audiences";
 
 export type BookingMode = "link" | "calendly" | "none";
@@ -26,9 +27,18 @@ export type BookingMode = "link" | "calendly" | "none";
  */
 export type AddonStatus = "undecided" | "included" | "declined";
 
-/** A button under "How can we help you today?". */
+/**
+ * A button under "How can we help you today?".
+ *
+ * ‼️ `referral` IS A SCRIPTED WALK, NOT A MAGNET. It could have been a lead_magnets row with a
+ * cta_label, and that is the wrong shape: the magnet path records a delivery, resolves an asset URL
+ * through frames_key, and feeds the chaining rule that decides when the bot may raise the call. This
+ * door asks four questions and books an install. Making it a magnet would have meant a magnet whose
+ * asset_url is null on purpose, which is exactly the row that already answers "that one is not ready
+ * to send yet". See src/lib/concierge/referral-script.ts.
+ */
 export interface QuickAction {
-  kind: "audit" | "magnet" | "type" | "booking";
+  kind: "audit" | "magnet" | "referral" | "type" | "booking";
   label: string;
 }
 
@@ -164,7 +174,12 @@ export async function loadConciergeConfig(slug: string): Promise<ConciergeConfig
     enabled: row.enabled === true && addonStatus !== "declined",
     addonStatus,
     quickActions: readQuickActions(row.quick_actions),
-    mascot: row.mascot === null ? null : str(row.mascot) ?? "wizard-cat",
+    // ‼️ NULL IS THE ANSWER FOR ANYTHING THAT IS NOT A KEY, AND IT USED TO BE THE WIZARD CAT
+    // (inverted 2026-09-25). Between 2026-09-16 and today the column defaulted to 'wizard-cat' AND this
+    // line coerced anything non-null to it, so a tenant got a cartoon on their own homepage through two
+    // separate defaults, neither of which anybody had chosen. The mascot is opt-in now: a key here means
+    // somebody typed `mascot <key>` in step 18's thread, and everything else is the plain pill.
+    mascot: str(row.mascot) ?? null,
     mascotCandidates: Array.isArray(row.mascot_candidates)
       ? (row.mascot_candidates as unknown[])
           .filter((k): k is string => typeof k === "string" && !!k.trim())
@@ -197,7 +212,7 @@ export async function loadConciergeConfig(slug: string): Promise<ConciergeConfig
 
 function readQuickActions(raw: unknown): QuickAction[] | null {
   if (!Array.isArray(raw)) return null;
-  const kinds = new Set(["audit", "magnet", "type", "booking"]);
+  const kinds = new Set(["audit", "magnet", "referral", "type", "booking"]);
   const out = raw
     .map((a) => a as { kind?: unknown; label?: unknown })
     .filter((a) => typeof a.kind === "string" && kinds.has(a.kind) && typeof a.label === "string" && a.label.trim())
@@ -229,7 +244,13 @@ export function quickActionsFor(config: Pick<ConciergeConfig, "audience" | "quic
   return config.audience === "owner"
     ? [
         { kind: "audit", label: "Get Free AI Visibility audit (3 min)" },
-        { kind: "magnet", label: "" },
+        // ‼️ THE SECOND DOOR IS THE REFERRAL WALK, WHERE IT USED TO BE THE LADDER'S MAGNET
+        // (2026-09-25). The magnet door was answering with whatever rankMagnets chose, and for SRT that
+        // was a minted row whose asset_url is hardcoded null by approveMagnetCandidate, so
+        // deliveryUrlFor returned null and the button said "that one is not ready to send yet". The
+        // door was broken before this replaced it, which is worth knowing: this is not a demotion of a
+        // working offer. The label lives in referral-script.ts with the rest of the copy.
+        { kind: "referral", label: REFERRAL_DOOR_LABEL },
         { kind: "type", label: "Type for help" },
       ]
     : [

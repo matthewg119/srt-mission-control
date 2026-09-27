@@ -11,7 +11,7 @@
 //   LAYER 2  "How did you hear about us?" on every booking form, theirs and ours.
 //   LAYER 1  The SRT pixel, which corroborates and feeds the monthly report.
 //
-// LAYER 3, the AI Skin Concierge, is already two steps of its own (concierge_preview and
+// LAYER 3, the AI Booking Bot, is already two steps of its own (concierge_preview and
 // concierge_live) and is the only layer that is 100% attributed with nothing else installed.
 // ─────────────────────────────────────────────────────────────────────────────
 //

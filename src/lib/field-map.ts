@@ -54,6 +54,8 @@ export const CONTACT_FIELD_MAP: FieldEntry[] = [
 
   // Source / attribution
   { supabase: "source", label: "Source" },
+  // Which page, next to which origin tag. See IngestLeadInput.sourcePage.
+  { supabase: "source_page", label: "Page" },
   { supabase: "utm_campaign", label: "Campaign" },
   { supabase: "utm_content", label: "UTM Content" },
   { supabase: "utm_medium", label: "UTM Medium" },

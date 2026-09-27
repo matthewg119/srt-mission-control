@@ -20,10 +20,12 @@
 // a body is never redrafted: it may carry somebody's words.
 
 import { supabaseAdmin } from "@/lib/db";
+import { hasBannedDash } from "@/lib/copy-guard";
 import { randomUUID } from "crypto";
 import type { AutoResult } from "./artifacts/registry";
 import {
   ANCHOR_COMMAND,
+  CTA_COMMAND,
   PLAN_COMMAND,
   PRE_CALL_SUPPORTS,
   approvePlan,
@@ -630,6 +632,23 @@ async function draftOne(
       }
     }
 
+    // ‼️ THE CTA SENTENCE LANDS ON THE PAGE HERE, AND AFTER THE MINT RATHER THAN BEFORE IT.
+    // The decision was made on the plan row, because it is made while the plan is approved and there
+    // was no page row then to hold it. This is the moment there is one. The magnet's own cta_label is
+    // the fallback, so a page nobody wrote a sentence for still asks in the offer's own words instead
+    // of asking in nobody's; `cta N:` in the step thread overrides it and keeps overriding it.
+    //
+    // Non-fatal on purpose, like the mint above and for the same reason: the page is already saved,
+    // so a failure here costs the sentence and never the draft.
+    if (row.ctaLine) {
+      const { setPageCtaLine } = await import("@/lib/hub/pages");
+      const wrote = await setPageCtaLine(clientId, page.id, row.ctaLine);
+      if (!wrote.ok) magnetNote = magnetNote || wrote.error;
+    } else if (row.frame?.ctaLabel) {
+      const { setPageCtaLine } = await import("@/lib/hub/pages");
+      await setPageCtaLine(clientId, page.id, row.frame.ctaLabel);
+    }
+
     // A1 D-P5a: Core sells 4 new + 4 refreshed a month, so the ninth page of month one is above
     // the sold count and is tagged, never hidden. A separate write, tolerant of the column missing.
     //
@@ -866,8 +885,32 @@ export async function preCallPagesCardLines(clientId: string): Promise<string[]>
             `${stepNumber("keyword_set")}, approve, then \`plan new\`. It is never padded.`,
         ]
       : []),
+    "",
+    // ‼️ THE CARD ASKS FOR THE SENTENCE RATHER THAN DEFAULTING IT (2026-09-25). A page's magnet has
+    // been a per-page decision since 09e1699, but the words the widget used to offer it were templated
+    // from the magnet's title, so every page on a hub asked in the same sentence. A count on the card is
+    // what makes the gap visible: silently falling back is how the old behaviour survived unnoticed.
+    ctaLines(rows),
     "_The pillar cannot be dropped, only swapped: every support links to it._",
   ];
+}
+
+/** How many pages have their own sentence, and how to write the rest. */
+function ctaLines(rows: PlanRow[]): string {
+  const written = rows.filter((r) => r.ctaLine).length;
+  if (written === rows.length) {
+    return `*Every page has its own call to action.* \`cta\` lists them, \`cta 3: <sentence>\` changes one.`;
+  }
+  const short = rows
+    .map((r, i) => (r.ctaLine ? null : i + 1))
+    .filter((n): n is number => n !== null)
+    .slice(0, 8)
+    .join(", ");
+  return (
+    `*Call to action: ${written} of ${rows.length} pages have their own.* Pages ${short} fall back to the magnet's ` +
+    `own words, which is the same sentence on each of them. \`cta\` lists them, \`cta 3: <sentence>\` writes one. ` +
+    "It is shown under the page and is the widget's first line there. It never enters the body."
+  );
 }
 
 export type PreCallCheck =
@@ -920,6 +963,73 @@ export interface PreCallReply {
 
 function unwrap(text: string): string {
   return text.trim().replace(/^[`*_]+|[`*_]+$/g, "").trim();
+}
+
+/** The word that clears a sentence, so a page can be put back to the templated lines. */
+const CTA_CLEAR = /^(none|clear|default)$/i;
+
+/**
+ * `cta` lists what each page says. `cta N: <sentence>` writes one. `cta N: none` clears it.
+ *
+ * ‼️ IT REFUSES A BANNED DASH RATHER THAN STRIPPING ONE, which is what copy-guard does
+ * everywhere else. This sentence is rendered on a client's live page and sent to the widget, so it is
+ * copy, and quietly rewriting somebody's words would teach them the rule has exceptions.
+ */
+async function ctaReply(
+  clientId: string,
+  which: string | null,
+  sentence: string | null
+): Promise<PreCallReply> {
+  const { setPlanCtaLine } = await import("./page-plan");
+  const plan = await loadPlan(clientId);
+  if ("error" in plan) return { message: `:warning: ${plan.error}` };
+
+  // loadPlan orders by rank already, and orderPlan() in this file is a DB reorder rather than a
+  // sorter. Role-bearing rows only, so the numbers here match the ones the plan card prints.
+  const rows = plan.rows.filter((r) => r.role);
+  if (!rows.length) {
+    return { message: "There is no approved plan yet, so there are no pages to write a line for. Type `plan` to see where it is." };
+  }
+
+  // No number: the list, so somebody can see which pages are still silent.
+  if (!which || !sentence) {
+    const lines = rows.map((r, i) => `${i + 1}. *${r.workingTitle}*\n   ${r.ctaLine ?? "_no line yet, so the widget falls back to the magnet's own words_"}`);
+    const missing = rows.filter((r) => !r.ctaLine).length;
+    return {
+      message: [
+        `*What each page says to offer its magnet.* ${rows.length - missing} of ${rows.length} written.`,
+        ...lines,
+        "",
+        "Write one with `cta 3: Free: the five questions to ask before you book.` and clear one with `cta 3: none`.",
+        "It is shown under the page, and it is the widget's first line on that page. It never goes in the body.",
+      ].join("\n"),
+    };
+  }
+
+  const index = Number(which);
+  const row = rows[index - 1];
+  if (!row) return { message: `There is no page ${index} in this plan. There are ${rows.length}.` };
+
+  const clearing = CTA_CLEAR.test(sentence.trim());
+  if (!clearing && hasBannedDash(sentence)) {
+    return {
+      message: `:warning: Nothing saved. That line has an em dash, an en dash or a "--" in it, and SRT copy uses commas, periods and single hyphens. Send it again without one.`,
+    };
+  }
+
+  const res = await setPlanCtaLine(clientId, row, clearing ? null : sentence);
+  if (!res.ok) return { message: `:warning: Not saved: ${res.error}` };
+
+  if (!res.stored) {
+    return { message: `:white_check_mark: *Page ${index} has no line now*, so the widget falls back to the magnet's own words on it.` };
+  }
+  const truncated = sentence.trim().length > res.stored.length;
+  return {
+    message:
+      `:white_check_mark: *Page ${index} says:* ${res.stored}` +
+      (truncated ? `\n(Cut to ${res.stored.length} characters, because the speech bubble cuts there too.)` : "") +
+      (row.pageId ? "" : "\n(Stored on the plan. It lands on the page when this one is drafted.)"),
+  };
 }
 
 /** `plan ...` and `anchor ...` in the pre-call step's thread. Anything else falls through. */
@@ -1064,6 +1174,9 @@ export async function handlePreCallThreadReply(input: {
         "\n```",
     };
   }
+
+  const cta = CTA_COMMAND.exec(command);
+  if (cta) return ctaReply(clientId, cta[1] ?? null, cta[2] ?? null);
 
   const plan = PLAN_COMMAND.exec(command);
   if (!plan) return null;

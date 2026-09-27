@@ -7,6 +7,7 @@ import { validateLeadSubmission, checkRateLimit, getClientIp, getCorsHeaders } f
 import { enrollContact } from "@/lib/sequence-engine";
 import { systemAlert } from "@/lib/notify";
 import { calculateLeadScore, resolveAdSource } from "@/lib/lead-score";
+import { pageFromRequest } from "@/lib/lead-intake";
 import { slack } from "@/lib/slack-bot";
 import { fireSpeedToLead } from "@/lib/speed-to-lead";
 import { hasMetaAttributionServer } from "@/lib/metaAttribution";
@@ -198,8 +199,14 @@ export async function POST(request: NextRequest) {
       if (phone) lines.push(`Phone: ${phone}`);
       if (message) lines.push(`Message: ${message.slice(0, 200)}`);
       lines.push(`Source: Contact Form`);
+      // ‼️ THIS ROUTE POSTS ITS OWN MESSAGE AND RENDERS NO CARD, so it is not one of the eleven
+      // ingestLead callers and source_page never reaches contacts from here. That is a bigger change than
+      // naming the page: routing it through ingestLead would start creating threads and firing the
+      // lead-thread cascade for a contact form. The page is at least SAID here, which is what the
+      // channel needed, and the gap is written down rather than left to be discovered.
+      lines.push(`Page: ${pageFromRequest(request, "/contact")}`);
       lines.push(`📱 *<${appUrl}/api/vcard/${contactId}|Save to iPhone Contacts>* · <${appUrl}/contacts/${contactId}|Open contact card>`);
-      slack.postMessage(hotLeadsChannel, lines.join("\n")).catch(() => {});
+      slack.postMessage(hotLeadsChannel, lines.join("\n"), undefined, { unfurl: false }).catch(() => {});
     }
 
     // 6. Speed to Lead instant callback

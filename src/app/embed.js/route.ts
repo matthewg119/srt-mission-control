@@ -5,9 +5,13 @@
 // Anything more would be code we ship into somebody else's site, and this is on a med spa's live
 // website where a script that breaks their booking form is our problem forever.
 //
-// ‼️ THE CORNER IS A MASCOT WHEN THE CONFIG NAMES ONE (2026-09-16), the wizard cat by default, with speech
-// bubbles drawn from /api/concierge/config every twenty seconds or so and an x that hides it for the page
-// view. Without a mascot it is the pill it always was.
+// ‼️ THE CORNER IS A PILL, AND A MASCOT ONLY WHERE A TENANT ASKED FOR ONE (inverted 2026-09-25).
+// It was the other way round from 2026-09-16: concierge_configs.mascot defaulted to the wizard cat and
+// config.ts coerced anything non-null to it as well, so a clinic got a cartoon on its own homepage
+// through two defaults and one decision nobody had made. The default is now a pill carrying a small
+// chat glyph, the mascot is opt-in through `mascot <key>` in step 18's thread, and `mascot skip` means
+// the pill rather than a character. Speech bubbles come from /api/concierge/config either way, and the
+// x still hides the launcher for the page view.
 //
 // ‼️ THE HEADER CTA TEXT COMES FROM THE MAGNET, VIA /api/concierge/config. Matthew's instruction is
 // that the best lead magnet is the header and the widget is a popup under it. So the button says
@@ -57,6 +61,27 @@ const SCRIPT = `(function(){
  // INSTEAD of the tenant's, which only /preview/[token] ever sets and which the config route only
  // honours alongside a valid preview token. See src/app/api/concierge/config/route.ts.
  var wantMascot=me.getAttribute("data-mascot")||"";
+ // The one sentence THIS page uses to offer its magnet, from client_pages.cta_line.
+ //
+ // ‼️ IT ARRIVES ON THE TAG AND IS NEVER FETCHED, WHICH IS THE WHOLE REASON IT IS HERE. The
+ // obvious design was to send it to /api/concierge/config and let that route answer with it, and that
+ // route's own comments say why not: it is fetched once per page view from a third party's page and is
+ // unstable_cached on (slug, category, magnetKey). A per-page sentence in that cache key gives the
+ // busiest endpoint in the lane a fourth dimension; a per-page sentence NOT in that key serves one
+ // page's line on every other page for five minutes. The page already knows the answer, so it says it.
+ //
+ // Sliced to 90 to match the cap normalizeCtaLine and the column CHECK both enforce, so a value put
+ // into the table by hand cannot render longer here than it does anywhere else.
+ var ctaLine=(me.getAttribute("data-cta")||"").slice(0,90);
+ // ‼️ THE RESUME TOKEN, READ OFF THE PAGE'S OWN URL. The welcome email links back to the page the
+ // conversation started on with ?srtc=<signed token> on it, so somebody who closed the widget half way
+ // through can carry on. Reading location.search is not a widening of this file's rules: it already reads
+ // location.pathname and location.host to tell the frame which page it is on.
+ //
+ // ‼️ IT IS PASSED TO THE FRAME AND VERIFIED THERE, NEVER TRUSTED HERE. This script does nothing
+ // with it but hand it on, so a forged one buys a frame that refuses it rather than an open panel.
+ var resume="";
+ try{resume=(new URLSearchParams(location.search).get("srtc")||"").slice(0,400)}catch(e){}
 
  function q(o){return Object.keys(o).filter(function(k){return o[k]}).map(function(k){
    return encodeURIComponent(k)+"="+encodeURIComponent(o[k])}).join("&")}
@@ -87,7 +112,7 @@ const SCRIPT = `(function(){
  function withPass(u){return pass?u+(u.indexOf("?")<0?"?":"&")+pass:u}
 
  var frameSrc=withPass(origin+"/w/"+encodeURIComponent(slug)+"?"+q({
-   category:category,city:city,magnet:magnet,path:location.pathname,host:location.host}));
+   category:category,city:city,magnet:magnet,path:location.pathname,host:location.host,srtc:resume}));
 
  function makeFrame(){
   var f=document.createElement("iframe");
@@ -144,8 +169,40 @@ const SCRIPT = `(function(){
  btn.type="button";
  btn.setAttribute("aria-expanded","false");
  btn.setAttribute("aria-label","Open the assistant");
- btn.style.cssText="display:block;padding:13px 20px;border:0;border-radius:999px;background:"+REEF+";color:"+INK+";font-weight:700;font-size:15px;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,.25)";
- btn.textContent="Chat";
+ btn.style.cssText="display:flex;align-items:center;gap:8px;padding:13px 18px;border:0;border-radius:999px;background:"+REEF+";color:"+INK+";font-weight:700;font-size:15px;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,.25)";
+
+ // ‼️ THE GLYPH IS BUILT WITH createElementNS, NOT innerHTML. The header rule is that this
+ // script never writes markup into a page it does not own, and an <svg> assembled element by element
+ // keeps that true. It reads currentColor, so it follows the pill's own ink with nothing to keep in
+ // step. Sixteen pixels, one path, no network: an <img> would be a second request that can 404
+ // silently, which is the failure mode the mascot assets already have.
+ var SVGNS="http://www.w3.org/2000/svg";
+ var icon=document.createElementNS(SVGNS,"svg");
+ icon.setAttribute("width","16");icon.setAttribute("height","16");
+ icon.setAttribute("viewBox","0 0 16 16");icon.setAttribute("aria-hidden","true");
+ icon.style.cssText="flex:0 0 auto;display:block";
+ var iconPath=document.createElementNS(SVGNS,"path");
+ iconPath.setAttribute("d","M2 6.2C2 4.4 3.4 3 5.2 3h5.6C12.6 3 14 4.4 14 6.2v2.6c0 1.8-1.4 3.2-3.2 3.2H7.4l-3.1 2.3c-.4.3-.9 0-.9-.5v-1.9C2.6 11.5 2 10.4 2 9.1V6.2Z");
+ iconPath.setAttribute("fill","currentColor");
+ icon.appendChild(iconPath);
+
+ // ‼️ THE LABEL IS ITS OWN ELEMENT BECAUSE toggle() USED TO SET btn.textContent, which would
+ // delete the glyph next to it on the first open. useMascot still clears the whole button, which is
+ // correct: a mascot replaces the pill rather than sitting beside it.
+ var btnLabel=document.createElement("span");
+ btnLabel.textContent="Help";
+ btn.appendChild(icon);btn.appendChild(btnLabel);
+
+ // ‼️ WHAT THE PILL SAYS WHILE IT IS SPEAKING, from /api/concierge/config. Matthew, 2026-09-25:
+ // "a combination of help and suggestions for Free AI Referral Engine or Get AI Visibility audit etc as
+ // default". So the corner rests on its resting label and names an offer only while a bubble is up, one
+ // thing at a time rather than a pill and a bubble saying two different things at once.
+ //
+ // ‼️ THESE COME FROM THE DOORS, NOT FROM A MAGNET ROW. The pill used to be pillLabel(magnet), so
+ // after the second door became the AI Referral Engine walk the corner still advertised the magnet it had
+ // replaced and read "Find my weakest pillar" for an offer nothing led to.
+ var offers=[], offerAt=0;
+ function restLabel(){return btn.getAttribute("data-label")||"Help"}
 
  var cat=null, catAssets=null, talkLoaded=false;
  var hide=document.createElement("button");
@@ -190,7 +247,7 @@ const SCRIPT = `(function(){
   // or scraped, that is the difference between zero cost and one row per bot.
   if(show&&!opened){opened=true;panel.appendChild(makeFrame())}
   if(show)say(null);
-  if(!cat)btn.textContent=show?"Close":(btn.getAttribute("data-label")||"Chat");
+  if(!cat)btnLabel.textContent=show?"Close":(btn.getAttribute("data-label")||"Help");
  }
 
  // ‼️ A DRAG MUST NOT OPEN THE PANEL. pointerup fires before click, so by the time this runs "moved"
@@ -216,18 +273,31 @@ const SCRIPT = `(function(){
  // ‼️ AND IT IS PERSISTED FROM THE PREVIEW ONLY. "pt" is minted by /preview/[token] for one client and
  // arrives nowhere else, so dragging on our own demo page is a decision Matthew is making about that
  // client, and dragging on a stranger's visit to a client's site is not. Nothing on a live page posts.
- var dragging=false, moved=false, sx=0, sy=0, ox=0, oy=0;
+ var dragging=false, moved=false, captured=false, sx=0, sy=0, ox=0, oy=0;
  launcher.addEventListener("pointerdown",function(e){
   if(e.button!==0||e.target===hide)return;
   dragging=true;moved=false;sx=e.clientX;sy=e.clientY;
   var r=wrap.getBoundingClientRect();ox=r.left;oy=r.top;
-  try{launcher.setPointerCapture(e.pointerId)}catch(err){}
  });
  launcher.addEventListener("pointermove",function(e){
   if(!dragging)return;
   var dx=e.clientX-sx, dy=e.clientY-sy;
   // A few pixels of travel is a click with a shaky hand, not a drag.
   if(!moved&&Math.abs(dx)+Math.abs(dy)<6)return;
+  if(!captured){
+   // ‼️ THE CAPTURE IS TAKEN HERE, NOT ON pointerdown, AND THAT WAS THE WHOLE BUG (2026-09-25).
+   // Pointer capture retargets the click that follows to the CAPTURING element. Taken on pointerdown
+   // it sent every click to the launcher div, so the handler on the inner button never ran and tapping
+   // the launcher did nothing at all. The teaser kept working only because the bubble is a SIBLING of
+   // the launcher rather than a child, so it was never inside the capture. Releasing on pointerup did
+   // not save it: the click is dispatched after the release and is still retargeted.
+   //
+   // Taking it at the moment moved flips means a click is never captured and a drag always is. The
+   // cost is the six pixels before the flip, where a pointerup outside the launcher would miss
+   // drop() and leave dragging true; six pixels is still inside the element for any pointer that
+   // started on it, and the next pointerdown resets the flag regardless.
+   try{launcher.setPointerCapture(e.pointerId);captured=true}catch(err){}
+  }
   moved=true;
   var x=Math.min(Math.max(0,ox+dx),Math.max(0,window.innerWidth-wrap.offsetWidth));
   var y=Math.min(Math.max(0,oy+dy),Math.max(0,window.innerHeight-wrap.offsetHeight));
@@ -236,7 +306,7 @@ const SCRIPT = `(function(){
  function drop(e){
   if(!dragging)return;
   dragging=false;
-  try{launcher.releasePointerCapture(e.pointerId)}catch(err){}
+  if(captured){try{launcher.releasePointerCapture(e.pointerId)}catch(err){}captured=false}
   if(!moved){place(corner);return}
   var r=wrap.getBoundingClientRect();
   var c=((r.top+r.height/2)<window.innerHeight/2?"top":"bottom")+"-"+((r.left+r.width/2)<window.innerWidth/2?"left":"right");
@@ -257,6 +327,7 @@ const SCRIPT = `(function(){
 
  function say(line){
   if(!line){
+   if(!cat&&panel.style.display==="none")btnLabel.textContent=restLabel();
    bubble.style.opacity="0";bubble.style.transform="translateY(6px)";
    setTimeout(function(){if(bubble.style.opacity==="0")bubble.style.display="none"},260);
    // Not while a gesture is running: the gesture puts idle back itself when it ends, and cutting it
@@ -264,6 +335,9 @@ const SCRIPT = `(function(){
    if(cat&&catAssets&&!reduce&&!flourishing&&cat.getAttribute("data-live"))cat.src=abs(catAssets.idle);
    return;
   }
+  // ‼️ THE PILL FOLLOWS THE BUBBLE. say(null) below puts it back, so the corner is only ever
+  // advertising something while there is something on screen saying it.
+  if(!cat&&offers.length){btnLabel.textContent=offers[offerAt%offers.length];offerAt++}
   bubbleText.textContent=line;
   bubble.style.display="block";
   requestAnimationFrame(function(){bubble.style.opacity="1";bubble.style.transform="translateY(0)"});
@@ -354,22 +428,50 @@ const SCRIPT = `(function(){
   if(document.readyState==="complete")animate();else window.addEventListener("load",animate);
  }
 
- function schedule(lines){
-  if(!lines||!lines.length)return;
-  var pool=lines.slice(), MAX=8;
+ // ‼️ THE ATTENTION POP, AND IT IS element.animate() RATHER THAN A KEYFRAME. A @keyframes rule
+ // would mean injecting a <style> element into a page this script does not own, which the header rules
+ // out. The Web Animations call needs no stylesheet, touches no selector the host page can collide
+ // with, and is wrapped because a browser without it must lose the flourish and nothing else.
+ function pop(){
+  if(reduce)return;
+  var el=cat||btn;
+  try{el.animate([{transform:"scale(1)"},{transform:"scale(1.09)"},{transform:"scale(1)"}],{duration:420,easing:"ease-out"})}catch(err){}
+ }
+
+ // ‼️ THE PAGE'S OWN LINE GOES FIRST, AND IT IS THE ONE PICK THAT IS NOT RANDOM. The rest are
+ // shuffled so the corner reads as a character rather than a playlist. This one is the sentence somebody
+ // wrote for this page, about the offer standing at the end of it, so leading with anything else would
+ // make the per-page decision a one-in-nine chance of being seen.
+ function schedule(lines,lead){
+  lines=lines&&lines.length?lines.slice():[];
+  if(lead&&lines.indexOf(lead)<0)lines.unshift(lead);
+  if(!lines.length)return;
+  // ‼️ FOUR LINES, FIRST AT FOUR SECONDS, THEN ONE EVERY TWELVE TO EIGHTEEN (2026-09-25).
+  // Matthew asked for a line every six seconds. That is eight bubbles inside a minute on a clinic's
+  // live website, which is a popup wearing an assistant's clothes and the kind of thing that gets the
+  // whole widget taken off the site by the client. Four seconds to the first one is the part of the
+  // ask that matters, because a visitor who scrolls past in eight seconds never saw the old six. The
+  // hard stop at four is what keeps the rest of it from being nagging: there is no fifth.
+  // ‼️ NEVER MORE SHOWINGS THAN THERE ARE LINES. Four is the ceiling, not a quota: a page that
+  // has only its own sentence, because the config could not be reached, would otherwise say the same
+  // words four times, which reads worse than saying them once.
+  var pool=lines.slice(), MAX=Math.min(4,lines.length);
   function next(){
    if(dismissed||!document.body||!document.body.contains(wrap)||shown>=MAX)return;
    if(panel.style.display!=="none"||document.hidden){setTimeout(next,8000);return}
    if(!pool.length)pool=lines.slice();
-   var line=pool.splice(Math.floor(Math.random()*pool.length),1)[0];
+   var line;
+   if(shown===0&&lead){line=lead;pool.splice(pool.indexOf(lead),1)}
+   else line=pool.splice(Math.floor(Math.random()*pool.length),1)[0];
    shown++;
    if(catAssets&&!talkLoaded&&!reduce){var t=new Image();t.onload=function(){talkLoaded=true};t.src=abs(catAssets.talk)}
    say(line);
+   pop();
    setTimeout(function(){if(panel.style.display==="none")say(null)},7000);
-   // "every 20 seconds ish": a random gap, so it reads as a character and not a timer.
-   setTimeout(next,7000+15000+Math.floor(Math.random()*13000));
+   // A random gap inside the window, so it reads as a character rather than as a timer.
+   setTimeout(next,12000+Math.floor(Math.random()*6000));
   }
-  setTimeout(next,6000);
+  setTimeout(next,4000);
  }
 
  function mount(){document.body&&document.body.appendChild(wrap)}
@@ -381,12 +483,31 @@ const SCRIPT = `(function(){
   .then(function(r){return r.json()})
   .then(function(d){
     if(!d||!d.enabled){wrap.remove();return}
+    // ‼️ A GLOBAL, NOT A DOM SEARCH, AND THE HEADER RULE IS WHY. This file "never reads the host
+    // page's DOM beyond the element it created", so it cannot go looking for a button to wire up. A page
+    // that wants to open the panel from its own copy calls this instead. Published only once the config
+    // has confirmed the tenant is live, so a caller can test for it and render no control when the widget
+    // is not there rather than rendering one that does nothing.
+    try{window.__srtConciergeOpen=function(){toggle(true)}}catch(err){}
+    // ‼️ A RESUME LINK OPENS THE PANEL BY ITSELF, AND THAT IS THE ONE TIME THIS SCRIPT DOES. The
+    // rest of the time the corner waits to be pressed, because a panel that opens itself on a stranger's
+    // first visit is a popup. Somebody arriving from an email we sent them, on a link they chose to tap,
+    // is not a stranger and is not being interrupted: the conversation IS the point of the link. It runs
+    // only after the config confirmed the tenant is live, so a switched-off widget still opens nothing.
+    if(resume)toggle(true);
     if(d.corner)place(d.corner);
     if(d.mascot&&wantMascot!=="none")useMascot(d.mascot);
-    else if(d.ctaLabel){btn.textContent=d.ctaLabel;btn.setAttribute("data-label",d.ctaLabel)}
-    schedule(d.lines&&d.lines.length?d.lines:(d.headline?[d.headline]:[]));
+    else if(d.ctaLabel){btnLabel.textContent=d.ctaLabel;btn.setAttribute("data-label",d.ctaLabel)}
+    if(d.ctaOffers&&d.ctaOffers.length)offers=d.ctaOffers;
+    schedule(d.lines&&d.lines.length?d.lines.slice():(d.headline?[d.headline]:[]),ctaLine||null);
   })
-  .catch(function(){});
+  // ‼️ A PAGE WITH ITS OWN LINE STILL SPEAKS WHEN THE CONFIG IS UNREACHABLE. Every failure in this
+  // file is deliberately silent, and this one has already happened once: before 2026-09-16 the config
+  // answered with no allow-origin header, the browser threw it away, and every embedded page showed a
+  // bare pill and no teaser. The sentence on the tag needs no network, so a lost config costs the
+  // mascot and the label and no longer costs the offer as well. A DISABLED tenant is a different
+  // branch above and still removes the widget outright.
+  .catch(function(){if(ctaLine)schedule([],ctaLine)});
 
  if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",mount)}else{mount()}
 

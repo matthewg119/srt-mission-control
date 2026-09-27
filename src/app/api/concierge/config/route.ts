@@ -12,8 +12,13 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { unstable_cache } from "next/cache";
-import { loadConciergeConfig, type LauncherCorner } from "@/lib/concierge/config";
-import { magnetByKey, pillLabel, resolveMagnet } from "@/lib/concierge/magnets";
+import {
+  loadConciergeConfig,
+  quickActionsFor,
+  type ConciergeConfig,
+  type LauncherCorner,
+} from "@/lib/concierge/config";
+import { magnetByKey, pillLabel, resolveMagnet, type LeadMagnet } from "@/lib/concierge/magnets";
 import { conciergeAllowed, PREVIEW_TOKEN_PARAM } from "@/lib/concierge/preview-grant";
 import { type MascotAssets } from "@/lib/concierge/mascot";
 import { mascotForClient } from "@/lib/concierge/mascot-for-client";
@@ -28,7 +33,18 @@ interface PublicConfig {
   audience: string;
   headline: string | null;
   promise: string | null;
+  /** What the pill says at rest. */
   ctaLabel: string;
+  /**
+   * What the pill says while a teaser bubble is up, one per door that offers something.
+   *
+   * ‼️ BUILT FROM THE DOORS, NOT FROM THE MAGNET ROW, AND THAT WAS A REAL BUG (2026-09-25). The
+   * pill used to be pillLabel(magnet), so after the second door was replaced by the AI Referral Engine
+   * walk the corner still advertised the magnet it replaced: it read "Find my weakest pillar" for an
+   * offer no door led to any more. A label derived from what the widget actually opens cannot drift
+   * from it.
+   */
+  ctaOffers: string[];
   /** The corner mascot's images, or null for the plain pill. */
   mascot: MascotAssets | null;
   /** Which corner the launcher rests in, before anybody drags it. */
@@ -45,6 +61,32 @@ interface PublicConfig {
  * a line nobody read first. Every line is the offer on the row, the page's magnet, or a fixed sentence.
  * Matthew, 2026-09-15: "saying things like Meow or Get Lead magnet here or offer every 20 seconds ish".
  */
+/**
+ * The short forms of this tenant's doors, for the pill.
+ *
+ * ‼️ SHORT FORMS, BECAUSE A DOOR AND A PILL ARE DIFFERENT SHAPES. "Download Free AI Referral
+ * Engine" is a button in a list with room to read; the same words in a corner pill are a banner. The
+ * doors keep Matthew's exact wording and this is what the corner says about them.
+ *
+ * ‼️ AND A MAGNET DOOR STILL USES ITS OWN ROW, which is 09e1699's decision and worth keeping: on a
+ * client's hub the pill should say what that page's offer promises, and editing the row changes every
+ * embedded page with no deploy. What changed is that the magnet is no longer consulted for a door that
+ * is not a magnet.
+ */
+function pillOffers(
+  config: Pick<ConciergeConfig, "audience" | "quickActions">,
+  magnet: LeadMagnet | null
+): string[] {
+  const out: string[] = [];
+  for (const action of quickActionsFor(config)) {
+    if (action.kind === "audit") out.push("Get AI Visibility audit");
+    else if (action.kind === "referral") out.push("Free AI Referral Engine");
+    else if (action.kind === "magnet" && magnet) out.push(pillLabel(magnet));
+  }
+  // Deduped and bounded: two doors offering the same words would make the corner look stuck.
+  return [...new Set(out)].filter((l) => l && !hasBannedDash(l)).map((l) => l.slice(0, 40));
+}
+
 function mascotLines(args: { audience: string; magnetTitle: string | null; treatment: string | null; clientName: string }): string[] {
   const lines = ["Meow.", "Meow! Click me if you need a hand."];
   if (args.magnetTitle) lines.push(`Psst. Free: ${args.magnetTitle}`, `Get ${args.magnetTitle} here.`);
@@ -121,11 +163,12 @@ const publicConfig = unstable_cache(
       // "Check my visibility" no matter what the widget was actually about to hand over. A page
       // that resolves no magnet still gets a working launcher, because the conversation is worth
       // having on its own, and the publish gate is what stops that shipping unnoticed.
-      ctaLabel: magnet
-        ? pillLabel(magnet)
-        : config.audience === "owner"
-          ? "Check my visibility"
-          : "Start my free scan",
+      // ‼️ THE PILL RESTS ON "Help" AND NAMES AN OFFER ONLY WHILE IT IS SPEAKING. Matthew, 2026-09-25:
+      // "a combination of help and suggestions for Free AI Referral Engine or Get AI Visibility audit etc
+      // as default". So the corner is the Help pill with its chat glyph when nothing is happening, and it
+      // says what the bubble is about for as long as the bubble is up. One thing at a time, from one source.
+      ctaLabel: "Help",
+      ctaOffers: pillOffers(config, magnet),
     };
 
     return { tenantEnabled: config.enabled, clientId: config.clientId, body };
