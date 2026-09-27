@@ -172,7 +172,26 @@ This is also why two lanes were reverted after being written:
 Measured 2026-09-18. This is the work list for "capture as much data as we need", ranked by what it
 costs a real run. None of it is fixed.
 
+> **Updated 2026-09-27.** The onboarding lane's unread columns went from 182 to **zero**, and the
+> board-wide count from 957 to 664. This section is the HAND-WRITTEN half and is still the authority on
+> *why*; the measured, per-column half now lives in `scripts/_dead-wires-baseline.ts`, which names every
+> remaining one and fails by name when a new one arrives. Two items below are resolved and say so.
+
 ### It changes a decision
+
+0. ~~**`keyword_clusters` stored its decision and the card printed a recomputed one.**~~ **FIXED
+   2026-09-27.** Kept here because it is the sharpest example of the shape this section is about, and
+   the only one that was invisible to both a reader and a column scan at once. `persistClusters` wrote
+   `rationale`, `awareness_entry`, `awareness_target` and `offer_fingerprint`; `strategyLines` printed
+   `verdictLine(row.verdict)` and a freshly derived awareness pair off `clusterFinalists` instead. So a
+   person saw a populated card, a column scan saw four dead columns, and the two could disagree by four
+   routes: `strategy` without `new` never persists, `strategy approve` promotes rows it did not delete,
+   `strategy service|post N` updates only `page_kind`, and an offer change moves every verdict
+   underneath. The card now prefers the stored values and compares `offer_fingerprint` against the offer
+   it is being drawn against, printing the disagreement rather than silently correcting it.
+   **`offer_fingerprint` was load-bearing, not a bonus:** reading the stored values without it would
+   have made the card more wrong than recomputing, because a stale decision with no warning is worse
+   than a fresh derivation.
 
 1. **`MarketCenter.precision` is computed, documented as stored, and dropped by the caller.**
    `geocode.ts` returns it; `provision.ts` writes lat/lng/radius and not precision, and no column
@@ -188,6 +207,14 @@ costs a real run. None of it is fixed.
    repeat harvest raises frequency; `mergePhrases` only merges within one run and the upsert
    replaces. A phrase seen in three harvests ends at the last run's count. `frequency_score` is what
    ranks a keyword, and the table is shared across the whole vertical for ever.
+
+0b. ~~**The gap card listed optional fields as required.**~~ **FIXED 2026-09-27.** `gapLines` grouped
+   gaps by their remedy sentence alone and renders a group `:no_entry:` when ANY member blocks, so the
+   seven `RESEARCH_SCRIPT_ONLY` wants, which share "no research is stored for this avatar" with the ten
+   blocking research fields, were shown inside the refusal. Step 11's card said it needed 17 fields when
+   ten were required. The gate never moved, because `blocking` is what `readinessFor` reads: this was the
+   card disagreeing with the gate it exists to explain, which is worse than either being wrong alone.
+   Found only because adding research section 18 pushed the number to 22 and made the merge visible.
 
 ### It loses evidence
 
@@ -254,7 +281,9 @@ nothing measured.
 2. The market-centre precision column and wiring `zipCentroidsLoaded()` (§5.1, §5.2).
 3. `question_bank.frequency_score` accumulation (§5.3).
 4. C11: `northStar(ctx)` and `/strategy`, the map a suggestion argues from.
-5. C12a: `dataset_suggestions` — the one SQL in the North Star build.
+5. ~~C12a: `dataset_suggestions` — the one SQL in the North Star build.~~ **DONE.**
+   `docs/2026-09-22-dataset-suggestions.sql` exists and the table carries 13 columns. This line was
+   already stale when §5 was measured on 2026-09-18; corrected 2026-09-27.
 6. C12b: the research console, `spendSoFar()`'s first caller (blocked on item 1 being honest).
 7. C12c: the screenshot annotation reader.
 8. C13c: suggestions that leave the board (§6).
