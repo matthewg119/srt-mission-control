@@ -5,6 +5,8 @@
 changing anything about a step: it says what runs it, what its [Done] checks, and what its thread accepts.
 
 What each step NEEDS, and every question it would have to ask, is its companion `docs/ONBOARDING-MAP.md`.
+That file also carries the same Feeds relation per step, with the sentence explaining how each artifact
+travels; the table below is the whole board on one screen.
 
 ## Re-running a step
 
@@ -71,6 +73,62 @@ Behind it: `src/lib/clients/step-rerun.ts`, `src/lib/clients/rerun-gaps.ts` (pur
 | 39 | `time_log_entries` | Time log has entries from day 0 | After the call | auto | none | a system check | default | Done / Skip / I hit a problem | `day_zero_archive` |
 | 40 | `weekly_report` | Weekly report firing | After the call | auto | none | a system check | default | Done / Skip / I hit a problem | `first_page` |
 | 41 | `day_30_date` | Day-30 report date set | After the call | manual | none | a system check | yes | Done / Skip / I hit a problem | `day_zero_archive` |
+
+## What each step feeds
+
+If you are about to change a step, this is the table that says what else moves. It is
+`STEP_PRODUCES` read forwards: the column the step records, the exported symbol that hands it to
+later steps, and the steps that consume it. A step that records nothing has to say why, so every one
+of the 41 appears. **A ‼️ in the last column is a finding**: something is recorded and no later step
+declares that it reads it, which is the curated-20 shape.
+
+Dataset FIELDS are deliberately not in here. `dataset-spec.ts` owns that relation and
+`docs/ONBOARDING-MAP.md` renders it per step.
+
+| # | key | records | carried by | read by |
+| --- | --- | --- | --- | --- |
+| 1 | `intake_received` | nothing | | everything it records is a dataset field, and dataset-spec.ts declares the step that fills each one |
+| 2 | `baseline_scan` | `audit_reports.client_id` | `adoptAuditClassification()` | 11 `avatar_harvest`, 12 `keyword_set`, 13 `custom_question_set` |
+| 3 | `site_dns_intel` | nothing | | it observes or hands over something outside this system, and records no artifact a later step draws from |
+| 4 | `nap_sweep` | nothing | | it seeds nap_discrepancies rows the manual tier and step 14 then read by status, not by a column a later step names |
+| 5 | `presence_sweep_manual` | nothing | | the artifact is an IMAGE filed against client_docs, and its own STEP_NEEDS entry records why: nothing in it is a value a later step reads |
+| 6 | `competitor_shortlist` | `competitor_candidates.selected` | `selectedCompetitors()` | 8 `review_audit`, 22 `call_sheet` |
+| 7 | `avatar_confirmed` | `clients.primary_avatar` | `confirmedAvatarFor()` | 11 `avatar_harvest`, 12 `keyword_set`, 13 `custom_question_set`, 14 `page_candidates`, 21 `pre_call_pages` |
+| 8 | `review_audit` | nothing | | the counts are read from live listings into review_audit_rows, which step 22's findings document reads by row rather than by a column a later step names |
+| 9 | `offer_proposed` | nothing | | the proposal is superseded by offer_locked, and its own STEP_NEEDS entry records that what it loses is a missing history row rather than a field |
+| 10 | `offer_locked` | nothing | | everything it records is a dataset field, and dataset-spec.ts declares the step that fills each one |
+| 11 | `avatar_harvest` | nothing | | everything it records is a dataset field, and dataset-spec.ts declares the step that fills each one |
+| 12 | `keyword_set` | `client_keywords.selected_at` | `selectedKeywords()` | 21 `pre_call_pages` |
+| 12 | `keyword_set` | `keyword_serp_reads.keyword_id` | `picturedIds()` | 21 `pre_call_pages` |
+| 13 | `custom_question_set` | nothing | | the tracked set is frozen at Day 0 and is MEASUREMENT. ‼️ It deliberately stays on planKeywords rather than the kept set, a probe asserts it stays broad, so it must never appear as a consumer of keyword_set's selection either |
+| 14 | `page_candidates` | nothing | | the candidates are frozen onto the page-studio session row, which the digit picker reads within one thread rather than a later step |
+| 15 | `citation_cleanup_list` | nothing | | the ranked list is nap_discrepancies read by status, which step 24 executes and step 25 reports on |
+| 16 | `hub_preview` | `client_hosts.host` | `resolveHost()` | 26 `dns_records`, 31 `subdomain_live`, 32 `first_page` |
+| 17 | `referral_engine_preview` | nothing | | it observes or hands over something outside this system, and records no artifact a later step draws from |
+| 18 | `concierge_preview` | nothing | | everything it records is a dataset field, and dataset-spec.ts declares the step that fills each one |
+| 19 | `site_replica` | nothing | | the replica is a crawl filed as client_replica_pages rows, rendered on request and read by no later step |
+| 20 | `review_card_pdf` | nothing | | the card is rendered from the review destination already on the client row |
+| 21 | `pre_call_pages` | nothing | | the drafts are client_pages rows, and the gate reads them by body hash within the publishing step rather than through a column a later step names |
+| 22 | `call_sheet` | nothing | | the call pack is documents stored against output_ref, which the step cards link rather than read |
+| 23 | `call_booked` | nothing | | it observes or hands over something outside this system, and records no artifact a later step draws from |
+| 24 | `call_held` | nothing | | what the call captures is written by offer_locked, not here |
+| 25 | `access_granted` | nothing | | it observes or hands over something outside this system, and records no artifact a later step draws from |
+| 26 | `dns_records` | nothing | | the records are client_dns_records rows whose `verified` status only checkRecord may write, and subdomain_live re-observes rather than reading it |
+| 27 | `agreement_signed` | nothing | | it observes or hands over something outside this system, and records no artifact a later step draws from |
+| 28 | `day_zero_archive` | `clients.day_0_archived_at` | `assertDay0Archived()` | 32 `first_page` |
+| 29 | `gbp_buildout` | nothing | | it observes or hands over something outside this system, and records no artifact a later step draws from |
+| 30 | `citation_cleanup` | nothing | | the confirmed_status it writes is read by the same step's verifier and by step 25's PDF, both of which re-read the rows rather than a summary column |
+| 31 | `subdomain_live` | nothing | | it observes or hands over something outside this system, and records no artifact a later step draws from |
+| 32 | `first_page` | nothing | | publishing flips client_pages.status, which the hub renders from; nothing later on the board draws from it |
+| 33 | `cards_printed` | nothing | | it observes or hands over something outside this system, and records no artifact a later step draws from |
+| 34 | `review_request_configured` | nothing | | everything it records is a dataset field, and dataset-spec.ts declares the step that fills each one |
+| 35 | `referral_engine_handed` | nothing | | it observes or hands over something outside this system, and records no artifact a later step draws from |
+| 36 | `concierge_live` | nothing | | the switch is concierge_configs.enabled, read by the widget at request time rather than by a later step |
+| 37 | `tracking_installed` | nothing | | a real session in hub_hits proves it, and the weekly report counts sessions rather than reading a flag this step set |
+| 38 | `self_report_field` | nothing | | it observes or hands over something outside this system, and records no artifact a later step draws from |
+| 39 | `time_log_entries` | nothing | | hours are time_log rows the weekly report counts, not a column a later step names |
+| 40 | `weekly_report` | nothing | | the report is assembled from what was measured; ATTRIBUTION_NOT_WIRED says in writing what it cannot count |
+| 41 | `day_30_date` | nothing | | it observes or hands over something outside this system, and records no artifact a later step draws from |
 
 ## The files a step touches
 

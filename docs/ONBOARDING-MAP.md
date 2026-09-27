@@ -10,7 +10,8 @@ fields come from `STEP_NEEDS` in `src/lib/clients/step-needs.ts`, which is
 `Record<StepKey, StepNeed>` and therefore fails the build until a new step says what it needs.
 
 **Read this before adding a step, a field or a question.** A step whose output nothing reads is
-either dead or a gap, and both are findings; the Downstream row is where that shows up.
+either dead or a gap, and both are findings; the Feeds row and the Feeds section are where that
+shows up, and a missing consumer is printed with a ‼️ rather than left as a blank.
 
 ## How to read it
 
@@ -19,6 +20,16 @@ either dead or a gap, and both are findings; the Downstream row is where that sh
   coarser and true. A table appears under Writes wherever it is also read.
 - **[Done] refuses on** is the first argument of every `notYet()` in that step's verifier: the
   system's own words for the evidence it went looking for.
+- **Feeds / Fed by** come from `STEP_PRODUCES` in `src/lib/clients/step-needs.ts`, which is
+  `Record<StepKey, StepProduces>` and so fails the build until a new step says what it records. Each
+  output names the column, the exported symbol that carries it to later steps, and the steps that
+  consume it. **Fed by** is the same declaration read backwards, so both questions are answered off
+  one source: "if I change this step, what breaks" and "where did this step's material come from".
+- ‼️ **Feeds says nothing about dataset FIELDS, on purpose.** `dataset-spec.ts` owns which step fills
+  which field and the Dataset fields row is where that lives. `STEP_PRODUCES` covers only artifacts
+  that are not dataset fields, which is exactly why the curated-20 bug was invisible:
+  `client_keywords.selected_at` is not a field. Restating the field relation from the step side would
+  be two sources of truth for one fact.
 - **What it would have to ask** is every ask, not the first five. A card prints at most five; this
   file passes `Infinity` because it has no card to overflow.
 - Live row counts are NOT here. They are in `docs/ONBOARDING-MAP-MEASURED.md`, which carries its
@@ -108,11 +119,20 @@ Intake received, canonical NAP locked, audit attached if one exists
 | Reads | nothing |
 | [Done] reads | no table |
 | Dataset fields | 0 needed, 1 wanted |
+| Feeds | nothing: everything it records is a dataset field, and dataset-spec.ts declares the step that fills each one |
 | Downstream | steps 2 `baseline_scan`, 3 `site_dns_intel`, 4 `nap_sweep`, 9 `offer_proposed`, 16 `hub_preview` declare they wait on this |
 
 **[Done] refuses on:**
 
 - clients.intake_completed_at
+
+**Feeds, and what carries it:**
+
+- nothing: everything it records is a dataset field, and dataset-spec.ts declares the step that fills each one
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -135,12 +155,24 @@ Pre-call audit attached (the one that got them to book)
 | Reads | nothing |
 | [Done] reads | `audit_reports`, `audit_runs` |
 | Dataset fields | none: the audit engine fires and scores it; no answer from a person fills a dataset field here |
+| Feeds | `audit_reports.client_id` → 11 `avatar_harvest`, 12 `keyword_set`, 13 `custom_question_set` |
 | Downstream | steps 6 `competitor_shortlist`, 7 `avatar_confirmed`, 11 `avatar_harvest` declare they wait on this |
 
 **[Done] refuses on:**
 
 - audit_reports rows carrying this client's id
 - this client's newest audit report
+
+**Feeds, and what carries it:**
+
+- **`audit_reports.client_id`** — the link from a finished audit to this client, and the vertical it classified.
+  - carried by `adoptAuditClassification()` in `src/lib/clients/baseline-scan.ts`
+  - read by steps 11 `avatar_harvest`, 12 `keyword_set`, 13 `custom_question_set`
+  - everything keyed on a vertical. Until it existed, harvest.ts, research-intake.ts, custom-question-set.ts and page-candidates.ts all took their `?? "med_spa"` fallback, and a shared corpus was poisoned for every client that ever existed.
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -161,11 +193,20 @@ Site, hosting and DNS intelligence
 | Reads | nothing |
 | [Done] reads | no table |
 | Dataset fields | none: hosting, DNS and the site are observed from the network, never answered |
+| Feeds | nothing: it observes or hands over something outside this system, and records no artifact a later step draws from |
 | Downstream | `clients` is selected in 96 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
 
 **[Done] refuses on:**
 
 - clients.site_intel
+
+**Feeds, and what carries it:**
+
+- nothing: it observes or hands over something outside this system, and records no artifact a later step draws from
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -186,11 +227,20 @@ Presence sweep: automated tier
 | Reads | `clients` |
 | [Done] reads | no table |
 | Dataset fields | none: the automated tier reads directories; nothing in the datasets feeds or records it |
+| Feeds | nothing: it seeds nap_discrepancies rows the manual tier and step 14 then read by status, not by a column a later step names |
 | Downstream | step 5 `presence_sweep_manual` declares it waits on this; `nap_discrepancies` is selected in 2 other file(s), e.g. `src/app/api/clients/[id]/presence-sweep/route.ts`, `src/lib/clients/listing-read.ts` |
 
 **[Done] refuses on:**
 
 - nap_discrepancies rows for this client
+
+**Feeds, and what carries it:**
+
+- nothing: it seeds nap_discrepancies rows the manual tier and step 14 then read by status, not by a column a later step names
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -211,11 +261,20 @@ Presence sweep: manual tier, screenshots in the thread
 | Reads | nothing |
 | [Done] reads | no table |
 | Dataset fields | none: screenshots of profiles that already exist, filed as evidence against client_docs. Nothing in them is a value a later step reads, and a field saying a screenshot was taken would record our activity rather than the client |
+| Feeds | nothing: the artifact is an IMAGE filed against client_docs, and its own STEP_NEEDS entry records why: nothing in it is a value a later step reads |
 | Downstream | steps 15 `citation_cleanup_list`, 22 `call_sheet` declare they wait on this |
 
 **[Done] refuses on:**
 
 - screenshots filed against this step's thread, counted by distinct platform
+
+**Feeds, and what carries it:**
+
+- nothing: the artifact is an IMAGE filed against client_docs, and its own STEP_NEEDS entry records why: nothing in it is a value a later step reads
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -236,12 +295,24 @@ Competitor shortlist of 10, top 3 pre-picked, I confirm
 | Reads | nothing |
 | [Done] reads | no table |
 | Dataset fields | 0 needed, 1 wanted |
+| Feeds | `competitor_candidates.selected` → 8 `review_audit`, 22 `call_sheet` |
 | Downstream | step 8 `review_audit` declares it waits on this |
 
 **[Done] refuses on:**
 
 - competitor_candidates for this client
 - competitor_candidates marked selected
+
+**Feeds, and what carries it:**
+
+- **`competitor_candidates.selected`** — which three competitors a person confirmed off the shortlist.
+  - carried by `selectedCompetitors()` in `src/app/api/clients/[id]/competitors/route.ts`
+  - read by steps 8 `review_audit`, 22 `call_sheet`
+  - the review-count grid at step 8, the findings document, the call sheet and the closing questions. It had a reader and no writer until 2026-08-24, which is the same class of bug one direction over.
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -264,12 +335,24 @@ Avatar confirmed: which customer this whole build is aimed at
 | Reads | nothing |
 | [Done] reads | `client_audiences` |
 | Dataset fields | 1 needed, 2 wanted |
+| Feeds | `clients.primary_avatar` → 11 `avatar_harvest`, 12 `keyword_set`, 13 `custom_question_set`, 14 `page_candidates`, 21 `pre_call_pages` |
 | Downstream | steps 9 `offer_proposed`, 10 `offer_locked`, 11 `avatar_harvest`, 13 `custom_question_set`, 14 `page_candidates` declare they wait on this; the fields it fills unblock step 11 `avatar_harvest` |
 
 **[Done] refuses on:**
 
 - clients.primary_avatar
 - a primary client_audiences row for this client
+
+**Feeds, and what carries it:**
+
+- **`clients.primary_avatar`** — which customer the whole build is aimed at.
+  - carried by `confirmedAvatarFor()` in `src/lib/clients/avatars.ts`
+  - read by steps 11 `avatar_harvest`, 12 `keyword_set`, 13 `custom_question_set`, 14 `page_candidates`, 21 `pre_call_pages`
+  - the deep research, the keyword categories, the question set and the pages. It had a column, a CHECK and a verifier and NO WRITER, so on the first real client the step came out skipped because no human being could tick it.
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -294,12 +377,21 @@ Review audit: them plus the three I picked
 | Reads | `client_docs`, `clients`, `onboarding` |
 | [Done] reads | `review_audit_rows` |
 | Dataset fields | 0 needed, 1 wanted |
+| Feeds | nothing: the counts are read from live listings into review_audit_rows, which step 22's findings document reads by row rather than by a column a later step names |
 | Downstream | step 22 `call_sheet` declares it waits on this; `review_audit_rows` is selected in 2 other file(s), e.g. `src/app/api/clients/[id]/review-audit/route.ts`, `src/lib/clients/step-verify.ts` |
 
 **[Done] refuses on:**
 
 - review_audit_rows for this client
 - review_audit_rows for the CLIENT carrying a measured review_count
+
+**Feeds, and what carries it:**
+
+- nothing: the counts are read from live listings into review_audit_rows, which step 22's findings document reads by row rather than by a column a later step names
+
+**Fed by:**
+
+- `competitor_candidates.selected`, recorded by step 6 `competitor_shortlist`, via `selectedCompetitors()`
 
 **What it would have to ask, with nothing on file:**
 
@@ -322,11 +414,20 @@ One offer proposed from what they told us at intake
 | Reads | `client_audiences`, `client_delivery_steps` |
 | [Done] reads | no table |
 | Dataset fields | none: the proposal is written from what intake already said, so nothing has to be collected for it. What it LOSES, the proposal's own reasoning before offer_locked overwrites it, is a missing history row rather than a missing field |
+| Feeds | nothing: the proposal is superseded by offer_locked, and its own STEP_NEEDS entry records that what it loses is a missing history row rather than a field |
 | Downstream | `client_offers` is selected in 1 other file(s), e.g. `src/lib/clients/archive.ts`; `clients` is selected in 96 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
 
 **[Done] refuses on:**
 
 - client_offers.proposed_treatment for the primary audience
+
+**Feeds, and what carries it:**
+
+- nothing: the proposal is superseded by offer_locked, and its own STEP_NEEDS entry records that what it loses is a missing history row rather than a field
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -347,11 +448,20 @@ Prep call: phone them, lock the one offer and the words their customers use for 
 | Reads | nothing |
 | [Done] reads | no table |
 | Dataset fields | 4 needed, 5 wanted |
+| Feeds | nothing: everything it records is a dataset field, and dataset-spec.ts declares the step that fills each one |
 | Downstream | steps 11 `avatar_harvest`, 12 `keyword_set`, 13 `custom_question_set`, 14 `page_candidates`, 21 `pre_call_pages` declare they wait on this; the fields it fills unblock steps 12 `keyword_set`, 21 `pre_call_pages` |
 
 **[Done] refuses on:**
 
 - client_offers.treatment for the primary audience
+
+**Feeds, and what carries it:**
+
+- nothing: everything it records is a dataset field, and dataset-spec.ts declares the step that fills each one
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -388,11 +498,21 @@ Buyer-phrase harvest and the deep research for the confirmed avatar
 | Reads | `audit_reports`, `audit_runs`, `clients` |
 | [Done] reads | `harvest_runs`, `question_bank` |
 | Dataset fields | 46 needed, 12 wanted |
+| Feeds | nothing: everything it records is a dataset field, and dataset-spec.ts declares the step that fills each one |
 | Downstream | step 12 `keyword_set` declares it waits on this; `harvest_runs` is selected in 2 other file(s), e.g. `src/lib/clients/research-intake.ts`, `src/lib/clients/step-verify.ts`; `question_bank` is selected in 13 other file(s), e.g. `src/lib/clients/artifacts/custom-question-set.ts`, `src/lib/clients/artifacts/deep-research-run.ts`, `src/lib/clients/artifacts/page-candidates.ts` |
 
 **[Done] refuses on:**
 
 - the deep research for this client, run and brought back into the thread
+
+**Feeds, and what carries it:**
+
+- nothing: everything it records is a dataset field, and dataset-spec.ts declares the step that fills each one
+
+**Fed by:**
+
+- `audit_reports.client_id`, recorded by step 2 `baseline_scan`, via `adoptAuditClassification()`
+- `clients.primary_avatar`, recorded by step 7 `avatar_confirmed`, via `confirmedAvatarFor()`
 
 **What it would have to ask, with nothing on file:**
 
@@ -423,11 +543,28 @@ Keywords: 200+ ways the offer is said, approved by me
 | Reads | `audit_reports`, `audit_runs`, `client_keyword_strategy`, `clients`, `keyword_clusters` |
 | [Done] reads | no table |
 | Dataset fields | 1 needed, 3 wanted |
+| Feeds | `client_keywords.selected_at` → 21 `pre_call_pages`; `keyword_serp_reads.keyword_id` → 21 `pre_call_pages` |
 | Downstream | steps 13 `custom_question_set`, 14 `page_candidates`, 21 `pre_call_pages` declare they wait on this; `client_keywords` is selected in 5 other file(s), e.g. `src/lib/clients/anchor-ladder.ts`, `src/lib/clients/archive.ts`, `src/lib/clients/keyword-cards.ts` |
 
 **[Done] refuses on:**
 
 - client_keywords for this client
+
+**Feeds, and what carries it:**
+
+- **`client_keywords.selected_at`** — the keywords that survived their screenshot, kept by a reaction on the keyword's own card.
+  - carried by `selectedKeywords()` in `src/lib/clients/keyword-decisions.ts`
+  - read by step 21 `pre_call_pages`
+  - the seven pages, the headlines and the anchor ladder. ‼️ THIS IS THE CURATED-20 BUG ITSELF: the column was written and read back by the card that wrote it, while step 21 went on drawing from the approved set, so twenty deliberate decisions reached nothing.
+- **`keyword_serp_reads.keyword_id`** — which keywords have a screenshot on file, filed against the keyword the picture was of.
+  - carried by `picturedIds()` in `src/lib/clients/keyword-strategy.ts`
+  - read by step 21 `pre_call_pages`
+  - the cluster gate, which refuses to plan a page off a keyword nobody has looked at. `picturedIds` re-reads these rows fresh on every call rather than trusting a summary, which is exactly why keyword_clusters.missing_pictures was dropped rather than wired: a cache must never be what a refusal is decided on.
+
+**Fed by:**
+
+- `audit_reports.client_id`, recorded by step 2 `baseline_scan`, via `adoptAuditClassification()`
+- `clients.primary_avatar`, recorded by step 7 `avatar_confirmed`, via `confirmedAvatarFor()`
 
 **What it would have to ask, with nothing on file:**
 
@@ -454,11 +591,21 @@ Custom question set drafted for approval
 | Reads | `clients`, `question_bank` |
 | [Done] reads | `client_question_sets` |
 | Dataset fields | 0 needed, 3 wanted |
+| Feeds | nothing: the tracked set is frozen at Day 0 and is MEASUREMENT. ‼️ It deliberately stays on planKeywords rather than the kept set, a probe asserts it stays broad, so it must never appear as a consumer of keyword_set's selection either |
 | Downstream | step 22 `call_sheet` declares it waits on this; `client_question_sets` is selected in 3 other file(s), e.g. `src/lib/clients/photograph.ts`, `src/lib/clients/step-engine.ts`, `src/lib/clients/step-verify.ts` |
 
 **[Done] refuses on:**
 
 - client_question_sets for this client
+
+**Feeds, and what carries it:**
+
+- nothing: the tracked set is frozen at Day 0 and is MEASUREMENT. ‼️ It deliberately stays on planKeywords rather than the kept set, a probe asserts it stays broad, so it must never appear as a consumer of keyword_set's selection either
+
+**Fed by:**
+
+- `audit_reports.client_id`, recorded by step 2 `baseline_scan`, via `adoptAuditClassification()`
+- `clients.primary_avatar`, recorded by step 7 `avatar_confirmed`, via `confirmedAvatarFor()`
 
 **What it would have to ask, with nothing on file:**
 
@@ -485,11 +632,20 @@ Page candidates scored and ranked for the call
 | Reads | `audit_reports`, `audit_runs`, `clients`, `competitor_candidates`, `question_bank`, `review_tool_submissions` |
 | [Done] reads | no table |
 | Dataset fields | 0 needed, 2 wanted |
+| Feeds | nothing: the candidates are frozen onto the page-studio session row, which the digit picker reads within one thread rather than a later step |
 | Downstream | steps 21 `pre_call_pages`, 22 `call_sheet` declare they wait on this; `page_candidates` is selected in 5 other file(s), e.g. `src/lib/clients/content-digest.ts`, `src/lib/clients/keyword-set.ts`, `src/lib/clients/page-plan.ts` |
 
 **[Done] refuses on:**
 
 - page_candidates for this client
+
+**Feeds, and what carries it:**
+
+- nothing: the candidates are frozen onto the page-studio session row, which the digit picker reads within one thread rather than a later step
+
+**Fed by:**
+
+- `clients.primary_avatar`, recorded by step 7 `avatar_confirmed`, via `confirmedAvatarFor()`
 
 **What it would have to ask, with nothing on file:**
 
@@ -512,11 +668,20 @@ Citation cleanup list built and ranked
 | Reads | `clients` |
 | [Done] reads | no table |
 | Dataset fields | none: the list is built from the directories the sweep found, and is ranked by what it measured |
+| Feeds | nothing: the ranked list is nap_discrepancies read by status, which step 24 executes and step 25 reports on |
 | Downstream | step 30 `citation_cleanup` declares it waits on this |
 
 **[Done] refuses on:**
 
 - nothing: this verifier never calls `notYet`
+
+**Feeds, and what carries it:**
+
+- nothing: the ranked list is nap_discrepancies read by status, which step 24 executes and step 25 reports on
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -537,11 +702,23 @@ Hub built, themed, preview live, theme confirmed by me
 | Reads | `clients` |
 | [Done] reads | `client_hosts` |
 | Dataset fields | none: the hub is built from the client's own theme and pages; its look is picked, not answered |
+| Feeds | `client_hosts.host` → 26 `dns_records`, 31 `subdomain_live`, 32 `first_page` |
 | Downstream | steps 17 `referral_engine_preview`, 18 `concierge_preview`, 19 `site_replica`, 20 `review_card_pdf`, 22 `call_sheet` declare they wait on this |
 
 **[Done] refuses on:**
 
 - the theme on this client's hub
+
+**Feeds, and what carries it:**
+
+- **`client_hosts.host`** — the hostnames attached to Vercel, which is what was ATTACHED rather than what was intended.
+  - carried by `resolveHost()` in `src/lib/hub/vercel-domains.ts`
+  - read by steps 26 `dns_records`, 31 `subdomain_live`, 32 `first_page`
+  - middleware's host classification and every hub page. It is also the Vercel ledger, so the routing map and the attachment state cannot disagree.
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -562,11 +739,20 @@ AI Referral Engine preview live, themed to match
 | Reads | `client_dns_records`, `client_hosts`, `clients` |
 | [Done] reads | no table |
 | Dataset fields | none: the AI Referral Engine mirrors listings that already exist and asks for no dataset field |
+| Feeds | nothing: it observes or hands over something outside this system, and records no artifact a later step draws from |
 | Downstream | `client_delivery_steps` is selected in 29 other file(s), e.g. `src/app/api/clients/[id]/time-log/route.ts`, `src/app/api/internal/board-kick/route.ts`, `src/app/api/internal/run-step/route.ts` |
 
 **[Done] refuses on:**
 
 - a confirmed theme for the AI Referral Engine
+
+**Feeds, and what carries it:**
+
+- nothing: it observes or hands over something outside this system, and records no artifact a later step draws from
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -587,6 +773,7 @@ AI Concierge preview live, ready to demo on the call
 | Reads | `client_hosts`, `clients` |
 | [Done] reads | `concierge_configs` |
 | Dataset fields | 1 needed, 2 wanted |
+| Feeds | nothing: everything it records is a dataset field, and dataset-spec.ts declares the step that fills each one |
 | Downstream | steps 19 `site_replica`, 21 `pre_call_pages` declare they wait on this; `client_delivery_steps` is selected in 29 other file(s), e.g. `src/app/api/clients/[id]/time-log/route.ts`, `src/app/api/internal/board-kick/route.ts`, `src/app/api/internal/run-step/route.ts`; `concierge_configs` is selected in 11 other file(s), e.g. `src/lib/clients/concierge-addon.ts`, `src/lib/clients/concierge-audience.ts`, `src/lib/clients/concierge-enabled.ts` |
 
 **[Done] refuses on:**
@@ -594,6 +781,14 @@ AI Concierge preview live, ready to demo on the call
 - the concierge_configs row for this client
 - the embed allowlist on this client's concierge config
 - a request for the demo link, made just now
+
+**Feeds, and what carries it:**
+
+- nothing: everything it records is a dataset field, and dataset-spec.ts declares the step that fills each one
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -620,11 +815,20 @@ Replica of their own site built, assistant on it, preview link ready to walk
 | Reads | `clients`, `concierge_configs` |
 | [Done] reads | `client_replica_pages` |
 | Dataset fields | none: the replica is a crawl of their own site, filed as evidence rather than collected as fields |
+| Feeds | nothing: the replica is a crawl filed as client_replica_pages rows, rendered on request and read by no later step |
 | Downstream | nothing downstream declares a dependency on it |
 
 **[Done] refuses on:**
 
 - replica pages for this client
+
+**Feeds, and what carries it:**
+
+- nothing: the replica is a crawl filed as client_replica_pages rows, rendered on request and read by no later step
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -645,11 +849,20 @@ Review card PDF generated
 | Reads | `client_hosts`, `clients` |
 | [Done] reads | no table |
 | Dataset fields | none: the card is rendered from the review destination already on the client row |
+| Feeds | nothing: the card is rendered from the review destination already on the client row |
 | Downstream | step 33 `cards_printed` declares it waits on this |
 
 **[Done] refuses on:**
 
 - a review link the page's Post button can open
+
+**Feeds, and what carries it:**
+
+- nothing: the card is rendered from the review destination already on the client row
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -670,11 +883,22 @@ Seven pages drafted before the call: one pillar for the offer, six supports
 | Reads | `clients`, `keyword_serp_reads` |
 | [Done] reads | no table |
 | Dataset fields | 3 needed, 7 wanted |
+| Feeds | nothing: the drafts are client_pages rows, and the gate reads them by body hash within the publishing step rather than through a column a later step names |
 | Downstream | step 22 `call_sheet` declares it waits on this; `client_pages` is selected in 15 other file(s), e.g. `src/app/api/clients/[id]/hub/route.ts`, `src/app/dashboard/clients/[id]/page.tsx`, `src/lib/clients/client-reads.ts`; `page_plan` is selected in 15 other file(s), e.g. `src/lib/clients/artifacts/call-sheet.ts`, `src/lib/clients/batch-research.ts`, `src/lib/clients/client-headlines.ts` |
 
 **[Done] refuses on:**
 
 - the pre-call plan and its drafts
+
+**Feeds, and what carries it:**
+
+- nothing: the drafts are client_pages rows, and the gate reads them by body hash within the publishing step rather than through a column a later step names
+
+**Fed by:**
+
+- `clients.primary_avatar`, recorded by step 7 `avatar_confirmed`, via `confirmedAvatarFor()`
+- `client_keywords.selected_at`, recorded by step 12 `keyword_set`, via `selectedKeywords()`
+- `keyword_serp_reads.keyword_id`, recorded by step 12 `keyword_set`, via `picturedIds()`
 
 **What it would have to ask, with nothing on file:**
 
@@ -709,12 +933,21 @@ Call pack: call sheet, findings, presence PDF, closing questions
 | Reads | nothing |
 | [Done] reads | `client_docs` |
 | Dataset fields | 0 needed, 5 wanted |
+| Feeds | nothing: the call pack is documents stored against output_ref, which the step cards link rather than read |
 | Downstream | step 24 `call_held` declares it waits on this |
 
 **[Done] refuses on:**
 
 - the step's output_ref
 - the four call pack documents filed against this step
+
+**Feeds, and what carries it:**
+
+- nothing: the call pack is documents stored against output_ref, which the step cards link rather than read
+
+**Fed by:**
+
+- `competitor_candidates.selected`, recorded by step 6 `competitor_shortlist`, via `selectedCompetitors()`
 
 **What it would have to ask, with nothing on file:**
 
@@ -743,11 +976,20 @@ Call booked
 | Reads | nothing |
 | [Done] reads | no table |
 | Dataset fields | none: a date in the calendar; nothing about the client is collected by it |
+| Feeds | nothing: it observes or hands over something outside this system, and records no artifact a later step draws from |
 | Downstream | nothing downstream declares a dependency on it |
 
 **[Done] refuses on:**
 
 - replies in this step's thread carrying a date
+
+**Feeds, and what carries it:**
+
+- nothing: it observes or hands over something outside this system, and records no artifact a later step draws from
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -768,11 +1010,20 @@ Call held: NAP aloud, question set approved, consent confirmed, preview and the 
 | Reads | nothing |
 | [Done] reads | no table |
 | Dataset fields | none: the call itself. What it captures is written by offer_locked, not here |
+| Feeds | nothing: what the call captures is written by offer_locked, not here |
 | Downstream | steps 25 `access_granted`, 26 `dns_records`, 27 `agreement_signed`, 28 `day_zero_archive`, 34 `review_request_configured`, 36 `concierge_live`, 37 `tracking_installed`, 38 `self_report_field` declare they wait on this |
 
 **[Done] refuses on:**
 
 - replies in this step's thread that read as call notes
+
+**Feeds, and what carries it:**
+
+- nothing: what the call captures is written by offer_locked, not here
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -793,11 +1044,20 @@ Access granted: GBP manager, Search Console, Analytics
 | Reads | nothing |
 | [Done] reads | no table |
 | Dataset fields | none: GBP, Search Console and Analytics access is granted, never answered |
+| Feeds | nothing: it observes or hands over something outside this system, and records no artifact a later step draws from |
 | Downstream | step 29 `gbp_buildout` declares it waits on this |
 
 **[Done] refuses on:**
 
 - clients.payment_recorded_at
+
+**Feeds, and what carries it:**
+
+- nothing: it observes or hands over something outside this system, and records no artifact a later step draws from
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -818,11 +1078,20 @@ DNS: three records added by the client, two CNAMEs and one TXT
 | Reads | nothing |
 | [Done] reads | no table |
 | Dataset fields | none: three records the client adds, verified by observation |
+| Feeds | nothing: the records are client_dns_records rows whose `verified` status only checkRecord may write, and subdomain_live re-observes rather than reading it |
 | Downstream | step 31 `subdomain_live` declares it waits on this |
 
 **[Done] refuses on:**
 
 - client_dns_records after a fresh resolver check
+
+**Feeds, and what carries it:**
+
+- nothing: the records are client_dns_records rows whose `verified` status only checkRecord may write, and subdomain_live re-observes rather than reading it
+
+**Fed by:**
+
+- `client_hosts.host`, recorded by step 16 `hub_preview`, via `resolveHost()`
 
 **What it would have to ask, with nothing on file:**
 
@@ -843,11 +1112,20 @@ Agreement signed on the call
 | Reads | nothing |
 | [Done] reads | no table |
 | Dataset fields | none: a signature on a contract, recorded against the signing row |
+| Feeds | nothing: it observes or hands over something outside this system, and records no artifact a later step draws from |
 | Downstream | nothing downstream declares a dependency on it |
 
 **[Done] refuses on:**
 
 - replies in this step's thread
+
+**Feeds, and what carries it:**
+
+- nothing: it observes or hands over something outside this system, and records no artifact a later step draws from
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -868,11 +1146,23 @@ Day-0 scan archived, before any change lands
 | Reads | nothing |
 | [Done] reads | no table |
 | Dataset fields | none: the before photograph. It archives what was already measured and asks for nothing |
+| Feeds | `clients.day_0_archived_at` → 32 `first_page` |
 | Downstream | steps 29 `gbp_buildout`, 30 `citation_cleanup`, 32 `first_page`, 39 `time_log_entries`, 41 `day_30_date` declare they wait on this |
 
 **[Done] refuses on:**
 
 - nothing: this verifier never calls `notYet`
+
+**Feeds, and what carries it:**
+
+- **`clients.day_0_archived_at`** — the before photograph, and the one hard rail on the board.
+  - carried by `assertDay0Archived()` in `src/lib/clients/day-zero.ts`
+  - read by step 32 `first_page`
+  - page_publish, which refuses while it is NULL. ‼️ `day_0_source` is the honest half: `manual_step` is a person asserting the archive happened, never evidence of it.
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -893,11 +1183,20 @@ Google Business Profile buildout: categories, services, photos, Q&A seeded
 | Reads | nothing |
 | [Done] reads | no table |
 | Dataset fields | none: categories, services and photos are entered in Google, not here |
+| Feeds | nothing: it observes or hands over something outside this system, and records no artifact a later step draws from |
 | Downstream | nothing downstream declares a dependency on it |
 
 **[Done] refuses on:**
 
 - nothing: this verifier never calls `notYet`
+
+**Feeds, and what carries it:**
+
+- nothing: it observes or hands over something outside this system, and records no artifact a later step draws from
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -918,12 +1217,21 @@ Citation cleanup executed from the list
 | Reads | nothing |
 | [Done] reads | no table |
 | Dataset fields | none: the list built at step 15 is executed; no new field is owed |
+| Feeds | nothing: the confirmed_status it writes is read by the same step's verifier and by step 25's PDF, both of which re-read the rows rather than a summary column |
 | Downstream | nothing downstream declares a dependency on it |
 
 **[Done] refuses on:**
 
 - the confirmed status on every nap_discrepancies row
 - nap_discrepancies still confirmed at mismatch
+
+**Feeds, and what carries it:**
+
+- nothing: the confirmed_status it writes is read by the same step's verifier and by step 25's PDF, both of which re-read the rows rather than a summary column
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -944,12 +1252,21 @@ Subdomain live and verified in Search Console
 | Reads | `clients` |
 | [Done] reads | no table |
 | Dataset fields | none: DNS and Search Console verification, both observed |
+| Feeds | nothing: it observes or hands over something outside this system, and records no artifact a later step draws from |
 | Downstream | steps 32 `first_page`, 35 `referral_engine_handed`, 36 `concierge_live` declare they wait on this |
 
 **[Done] refuses on:**
 
 - a live request to the hub host
 - the hub CNAME, resolved by a real lookup
+
+**Feeds, and what carries it:**
+
+- nothing: it observes or hands over something outside this system, and records no artifact a later step draws from
+
+**Fed by:**
+
+- `client_hosts.host`, recorded by step 16 `hub_preview`, via `resolveHost()`
 
 **What it would have to ask, with nothing on file:**
 
@@ -970,11 +1287,21 @@ First pages published, measured track first
 | Reads | nothing |
 | [Done] reads | `page_gate_runs` |
 | Dataset fields | none: the pages were drafted and gated at step 21; publishing them collects nothing new |
+| Feeds | nothing: publishing flips client_pages.status, which the hub renders from; nothing later on the board draws from it |
 | Downstream | step 40 `weekly_report` declares it waits on this |
 
 **[Done] refuses on:**
 
 - client_pages with status published
+
+**Feeds, and what carries it:**
+
+- nothing: publishing flips client_pages.status, which the hub renders from; nothing later on the board draws from it
+
+**Fed by:**
+
+- `client_hosts.host`, recorded by step 16 `hub_preview`, via `resolveHost()`
+- `clients.day_0_archived_at`, recorded by step 28 `day_zero_archive`, via `assertDay0Archived()`
 
 **What it would have to ask, with nothing on file:**
 
@@ -995,11 +1322,20 @@ Cards printed and handed to the clinic
 | Reads | nothing |
 | [Done] reads | no table |
 | Dataset fields | none: a physical deliverable handed over in person |
+| Feeds | nothing: it observes or hands over something outside this system, and records no artifact a later step draws from |
 | Downstream | nothing downstream declares a dependency on it |
 
 **[Done] refuses on:**
 
 - nothing: this verifier never calls `notYet`
+
+**Feeds, and what carries it:**
+
+- nothing: it observes or hands over something outside this system, and records no artifact a later step draws from
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -1020,11 +1356,20 @@ Automated request configured in their booking system, or card_only recorded
 | Reads | nothing |
 | [Done] reads | no table |
 | Dataset fields | none: a setting in their booking system, or the printed cards |
+| Feeds | nothing: everything it records is a dataset field, and dataset-spec.ts declares the step that fills each one |
 | Downstream | nothing downstream declares a dependency on it |
 
 **[Done] refuses on:**
 
 - clients.review_request_mode
+
+**Feeds, and what carries it:**
+
+- nothing: everything it records is a dataset field, and dataset-spec.ts declares the step that fills each one
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -1045,11 +1390,20 @@ AI Referral Engine handed to the named person
 | Reads | nothing |
 | [Done] reads | no table |
 | Dataset fields | none: a named person is given the tool; the naming is not a dataset field |
+| Feeds | nothing: it observes or hands over something outside this system, and records no artifact a later step draws from |
 | Downstream | nothing downstream declares a dependency on it |
 
 **[Done] refuses on:**
 
 - replies in this step's thread
+
+**Feeds, and what carries it:**
+
+- nothing: it observes or hands over something outside this system, and records no artifact a later step draws from
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -1070,6 +1424,7 @@ AI Concierge enabled: audience confirmed, booking destination set, consent copy 
 | Reads | nothing |
 | [Done] reads | `concierge_configs` |
 | Dataset fields | none: the switch, the booking destination and the audience were all confirmed at concierge_preview |
+| Feeds | nothing: the switch is concierge_configs.enabled, read by the widget at request time rather than by a later step |
 | Downstream | nothing downstream declares a dependency on it |
 
 **[Done] refuses on:**
@@ -1079,6 +1434,14 @@ AI Concierge enabled: audience confirmed, booking destination set, consent copy 
 - concierge_configs.audience_confirmed_at for this client
 - concierge_configs.enabled for this client
 - the widget host \
+
+**Feeds, and what carries it:**
+
+- nothing: the switch is concierge_configs.enabled, read by the widget at request time rather than by a later step
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -1099,12 +1462,21 @@ SRT pixel live on the client site, first real session seen
 | Reads | nothing |
 | [Done] reads | no table |
 | Dataset fields | none: the pixel is live or it is not, and a real session proves it |
+| Feeds | nothing: a real session in hub_hits proves it, and the weekly report counts sessions rather than reading a flag this step set |
 | Downstream | `clients` is selected in 96 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
 
 **[Done] refuses on:**
 
 - clients.pixel_key for this client
 - real, non-test sessions in attribution_sessions for this client
+
+**Feeds, and what carries it:**
+
+- nothing: a real session in hub_hits proves it, and the weekly report counts sessions rather than reading a flag this step set
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -1125,11 +1497,20 @@ How did you hear about us: six options live on their own booking form
 | Reads | nothing |
 | [Done] reads | `attribution_bookings` |
 | Dataset fields | none: six options added to their own booking form |
+| Feeds | nothing: it observes or hands over something outside this system, and records no artifact a later step draws from |
 | Downstream | nothing downstream declares a dependency on it |
 
 **[Done] refuses on:**
 
 - answered bookings, then screenshots in this thread
+
+**Feeds, and what carries it:**
+
+- nothing: it observes or hands over something outside this system, and records no artifact a later step draws from
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -1150,11 +1531,20 @@ Time log has entries from day 0
 | Reads | nothing |
 | [Done] reads | `time_log` |
 | Dataset fields | none: hours recorded as work happens |
+| Feeds | nothing: hours are time_log rows the weekly report counts, not a column a later step names |
 | Downstream | nothing downstream declares a dependency on it |
 
 **[Done] refuses on:**
 
 - time_log entries since day 0 (<...>)
+
+**Feeds, and what carries it:**
+
+- nothing: hours are time_log rows the weekly report counts, not a column a later step names
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -1175,11 +1565,20 @@ Weekly report firing
 | Reads | nothing |
 | [Done] reads | `client_weekly_reports` |
 | Dataset fields | none: the report is assembled from what was measured. ATTRIBUTION_NOT_WIRED says in writing what it cannot count |
+| Feeds | nothing: the report is assembled from what was measured; ATTRIBUTION_NOT_WIRED says in writing what it cannot count |
 | Downstream | nothing downstream declares a dependency on it |
 
 **[Done] refuses on:**
 
 - client_weekly_reports rows for this client
+
+**Feeds, and what carries it:**
+
+- nothing: the report is assembled from what was measured; ATTRIBUTION_NOT_WIRED says in writing what it cannot count
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 
@@ -1200,11 +1599,20 @@ Day-30 report date set
 | Reads | nothing |
 | [Done] reads | no table |
 | Dataset fields | none: a date for the day-30 retest |
+| Feeds | nothing: it observes or hands over something outside this system, and records no artifact a later step draws from |
 | Downstream | nothing downstream declares a dependency on it |
 
 **[Done] refuses on:**
 
 - replies in this step's thread carrying a date
+
+**Feeds, and what carries it:**
+
+- nothing: it observes or hands over something outside this system, and records no artifact a later step draws from
+
+**Fed by:**
+
+- no earlier step declares an artifact this one consumes
 
 **What it would have to ask, with nothing on file:**
 

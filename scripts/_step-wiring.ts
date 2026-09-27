@@ -20,7 +20,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DELIVERY_STEPS, stepNumber, type StepKey } from "../src/config/delivery-steps";
-import { STEP_NEEDS, fieldsForStep, stepsBlockedBy, type FieldRef } from "../src/lib/clients/step-needs";
+import {
+  STEP_NEEDS,
+  STEP_PRODUCES,
+  allOutputs,
+  fieldsForStep,
+  stepsBlockedBy,
+  type FieldRef,
+  type StepOutput,
+} from "../src/lib/clients/step-needs";
 import { gapsFrom, gapLines } from "../src/lib/clients/step-gaps";
 import { DATASET_FIELDS, NOTHING_ON_FILE, evaluateDatasets } from "../src/lib/clients/dataset-spec";
 import { RESEARCH_SECTION_KEYS } from "../src/lib/clients/artifacts/deep-research-run";
@@ -279,6 +287,39 @@ const DATASET_FILLERS = (() => {
   return out;
 })();
 
+/**
+ * Which steps a step FEEDS, and which steps feed it. Both directions off one declaration.
+ *
+ * ‼️ SYNCHRONOUS, LIKE EVERYTHING ELSE THAT REACHES A --check'ed DOC. `allOutputs()` is pure, reads
+ * `STEP_PRODUCES` and `DELIVERY_STEPS` and nothing else, so no live number can arrive here by
+ * accident. Do not make a Feeds line reach for a row count: that belongs in `--live`.
+ *
+ * ‼️ AND IT DELIBERATELY SAYS NOTHING ABOUT DATASET FIELDS. `dataset-spec.ts` owns "which step fills
+ * which field" and `DATASET_FILLERS` above already inverts it. `STEP_PRODUCES` covers only artifacts
+ * that are NOT dataset fields, which is exactly why the curated-20 bug was invisible:
+ * `client_keywords.selected_at` is not a field. Restating the field relation from the step side would
+ * be two sources of truth for one fact, which is the bug this whole map exists to stop.
+ */
+const OUTPUTS_BY_STEP = (() => {
+  const out = new Map<StepKey, StepOutput[]>();
+  for (const { step, output } of allOutputs()) out.set(step, [...(out.get(step) ?? []), output]);
+  return out;
+})();
+
+/** The reverse: for each consumer, every output it draws on and the step that recorded it. */
+const FED_BY = (() => {
+  const out = new Map<StepKey, Array<{ producer: StepKey; output: StepOutput }>>();
+  for (const { step, output } of allOutputs()) {
+    for (const consumer of output.consumedBy) {
+      out.set(consumer, [...(out.get(consumer) ?? []), { producer: step, output }]);
+    }
+  }
+  return out;
+})();
+
+/** `12 \`keyword_set\``, the same shape the Downstream row has always used. */
+const stepRef = (k: StepKey) => `${stepNumber(k)} \`${k}\``;
+
 function mapSections(): string {
   const ctx = everyQuestionContext();
   const blocks: string[] = [];
@@ -295,11 +336,11 @@ function mapSections(): string {
     const need = STEP_NEEDS[key];
     const { needs, wants } = fieldsForStep(key);
 
-    const waitedOnBy = DELIVERY_STEPS.filter((s) => (s.blockedBy ?? []).includes(step.key)).map((s) => `${stepNumber(s.key as StepKey)} \`${s.key}\``);
+    const waitedOnBy = DELIVERY_STEPS.filter((s) => (s.blockedBy ?? []).includes(step.key)).map((s) => stepRef(s.key as StepKey));
     const fills = DATASET_FILLERS.get(step.key) ?? [];
     const unlocks = [...new Set(fills.flatMap((ref) => stepsBlockedBy(ref)))]
       .filter((k) => k !== key)
-      .map((k) => `${stepNumber(k)} \`${k}\``)
+      .map(stepRef)
       .sort();
 
     const downstream: string[] = [];
@@ -325,6 +366,33 @@ function mapSections(): string {
 
     const questions = gapLines(gapsFrom(ctx, key), Infinity);
 
+    // What this step RECORDS, and who reads it back. `STEP_PRODUCES` is `Record<StepKey, ...>`, so a
+    // 42nd step fails the build until somebody fills this in; a step recording nothing has to say why.
+    const produces = STEP_PRODUCES[key];
+    const outputs = OUTPUTS_BY_STEP.get(key) ?? [];
+    const feedsCell =
+      produces.kind === "nothing"
+        ? `nothing: ${produces.why}`
+        : outputs
+            .map((o) => `\`${o.records}\` → ${o.consumedBy.length ? o.consumedBy.map(stepRef).join(", ") : "‼️ no consumer declared"}`)
+            .join("; ");
+
+    const feedLines = outputs.length
+      ? outputs.map((o) =>
+          [
+            `- **\`${o.records}\`** — ${o.what}`,
+            `  - carried by \`${o.reader}()\` in \`${o.writtenIn}\``,
+            `  - read by ${o.consumedBy.length ? `step${o.consumedBy.length === 1 ? "" : "s"} ${o.consumedBy.map(stepRef).join(", ")}` : "‼️ **nothing declares it as a consumer**"}`,
+            `  - ${o.feeds}`,
+          ].join("\n")
+        )
+      : [`- nothing: ${produces.kind === "nothing" ? produces.why : "no output declared"}`];
+
+    const fedBy = FED_BY.get(key) ?? [];
+    const fedByLines = fedBy.length
+      ? fedBy.map((f) => `- \`${f.output.records}\`, recorded by step ${stepRef(f.producer)}, via \`${f.output.reader}()\``)
+      : ["- no earlier step declares an artifact this one consumes"];
+
     blocks.push(
       [
         `### ${n}. \`${step.key}\``,
@@ -340,11 +408,20 @@ function mapSections(): string {
         `| Reads | ${cell(tables.reads.map((t) => `\`${t}\``).join(", ") || "nothing")} |`,
         `| [Done] reads | ${vTables.reads.concat(vTables.writes).map((t) => `\`${t}\``).join(", ") || "no table"} |`,
         `| Dataset fields | ${need.kind === "nothing" ? "none: " + need.why : `${needs.length} needed, ${wants.length} wanted`} |`,
+        `| Feeds | ${cell(feedsCell)} |`,
         `| Downstream | ${cell(downstream.join("; "))} |`,
         "",
         "**[Done] refuses on:**",
         "",
         refusals.length ? refusals.map((r) => `- ${r}`).join("\n") : "- nothing: this verifier never calls `notYet`",
+        "",
+        "**Feeds, and what carries it:**",
+        "",
+        feedLines.join("\n"),
+        "",
+        "**Fed by:**",
+        "",
+        fedByLines.join("\n"),
         "",
         "**What it would have to ask, with nothing on file:**",
         "",
@@ -356,6 +433,31 @@ function mapSections(): string {
   }
 
   return blocks.join("\n\n");
+}
+
+/**
+ * What every step FEEDS, so "if I change step N, what breaks" has a written answer.
+ *
+ * ‼️ ONE ROW PER DECLARED OUTPUT, AND THE 35 STEPS THAT RECORD NOTHING ARE LISTED TOO. A table of only
+ * the six steps that produce something reads as though the rest had never been considered, which is
+ * the difference between a map and a highlight reel. `STEP_PRODUCES` is `Record<StepKey, StepProduces>`
+ * so every step has to answer, and on a `nothing` entry the `why` IS the answer.
+ */
+function feedsTable(): string {
+  const rows: string[] = ["| # | key | records | carried by | read by |", "| --- | --- | --- | --- | --- |"];
+  for (const s of DELIVERY_STEPS) {
+    const key = s.key as StepKey;
+    const p = STEP_PRODUCES[key];
+    if (p.kind === "nothing") {
+      rows.push(`| ${stepNumber(key)} | \`${key}\` | nothing | | ${cell(p.why)} |`);
+      continue;
+    }
+    for (const o of p.outputs) {
+      const consumers = o.consumedBy.length ? o.consumedBy.map(stepRef).join(", ") : "‼️ no consumer declared";
+      rows.push(`| ${stepNumber(key)} | \`${key}\` | \`${o.records}\` | \`${o.reader}()\` | ${cell(consumers)} |`);
+    }
+  }
+  return rows.join("\n");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -624,7 +726,8 @@ fields come from \`STEP_NEEDS\` in \`src/lib/clients/step-needs.ts\`, which is
 \`Record<StepKey, StepNeed>\` and therefore fails the build until a new step says what it needs.
 
 **Read this before adding a step, a field or a question.** A step whose output nothing reads is
-either dead or a gap, and both are findings; the Downstream row is where that shows up.
+either dead or a gap, and both are findings; the Feeds row and the Feeds section are where that
+shows up, and a missing consumer is printed with a ‼️ rather than left as a blank.
 
 ## How to read it
 
@@ -633,6 +736,16 @@ either dead or a gap, and both are findings; the Downstream row is where that sh
   coarser and true. A table appears under Writes wherever it is also read.
 - **[Done] refuses on** is the first argument of every \`notYet()\` in that step's verifier: the
   system's own words for the evidence it went looking for.
+- **Feeds / Fed by** come from \`STEP_PRODUCES\` in \`src/lib/clients/step-needs.ts\`, which is
+  \`Record<StepKey, StepProduces>\` and so fails the build until a new step says what it records. Each
+  output names the column, the exported symbol that carries it to later steps, and the steps that
+  consume it. **Fed by** is the same declaration read backwards, so both questions are answered off
+  one source: "if I change this step, what breaks" and "where did this step's material come from".
+- ‼️ **Feeds says nothing about dataset FIELDS, on purpose.** \`dataset-spec.ts\` owns which step fills
+  which field and the Dataset fields row is where that lives. \`STEP_PRODUCES\` covers only artifacts
+  that are not dataset fields, which is exactly why the curated-20 bug was invisible:
+  \`client_keywords.selected_at\` is not a field. Restating the field relation from the step side would
+  be two sources of truth for one fact.
 - **What it would have to ask** is every ask, not the first five. A card prints at most five; this
   file passes \`Infinity\` because it has no card to overflow.
 - Live row counts are NOT here. They are in \`docs/ONBOARDING-MAP-MEASURED.md\`, which carries its
@@ -656,6 +769,8 @@ const DOC = `# The board, step by step
 changing anything about a step: it says what runs it, what its [Done] checks, and what its thread accepts.
 
 What each step NEEDS, and every question it would have to ask, is its companion \`docs/ONBOARDING-MAP.md\`.
+That file also carries the same Feeds relation per step, with the sentence explaining how each artifact
+travels; the table below is the whole board on one screen.
 
 ## Re-running a step
 
@@ -680,6 +795,19 @@ Behind it: \`src/lib/clients/step-rerun.ts\`, \`src/lib/clients/rerun-gaps.ts\` 
 ## Every step
 
 ${table()}
+
+## What each step feeds
+
+If you are about to change a step, this is the table that says what else moves. It is
+\`STEP_PRODUCES\` read forwards: the column the step records, the exported symbol that hands it to
+later steps, and the steps that consume it. A step that records nothing has to say why, so every one
+of the 41 appears. **A ‼️ in the last column is a finding**: something is recorded and no later step
+declares that it reads it, which is the curated-20 shape.
+
+Dataset FIELDS are deliberately not in here. \`dataset-spec.ts\` owns that relation and
+\`docs/ONBOARDING-MAP.md\` renders it per step.
+
+${feedsTable()}
 
 ## The files a step touches
 
