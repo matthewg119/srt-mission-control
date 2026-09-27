@@ -57,6 +57,17 @@ export interface EnrichTarget {
 
 export interface EnrichHit {
   email: string;
+  /**
+   * Other addresses worth testing for the SAME company, best first, excluding `email`.
+   *
+   * ‼️ ONLY A RUNG THAT GUESSES SHOULD SET THIS. A crawl found ONE address on a page and has nothing
+   * else to offer; a permutation has five more patterns and no way to tell which is right without a
+   * verifier. They are written as extra sendable rows, verified alongside everything else, and all
+   * but the winner are suppressed by `resolvePermutations` once the verdicts land. Nothing can ship
+   * before that, because `sendableRows` admits only `valid` and `catch_all` and an unverified row is
+   * neither.
+   */
+  alternates?: string[];
   firstName: string | null;
   lastName: string | null;
   title: string | null;
@@ -242,10 +253,11 @@ export const PROVIDERS: Provider[] = [
       return { ok: true };
     },
     async find(t) {
-      const email = firstNameAddress(t.ownerName, t.domain);
-      if (!email) return null;
+      const candidates = permutations(t.ownerName, t.domain);
+      if (!candidates.length) return null;
       return {
-        email,
+        email: candidates[0],
+        alternates: candidates.slice(1),
         firstName: firstNameOf(t.ownerName),
         lastName: lastNameOf(t.ownerName),
         title: null,
@@ -282,27 +294,39 @@ export const PROVIDERS: Provider[] = [
 ];
 
 /**
- * `first@domain`, or null when the name cannot carry a guess.
+ * The address patterns a small business actually uses, best first.
  *
- * ‼️ ONE CANDIDATE, NOT THREE, AND THE ARITHMETIC IS THE REASON. A guess cannot be tested here:
- * MillionVerifier is billed per address uploaded and its upload sits behind a human reaction, which
- * `millionverifier.ts` states is never called unattended. So emitting three candidates would upload
- * three addresses per lead, at least two of which are wrong by construction, to buy one answer.
- * Emitting one costs a single credit, and because this rung is LAST it only runs on leads where the
- * file and the crawl both found nothing, so the alternative is not a cheaper lead, it is no lead.
+ * ‼️ SIX, NOT ONE, AND THE ARITHMETIC CHANGED RATHER THAN THE PRINCIPLE. This rung used to emit a
+ * single guess because MillionVerifier bills per address UPLOADED and three wrong guesses to buy one
+ * answer looked like a bad trade. With MV's real price in hand, $89 per 50,000 is $0.00178 an address,
+ * so six patterns is about a cent per lead. A finder API charges $0.017 per address it FINDS. Six
+ * cheap guesses, tested by a verifier we already pay for, is the better first pass; the finder is what
+ * happens after they all fail.
  *
- * ‼️ first@ RATHER THAN first.last@, FOR THIS ICP SPECIFICALLY. A one-to-three person med spa is a
- * first-name shop: the only true owner address in the 60 site sample was `marina@mmaestheticss.com`.
- * `first.last@` is the corporate pattern and would be the better guess for a larger company. This is
- * a judgement, not a measurement, and it is worth re-deciding once there are verdicts to count:
- * `sendable_leads.provider` records which rung produced each address, so the win rate of this one is
- * answerable from the database rather than from an opinion.
+ * ‼️ first@ LEADS BECAUSE THE ICP IS A ONE TO THREE PERSON CLINIC. Measured on 60 live med spa sites:
+ * the only true owner address found was `marina@mmaestheticss.com`. `first.last@` is the corporate
+ * pattern and is kept, lower down, for the practices large enough to use it.
+ *
+ * Order is the tie-break when more than one verifies, so it is load bearing, not cosmetic.
  */
-function firstNameAddress(ownerName: string | null, domain: string): string | null {
+export function permutations(ownerName: string | null, domain: string): string[] {
   const first = (firstNameOf(ownerName) ?? "").toLowerCase().replace(/[^a-z]/g, "");
+  const last = (lastNameOf(ownerName) ?? "").toLowerCase().replace(/[^a-z]/g, "");
   const host = domain.trim().toLowerCase().replace(/^www\./, "");
-  if (first.length < 2 || !host.includes(".")) return null;
-  return `${first}@${host}`;
+  if (first.length < 2 || !host.includes(".")) return [];
+
+  const locals = [first];
+  if (last.length > 1) {
+    locals.push(
+      first + "." + last,
+      first + last,
+      first[0] + last,
+      first + "." + last[0],
+      first + "_" + last
+    );
+  }
+  // Deduped, because a one-letter surname would collide, and capped so a pull cannot surprise anyone.
+  return [...new Set(locals)].slice(0, 6).map((l) => l + "@" + host);
 }
 
 function firstNameOf(owner: string | null): string | null {

@@ -67,6 +67,7 @@ import {
   recordCatchallRecheck,
   recordEnrichment,
   recordSuppression,
+  resolvePermutations,
   recordHandoff,
   sendableRows,
   setOwnerName,
@@ -1961,6 +1962,20 @@ async function pollListPrepVerification(batch: BatchRow): Promise<void> {
   const text = await downloadResult(batch.mv_file_id, "all");
   const verdicts = parseResultLines(text);
   await applyVerification(runId, verdicts);
+
+  // ‼️ ONE ADDRESS PER COMPANY, BEFORE ANYTHING COUNTS THE FUNNEL. The guessing rung writes every
+  // pattern it wants tested, so a company can hold six candidate rows until the verdicts land. This
+  // keeps the best one and suppresses the rest; without it a guessed lead would be counted six times
+  // and mailed six times.
+  const resolved = await resolvePermutations(runId);
+  if (resolved.suppressed) {
+    await say(
+      batch,
+      "Resolved " + resolved.kept + " guessed " + (resolved.kept === 1 ? "address" : "addresses") +
+        " down to one each, dropping " + resolved.suppressed + " runner" +
+        (resolved.suppressed === 1 ? "" : "s") + " up."
+    );
+  }
 
   const funnel = await funnelFor(runId);
   await updateRun(runId, { stage: "catchall_recheck", verified_count: funnel.verified });
