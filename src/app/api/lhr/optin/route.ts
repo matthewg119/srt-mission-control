@@ -22,7 +22,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
 import { supabaseAdmin } from "@/lib/db";
-import { ingestLead } from "@/lib/lead-intake";
+import { pageFromRequest, ingestLead } from "@/lib/lead-intake";
 import { sendEvent } from "@/lib/meta-capi";
 import { hasMetaAttributionServer } from "@/lib/metaAttribution";
 import { hashIp, clientIpFrom } from "@/lib/scan/session";
@@ -203,6 +203,7 @@ export async function POST(req: NextRequest) {
       // them lets this lead match an existing contact correctly. A guessed value would
       // fork the contact and split the #hot-leads thread.
       source: LHR_SOURCE,
+      sourcePage: pageFromRequest(req, "/LHR"),
       noteTitle: "Laser hair removal training opt-in",
       headline: `New /LHR training opt-in: ${result.name}`,
       detailLines: [

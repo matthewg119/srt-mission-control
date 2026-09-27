@@ -29,7 +29,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
 import { runAuditPipeline } from "@/lib/audit-engine/run-audit-pipeline";
-import { ingestLead, enrichLead } from "@/lib/lead-intake";
+import { ingestLead, enrichLead, pageFromRequest } from "@/lib/lead-intake";
 import { slack } from "@/lib/slack-bot";
 import { normalizeLeadPhone } from "@/lib/phone";
 
@@ -178,6 +178,7 @@ export async function POST(req: NextRequest) {
       phone: partialPhone,
       website: partialSite,
       source: partialSource,
+      sourcePage: pageFromRequest(req, `/${partialSource}`),
       noteTitle: isComplete ? "Clinic guide, funnel completed" : "Clinic guide, funnel started",
       headline: isComplete
         ? ":white_check_mark: *Guide funnel completed.* Everything below is their own words from the questions."
@@ -231,6 +232,7 @@ export async function POST(req: NextRequest) {
     phone,
     website,
     source,
+    sourcePage: pageFromRequest(req, `/${source}`),
     noteTitle: isGuide ? "Clinic guide request" : "Free AI Visibility Audit request",
     headline: isGuide
       ? `:mag: *Audit running now* on ${website} to build their guide. The report goes to #ai-visibility-audits; this thread keeps the lead and their answers.`

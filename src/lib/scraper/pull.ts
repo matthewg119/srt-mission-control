@@ -19,6 +19,7 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { normalizePhone, type OutscraperRecord } from "@/lib/outscraper";
+import type { DfsListing } from "@/lib/dataforseo-places";
 import { normalizeDomain } from "@/lib/outreach/suppression";
 
 export type LeadSource = "outscraper" | "dataforseo" | "socialscraper" | "csv" | "apollo";
@@ -93,7 +94,12 @@ export function fromOutscraper(
     source: "outscraper",
     sourceQuery: ctx.sourceQuery,
     sourceMetro: ctx.sourceMetro,
-    placeId: str(rec.place_id) ?? str(rec.google_id),
+    // ‼️ A SYNTHETIC ID WHEN MAPS GIVES NONE, THE SAME WAY fromCsv DOES. Null place_ids are DISTINCT
+    // in the unique index, so a re-driven pull inserts every placeless row again: measured on a
+    // synthetic payload where one record in four had no place_id. Falling back to the domain makes
+    // those rows idempotent too, and the domain is already this lane's identity rule, which is what
+    // ACTIVE_KEYS in dedup.ts narrows to. The prefix keeps the value greppably NOT a Google id.
+    placeId: str(rec.place_id) ?? str(rec.google_id) ?? (normalizeDomain(website) ? "site:" + normalizeDomain(website) : null),
     businessName,
     domain: normalizeDomain(website),
     website,
@@ -115,11 +121,147 @@ export function fromOutscraper(
   };
 }
 
+
+/**
+ * A DataForSEO business listing into a raw lead.
+ *
+ * Sibling of `fromOutscraper` and deliberately the same shape: the pull stage, the qualify sweep, the
+ * crawl and the verifier all read `RawLeadInput` and none of them knows or cares which vendor filled
+ * it. That is what makes a source a DOOR rather than a second engine.
+ *
+ * ‼️ THE SYNTHETIC PLACE ID FALLBACK IS HERE TOO, for the reason it is in fromOutscraper: a null
+ * place_id is DISTINCT in the unique index, so without it a re-driven pull inserts the row again.
+ */
+export function fromDataForSeo(
+  item: DfsListing,
+  ctx: { runId: string; sourceQuery: string | null; sourceMetro: string | null; verticalSlug?: string | null }
+): RawLeadInput | null {
+  const businessName = str(item.title) ?? str(item.original_title);
+  if (!businessName) return null;
+
+  const website = str(item.url);
+  const domain = normalizeDomain(website);
+  const addr = item.address_info ?? {};
+
+  return {
+    runId: ctx.runId,
+    source: "dataforseo",
+    sourceQuery: ctx.sourceQuery,
+    sourceMetro: ctx.sourceMetro,
+    placeId: str(item.place_id) ?? str(item.cid) ?? (domain ? "site:" + domain : null),
+    businessName,
+    domain,
+    website,
+    phone: str(item.phone),
+    fullAddress: str(addr.address),
+    city: str(addr.city),
+    // DataForSEO returns the full region name ("Texas"), which is what geo.ts already reads.
+    state: str(addr.region),
+    postalCode: str(addr.zip),
+    categories: [str(item.category), ...(item.additional_categories ?? [])].filter(Boolean).join(", ") || null,
+    primaryType: str(item.category),
+    rating: typeof item.rating?.value === "number" ? item.rating.value : null,
+    reviewCount: typeof item.rating?.votes_count === "number" ? item.rating.votes_count : null,
+    // No Instagram field on this endpoint. Null rather than guessed.
+    instagramHandle: null,
+    ownerName: null,
+    verticalSlug: ctx.verticalSlug ?? null,
+    businessType: null,
+    avatarSlug: null,
+    raw: item as Record<string, unknown>,
+  };
+}
+
+/** The header names a dropped CSV resolved to, already matched by rules.ts. */
+export interface CsvColumns {
+  company: string;
+  website: string;
+  city: string | null;
+  state: string | null;
+  phone: string | null;
+  email: string | null;
+  /** Maps-shaped extras, when the scraper emitted them. All optional. */
+  rating: string | null;
+  reviews: string | null;
+  categories: string | null;
+  placeId: string | null;
+}
+
+/**
+ * One row of a dropped CSV, in the shared shape.
+ *
+ * ‼️ `place_id` IS SYNTHESISED FROM THE ROW INDEX, AND IT IS NOT A HACK. storeRawLeads dedupes on
+ * (run_id, place_id) and skips the check entirely when place_id is null, so a CSV pull would not
+ * be idempotent: the `pulling` arm is re-driven on any tick that dies mid-write, and every
+ * re-entry would insert the whole file again. The column's real contract is "the stable key across
+ * two reads of the same source", and for a dropped file the row index is exactly that. There is
+ * one run per batch, so (run_id, "csv:17") is unique.
+ *
+ * The `csv:` prefix is load-bearing in a different way: it keeps the value greppably NOT a Google
+ * place id, so nobody later joins raw_leads to med_spa_leads on it and gets silence.
+ *
+ * ‼️ A REAL place_id FROM THE FILE WINS. A Maps scraper that emitted one is identifying the same
+ * business better than the row number can, and two exports of one metro then dedupe against each
+ * other rather than both landing.
+ */
+export function fromCsv(
+  row: Record<string, string>,
+  ctx: {
+    runId: string;
+    rowIndex: number;
+    cols: CsvColumns;
+    sourceQuery: string | null;
+    sourceMetro?: string | null;
+    verticalSlug?: string | null;
+  }
+): RawLeadInput | null {
+  const cell = (header: string | null): string | null => (header ? str(row[header]) : null);
+
+  const businessName = cell(ctx.cols.company);
+  // Same refusal as fromOutscraper: raw_leads.business_name is NOT NULL, and a nameless row could
+  // not be judged by qualify.ts even if it could be stored.
+  if (!businessName) return null;
+
+  const website = cell(ctx.cols.website);
+  const realPlaceId = cell(ctx.cols.placeId);
+
+  return {
+    runId: ctx.runId,
+    source: "csv",
+    sourceQuery: ctx.sourceQuery,
+    sourceMetro: ctx.sourceMetro ?? null,
+    placeId: realPlaceId ?? "csv:" + ctx.rowIndex,
+    businessName,
+    domain: normalizeDomain(website),
+    website,
+    phone: cell(ctx.cols.phone),
+    fullAddress: null,
+    city: cell(ctx.cols.city),
+    state: cell(ctx.cols.state),
+    postalCode: null,
+    categories: cell(ctx.cols.categories),
+    primaryType: cell(ctx.cols.categories),
+    rating: num(cell(ctx.cols.rating)),
+    reviewCount: num(cell(ctx.cols.reviews)),
+    instagramHandle: null,
+    ownerName: null,
+    verticalSlug: ctx.verticalSlug ?? null,
+    businessType: null,
+    avatarSlug: null,
+    raw: row as Record<string, unknown>,
+  };
+}
+
 export interface StoreResult {
   inserted: number;
   skipped: number;
   error?: string;
 }
+
+// Same bound and the same reasoning as store.ts and listprep.ts: a PostgREST write is one HTTP
+// request, so the chunk is bounded by what a body can carry rather than by anything Postgres
+// cares about.
+const INSERT_CHUNK = 500;
 
 /**
  * Write a pull into raw_leads.
@@ -160,22 +302,32 @@ export async function storeRawLeads(rows: readonly RawLeadInput[]): Promise<Stor
     raw: r.raw,
   }));
 
-  const { data, error } = await supabaseAdmin
-    .from("raw_leads")
-    .upsert(payload, { onConflict: "run_id,place_id", ignoreDuplicates: true })
-    .select("id");
+  // ‼️ CHUNKED, BECAUSE THIS PATH HAD NEVER RUN. `fromOutscraper` had no production caller until the
+  // 4️⃣ door, so every real call here came from a CSV that sweepPull had already trimmed. A Maps pull
+  // of twenty queries at a 500 limit is ten thousand rows, and this was one PostgREST POST. Same
+  // bound and same reasoning as INSERT_CHUNK in store.ts and listprep.ts.
+  let inserted = 0;
+  for (let i = 0; i < payload.length; i += INSERT_CHUNK) {
+    const slice = payload.slice(i, i + INSERT_CHUNK);
+    const { data, error } = await supabaseAdmin
+      .from("raw_leads")
+      .upsert(slice, { onConflict: "run_id,place_id", ignoreDuplicates: true })
+      .select("id");
 
-  if (error) {
-    return {
-      inserted: 0,
-      skipped: rows.length,
-      error:
-        `${error.message}. If that names raw_leads, ` +
-        "docs/2026-09-17-list-prep-pipeline.sql has not been run on this database.",
-    };
+    if (error) {
+      // ‼️ PARTIAL SUCCESS IS REPORTED AS SUCH. The rows already committed are real, and a caller
+      // told "0 inserted" would re-drive the whole pull to find them again.
+      return {
+        inserted,
+        skipped: rows.length - inserted,
+        error:
+          `${error.message}. If that names raw_leads, ` +
+          "docs/2026-09-17-list-prep-pipeline.sql has not been run on this database.",
+      };
+    }
+    inserted += data?.length ?? 0;
   }
 
-  const inserted = data?.length ?? 0;
   return { inserted, skipped: rows.length - inserted };
 }
 
@@ -185,6 +337,8 @@ export async function startRun(args: {
   source: LeadSource;
   queries: string[];
   icp: string | null;
+  /** serviceKey() shaped, e.g. `medspa` or `dentist`. Copied onto every raw lead the run pulls. */
+  vertical: string;
   slackChannelId?: string | null;
   slackThreadTs?: string | null;
 }): Promise<{ ok: true; runId: string } | { ok: false; error: string }> {
@@ -195,6 +349,7 @@ export async function startRun(args: {
       source: args.source,
       source_queries: args.queries,
       icp_text: args.icp,
+      vertical_slug: args.vertical,
       stage: "pulling",
       slack_channel_id: args.slackChannelId ?? null,
       slack_thread_ts: args.slackThreadTs ?? null,

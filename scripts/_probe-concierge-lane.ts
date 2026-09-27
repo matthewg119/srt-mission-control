@@ -448,6 +448,36 @@ function noPersona(): void {
     }
   }
   check("nor do the concierge routes", routeOffenders.length === 0, routeOffenders.join(", "));
+
+  // ‼️ THE CHIPS ARE DETERMINISTIC, AND HERE IS WHERE THAT STOPS BEING AN OPINION.
+  //
+  // /api/concierge/turn returns buttons under every reply. They are built by chips.ts from rows:
+  // the next allowed magnet, the client's own published pages, the call once bookingGate permits
+  // it. A model that could name its own buttons would be writing the interface, and the first
+  // thing it would write is the button it wanted pressed.
+  //
+  // Two assertions, because one is not enough. No model import, so nothing in there can call one.
+  // And no `reply` parameter, so the model's words are not even in scope: a future edit that
+  // wanted to vary a chip by what was said would have to change the signature to do it.
+  const chips = readFileSync("src/lib/concierge/chips.ts", "utf8");
+  const MODEL_IMPORTS = ["@/lib/ai", "claude-calls", "@anthropic", "runConversation"];
+  check(
+    "chips.ts imports no model",
+    MODEL_IMPORTS.every((m) => !chips.includes(m)),
+    "a chip comes off a row or a counter, never out of a reply"
+  );
+  // The FIELDS, not the prose. The comment over ChipInput explains why a chip is built after the
+  // reply rather than from it, so a naive search for the word finds the sentence that documents
+  // the rule and fails on it. Comments stripped first, the same discipline the gating probe uses.
+  const chipFields = chips
+    .slice(chips.indexOf("interface ChipInput"), chips.indexOf("export async function chipsFor"))
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^\s*\/\/.*$/gm, "");
+  check(
+    "chipsFor takes no reply text",
+    !chipFields.includes("reply"),
+    "the model's words are not in scope, so they cannot be read by accident"
+  );
 }
 
 // ── 8b. The page's own magnet outranks the ladder ────────────────────────────

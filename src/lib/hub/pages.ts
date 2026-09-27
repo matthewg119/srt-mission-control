@@ -31,6 +31,24 @@ export interface ClientPage {
    * Null means the ladder decides, which is every page written before this column existed.
    */
   leadMagnetKey: string | null;
+  /**
+   * The one sentence this page says about the offer standing at the end of it.
+   *
+   * ‼️ IT IS NOT IN `answerMd` AND IT MUST NOT BE. Three separate rails keep the body free of a
+   * pitch: draft-page.ts tells the drafter not to write a call to action, the same prompt forbids
+   * links, and page-gate.ts fails the publish gate on a markdown link in the body. The reason is
+   * that the body exists to be QUOTED by an assistant, and a pitch inside the answer is the part
+   * that stops it being quoted. So this is a sentence rendered AFTER the answer, and the answer is
+   * unchanged.
+   *
+   * ‼️ AND IT IS PER PAGE, WHICH IS THE WHOLE POINT. The widget's teaser lines are templated
+   * from the magnet's title, so every page on a hub teased the same words even after 09e1699 made
+   * the magnet a per-page decision. The magnet says WHICH offer; this says how this page asks.
+   *
+   * Null means the config route falls back to the magnet-templated lines, which is every page
+   * written before this column existed.
+   */
+  ctaLine: string | null;
   status: PageStatus;
   publishedAt: string | null;
   updatedAt: string | null;
@@ -39,7 +57,7 @@ export interface ClientPage {
 // ‼️ ONE STRING LITERAL, NOT A CONCATENATION. supabase-js parses this at the type level, and
 // "a" + "b" widens to `string`, which turns every read here into GenericStringError.
 const COLUMNS =
-  "id, slug, title, question, prompt_block, answer_md, meta_description, lead_magnet_key, status, published_at, updated_at";
+  "id, slug, title, question, prompt_block, answer_md, meta_description, lead_magnet_key, cta_line, status, published_at, updated_at";
 
 function toPage(row: Record<string, unknown>): ClientPage {
   return {
@@ -51,6 +69,7 @@ function toPage(row: Record<string, unknown>): ClientPage {
     answerMd: (row.answer_md as string) ?? "",
     metaDescription: (row.meta_description as string | null) ?? null,
     leadMagnetKey: (row.lead_magnet_key as string | null) ?? null,
+    ctaLine: (row.cta_line as string | null) ?? null,
     status: row.status as PageStatus,
     publishedAt: (row.published_at as string | null) ?? null,
     updatedAt: (row.updated_at as string | null) ?? null,
@@ -202,6 +221,11 @@ export interface SavePageInput {
    */
   leadMagnetKey?: string | null;
   /**
+   * The page's own call to action. Same undefined/null split as `leadMagnetKey` above: `undefined`
+   * leaves the stored sentence alone, `null` clears it back to the magnet-templated default.
+   */
+  ctaLine?: string | null;
+  /**
    * What each claim rests on, from the drafter. `[{ claim, sourceRef }]`.
    *
    * ‼️ UNDEFINED AND NULL MEAN DIFFERENT THINGS HERE AND THE WRITE BELOW DEPENDS ON IT.
@@ -267,6 +291,9 @@ export async function savePage(input: SavePageInput): Promise<{ ok: true; id: st
   // Only when the caller actually said something about it. See SavePageInput.leadMagnetKey.
   if (input.leadMagnetKey !== undefined) {
     row.lead_magnet_key = input.leadMagnetKey?.trim() || null;
+  }
+  if (input.ctaLine !== undefined) {
+    row.cta_line = normalizeCtaLine(input.ctaLine);
   }
 
   // ‼️ THE GATE IS ON CREATION ONLY, AND THAT ASYMMETRY IS DELIBERATE.
@@ -923,6 +950,51 @@ export async function setPageOutline(
  *
  * Not gated. Naming an offer is not publishing — see NOT_GATED in clients/day-zero.ts.
  */
+/** What a page's call to action may be, in characters. See normalizeCtaLine. */
+export const CTA_LINE_MAX = 90;
+
+/**
+ * The one place a CTA sentence is cleaned, so the form and the step thread cannot disagree.
+ *
+ * ‼️ NINETY CHARACTERS BECAUSE THAT IS WHAT THE BUBBLE ALLOWS. mascotLines() in
+ * api/concierge/config/route.ts slices every line to 90, so a longer sentence would be stored whole,
+ * shown truncated, and read as a bug in the widget rather than as a sentence nobody counted. Cutting
+ * it here means what is stored is what is shown.
+ *
+ * ‼️ AND IT REFUSES A BANNED DASH RATHER THAN STRIPPING ONE. copy-guard is a throw everywhere
+ * else in this repo; silently rewriting somebody's sentence would teach them the rule does not apply
+ * here. Returning the problem is the caller's to report.
+ */
+export function normalizeCtaLine(raw: string | null | undefined): string | null {
+  const line = (raw ?? "").replace(/\s+/g, " ").trim();
+  return line ? line.slice(0, CTA_LINE_MAX) : null;
+}
+
+
+/**
+ * Write the sentence a page uses to ask, from the step thread or the studio.
+ *
+ * A separate writer for the same reason setPageMagnet is one: the Slack lane holds a page id and one
+ * field, not a whole form. Not gated, for the same reason either: a sentence about an offer is not
+ * publishing a page.
+ */
+export async function setPageCtaLine(
+  clientId: string,
+  pageId: string,
+  line: string | null
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { error } = await supabaseAdmin
+    .from("client_pages")
+    .update({ cta_line: normalizeCtaLine(line), updated_at: new Date().toISOString() })
+    .eq("id", pageId)
+    .eq("client_id", clientId);
+
+  if (error) return { ok: false, error: error.message };
+
+  bustPages(clientId);
+  return { ok: true };
+}
+
 export async function setPageMagnet(
   clientId: string,
   pageId: string,

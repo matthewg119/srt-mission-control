@@ -60,6 +60,54 @@ jobs:
 
       - name: Step verify probe
         run: bun --no-env-file run scripts/_probe-step-verify.ts
+      # ‼️ THE ANTI-GATING RULE WAS A COMMENT UNTIL 2026-09-24. _probe-review-gating.ts has
+      # existed since the stars were added and was referenced in three docs, but it was in no
+      # workflow and no package script, so nothing ran it. It needs no secrets and no database,
+      # which is exactly why there was no reason for it to be missing.
+      - name: Review gating probe (the rating must not route, and neither may a Yes)
+        run: bun --no-env-file run scripts/_probe-review-gating.ts
+
+      - name: Virtual Agent grammar probe (one agent, two surfaces)
+        run: bun --no-env-file run scripts/_probe-virtual-agent-grammar.ts
+
+      # The launcher was unclickable for nine days and no check in this file noticed, because the
+      # only thing that could have noticed was somebody tapping it. See the probe's own header for
+      # why it asserts a shape rather than simulating a tap.
+      - name: Launcher gesture probe (a tap opens it, a drag does not)
+        run: bun --no-env-file run scripts/_probe-launcher-gestures.ts
+      # Importing referral-script.ts is itself the copy-guard check, and section 3 is the one that
+      # matters: a scripted walk is where inventing "Tuesday at 10" is easiest and worst, because the
+      # model is not in that path and nothing downstream would catch it.
+      - name: Referral lane probe (scripted, and the times are the calendar's)
+        run: bun --no-env-file run scripts/_probe-referral-lane.ts
+
+      # A link in an email is the least controlled thing we produce. These checks are about what the
+      # resume link CANNOT do: it is not the session's write bearer, it expires in three days, and it
+      # cannot open another tenant's conversation.
+      - name: Referral resume probe (a grant, not a bearer)
+        run: bun --no-env-file run scripts/_probe-referral-resume.ts
+      # The pivot is a sales pitch that cites a measurement about somebody's own business. A made-up
+      # number there is a false claim about a real company, in writing, so this one has teeth.
+      - name: Report pivot probe (it cites the report or cites nothing)
+        run: bun --no-env-file run scripts/_probe-report-pivot.ts
+      # Section 2 is the one that matters: Findable/Familiar/Fresh exist nowhere in the data, so a wait
+      # card implying a score per pillar promises a shape the report contradicts a minute later.
+      - name: Audit wait probe (it teaches, and claims nothing)
+        run: bun --no-env-file run scripts/_probe-audit-wait.ts
+      # Section 2 is the one with teeth: it derives the ingestLead census from the tree, so a twelfth
+      # caller cannot be added without either passing a source page or saying why there is none.
+      - name: Lead card probe (every lead source names its page)
+        run: bun --no-env-file run scripts/_probe-lead-card.ts
+      # ‼️ THE SCRAPER LANE'S ONLY AUTOMATIC GUARD. The lane leans on four lists the
+      # compiler cannot check, because each is a plain array rather than a `Record<Workflow, ...>`:
+      # PICK and KEYCAPS in lane.ts, IN_FLIGHT in report.ts, ACTIVE_STATUSES in store.ts. A missing
+      # entry in any of them is a silent misroute, and the worst of them spends money per row. This
+      # probe reads them out of the source for exactly that reason, and until now nothing ran it.
+      #
+      # Offline by construction: the three real MX lookups sit behind --mx, so the default run
+      # touches no network, no database and no Slack.
+      - name: Scraper lane probe (the dispatch the compiler cannot check)
+        run: bun --no-env-file run scripts/_probe-scraper.ts
 
       # ‼️ THE ONE THAT STOPS DEAD WIRES COMING BACK. It reads docs/*.sql and src/ off disk and
       # touches no database, which is what makes it gateable: its whole value is that it runs without

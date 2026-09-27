@@ -212,6 +212,10 @@ export async function ensureProspectContact(
     email: prospect.email,
     website: prospect.website ?? undefined,
     source: "reachinbox",
+    // ‼️ NO sourcePage, AND THERE IS NO HONEST ONE. A campaign reply arrives as MAIL: this lane has
+    // no webhook, no page and no browser anywhere in it. The utm fields below carry the campaign, which is
+    // the whole of its attribution.
+    sourcePage: undefined,
     headline: input.headline,
     noteTitle: input.noteTitle,
     detailLines: input.detailLines,

@@ -8,6 +8,7 @@
 //   magnet        the page's offer, handed over deterministically (no model decides what is given)
 //   audit_start   a website, then the same self-serve scan srtagency.com/scan runs
 //   audit_status  where that scan is, claimed with their email the moment its report exists
+//   booking       times, a link or a phone number, resolved exactly as the model's tool resolves them
 //
 // ‼️ PUBLIC, SO THE SESSION IS THE GATE. Every action needs a session token, and a session is minted only
 // by /api/concierge/start, which is where `enabled` and the preview grant are checked. The tenant, the
@@ -20,7 +21,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { loadConciergeConfig } from "@/lib/concierge/config";
 import { conciergeAllowed, PREVIEW_TOKEN_PARAM } from "@/lib/concierge/preview-grant";
-import { allowedMagnet } from "@/lib/concierge/engine";
+import { allowedMagnet, onboardingUrl, trackedUrl } from "@/lib/concierge/engine";
+import { resolveBooking } from "@/lib/concierge/booking";
+import { safeTimeZone } from "@/lib/calendly";
 import { deliveryUrlFor } from "@/lib/concierge/magnets";
 import { appendMessage, captureLead, loadConciergeSession, loadMessages, recordDelivered } from "@/lib/concierge/session";
 import { claimScan, isEmail, startScan } from "@/lib/scan/start-claim";
@@ -66,16 +69,52 @@ export async function POST(req: NextRequest) {
   const action = String(body.action ?? "");
 
   // ── contact ────────────────────────────────────────────────────────────────
+  // ‼️ ONE LEAD WRITER, WIDENED, NOT A SECOND ONE. The AI Referral Engine walk asks for a last
+  // name and a phone that the two-field door never collected, and the obvious shape was a
+  // referral_contact action beside this one. That is how a lane ends up with two paths into #hot-leads
+  // that disagree about the owner/patient rule, and this file's header IS that rule. Everything the
+  // walk adds is optional here, so the audit door and the magnet door send what they always sent.
   if (action === "contact") {
     const name = clean(body.name, 60);
     const email = clean(body.email, 120).toLowerCase();
     if (name.length < 2 || /[<>{}]|https?:/i.test(name)) return reply({ ok: false, field: "name", message: "What should we call you?" }, 400);
     if (!isEmail(email)) return reply({ ok: false, field: "email", message: "That email does not look right." }, 400);
 
+    // ‼️ THE SURNAME IS ITS OWN FIELD ON THE WALK'S FORM, AND SPLITTING `name` WOULD LOSE IT. The
+    // two-field door still sends one `name`, so the split below stays as the fallback for it.
+    const lastTyped = clean(body.lastName, 60);
+    if (lastTyped && /[<>{}]|https?:/i.test(lastTyped)) {
+      return reply({ ok: false, field: "lastName", message: "That surname does not look right." }, 400);
+    }
+
+    // ‼️ STRICT, AND THE STRICTNESS IS LOAD BEARING. This route is public and unauthenticated, and
+    // a phone that reaches contacts is a number a person or a dialer will ring. normalizePhone is the
+    // /aivisibility validator: ten digits, no 0 or 1 area code or exchange, no all-same placeholder. A
+    // number that fails is REFUSED rather than stored, because a stored bad number is a call to a
+    // stranger. Empty is fine: every door except the referral walk asks for no phone at all.
+    const phoneTyped = clean(body.phone, 32);
+    let phone: string | null = null;
+    if (phoneTyped) {
+      const { normalizePhone } = await import("@/lib/medspa/validate");
+      phone = normalizePhone(phoneTyped);
+      if (!phone) {
+        return reply({ ok: false, field: "phone", message: "That phone number does not look right." }, 400);
+      }
+    }
+
+    // What the walk asked before the form. Recorded as answers, never interpreted.
+    const reviews = clean(body.reviews, 60);
+    const website = clean(body.website, 200);
+
     const already = session.email === email;
-    await captureLead(session, { firstName: name, email });
+    await captureLead(session, { firstName: name, email, phone });
     const picked = clean(body.picked, 20);
-    await note(session.id, "user", `${name} <${email}>${picked ? ` (picked: ${picked})` : ""}`);
+    await note(
+      session.id,
+      "user",
+      `${name}${lastTyped ? ` ${lastTyped}` : ""} <${email}>${phone ? ` ${phone}` : ""}` +
+        `${picked ? ` (picked: ${picked})` : ""}${reviews ? ` reviews: ${reviews}` : ""}${website ? ` site: ${website}` : ""}`
+    );
 
     if (config.audience === "owner" && !already) {
       const { ingestLead } = await import("@/lib/lead-intake");
@@ -83,13 +122,32 @@ export async function POST(req: NextRequest) {
       const where = [clean(body.host, 200), clean(body.path, 300)].join("");
       const { contactId } = await ingestLead({
         firstName: parts[0] ?? "",
-        lastName: parts.slice(1).join(" "),
+        lastName: lastTyped || parts.slice(1).join(" "),
         email,
+        ...(phone ? { phone } : {}),
+        ...(website ? { website } : {}),
         source: "concierge",
+        // ‼️ THE SAME `where` THAT WAS ALREADY BEING BUILT, NOW ON THE CARD TOO. It went into the
+        // headline and a detailLine, and both of those are the thread reply: the "1 reply" under the card
+        // that nobody opens. The widget is the one lead source that always knows the exact page.
+        sourcePage: where,
+        // ‼️ STILL FALSE EVEN THOUGH THERE IS NOW A PHONE, AND THAT IS MATTHEW'S CALL (2026-09-25).
+        // It was false before because the concierge collected no number, so it cost nothing either way.
+        // The referral walk collects one, which turns this from a leftover into a decision: nothing
+        // auto-dials somebody who filled in a form on a clinic's website. The number is on the
+        // #hot-leads card and the call is a person's to make. One flag to reverse.
         speedToLead: false,
         noteTitle: "AI concierge conversation",
         headline: `:cat: *Started a conversation with the concierge*${where ? ` on ${where}` : ""} and gave their email.`,
-        detailLines: [picked ? `Picked: ${picked}` : "", where ? `Page: ${where}` : "", "SMS consent: not collected (the concierge asks for email only)"],
+        detailLines: [
+          picked ? `Picked: ${picked}` : "",
+          where ? `Page: ${where}` : "",
+          reviews ? `Reviews they say they have: ${reviews}` : "",
+          website ? `Website: ${website}` : "",
+          phone
+            ? "SMS consent: not collected (the phone was given to book the install call)"
+            : "SMS consent: not collected (the concierge asks for email only)",
+        ],
       }).catch((e) => {
         console.error(`[concierge/action] ingestLead failed: ${(e as Error).message}`);
         return { contactId: null };
@@ -108,15 +166,121 @@ export async function POST(req: NextRequest) {
       //
       // Failure is swallowed on purpose. A missing channel, a Slack outage or a client provisioned before
       // ops channels existed must not turn into a 500 for the person typing their name into a widget.
-      await notifyClientLead({ clientId: session.clientId, name, email, body, picked }).catch((e) =>
+      await notifyClientLead({ clientId: session.clientId, name, email, phone, body, picked }).catch((e) =>
         console.error(`[concierge/action] client lead notice failed: ${(e as Error).message}`)
       );
     }
+    // ‼️ THE WALK PROMISED AN EMAIL, SO THIS IS WHERE IT IS SENT. Step four of the script says "we
+    // will send your download link promptly" and its closing line says "plus the email we already sent
+    // you". Both were false until this existed. Only the referral walk asks for it, which is what `picked`
+    // distinguishes: the audit and magnet doors send no email from here and never did.
+    //
+    // ‼️ AWAITED, NOT FIRED AND FORGOTTEN. A floating promise after the response has been returned
+    // may never run at all in a serverless function, and "we will send it promptly" is not a claim to
+    // leave to whether the container survives. Graph adds about a second to a form submit that already
+    // waits for ingestLead and Slack.
+    //
+    // ‼️ AND A MAIL FAILURE NEVER FAILS THE FORM. Somebody who has just typed their name and number
+    // into a widget must not be told it did not go through because our mailbox is down: the lead is
+    // already written, the walk carries on to the install call, and the missing email is ours to notice.
+    if (picked === "referral") {
+      try {
+        const [{ sendReferralWelcome }, { resumeUrl }] = await Promise.all([
+          import("@/lib/concierge/referral-email"),
+          import("@/lib/concierge/resume"),
+        ]);
+        await sendReferralWelcome({
+          to: email,
+          firstName: name.split(" ")[0],
+          resumeUrl: resumeUrl(session),
+          onboardingUrl: onboardingUrl(session, null, null),
+        });
+      } catch (e) {
+        console.error(`[concierge/action] referral welcome email failed: ${(e as Error).message}`);
+      }
+    }
+
     return reply({ ok: true, firstName: name.split(" ")[0] });
   }
 
   // Everything below hands something over, and nothing is handed over before a way to reach them.
   if (!session.email) return reply({ ok: false, needContact: true }, 400);
+
+  // ── referral_times ─────────────────────────────────────────────────────────
+  //
+  // The install-call step of the AI Referral Engine walk. Two real times, in the half of the day they
+  // asked for, or an honest answer that there are none.
+  //
+  // ‼️ resolveBooking() UNCHANGED, AND NO SECOND SLOT SOURCE. It is what offer_booking and the
+  // `booking` action already use, and it is the only thing in the lane that knows what is actually
+  // open. A scripted walk is exactly where inventing "Tuesday at 10" would be easiest and worst: the
+  // model is not in this path, so nothing downstream would catch a made-up time.
+  //
+  // ‼️ THE OWNER LANE IGNORES THE TENANT'S booking_* COLUMNS, WHICH IS WHY THIS WORKS TODAY. The
+  // brief said SRT has no booking destination set so this step had nothing to offer. Not for this
+  // audience: booking.ts reaches for SRT's own Calendly for `owner` and never reads
+  // concierge_configs.booking_mode. `booking: <link>` in a step thread is for PATIENT tenants.
+  if (action === "referral_times") {
+    if (config.audience !== "owner") return reply({ ok: false, message: "Not available here." }, 404);
+
+    const daypart = body.daypart === "afternoon" ? "afternoon" : "morning";
+    const tz = safeTimeZone(clean(body.tz, 64));
+    const offer = await resolveBooking({
+      config,
+      timeZone: tz,
+      // ‼️ WIDENED FROM THE START, UNLIKE THE `booking` ACTION. That one hardcodes today_tomorrow
+      // and never widens, which is fine for "here are some times" and wrong here: this walk asks for a
+      // half of the day first, so a two-day window that happens to hold only mornings would answer an
+      // afternoon request with nothing at all.
+      window: "extended",
+      fallbackUrl: onboardingUrl(session, null, null),
+    });
+
+    if (offer.mode === "slots") {
+      const wanted = offer.slots.filter((slot) => partOfDay(slot.startTime, tz) === daypart);
+      // Their half of the day first. If it holds none, say so rather than quietly booking the other
+      // half: somebody who asked for mornings and is shown 3pm has been ignored, not helped.
+      const chosen = wanted.slice(0, 2);
+      if (chosen.length > 0) {
+        return reply({
+          ok: true,
+          mode: "slots",
+          daypart,
+          slots: chosen.map((slot) => ({
+            label: slot.label,
+            url: trackedUrl(session, slot.url),
+            startTime: slot.startTime,
+          })),
+          // Only used when their half of the day is empty and the other is not.
+          otherHalf: wanted.length === 0 && offer.slots.length > 0,
+        });
+      }
+      return reply({
+        ok: true,
+        mode: "slots",
+        daypart,
+        slots: offer.slots.slice(0, 2).map((slot) => ({
+          label: slot.label,
+          url: trackedUrl(session, slot.url),
+          startTime: slot.startTime,
+        })),
+        otherHalf: true,
+      });
+    }
+
+    if (offer.mode === "link") {
+      return reply({
+        ok: true,
+        mode: "link",
+        attachments: [{ kind: "booking", key: "link", title: offer.label, url: trackedUrl(session, offer.url) }],
+      });
+    }
+    if (offer.mode === "phone") return reply({ ok: true, mode: "phone", phone: offer.phone });
+
+    // no_slots and callback both mean there is nothing real to put in front of them. Kept apart from
+    // `link` and `phone` so the frame says the callback line rather than drawing an empty row of times.
+    return reply({ ok: true, mode: "callback" });
+  }
 
   // ── magnet ─────────────────────────────────────────────────────────────────
   if (action === "magnet") {
@@ -131,6 +295,59 @@ export async function POST(req: NextRequest) {
     return reply({ ok: true, magnet: { title: magnet.title, promise: magnet.promise, url, cta: magnet.ctaLabel || "Open it" } });
   }
 
+  // ── booking ────────────────────────────────────────────────────
+  //
+  // ‼️ THE KIND EXISTED IN THE TYPE AND NOWHERE ELSE UNTIL NOW. QuickAction.kind has accepted
+  // "booking" since the doors were built, readQuickActions validated it, and neither
+  // quickActionsFor nor the frame's choose() ever handled one. A tenant who put a booking button
+  // in concierge_configs.quick_actions got a button that opened a text box.
+  //
+  // ‼️ IT RESOLVES THE CALL THE SAME WAY offer_booking DOES, by calling the same function. A
+  // second way to work out whether this tenant has a calendar is a second thing to get wrong, and
+  // the failure mode is a visitor being offered a time that does not exist.
+  //
+  // ‼️ NOTHING HERE MARKS THE SESSION BOOKED. Offering a time is not taking one;
+  // /api/concierge/booked records the click.
+  if (action === "booking") {
+    const offer = await resolveBooking({
+      config,
+      timeZone: safeTimeZone(clean(body.tz, 64)),
+      window: "today_tomorrow",
+      // The session carries no place or business on this path, and inventing one would put a
+      // city into a handoff URL that nobody said out loud.
+      fallbackUrl: onboardingUrl(session, null, null),
+    });
+
+    if (offer.mode === "slots") {
+      return reply({
+        ok: true,
+        message: "Here are the next times. Pick whichever suits you.",
+        attachments: offer.slots.map((slot) => ({
+          kind: "slot",
+          key: slot.startTime,
+          title: slot.label,
+          url: trackedUrl(session, slot.url),
+        })),
+      });
+    }
+    if (offer.mode === "link") {
+      return reply({
+        ok: true,
+        message: "Here is the calendar. Pick a time that suits you.",
+        attachments: [{ kind: "booking", key: "link", title: offer.label, url: trackedUrl(session, offer.url) }],
+      });
+    }
+    if (offer.mode === "phone") {
+      return reply({ ok: true, message: `The fastest way is to call ${offer.phone}.`, attachments: [] });
+    }
+    // no_slots and callback both mean: there is nothing to put in front of them right now. Say
+    // so rather than rendering an empty row of buttons.
+    return reply({
+      ok: true,
+      message: "I do not have times to offer this minute. Leave it with me and we will come back to you with some.",
+      attachments: [],
+    });
+  }
   // The audit is SRT's product, offered to a business owner. It is not a button a patient ever sees.
   if ((action === "audit_start" || action === "audit_status") && config.audience !== "owner") {
     return reply({ error: "Not found" }, 404);
@@ -166,12 +383,46 @@ export async function POST(req: NextRequest) {
       if (claimed.ok) reportUrl = claimed.reportUrl;
     }
     const payload = await buildStatusPayload(scan);
+
+    // ‼️ THE FINDING IS BUILT HERE AND HANDED OVER FINISHED, AND THE MODEL NEVER SEES THE REPORT.
+    // The pivot that follows the report link needs one true sentence about what was found. The other way
+    // to get it was to feed the report into the prompt, which widens what the model may say about a real
+    // business and would need tools.ts's header rewritten ("THE MODEL IS HANDED NO BUSINESS NAMES AND NO
+    // NUMBERS. Not in the prompt, not in the config, nowhere."). Nothing here reaches a model at all, so
+    // that rule stands untouched. Same precedent as openingFor() in engine.ts.
+    //
+    // ‼️ IT NAMES A BLOCK WITH ITS DENOMINATOR, NEVER A PILLAR. Findable, Familiar and Fresh are
+    // sales prose and exist in no column. See src/lib/concierge/report-pivot.ts for the whole argument.
+    //
+    // ‼️ AND IT IS WRAPPED, WITH THE LINK EMITTED EITHER WAY. This is the moment somebody has spent
+    // three minutes and our money to reach. loadReportView reads every audit_runs row for the report, so
+    // it is the one thing in this branch that can be slow or throw, and losing the report link to a
+    // failed sales line would be the worst trade in the lane. No finding is a supported state.
+    let weakest: string | null = null;
+    if (reportUrl && scan.report_id) {
+      try {
+        const [{ loadReportView }, { weakestFinding }, { supabaseAdmin: db }] = await Promise.all([
+          import("@/lib/audit-engine/report-view"),
+          import("@/lib/concierge/report-pivot"),
+          import("@/lib/db"),
+        ]);
+        const { data: report } = await db.from("audit_reports").select("*").eq("id", scan.report_id).maybeSingle();
+        if (report) weakest = weakestFinding((await loadReportView(report)).blockStats);
+      } catch (e) {
+        console.error(`[concierge/action] weakest finding skipped: ${(e as Error).message}`);
+      }
+    }
+
     // A subset: the stepped page's payload also carries competitor names and prompts, which belong on the
     // report the email unlocks, not in a chat bubble before it.
+    //
+    // `weakest` is the one exception, and it is a finished sentence rather than data: one count and its
+    // denominator, about their own business, which is what they just asked us to measure.
     return reply({
       ok: true,
       status: payload.status,
       reportUrl,
+      weakest,
       step: payload.activeStep,
       engine: payload.engine,
       error: payload.error,
@@ -189,10 +440,38 @@ export async function POST(req: NextRequest) {
  * lead". Nothing here writes to contacts, Zoho or the lead thread: it is a message, and the durable
  * record stays on concierge_sessions where the 24 hour purge can reach it.
  */
+/**
+ * Which half of the day a slot falls in, in the VISITOR'S timezone.
+ *
+ * ‼️ THE TIMEZONE IS THE WHOLE FUNCTION. Calendly returns an instant, and "mornings" is a fact
+ * about where the person asking is standing, not about where our calendar lives. Reading the UTC hour
+ * would offer a 9am Pacific install to somebody in New York as an afternoon.
+ *
+ * ‼️ AND AN UNREADABLE INSTANT IS "afternoon" RATHER THAN A THROW. This runs inside a scheduling
+ * step where the alternative to a bucket is no times at all; the slot's own label is what the visitor
+ * actually reads, and that label came from Calendly, so a mis-bucketed slot shows the right time in the
+ * wrong half rather than a wrong time. safeTimeZone has already rejected a junk zone by this point.
+ */
+function partOfDay(startTime: string, timeZone: string): "morning" | "afternoon" {
+  try {
+    const hour = Number(
+      new Intl.DateTimeFormat("en-US", { hour: "numeric", hour12: false, timeZone }).format(
+        new Date(startTime)
+      )
+    );
+    return Number.isFinite(hour) && hour < 12 ? "morning" : "afternoon";
+  } catch {
+    return "afternoon";
+  }
+}
+
 async function notifyClientLead(args: {
   clientId: string;
   name: string;
   email: string;
+  /** Null on every door but the referral walk, which is owner-only today. Here so that if a patient
+   *  lane ever collects one, the clinic is told the number rather than only that somebody called. */
+  phone: string | null;
   body: { host?: unknown; path?: unknown };
   picked: string;
 }): Promise<void> {
@@ -212,6 +491,7 @@ async function notifyClientLead(args: {
       `:wave: *Somebody left their details with the assistant* on ${(data?.dba_name as string) || (data?.legal_name as string) || "the site"}.`,
       `Name: ${args.name}`,
       `Email: ${args.email}`,
+      args.phone ? `Phone: ${args.phone}` : "",
       args.picked ? `Asked for: ${args.picked}` : "",
       where ? `Page: ${where}` : "",
       "This is the clinic's own enquiry. It is not in our CRM and it has not been contacted.",

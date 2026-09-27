@@ -10,12 +10,50 @@
 // ‼️ THE SUMMARY AND THE process.exit MUST STAY THE LAST TWO STATEMENTS IN THIS FILE. The DM probe
 // records what happens otherwise: five checks once sat below them and never ran.
 
+import { readFileSync } from "node:fs";
 import { parseCsv, parseCsvRows, toCsv } from "../src/lib/scraper/csv";
-import { columnVerdict, emailDomain, isDisposableDomain, isRoleAccount, resolveEmailColumn } from "../src/lib/scraper/rules";
+import {
+  FILE_WORKFLOWS,
+  columnVerdict,
+  emailDomain,
+  isDisposableDomain,
+  isRoleAccount,
+  resolveEmailColumn,
+  runnableWorkflows,
+} from "../src/lib/scraper/rules";
+import type { Workflow } from "../src/lib/scraper/store";
 import { applyMxVerdicts, filterRows } from "../src/lib/scraper/filter";
 import { formatBreakdown, formatLatePick, formatPickRewind } from "../src/lib/scraper/report";
 import { parseResultLines } from "../src/lib/scraper/millionverifier";
 import { hasMx } from "../src/lib/scraper/mx";
+import { hasBannedDash } from "../src/lib/copy-guard";
+import { COLD_EMAIL_1, COLD_MERGE_FIELDS, renderColdEmail } from "../src/config/cold-email-1";
+import {
+  MAPS_GRAMMAR,
+  MAPS_LIMIT_DEFAULT,
+  MAPS_RADIUS_KM_DEFAULT,
+  MAPS_SOURCE_DEFAULT,
+  laneHelp,
+  looksLikeMapsCommand,
+  parseMapsCommand,
+  parseNaturalPull,
+} from "../src/lib/scraper/maps-command";
+import { cityNameFrom, locationVerdict, stateNameFrom } from "../src/lib/scraper/geo";
+import { knownVerticals } from "../src/lib/scraper/icp";
+import {
+  EMAIL_TIER,
+  bestEmailTier,
+  emailTier,
+  pickBestEmail,
+  type EmailCandidate,
+} from "../src/lib/email-scrape";
+import {
+  NAME_SCORE_CEILING,
+  bestNameScore,
+  collectNames,
+  looksLikeTitle,
+  pickOwnerName,
+} from "../src/lib/medspa-owner-scrape";
 
 let passed = 0;
 const failures: string[] = [];
@@ -244,9 +282,9 @@ eq(
 // A missing required column is a WRONG PICK, not a broken file.
 
 eq(
-  "a company list picked for filtering rewinds to score",
-  columnVerdict("filter", ["company", "city", "state", "website"]),
-  { kind: "rewind", missing: "email", other: "score", otherColumn: "company" }
+  "a company list picked for filtering rewinds",
+  columnVerdict("filter", ["company", "city", "state", "website"]).kind,
+  "rewind"
 );
 eq(
   "leads (5).csv's real headers rewind rather than die",
@@ -257,46 +295,134 @@ eq(
 );
 eq(
   "a contact list picked for scoring rewinds to filter",
-  columnVerdict("score", ["Email", "First Name"]),
-  { kind: "rewind", missing: "company", other: "filter", otherColumn: "Email" }
+  columnVerdict("score", ["Email", "First Name"]).kind,
+  "rewind"
 );
 
-// The bound. A rewind is only ever offered once the OTHER workflow's column is confirmed present,
-// so pick -> rewind -> pick cannot bounce twice. A file carrying NEITHER column has to stay
-// terminal, or the picker hands back a choice between two refusals and the lane loops.
+// ================================================================================================
+// THE TERMINATION BOUND, ENUMERATED RATHER THAN SAMPLED.
+//
+// ‼️ THE OLD PROOF DIED WHEN THE THIRD ARM LANDED, AND PRETENDING OTHERWISE WOULD BE THE WORST
+// OUTCOME. With two arms, "this arm cannot run and some arm can" forced the runnable set to be a
+// singleton, so a rewind card always named the one arm that works and the bound was one hop. With
+// three arms a file carrying only `company` leaves 2️⃣ runnable while BOTH 1️⃣ and 3️⃣ bounce, so
+// somebody can bounce twice. The bound is now |workflows| - |runnable|, which is two.
+//
+// What pays for the weaker bound is that the proof is now COMPLETE instead of exemplary: three
+// arms distinguished by three columns is 2^3 header subsets x 3 arms = 24 cells, and every one is
+// checked below. The four properties are what the lane actually relies on.
+// ================================================================================================
+{
+  const COLS = { email: "Email", company: "Company", website: "Website" } as const;
+  // ‼️ READ FROM THE SOURCE LIST, NOT RETYPED. This block's whole claim is that the proof is
+  // COMPLETE rather than exemplary. A hardcoded triple makes that claim expire silently the next time
+  // an arm is added: `Workflow[]` accepts a subset, so neither the compiler nor this probe would
+  // notice the enumeration had stopped covering everything.
+  const ARMS: readonly Workflow[] = FILE_WORKFLOWS;
+  let cells = 0;
+  let ok = true;
+  const fails: string[] = [];
+
+  for (let mask = 0; mask < 8; mask++) {
+    const headers = [
+      mask & 1 ? COLS.email : null,
+      mask & 2 ? COLS.company : null,
+      mask & 4 ? COLS.website : null,
+    ].filter(Boolean) as string[];
+    const runnable = runnableWorkflows(headers);
+
+    for (const arm of ARMS) {
+      cells++;
+      const v = columnVerdict(arm, headers);
+      const armRuns = runnable.includes(arm);
+
+      // The verdict and the runnable set are the same computation, or the card lies to the person.
+      if (armRuns !== (v.kind === "ok")) {
+        ok = false;
+        fails.push(`${arm} [${headers}] verdict ${v.kind} but runnable=${armRuns}`);
+      }
+      // P4: terminal exactly when nothing can run, and therefore arm-independent.
+      if ((v.kind === "terminal") !== (runnable.length === 0)) {
+        ok = false;
+        fails.push(`${arm} [${headers}] terminal/runnable disagree`);
+      }
+      if (v.kind === "rewind") {
+        // P1: every arm offered is genuinely runnable on these exact headers.
+        if (!v.runnable.every((r) => columnVerdict(r.workflow, headers).kind === "ok")) {
+          ok = false;
+          fails.push(`${arm} [${headers}] offered an arm that would bounce`);
+        }
+        // P2: never offer back the arm that just refused.
+        if (v.runnable.some((r) => r.workflow === arm)) {
+          ok = false;
+          fails.push(`${arm} [${headers}] offered itself`);
+        }
+        // P3: the COMPLETE set, not a representative. This is what replaced the one-hop bound:
+        // a second bounce is only possible on an arm the card already said would bounce.
+        if (v.runnable.length !== runnable.length) {
+          ok = false;
+          fails.push(`${arm} [${headers}] offered ${v.runnable.length} of ${runnable.length}`);
+        }
+      }
+    }
+  }
+  eq(
+    "all 8 header subsets x every file arm enumerated",
+    cells,
+    8 * FILE_WORKFLOWS.length
+  );
+  check("the rewind bound holds on every cell" + (fails.length ? ": " + fails.join("; ") : ""), ok);
+}
+
 eq(
   "neither column is terminal, never a rewind (filter)",
-  columnVerdict("filter", ["first_name", "phone"]),
-  { kind: "terminal", missing: "email" }
+  columnVerdict("filter", ["first_name", "phone"]).kind,
+  "terminal"
 );
 eq(
   "neither column is terminal, never a rewind (score)",
-  columnVerdict("score", ["first_name", "phone"]),
-  { kind: "terminal", missing: "company" }
+  columnVerdict("score", ["first_name", "phone"]).kind,
+  "terminal"
 );
 check(
-  "no headers can produce a rewind in either direction",
-  (["filter", "score"] as const).every((w) =>
+  "no headers can produce a rewind in any direction",
+  FILE_WORKFLOWS.every((w) =>
     [[], ["first_name"], ["phone", "zip"]].every((h) => columnVerdict(w, h).kind !== "rewind")
   )
 );
 
 eq("both columns present, filter runs", columnVerdict("filter", ["Email", "Company"]), {
   kind: "ok",
-  column: "Email",
+  columns: { email: "Email" },
 });
 eq("both columns present, score runs", columnVerdict("score", ["Email", "Company"]), {
   kind: "ok",
-  column: "Company",
+  columns: { company: "Company" },
 });
+
+// ‼️ 3️⃣ NEEDS TWO COLUMNS, AND A COMPANY-ONLY FILE MUST NOT REACH IT. `enrichOne` degrades to
+// "not enriched" rather than throwing, so a website-less file would run a full paid qualification
+// sweep and then produce zero sendable rows.
+eq(
+  "listprep needs a website, not just a company",
+  columnVerdict("listprep", ["Company", "City"]).kind,
+  "rewind"
+);
+eq("listprep runs with company and website", columnVerdict("listprep", ["Company", "Website"]), {
+  kind: "ok",
+  columns: { company: "Company", website: "Website" },
+});
+check(
+  "a company-only file leaves exactly :two: runnable",
+  runnableWorkflows(["Company", "City"]).join() === "score"
+);
 
 // ‼️ Slack never re-fires reaction_added for an emoji already on the message, and after a wrong
 // pick the other keycap is usually already sitting there. Without this line the rewind looks
 // exactly as broken as the silence it replaces.
 const rewindCard = formatPickRewind({
   reason: "No email column in that file, so there is nothing to filter. Headers found: `company`",
-  other: "score",
-  otherColumn: "company",
+  runnable: [{ workflow: "score", columns: { company: "company" } }],
 });
 check("the rewind says to take the reaction off and put it back", rewindCard.includes("take it off and put it back"));
 check("the rewind names the keycap to react", rewindCard.includes(":two:"));
@@ -305,6 +431,19 @@ check(
   "the rewind promises nothing was inserted and nothing was spent",
   rewindCard.includes("Nothing was inserted and nothing was spent")
 );
+
+// ‼️ WITH TWO ARMS OFFERED, BOTH ARE NAMED. Naming one would reinstate the old singleton
+// assumption inside a card that can now carry two, and the un-named arm is exactly where a second
+// bounce comes from.
+const twoArmRewind = formatPickRewind({
+  reason: "That file is missing website.",
+  runnable: [
+    { workflow: "filter", columns: { email: "Email" } },
+    { workflow: "score", columns: { company: "Company" } },
+  ],
+});
+check("a two-arm rewind names :one:", twoArmRewind.includes(":one:"));
+check("a two-arm rewind names :two:", twoArmRewind.includes(":two:"));
 
 // ‼️ "Just drop the file again" is the obvious advice and it is WRONG: recordSeen runs at the
 // drop, before the pick, so a re-drop of a batch that later died comes back as duplicates. Any arm
@@ -356,6 +495,586 @@ async function liveMx(): Promise<void> {
   }
   console.log(
     "  (true = has MX, false = definitively none, null = nobody could ask, so the row stays pending)"
+  );
+}
+
+// ================================================================================================
+// THE DISPATCH. Source-read rather than imported, because lane.ts pulls in the Slack client and
+// this probe is offline.
+//
+// ‼️ THIS IS THE CHECK THAT GUARDS THE ONLY STEP HERE THAT CAN SPEND MONEY. The pick used to be
+// `keycap === 1 ? "filter" : "score"` in four separate places, every one falling through to score.
+// A 3️⃣ that fell through would insert company rows and buy a DataForSEO SERP for each of them,
+// with no error and a thread that reads as though the right thing happened.
+{
+  const lane = readFileSync("src/lib/scraper/lane.ts", "utf8");
+  // ‼️ COMMENTS STRIPPED BEFORE ANY "THIS PATTERN IS GONE" CHECK. The comment explaining WHY the
+  // ternary was removed contains the ternary, so a raw source test fails on its own documentation
+  // and the obvious fix is to delete the explanation. Strip first, assert second.
+  const laneCode = lane
+    .split("\n")
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join("\n");
+  check(
+    "the pick is a table, not a ternary",
+    /const PICK: Record<number, Workflow> = \{ 1: "filter", 2: "score", 3: "listprep" \}/.test(laneCode)
+  );
+  check(
+    "3 maps to listprep and nothing falls through to score",
+    !/keycap === 1 \? "filter" : "score"/.test(laneCode),
+    "a ternary dispatch survives in lane.ts"
+  );
+  check(
+    "the keycap cap is gone, so an unknown keycap is absent rather than defaulted",
+    !/keycap > 2/.test(laneCode)
+  );
+  check(
+    "workflow dispatch is one exhaustive switch with a never default",
+    /const _never: never = workflow/.test(lane)
+  );
+  // The shared statuses are the ones a two-workflow assumption survives into.
+  check(
+    "the shared verifying arm branches on workflow before it reads a row",
+    /batch\.workflow === "listprep"[\s\S]{0,200}pollListPrepVerification/.test(lane)
+  );
+  check(
+    "list_run_id is in BATCH_COLUMNS, or the pull opens a run every tick",
+    /list_run_id/.test(readFileSync("src/lib/scraper/store.ts", "utf8").match(/const BATCH_COLUMNS =[\s\S]*?;/)?.[0] ?? "")
+  );
+  const rep = readFileSync("src/lib/scraper/report.ts", "utf8");
+  const inFlight = rep.match(/const IN_FLIGHT: BatchStatus\[\] = \[[\s\S]*?\];/)?.[0] ?? "";
+  check(
+    "IN_FLIGHT carries the workflow C stages, which the compiler cannot check",
+    ["pulling", "qualifying", "enriching", "catchall_recheck", "suppressing"].every((s) =>
+      inFlight.includes(s)
+    ),
+    inFlight
+  );
+}
+
+
+// ── The email tiers, owner first ────────────────────────────────────────────────────────────────
+// The two role lists disagree, so "prefer non-role" is not the same instruction as "prefer a
+// person". These checks pin the band ORDER, which is the whole of W2a.
+{
+  const cand = (email: string, viaMailto = false): EmailCandidate => ({
+    email, viaMailto, path: "", count: 1,
+  });
+  const site = "clinic.com";
+
+  eq("a front desk role is tier 2", emailTier(cand("info@clinic.com"), site), EMAIL_TIER.FRONT_OFFICE);
+  eq("a hiring inbox is tier 4, BELOW info@", emailTier(cand("careers@clinic.com"), site), EMAIL_TIER.BACK_OFFICE);
+  eq("so is billing", emailTier(cand("billing@clinic.com"), site), EMAIL_TIER.BACK_OFFICE);
+  eq("so is marketing", emailTier(cand("marketing@clinic.com"), site), EMAIL_TIER.BACK_OFFICE);
+
+  // ‼️ THE REGRESSION THE SIX BANDS EXIST TO PREVENT. careers@ is not in this file's
+  // ROLE_LOCAL_PARTS, so a plain "role loses to non-role" swap would have ranked it FIRST.
+  check(
+    "info@ beats careers@, which a bare tier swap would have inverted",
+    emailTier(cand("info@clinic.com"), site) < emailTier(cand("careers@clinic.com"), site)
+  );
+
+  eq(
+    "a same-domain business inbox is tier 3, below info@",
+    emailTier(cand("zenfuldaymedspa@zenfulday.com"), "zenfulday.com"),
+    EMAIL_TIER.SAME_DOMAIN
+  );
+  check(
+    "so the business inbox does NOT outrank the front desk",
+    emailTier(cand("info@zenfulday.com"), "zenfulday.com") <
+      emailTier(cand("zenfuldaymedspa@zenfulday.com"), "zenfulday.com")
+  );
+
+  // The one true owner address in the 60 site sample, with and without the name in hand.
+  eq(
+    "marina@ is only tier 3 with no owner name to confirm it",
+    emailTier(cand("marina@mmaestheticss.com"), "mmaestheticss.com"),
+    EMAIL_TIER.SAME_DOMAIN
+  );
+  eq(
+    "marina@ is tier 1 once the crawl has found Marina Musalyants",
+    emailTier(cand("marina@mmaestheticss.com"), "mmaestheticss.com", "Marina Musalyants"),
+    EMAIL_TIER.OWNER
+  );
+  eq(
+    "first.last is person-shaped without any name in hand",
+    emailTier(cand("jane.roe@clinic.com"), site),
+    EMAIL_TIER.OWNER
+  );
+  check(
+    "and a person beats the front desk, which is the point of the change",
+    emailTier(cand("jane.roe@clinic.com"), site) < emailTier(cand("info@clinic.com"), site)
+  );
+
+  eq("webmail is tier 5", emailTier(cand("clinic@gmail.com"), site), EMAIL_TIER.WEBMAIL);
+  eq(
+    "a parent group role address via mailto is tier 6",
+    emailTier(cand("info@medgroup.com", true), site),
+    EMAIL_TIER.OTHER_DOMAIN_ROLE
+  );
+  eq(
+    "a web agency footer credit is rejected",
+    emailTier(cand("hello@someagency.com"), site),
+    EMAIL_TIER.REJECT
+  );
+
+  // pickBestEmail must agree with the bands, and the owner name must change the winner.
+  const pool = [cand("info@clinic.com"), cand("careers@clinic.com"), cand("marina@clinic.com")];
+  eq("without a name the front desk wins", pickBestEmail(pool, site)?.email, "info@clinic.com");
+  eq(
+    "with the name, the owner wins",
+    pickBestEmail(pool, site, "Marina Musalyants")?.email,
+    "marina@clinic.com"
+  );
+
+  // ‼️ THE EARLY EXIT MUST FIRE ON TIER 1 AND NOTHING ELSE. If it fires on info@ the crawl stops on
+  // the homepage and never fetches /team, so the ranking change buys nothing.
+  eq(
+    "bestEmailTier says OWNER only for a person",
+    bestEmailTier([cand("info@clinic.com"), cand("jane.roe@clinic.com")], site),
+    EMAIL_TIER.OWNER
+  );
+  eq(
+    "and stays at FRONT_OFFICE for info@ alone, so the walk continues",
+    bestEmailTier([cand("info@clinic.com")], site),
+    EMAIL_TIER.FRONT_OFFICE
+  );
+  {
+    const src = readFileSync("src/lib/email-scrape.ts", "utf8");
+    // Derived from emailTier, never re-spelled. Named functions rather than a character window, so
+    // the check survives the code moving and still fails if the rule gets duplicated.
+    check(
+      "the crawl's stop condition is derived from bestEmailTier and EMAIL_TIER.OWNER",
+      /bestEmailTier\([\s\S]*?\) === EMAIL_TIER\.OWNER/.test(src)
+    );
+    check(
+      "and nothing re-implements tier 1 by hand alongside it",
+      !/ROLE_LOCAL_PARTS\.has\(localPartOf/.test(src)
+    );
+    // One page walk for both questions. Two walks is the 84-seconds-per-dead-site bug.
+    check("scrapeEmail delegates to crawlSite rather than walking pages itself", /const pass = await crawlSite\(/.test(src));
+    check(
+      "crawlSite stops on a conjunction, so one answer does not end the other's search",
+      /haveOwnerEmail && bestNameScore\(names\) >= NAME_SCORE_CEILING/.test(src)
+    );
+
+    const lane = readFileSync("src/lib/scraper/lane.ts", "utf8");
+    // ‼️ THE BUDGET IS THE WHOLE POINT. sweepEnrich checks its deadline per LEAD, not per page, so a
+    // crawl called without one can overrun a 240 second tick on three dead sites.
+    check("sweepEnrich passes its deadline into the crawl", /crawlSite\(lead\.website, \{ deadline/.test(lane));
+    check(
+      "and a crawl miss is recorded as null so the rung does not re-fetch the site",
+      /siteEmail = pass\.email \? \{[\s\S]*?\} : null;/.test(lane)
+    );
+    // ‼️ COMMENTS STRIPPED FIRST. lane.ts still NAMES scrapeOwnerName in the comment explaining why
+    // the second pass went away, so an absence check over the raw file tests the prose and not the
+    // program. Same lesson as the dispatch block lower down, which strips for the same reason.
+    const laneCode = lane
+      .split("\n")
+      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join("\n");
+    check("the lane no longer runs a second owner-name pass of its own", !/scrapeOwnerName/.test(laneCode));
+  }
+}
+
+// ── Owner names: the title blocklist, and the suppression it undoes ─────────────────────────────
+// Every junk string below was returned as an owner name by the matcher this replaces. Every real
+// name below was a genuine hit in the same 60 site sample, so the blocklist must not touch them.
+{
+  const junk = [
+    "Nurse Practitioner", "Medical Director", "Lead Physician",
+    "Aesthetic Nurse", "Policy Refund", "Button James",
+    // Still sitting in med_spa_leads.owner_name from the pre-fix scraper.
+    "Join Our", "Learn More", "Vision Empower",
+  ];
+  for (const j of junk) check("a title is not a name: " + j, looksLikeTitle(j));
+
+  const real = [
+    "Marina Musalyants", "Anya Stassiy", "Nilam Patel", "Kathy Newman",
+    "Ashraf G. Andrawis", "Jennie Evans", "Chidi Uche",
+  ];
+  for (const r of real) check("a real hit survives the blocklist: " + r, !looksLikeTitle(r));
+
+  // ‼️ THE BLOCKLIST IS PER WHOLE TOKEN. "Newman" carries "new" and "Andrawis" carries "and";
+  // a substring test would reject two of the seven names above.
+  check("the test is per token, not substring", !looksLikeTitle("Kathy Newman"));
+
+  // Measured on the frozen sample, 2026-09-25. Every one of these was returned as an owner name by
+  // the FIXED matcher on its first run, which is how the blocklist earned these entries. Skinney
+  // Story is the important one: it outranked the real owner, Adriana Martino, until "story" landed.
+  for (const j of [
+    "Amazing Hydrafacial", "Chemical Peels", "Illness Breast", "Sherif Medical",
+    "Skinney Story", "Speaker In", "Personal Care", "Registered Nurse",
+  ]) {
+    check("measured junk is refused: " + j, looksLikeTitle(j));
+  }
+  // A heading repeated after the tags come off. No list can enumerate this, so it is a rule.
+  check("a name whose halves are the same word is not a name", looksLikeTitle("Marianne Marianne"));
+  check("but a real repeated-initial name is fine", !looksLikeTitle("Adriana Martino"));
+
+  // The failure that made precision 12%: a title matched first and ENDED the search.
+  const page = "Our Medical Director Jane Roe leads care. The spa is owned by Dr. Marina Musalyants.";
+  const found = collectNames(page, "/about");
+  eq("the real owner is reached past the weaker cue", pickOwnerName(found), "Marina Musalyants");
+  // Jane Roe IS a person and IS collected. She is a hired medical director, so her cue is weak and
+  // she loses. The point is that the old matcher returned HER and stopped, never reaching the owner.
+  check("the weaker candidate is still seen, just outranked", found.some((c) => c.name === "Jane Roe"));
+  check(
+    "and it is outranked on score, not on luck of position",
+    (found.find((c) => c.name === "Marina Musalyants")?.score ?? 0) >
+      (found.find((c) => c.name === "Jane Roe")?.score ?? 0)
+  );
+
+  // ‼️ THE BLOCKLIST'S OWN PATH: a cue whose NAME capture is itself a title. This is the shape that
+  // produced `Nurse Practitioner` and `Aesthetic Nurse` as owner names.
+  eq(
+    "a title captured as the name is refused outright",
+    pickOwnerName(collectNames("Our Owner Nurse Practitioner will see you now", "")),
+    null
+  );
+
+  // Both cue orders are read, not just the first that matches.
+  eq(
+    "cue-then-name is collected",
+    pickOwnerName(collectNames("Owner Sandra Klein welcomes you.", "")),
+    "Sandra Klein"
+  );
+  eq(
+    "name-then-cue is collected too",
+    pickOwnerName(collectNames("Sandra Klein, founder of the practice.", "")),
+    "Sandra Klein"
+  );
+
+  // The cue rules are built with new RegExp over a template literal, where a lone backslash-s is an
+  // invalid escape that collapses to the LETTER s. That shipped once: the rule silently stopped
+  // matching whitespace and started matching "s", and every test using exactly one space still
+  // passed. These two only pass when the character class survived.
+  eq(
+    "the name-then-cue rule matches across several spaces",
+    pickOwnerName(collectNames("Sandra Klein    founder", "")),
+    "Sandra Klein"
+  );
+  eq(
+    "and across a tab",
+    pickOwnerName(collectNames("Sandra Klein	founder", "")),
+    "Sandra Klein"
+  );
+
+  // A deliberate statement on /our-team outranks a caption on the homepage.
+  const home = collectNames("Owner Sandra Klein welcomes you.", "");
+  const about = collectNames("The clinic was founded by Dr. Priya Raman in 2011.", "/our-team");
+  eq("the About page beats the homepage", pickOwnerName([...home, ...about]), "Priya Raman");
+
+  eq("a strong cue on an About page with a Dr. prefix is the ceiling", bestNameScore(about), NAME_SCORE_CEILING);
+  eq("nothing found is score zero", bestNameScore([]), 0);
+  eq("and nothing found picks nothing", pickOwnerName([]), null);
+}
+
+
+// ── The fourth arm is a command, not a keycap ───────────────────────────────────────────────────
+// 4️⃣ has no file, so it has no columns and must never be offered by the picker. These checks are
+// what stop somebody "completing" PICK later and turning a 4️⃣ on a CSV card into a paid pull.
+{
+  const lane = readFileSync("src/lib/scraper/lane.ts", "utf8");
+  const laneCode = lane
+    .split("\n")
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join("\n");
+
+  check("mapspull is not a file workflow", !FILE_WORKFLOWS.includes("mapspull" as Workflow));
+  check(
+    "so no header set ever offers it as a pick",
+    [[], ["Company"], ["Company", "Website"], ["Email", "Company", "Website"]].every(
+      (h) => !runnableWorkflows(h).includes("mapspull" as Workflow)
+    )
+  );
+  // ‼️ AND ITS EMPTY REQUIREMENT LIST IS WHY THAT MATTERS. Zero required columns is satisfied by every
+  // header set including none, so listing it in FILE_WORKFLOWS would make columnVerdict's terminal
+  // branch unreachable and a junk file would rewind forever, offering a paid pull as the way out.
+  eq("a junk file is still terminal", columnVerdict("filter", ["first_name", "phone"]).kind, "terminal");
+  eq("and no headers at all leaves nothing runnable", runnableWorkflows([]).length, 0);
+
+  check("PICK still stops at three entries", (laneCode.match(/const PICK: Record<number, Workflow> = \{[^}]*\}/)?.[0].match(/\d+:/g) ?? []).length === 3);
+  check("KEYCAPS still stops at three", (laneCode.match(/const KEYCAPS: Record<string, number> = \{[^}]*\}/)?.[0].match(/:/g) ?? []).length === 4);
+
+  // The stage machine dispatches on the arm with a never default, in both places.
+  check("the pull stage dispatches exhaustively", /_never: never = batch\.workflow/.test(laneCode));
+  check("and never infers the door from a missing file id", !/slack_file_id === null/.test(laneCode));
+  check("a fileless batch is refused by name at the parsing arm", /has no dropped file to re-read/.test(lane));
+
+  // ‼️ awaiting_pull_approval IS IN ACTIVE_STATUSES AND NOT IN IN_FLIGHT, and the compiler checks
+  // neither: both are plain BatchStatus[].
+  const store = readFileSync("src/lib/scraper/store.ts", "utf8");
+  const active = store.match(/const ACTIVE_STATUSES: BatchStatus\[\] = \[[\s\S]*?\];/)?.[0] ?? "";
+  check("the spend gate is polled, so a failed card post is retried", active.includes("awaiting_pull_approval"));
+  const rep = readFileSync("src/lib/scraper/report.ts", "utf8");
+  const inFlight = rep.match(/const IN_FLIGHT: BatchStatus\[\] = \[[\s\S]*?\];/)?.[0] ?? "";
+  check(
+    "but it is NOT in flight: nothing is inserted and nothing is bought",
+    !inFlight.includes("awaiting_pull_approval"),
+    inFlight
+  );
+
+  // Nothing is bought before the reaction.
+  check("the submit lives behind the gate, not in the door", /async function releaseMapsPull/.test(lane));
+  // Extracted by its own braces rather than by counting characters: a window would pass or fail on
+  // how much unrelated code sits nearby, which is not a property anybody should have to hold.
+  const doorBody = lane.slice(
+    lane.indexOf("async function beginMapsPull"),
+    lane.indexOf("async function postPullEstimate")
+  );
+  check("the door itself buys nothing", doorBody.length > 0 && !doorBody.includes("submitMapsSearch"));
+  check("it posts the estimate and stops there", doorBody.includes("await postPullEstimate("));
+  check(
+    "and the batch is born waiting for a reaction",
+    doorBody.includes('status: "awaiting_pull_approval"')
+  );
+  check("the new door has its own switch", /LISTPREP_MAPS_ENABLED/.test(lane));
+  // The base URL is derived from the one the deployment already has, so turning the door on is one
+  // env var rather than two. A pull submitted with no webhook is bought and then lost.
+  check(
+    "the webhook base falls back to OUTSCRAPER_WEBHOOK_URL",
+    /OUTSCRAPER_WEBHOOK_URL[\s\S]{0,120}outscraper-listprep/.test(lane)
+  );
+  check(
+    "and a missing base refuses before anything is bought",
+    lane.indexOf("have nowhere to deliver") < lane.indexOf("await submitMapsSearch(")
+  );
+  // ‼️ NAMED IN THE OPERATOR COPY ON PURPOSE, SO THE TEST IS ON THE READ, NOT THE MENTION. The
+  // refusal card tells you which switch you did NOT set, which is the whole point of having two.
+  check("the paused lane's switch is never read here", !/process\.env\.MAPS_PULL_ENABLED/.test(laneCode));
+  check("but the copy still names it, so the two are not confused", /`MAPS_PULL_ENABLED`/.test(lane));
+}
+
+// ── The pull command: it refuses rather than guesses ────────────────────────────────────────────
+{
+  const ok = parseMapsCommand("pull maps medspa | Dallas TX | med spa");
+  check("a well formed command parses", ok.ok);
+  if (ok.ok) {
+    eq("the vertical is kept", ok.command.vertical, "medspa");
+    eq("the metro is kept", ok.command.metro, "Dallas TX");
+    eq("the metro is appended for Outscraper", ok.command.searchQuery, "med spa Dallas TX");
+    eq("the limit defaults rather than being unbounded", ok.command.limit, MAPS_LIMIT_DEFAULT);
+  }
+
+  const limited = parseMapsCommand("pull maps dentist | Phoenix AZ | implants | limit 40");
+  check("an explicit limit is taken", limited.ok && limited.command.limit === 40);
+
+  // ‼️ 4️⃣ REFUSES ON AN UNKNOWN VERTICAL WHERE 3️⃣ ONLY WARNS, and the asymmetry is the point: 3️⃣ has
+  // the file already and free, so a wrong default wastes a sweep over rows we own. 4️⃣ decides before
+  // Outscraper is billed, so the same default buys the wrong list.
+  const unknown = parseMapsCommand("pull maps plumbers | Dallas TX | plumber");
+  check("an unknown vertical is refused", !unknown.ok);
+  check("and the refusal names the ones that exist", !unknown.ok && /medspa/.test(unknown.reason));
+
+  check("a missing metro is refused", !parseMapsCommand("pull maps medspa | med spa").ok);
+  check("an empty command is refused", !parseMapsCommand("pull maps").ok);
+  check("a limit above the cap is refused", !parseMapsCommand("pull maps medspa | Dallas TX | med spa | limit 5000").ok);
+  check("a fourth part that is not a limit is refused", !parseMapsCommand("pull maps medspa | Dallas TX | med spa | nonsense").ok);
+  check("a fifth part is refused", !parseMapsCommand("pull maps medspa | A | B | limit 5 | more").ok);
+
+  // The anchor must not swallow ordinary chat, because returning true hides the message from the
+  // general assistant.
+  check("it claims only messages that start with the command", looksLikeMapsCommand("pull maps medspa | A | B"));
+
+  // ‼️ SLACK CODE FORMATTING COST A REAL PULL ON 2026-09-27. The operator typed the command as code,
+  // which is the natural thing to do with something that looks like a command, so the text arrived
+  // wrapped in backticks, the anchor missed, handleScraperEvent returned false, and the message fell
+  // through to the general assistant, which answered it from the existing database. It LOOKED like the
+  // command had run and returned 25 leads. Nothing ran and nothing was bought.
+  //
+  // A command surface that is also a chat surface has to be generous about formatting, because the
+  // fallback is not an error, it is a different bot answering plausibly.
+  const wrapped: Array<[string, string]> = [
+    ["inline backticks", "`pull maps medspa | Dallas TX | med spa | limit 50`"],
+    ["double backticks", "``pull maps medspa | Dallas TX | med spa``"],
+    ["one-line fence", "```pull maps medspa | Dallas TX | med spa | limit 50```"],
+    ["fence with newlines", "```\npull maps medspa | Dallas TX | med spa | limit 50\n```"],
+    ["fence with a language", "```sh\npull maps medspa | Dallas TX | med spa\n```"],
+  ];
+  for (const [label, text] of wrapped) {
+    check("a command wrapped in " + label + " is still claimed", looksLikeMapsCommand(text));
+    const parsed = parseMapsCommand(text);
+    check("and still parses: " + label, parsed.ok, parsed.ok ? "" : parsed.reason);
+  }
+  // The one-line fence is the case a lazy language-tag matcher gets wrong by eating the word "pull".
+  const oneLine = parseMapsCommand("```pull maps medspa | Dallas TX | med spa | limit 50```");
+  check("a one-line fence keeps its limit", oneLine.ok && oneLine.command.limit === 50);
+  // Unwrapping must not turn ordinary chat into a command.
+  check("wrapping something else does not make it a command", !looksLikeMapsCommand("`status`"));
+
+  // ‼️ HELP HAS TO COME FROM THE LANE. Asked "workflows", the general assistant answered "I do not
+  // have a pull maps or lead scrape workflow" and offered to search the CRM. Honest and wrong: it
+  // cannot see this channel. A command surface that does not describe itself gets described by
+  // something that has never heard of it.
+  const help = laneHelp();
+  for (const must of ["pull maps", "get me med spa leads", ":one:", ":two:", ":three:", "sendable.csv", "status"]) {
+    check("the help card explains " + must, help.includes(must));
+  }
+  check("and says what :three: is for, which is the one people forget", /build a send list/.test(help));
+  check("no em dash in the help card", !help.includes("—"));
+
+  // Plain English produces the SAME estimate card, which is what makes loose parsing safe here:
+  // nothing is bought until a reaction.
+  const nat = parseNaturalPull("get me some med spa leads from google maps in Dallas TX");
+  check("a plain-English ask parses", nat !== null && nat.ok);
+  if (nat && nat.ok) {
+    eq("into the right vertical", nat.command.vertical, "medspa");
+    eq("and the right metro", nat.command.locationName, "Dallas,Texas,United States");
+  }
+  const withN = parseNaturalPull("find 100 med spa leads near Seattle WA");
+  check("a number in the sentence becomes the limit", withN !== null && withN.ok && withN.command.limit === 100);
+
+  // ‼️ IT REFUSES RATHER THAN DEFAULTING. "Some leads" must never inherit the last city anybody used.
+  const noWhere = parseNaturalPull("get me some med spa leads");
+  check("a missing city is asked for, not assumed", noWhere !== null && !noWhere.ok);
+  check("an unrelated sentence is left alone", parseNaturalPull("how is the weather in Dallas TX") === null);
+  check("and so is a bare ask with no vertical", parseNaturalPull("get me some leads") === null);
+  check("the typed command is not double-handled", parseNaturalPull("pull maps medspa | Dallas TX | med spa") === null);
+  check("not a sentence that merely mentions it", !looksLikeMapsCommand("can you pull maps for dallas"));
+  check("and not a status check", !looksLikeMapsCommand("status"));
+
+  // The grammar a refusal prints has to be a command that actually parses.
+  const example = /`(pull maps [^`]+)`/.exec(MAPS_GRAMMAR.split("For example:")[1] ?? "");
+  check("the grammar's own example parses", Boolean(example) && parseMapsCommand(example![1]).ok);
+}
+
+
+// ── Email 1 reads correctly into a shared inbox ─────────────────────────────────────────────────
+// Option A: info@ is an acceptable target, so the copy cannot assume the reader is the owner. And
+// first_name is blank on roughly three quarters of rows, so the blank case is the COMMON one.
+{
+  // Only fields a send list can actually fill.
+  const tokens = [...COLD_EMAIL_1.subject.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1])
+    .concat([...COLD_EMAIL_1.body.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]));
+  check(
+    "every merge field exists in the send list",
+    tokens.every((t) => (COLD_MERGE_FIELDS as readonly string[]).includes(t)),
+    tokens.filter((t) => !(COLD_MERGE_FIELDS as readonly string[]).includes(t)).join(",")
+  );
+
+  // ‼️ THE BLANK CASE, WHICH IS THE MAJORITY CASE. Everything empty except the company name.
+  const bare = renderColdEmail({ company: "Glow Med Spa" });
+  check("it renders with everything blank but the company", bare.body.length > 0);
+  check("no dangling comma or period", !/ ,|\s\.(\s|$)/.test(bare.body), bare.body);
+  check("no double space", !/ {2}/.test(bare.body), bare.body);
+  // ‼️ THE BUG THE FIRST DRAFT SHIPPED AND THE OTHER CHECKS ALL MISSED. An empty {{city}} after a
+  // preposition renders "is not coming up for right now". Tidying spaces and commas cannot fix that,
+  // because the debris is a WORD, so the clause is wrapped in [[ ]] and dropped whole. Checked by
+  // naming the orphans rather than by eyeballing the output.
+  for (const orphan of [" for right", " in right", " for ,", " in ,", " at right"]) {
+    check("no orphaned preposition: " + JSON.stringify(orphan), !bare.body.includes(orphan), bare.body);
+  }
+  check("and the optional clause returns when the value does", renderColdEmail({ company: "X", city: "Dallas" }).body.includes("for Dallas right now"));
+  check("no unrendered optional-clause markers", !/\[\[|\]\]/.test(bare.body + bare.subject));
+  check("no empty parentheses", !/\(\s*\)/.test(bare.body));
+  check("no unfilled token survives", !/\{\{/.test(bare.body + bare.subject));
+  check("the subject still names the business", bare.subject.includes("Glow Med Spa"));
+  check("and there is no greeting to leave hanging", !/^(hi|hello|hey)\b/i.test(bare.body.trim()));
+
+  // The pass-along is the FIRST thing said, because the reader is usually not the decision maker.
+  const firstLine = bare.body.split("\n")[0];
+  check("the first line offers the pass-along", /pass this along/i.test(firstLine), firstLine);
+
+  // A fully populated render must also be clean.
+  const full = renderColdEmail({ company: "Glow Med Spa", city: "Dallas", first_name: "Marina" });
+  check("a populated render is clean too", !/\{\{/.test(full.body) && !/ {2}/.test(full.body));
+  check("and the city lands where it belongs", full.body.includes("Dallas"));
+
+  // ‼️ THE HOUSE RULE, MADE STRUCTURAL. guard() throws at module evaluation, so an em dash here
+  // fails `next build` rather than reaching an inbox. This asserts the rule still holds after edits.
+  check("no banned dash in the subject", !hasBannedDash(COLD_EMAIL_1.subject));
+  check("no banned dash in the body", !hasBannedDash(COLD_EMAIL_1.body));
+  check("no links in a first touch", !/https?:\/\//.test(COLD_EMAIL_1.body));
+}
+
+
+// ── geo.ts: the state table that deletes rows ───────────────────────────────────────────────────
+// ‼️ locationVerdict RETURNS not_us FOR AN UNKNOWN CODE, AND not_us DELETES THE ROW. "WA" was absent
+// from STATE_CODES until 2026-09-27, so every Seattle, Spokane, Tacoma and Bellevue business written
+// with the abbreviation was classified foreign and dropped from every list. Nothing was left behind to
+// look at, which is why it survived. This enumerates all 51 rather than sampling.
+{
+  const CODES = [
+    "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME",
+    "MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA",
+    "RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY","DC",
+  ];
+  eq("all 51 postal codes are covered", CODES.length, 51);
+  const missed = CODES.filter((c) => locationVerdict({ city: "Somewhere", state: c }) !== "us");
+  check("every one reads as US", missed.length === 0, "not recognised: " + missed.join(","));
+  eq("Seattle WA specifically, the one that was dropped", locationVerdict({ city: "Seattle", state: "WA" }), "us");
+  eq("a foreign row is still refused", locationVerdict({ city: "Prague", state: "Praha" }), "not_us");
+
+  // The derived code-to-name map, which is what makes a metro geocodable.
+  eq("a code becomes a full state name", stateNameFrom("Dallas TX"), "Texas");
+  eq("so does the one that was missing", stateNameFrom("Seattle WA"), "Washington");
+  eq("a two-word state survives", stateNameFrom("New York NY"), "New York");
+  eq("a spelled-out state is taken as given", stateNameFrom("Miami, Florida"), "Florida");
+  eq("a multi-word city keeps its words", cityNameFrom("Salt Lake City UT"), "Salt Lake City");
+  eq("and no state is null, never a guess", stateNameFrom("London"), null);
+}
+
+// ── The pull command's optional tail ────────────────────────────────────────────────────────────
+{
+  eq("the default source is the one with credit already paid", MAPS_SOURCE_DEFAULT, "dataforseo");
+
+  const a = parseMapsCommand("pull maps medspa | Dallas TX | med spa");
+  check("a bare command defaults sensibly", a.ok);
+  if (a.ok) {
+    eq("location is shaped for a geocoder", a.command.locationName, "Dallas,Texas,United States");
+    eq("radius defaults to a metro", a.command.radiusKm, MAPS_RADIUS_KM_DEFAULT);
+    eq("categories come from the vertical", a.command.categories.includes("medical_spa"), true);
+  }
+
+  // Any order, because an operator will not remember one.
+  const b = parseMapsCommand("pull maps medspa | Dallas TX | med spa | radius 50 | limit 100");
+  const c = parseMapsCommand("pull maps medspa | Dallas TX | med spa | limit 100 | radius 50");
+  check("limit then radius parses", b.ok && b.command.limit === 100 && b.command.radiusKm === 50);
+  check("and radius then limit parses the same", c.ok && c.command.limit === 100 && c.command.radiusKm === 50);
+  const d = parseMapsCommand("pull maps medspa | Dallas TX | med spa | via outscraper | limit 30");
+  check("via mixes in too", d.ok && d.command.source === "outscraper" && d.command.limit === 30);
+
+  check("an absurd radius is refused", !parseMapsCommand("pull maps medspa | Dallas TX | med spa | radius 9000").ok);
+  check("two limits are refused rather than chosen between", !parseMapsCommand("pull maps medspa | A TX | b | limit 5 | limit 9").ok);
+  check("an unknown source is refused", !parseMapsCommand("pull maps medspa | Dallas TX | med spa | via bogus").ok);
+
+  // ‼️ A VERTICAL WITH NO CATEGORY MAP MUST REFUSE ON THE DATAFORSEO PATH. Pulling with an empty
+  // category list searches for nothing and bills for the privilege.
+  for (const v of knownVerticals()) {
+    const r = parseMapsCommand("pull maps " + v + " | Dallas TX | anything");
+    check("a known vertical has categories mapped: " + v, r.ok && r.command.categories.length > 0);
+  }
+
+  // The grammar's examples all have to parse, or the refusal card teaches a command that fails.
+  // Only the lines BELOW "For example:". The first backticked line is the syntax template, with
+  // <placeholders> that are not meant to parse.
+  const exampleBlock = MAPS_GRAMMAR.split("For example:")[1] ?? "";
+  const examples = [...exampleBlock.matchAll(/`(pull maps [^`]+)`/g)].map((m) => m[1]);
+  check("the grammar shows at least two examples", examples.length >= 2, String(examples.length));
+  for (const ex of examples) check("grammar example parses: " + ex, parseMapsCommand(ex).ok);
+  check(
+    "the syntax template is above the examples, not among them",
+    MAPS_GRAMMAR.indexOf("<vertical>") < MAPS_GRAMMAR.indexOf("For example:")
+  );
+}
+
+// ── The geo filter the vendor ignores ──────────────────────────────────────────────────────────
+// ‼️ THE BUG THIS PINS COST A WHOLE BUILD PASS. DataForSEO accepts `location_name` and `location_code`,
+// returns status 20000 Ok, and then answers GLOBALLY: 85,179 matches from Miami, Doncaster and
+// Vancouver where a coordinate returned 804, all in Dallas. Checking the status code proved nothing.
+{
+  const dfs = readFileSync("src/lib/dataforseo-places.ts", "utf8");
+  const code = dfs.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+  check("the query filters by coordinate", /location_coordinate: args\.locationCoordinate/.test(code));
+  check("and never by a name the endpoint ignores", !/location_name:/.test(code));
+  check("nor by a code it also ignores", !/location_code:/.test(code));
+
+  const lane = readFileSync("src/lib/scraper/lane.ts", "utf8");
+  check("the lane geocodes before it spends", lane.indexOf("await geocodeMetro(") < lane.indexOf("await searchListings("));
+  check(
+    "and refuses when the metro cannot be found",
+    /I could not find `" \+ command\.metro \+ "` on the map/.test(lane)
   );
 }
 

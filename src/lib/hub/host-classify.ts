@@ -12,7 +12,7 @@
 export type HostClass = "internal" | "external" | "concierge";
 
 /**
- * The one hostname that serves the AI Skin Concierge widget, and nothing else.
+ * The one hostname that serves the AI Booking Bot widget, and nothing else.
  *
  * ‼️ IT IS NOT INTERNAL AND IT MUST NEVER BE ADDED TO INTERNAL_HOSTS. Classifying it internal
  * would publish the whole application on it — /api/leads/funnel, /api/scan/*, /api/clients/start,

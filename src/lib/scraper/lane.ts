@@ -25,10 +25,60 @@
 
 import { waitUntil } from "@vercel/functions";
 import { slack } from "@/lib/slack-bot";
-import { parseCsv } from "./csv";
+import { parseCsv, toCsv } from "./csv";
+import { supabaseAdmin } from "@/lib/db";
 import { filterRows } from "./filter";
+import { hasMx } from "./mx";
+import { crawlSite } from "@/lib/email-scrape";
+import { checkMany } from "@/lib/outreach/suppression";
+import { DEFAULT_VERTICAL, icpFor, knownVerticals, resolveVertical } from "./icp";
+import {
+  fromCsv,
+  funnelLines,
+  startRun,
+  fromDataForSeo,
+  storeRawLeads,
+  type CsvColumns,
+  type RawLeadInput,
+} from "./pull";
+import {
+  QUALIFY_CHUNK,
+  dropReviewLines,
+  groupDrops,
+  qualifyChunk,
+  QUALIFY_MODEL,
+} from "./qualify";
+import { enrichLines, enrichOne, summarize, type EnrichAttempt, type EnrichResult } from "./enrich";
+import {
+  applyVerification,
+  bindRunToBatch,
+  dropReasons,
+  applyFreeRejects,
+  dropWebsiteless,
+  droppedRows,
+  funnelFor,
+  getRun,
+  heldBackRows,
+  pendingCatchall,
+  pendingEnrich,
+  pendingQualify,
+  pendingSuppression,
+  qualifyTally,
+  recordCatchallRecheck,
+  recordEnrichment,
+  recordSuppression,
+  recordHandoff,
+  sendableRows,
+  setOwnerName,
+  unverifiedEmails,
+  updateRun,
+  writeVerdicts,
+  type FreeRejectKind,
+} from "./listprep";
 import {
   columnVerdict,
+  emailDomain,
+  isDisposableDomain,
   resolveCityColumn,
   resolveStateColumn,
   resolveCompanyColumn,
@@ -36,7 +86,23 @@ import {
   resolveWebsiteColumn,
 } from "./rules";
 import { allKeys, countTruncatedNames, dedupeColumns, isKeyActive, splitDuplicates } from "./dedup";
-import { resolveMxBatch } from "./mx";
+import { mailProviderOf, resolveMxBatch } from "./mx";
+import {
+  MAPS_GRAMMAR,
+  laneHelp,
+  looksLikeMapsCommand,
+  parseMapsCommand,
+  parseNaturalPull,
+  unwrapCodeText,
+  type MapsCommand,
+} from "./maps-command";
+// The default source. Its endpoint is synchronous, so this half needs no webhook at all.
+import { isConfigured as dfsPlacesConfigured, searchListings } from "@/lib/dataforseo-places";
+// The listings endpoint honours a coordinate and silently ignores a name, so this is not optional.
+import { geocodeMetro } from "@/lib/geocode";
+// The async submit. The transport already existed and is not rebuilt: the 4️⃣ door is the caller
+// it never had.
+import { submitMapsSearch } from "@/lib/outscraper";
 import {
   addScoreCost,
   allRows,
@@ -157,6 +223,19 @@ const KEYCAPS: Record<string, number> = { one: 1, two: 2, three: 3 };
 /** 1️⃣ / 2️⃣ / 3️⃣ on the cutoff card, as a percentage of the file to KEEP off the bottom. */
 const CUTOFF_PRESETS: Record<number, number> = { 1: 30, 2: 50, 3: 70 };
 
+/**
+ * Which keycap on the PICKER means which workflow.
+ *
+ * ‼️ THIS TABLE EXISTS BECAUSE THE DISPATCH USED TO BE `keycap === 1 ? "filter" : "score"`, IN
+ * FOUR PLACES, AND EVERY ONE FELL THROUGH TO SCORE. With two arms that was correct. With three it
+ * is a way to spend money: a 3️⃣ that fell through would insert company rows and buy a DataForSEO
+ * SERP for every one of them, with no error anywhere and a thread that reads as though the right
+ * thing happened. A missing keycap must be an absent entry here, never a default branch.
+ *
+ * `_probe-scraper.ts` asserts PICK[3] === "listprep" for exactly that reason.
+ */
+const PICK: Record<number, Workflow> = { 1: "filter", 2: "score", 3: "listprep" };
+
 export function scraperChannel(): string {
   return process.env.SLACK_SCRAPER_CHANNEL || "";
 }
@@ -245,7 +324,7 @@ async function fail(batch: BatchRow, message: string): Promise<void> {
  */
 async function rewindPick(
   batch: BatchRow,
-  input: { reason: string; other: Workflow; otherColumn: string }
+  input: { reason: string; runnable: Array<{ workflow: Workflow; columns: Record<string, string> }> }
 ): Promise<void> {
   if (!batch.workflow_pick_ts) return fail(batch, input.reason);
 
@@ -315,6 +394,43 @@ export async function handleScraperEvent(event: ScraperEvent): Promise<boolean> 
     if (handled) return true;
   }
 
+  // ‼️ A NEW TOP-LEVEL COMMAND, AND RETURNING true SWALLOWS THE MESSAGE FROM THE GENERAL
+  // ASSISTANT. So the anchor has to be unambiguous against ordinary chat: looksLikeMapsCommand only
+  // fires on a message starting with "pull maps", and anything that starts that way and is then
+  // malformed gets the grammar back rather than a guess. Returning false here instead would send
+  // "pull maps ..." to the chat assistant, which would answer it conversationally and buy nothing.
+  // ‼️ HELP COMES FROM THE LANE, NOT THE ASSISTANT. Asked "workflows" on 2026-09-27 the general
+  // assistant answered "I don't have a pull maps or lead scrape workflow", which was honest and
+  // wrong: it cannot see this channel's features. A command surface has to describe itself.
+  if (/^\s*(help|workflows?|commands?|\?)\s*$/i.test(unwrapCodeText(event.text))) {
+    await slack.postMessage(event.channel, laneHelp());
+    return true;
+  }
+
+  // A plain-English ask becomes the same estimate card, which is what makes guessing safe: it
+  // shows back everything it inferred and buys nothing until somebody reacts.
+  {
+    const natural = parseNaturalPull(event.text);
+    if (natural) {
+      if (!natural.ok) {
+        await slack.postMessage(event.channel, [":no_entry: " + natural.reason, "", MAPS_GRAMMAR].join("\n"));
+        return true;
+      }
+      await beginMapsPull(event, natural.command);
+      return true;
+    }
+  }
+
+  if (looksLikeMapsCommand(event.text)) {
+    const parsed = parseMapsCommand(event.text);
+    if (!parsed.ok) {
+      await slack.postMessage(event.channel, [":no_entry: " + parsed.reason, "", MAPS_GRAMMAR].join("\n"));
+      return true;
+    }
+    await beginMapsPull(event, parsed.command);
+    return true;
+  }
+
   if (/^\s*status\s*$/i.test(event.text)) {
     await reportStatus(event.channel);
     return true;
@@ -329,19 +445,30 @@ async function reportStatus(channel: string): Promise<void> {
     await slack.postMessage(channel, "No batch has run in this channel yet. Drop a CSV here.");
     return;
   }
-  const pending = await countPending(batch.id);
-  const clean = await countByVerdict(batch.id, "clean");
-  const junk = await countByVerdict(batch.id, "junk");
-  const lines = [
+  const header =
     "*" + (batch.file_name ?? "last batch") + "*, status `" + batch.status + "`" +
-      (batch.workflow ? ", workflow `" + batch.workflow + "`" : ""),
-    "```",
-    "rows      " + batch.total_rows,
-    "clean     " + clean,
-    "junk      " + junk,
-    "pending   " + pending,
-    "```",
-  ];
+    (batch.workflow ? ", workflow `" + batch.workflow + "`" : "");
+
+  // ‼️ A LISTPREP BATCH OWNS NO `scraper_rows`, so the three counts below are all zero for it and
+  // `status` would report a finished 900-lead run as having done nothing. Its numbers live on the
+  // pipeline run instead.
+  let lines: string[];
+  if (batch.workflow === "listprep" && batch.list_run_id) {
+    lines = [header, "```", ...funnelLines(await funnelFor(batch.list_run_id)), "```"];
+  } else {
+    const pending = await countPending(batch.id);
+    const clean = await countByVerdict(batch.id, "clean");
+    const junk = await countByVerdict(batch.id, "junk");
+    lines = [
+      header,
+      "```",
+      "rows      " + batch.total_rows,
+      "clean     " + clean,
+      "junk      " + junk,
+      "pending   " + pending,
+      "```",
+    ];
+  }
   if (batch.mv_status) lines.push("MillionVerifier: `" + batch.mv_status + "`");
   if (Number(batch.score_cost_usd ?? 0) > 0) {
     lines.push("DataForSEO spend: $" + Number(batch.score_cost_usd).toFixed(4));
@@ -494,6 +621,8 @@ async function postWorkflowPicker(batch: BatchRow, headers: string[]): Promise<v
       companyColumn: resolveCompanyColumn(headers),
       cityColumn: resolveCityColumn(headers),
       websiteColumn: resolveWebsiteColumn(headers),
+      headers,
+      vertical: resolveVertical(batch.batch_label),
       duplicateCount: batch.dedupe_dupe_count,
       newCount: batch.dedupe_new_count,
     })
@@ -580,6 +709,40 @@ async function handleThreadedCsv(event: ScraperEvent, file: SlackFile): Promise<
  * The email column is resolved HERE rather than at the drop, which is the whole point of the
  * picker: a company list must be able to reach 2️⃣ without dying on this check first.
  */
+/**
+ * Hand a parsed file to the workflow that was picked. THE ONLY PLACE THAT DISPATCHES ON WORKFLOW.
+ *
+ * ‼️ EXHAUSTIVE `switch`, WITH A `never` DEFAULT, AND BOTH HALVES EARN THEIR KEEP. The three call
+ * sites used to each write `if (workflow === "filter") … else beginScoreWorkflow(…)`, so a fourth
+ * arm would silently run the scoring workflow and BUY A SERP PER ROW. Routing every caller through
+ * one function makes adding an arm a compile error in exactly one place instead of a billing
+ * surprise in three.
+ */
+async function beginWorkflow(
+  workflow: Workflow,
+  batch: BatchRow,
+  parsed: ReturnType<typeof parseCsv>
+): Promise<void> {
+  switch (workflow) {
+    case "filter":
+      return beginFilterWorkflow(batch, parsed);
+    case "score":
+      return beginScoreWorkflow(batch, parsed);
+    case "listprep":
+      return beginListPrepWorkflow(batch, parsed);
+    case "mapspull":
+      // ‼️ REACHING HERE IS A BUG, NOT A CASE TO HANDLE. This function's whole signature is "here is
+      // a parsed CSV, run an arm on it", and a Maps pull has no CSV. It is started by
+      // `beginMapsPull` from a typed command. Throwing names the mistake instead of quietly running
+      // a paid arm against whatever file happened to be in the thread.
+      throw new Error("mapspull is not started from a dropped file");
+    default: {
+      const _never: never = workflow;
+      throw new Error("unhandled workflow: " + String(_never));
+    }
+  }
+}
+
 async function beginFilterWorkflow(batch: BatchRow, parsed: ReturnType<typeof parseCsv>): Promise<void> {
   const verdict = columnVerdict("filter", parsed.headers);
   if (verdict.kind !== "ok") {
@@ -592,11 +755,12 @@ async function beginFilterWorkflow(batch: BatchRow, parsed: ReturnType<typeof pa
     // genuinely terminal. `columnVerdict` makes the split, so the rewind can never be offered on a
     // pick that would bounce off the same refusal. See its comment for why that is the bound.
     if (verdict.kind === "terminal") {
-      return fail(batch, reason + " There is no company column either, so :two: cannot run on it.");
+      return fail(batch, reason + " No other workflow can run on it either: :two: needs a company " +
+        "column and :three: needs a company column and a website column.");
     }
-    return rewindPick(batch, { reason, other: verdict.other, otherColumn: verdict.otherColumn });
+    return rewindPick(batch, { reason, runnable: verdict.runnable });
   }
-  const emailColumn = verdict.column;
+  const emailColumn = verdict.columns.email;
 
   const knownEmails = await knownProspectEmails();
   // The drop's verdicts, carried in by index. `already_in_crm` still runs underneath: that one asks
@@ -638,11 +802,12 @@ async function beginScoreWorkflow(batch: BatchRow, parsed: ReturnType<typeof par
     // Symmetric with beginFilterWorkflow, and the symmetry is the point: exactly one refusal in
     // each workflow is a WRONG PICK rather than a broken file, and it is the required-column one.
     if (verdict.kind === "terminal") {
-      return fail(batch, reason + " There is no email column either, so :one: cannot run on it.");
+      return fail(batch, reason + " There is no email column either, so :one: cannot run on it, " +
+        "and :three: needs this same company column.");
     }
-    return rewindPick(batch, { reason, other: verdict.other, otherColumn: verdict.otherColumn });
+    return rewindPick(batch, { reason, runnable: verdict.runnable });
   }
-  const companyColumn = verdict.column;
+  const companyColumn = verdict.columns.company;
 
   const cityColumn = resolveCityColumn(parsed.headers);
   const websiteColumn = resolveWebsiteColumn(parsed.headers);
@@ -778,10 +943,17 @@ export async function advanceBatch(batch: BatchRow, deadline = Date.now() + MX_B
       // `parsing` forever with a picker nobody can react to twice, and NOTHING would ever say so.
       // Re-driving is safe: both inserters upsert with ignoreDuplicates on (batch_id, row_index).
       if (!batch.workflow) return;
+      // ‼️ A FILELESS BATCH MUST NEVER REACH reloadCsv, WHICH THROWS, AND WHOSE CATCH IS TERMINAL.
+      // A Maps pull is born at `awaiting_pull_approval` and never passes through `parsing`, so
+      // arriving here means something moved it by hand. Refused by name rather than dying as an
+      // uncaught throw that reads like a Slack outage.
+      if (!batch.slack_file_id) {
+        await fail(batch, "this batch has no dropped file to re-read, so `parsing` cannot mean anything for it.");
+        return;
+      }
       const parsed = await reloadCsv(batch);
-      if (batch.workflow === "filter") await beginFilterWorkflow(batch, parsed);
-      else await beginScoreWorkflow(batch, parsed);
-      // Both entries drive the rest of the machine themselves, so this call is done.
+      await beginWorkflow(batch.workflow, batch, parsed);
+      // Every entry drives the rest of the machine itself, so this call is done.
       return;
     }
 
@@ -818,12 +990,1193 @@ export async function advanceBatch(batch: BatchRow, deadline = Date.now() + MX_B
       batch = (await getBatch(batch.id)) ?? batch;
     }
 
+    // --- Workflow C -------------------------------------------------------------------------
+    //
+    // Placed BEFORE the shared `verifying` arm, and each one returns rather than falling through,
+    // because C shares three statuses with the other workflows and owns no `scraper_rows`.
+
+    if (batch.status === "awaiting_pull_approval") {
+      // ‼️ THIS ARM POSTS A GUARDED CARD AND RETURNS. It never advances, and nothing is bought until
+      // somebody reacts. That is what makes `awaiting_pull_approval` safe to list in
+      // ACTIVE_STATUSES: the cron may poll it forever and the only effect is re-reading one row.
+      await postPullEstimate(batch);
+      return;
+    }
+
+    if (batch.status === "pulling") {
+      const done = await sweepPull(batch);
+      if (!done) return;
+      batch = (await getBatch(batch.id)) ?? batch;
+    }
+
+    if (batch.status === "qualifying") {
+      const done = await sweepQualify(batch, deadline);
+      if (!done) return;
+      batch = (await getBatch(batch.id)) ?? batch;
+    }
+
+    if (batch.status === "qualified") {
+      // ‼️ THIS ARM POSTS A GUARDED CARD AND RETURNS. It never advances. That is what makes
+      // `qualified` safe to list in ACTIVE_STATUSES: the cron may poll it forever and the only
+      // effect is re-reading one row.
+      await postDropReview(batch);
+      return;
+    }
+
+    if (batch.status === "enriching") {
+      const done = await sweepEnrich(batch, deadline);
+      if (!done) return;
+      batch = (await getBatch(batch.id)) ?? batch;
+    }
+
+    if (batch.status === "catchall_recheck") {
+      const done = await sweepCatchall(batch, deadline);
+      if (!done) return;
+      batch = (await getBatch(batch.id)) ?? batch;
+    }
+
+    if (batch.status === "suppressing") {
+      const done = await sweepSuppression(batch, deadline);
+      if (!done) return;
+      await publishSendable(batch);
+      return;
+    }
+
     if (batch.status === "verifying") {
+      // ‼️ BRANCH BEFORE READING A ROW. A listprep batch reaching `pollVerification` would pass its
+      // `mv_file_id` guard, write MV verdicts into `scraper_rows` where it has NONE, match nothing,
+      // post a summary with no CSV attached, and report itself done. Not an error anywhere: a
+      // silent truncation of the whole run, which is the exact failure store.ts's header opens with.
+      if (batch.workflow === "listprep") {
+        await pollListPrepVerification(batch);
+        return;
+      }
       await pollVerification(batch);
     }
   } catch (e) {
     await fail(batch, (e as Error).message);
   }
+}
+
+// ================================================================================================
+// Workflow C: qualify before you enrich, and suppress against our own source of truth.
+//
+// ‼️ EVERY SWEEP BELOW TAKES THE SHARED DEADLINE AND PARKS RATHER THAN OVERRUNNING. The tick's
+// budget is shared across every active batch, and a Vercel function is killed at 300s with no
+// chance to write. Returning false leaves the worklist exactly as the database has it, so the next
+// tick resumes without re-doing or re-buying anything. That is the same contract sweepMx and
+// sweepScoring already keep.
+// ================================================================================================
+
+/**
+ * 3️⃣ Build a send list.
+ *
+ * Opens the pipeline run and moves to `pulling`. Everything after this is the stage machine.
+ */
+async function beginListPrepWorkflow(
+  batch: BatchRow,
+  parsed: ReturnType<typeof parseCsv>
+): Promise<void> {
+  const verdict = columnVerdict("listprep", parsed.headers);
+  if (verdict.kind !== "ok") {
+    const reason =
+      "That file is missing " + verdict.missing.join(" and ") + ", so :three: cannot build a send " +
+      "list from it. A send list needs a business name to judge and a website to crawl for an " +
+      "address. Headers found: " +
+      parsed.headers.map((h) => "`" + h + "`").join(", ");
+    if (verdict.kind === "terminal") {
+      return fail(batch, reason + " No other workflow can run on it either.");
+    }
+    return rewindPick(batch, { reason, runnable: verdict.runnable });
+  }
+
+  // Guarded: a re-driven `parsing` arm must not open a second run. `list_run_id` is the guard, and
+  // it is the column BATCH_COLUMNS has to carry or this check is always true. See store.ts.
+  if (batch.list_run_id) {
+    await updateBatch(batch.id, { status: "pulling" });
+    const fresh = await getBatch(batch.id);
+    if (fresh) await advanceBatch(fresh);
+    return;
+  }
+
+  // The vertical is resolved ONCE, here, and written to the run. Every later stage reads it back
+  // rather than re-deriving it: the alias table is editable, and a run whose rows were pulled under
+  // one vertical and qualified under another is not something the drop-review card could explain.
+  // Same contract as icp_text, which is copied onto the run for exactly this reason.
+  const vertical = resolveVertical(batch.batch_label);
+  const icp = icpFor(vertical.slug);
+  if (!icp) {
+    return fail(
+      batch,
+      "there is no buyer profile for the vertical `" +
+        vertical.slug +
+        "`, so nothing can be judged. Known verticals: " +
+        knownVerticals().map((v) => "`" + v + "`").join(", ") +
+        ". Add one in `src/lib/scraper/icp.ts`."
+    );
+  }
+
+  const started = await startRun({
+    label: batch.file_name,
+    source: "csv",
+    queries: batch.batch_label ? [batch.batch_label] : [],
+    icp,
+    vertical: vertical.slug,
+    slackChannelId: batch.slack_channel_id,
+    slackThreadTs: batch.slack_thread_ts,
+  });
+  if (!started.ok) return fail(batch, started.error);
+
+  await bindRunToBatch(started.runId, batch.id);
+  await updateBatch(batch.id, {
+    status: "pulling",
+    workflow: "listprep",
+    list_run_id: started.runId,
+    total_rows: parsed.rows.length,
+    headers: parsed.headers,
+  });
+
+  await say(
+    batch,
+    [
+      ":three: *Building a send list* from " +
+        (parsed.rows.length - skipIndexesOf(batch).size) +
+        " new rows.",
+      "",
+      vertical.matched
+        ? "Vertical: `" + vertical.slug + "`, from the caption on the drop."
+        : ":warning: Vertical: `" +
+          vertical.slug +
+          "` (the default). Nothing in the caption named one, so if this list is not " +
+          vertical.slug +
+          " then every row below is about to be judged against the wrong profile. Known " +
+          "verticals: " +
+          knownVerticals().map((v) => "`" + v + "`").join(", ") +
+          ". Say one in the caption when you drop the file.",
+      "",
+      "Judging every one against this profile before anything is crawled or verified:",
+      "```",
+      icp,
+      "```",
+      "_Edit it in `src/lib/scraper/icp.ts`. The text above is stored on this run, so a later " +
+        "edit changes the next run and never rewrites this one._",
+    ].join("\n")
+  );
+
+  const fresh = await getBatch(batch.id);
+  if (fresh) await advanceBatch(fresh);
+}
+
+// 4 the Maps front door
+//
+// IT IS A DOOR, NOT A SECOND ENGINE. Everything from `qualifying` onward reads `raw_leads` and
+// `sendable_leads` and never touches a CSV, so the 3 stages serve this arm unchanged. The only thing
+// this door adds is a way for rows to ARRIVE. Building a second qualify/enrich/verify path is the
+// mistake this shape exists to prevent.
+
+/** How long a pull may sit waiting for its webhook before the batch is failed. */
+const PULL_TIMEOUT_MS = 6 * 60 * 60 * 1000;
+
+/** The new door's own switch. Deliberately NOT MAPS_PULL_ENABLED, which guards a different lane. */
+function mapsPullEnabled(): boolean {
+  return process.env.LISTPREP_MAPS_ENABLED === "1";
+}
+
+/**
+ * Where Outscraper delivers. The run id rides in the query string so a replay finds its own row.
+ *
+ * Derived from OUTSCRAPER_WEBHOOK_URL when its own var is unset, the same way pull-medspa and
+ * pull-trt derive theirs. That is worth the three lines: the deployment already has the base URL, so
+ * turning this door on is one new env var (LISTPREP_MAPS_ENABLED) rather than two, and one fewer
+ * thing to get wrong is one fewer pull that dies six hours later holding a batch open.
+ */
+function pullWebhookUrl(runId: string): string | null {
+  const base =
+    (process.env.LISTPREP_MAPS_WEBHOOK_URL ?? "").trim() ||
+    (process.env.OUTSCRAPER_WEBHOOK_URL ?? "").trim().replace(/\/outscraper(-[a-z]+)?$/, "/outscraper-listprep");
+  if (!base) return null;
+  const token = (process.env.OUTSCRAPER_WEBHOOK_SECRET ?? "").trim();
+  const sep = base.includes("?") ? "&" : "?";
+  return base + sep + "run=" + encodeURIComponent(runId) + (token ? "&token=" + encodeURIComponent(token) : "");
+}
+
+/**
+ * A typed `pull maps` command: open a run and a fileless batch, then ask before spending.
+ *
+ * NOTHING IS BOUGHT HERE. The batch lands on `awaiting_pull_approval` and an estimate card is the
+ * only thing posted. Outscraper is called by `releaseMapsPull`, from the check mark, which is the
+ * posture MillionVerifier already has in this lane: nothing that spends money is automatic, at any
+ * size.
+ */
+async function beginMapsPull(event: ScraperEvent, command: MapsCommand): Promise<void> {
+  const icp = icpFor(command.vertical);
+  if (!icp) {
+    await slack.postMessage(
+      event.channel,
+      "There is no buyer profile for `" + command.vertical + "` any more, so a pull could not be judged."
+    );
+    return;
+  }
+
+  // fileId NULL, AND THE DATABASE WAS ALWAYS FINE WITH IT. slack_file_id is nullable and createBatch
+  // already took `string | null`; it was lane.ts that could not produce one, because every path into
+  // createBatch came from a dropped file.
+  const batch = await createBatch({
+    channel: event.channel,
+    threadTs: event.threadTs ?? event.messageTs,
+    fileId: null,
+    fileName: null,
+    status: "awaiting_pull_approval",
+    batchLabel: event.text.trim(),
+    scoreQueryTemplate: null,
+  });
+  await updateBatch(batch.id, { workflow: "mapspull" });
+
+  const started = await startRun({
+    label: command.searchQuery,
+    // ‼️ THE SOURCE COMES FROM THE COMMAND, NOT A LITERAL. This was hardcoded "outscraper" before a
+    // second source existed, and it survived the source dispatch being added: a DataForSEO pull
+    // recorded itself as an Outscraper one. That is the exact column the attribution this build exists
+    // for reads, so "which vendor produced the leads that converted" would have answered wrongly and
+    // confidently. raw_leads.source was right the whole time, which is what made it invisible.
+    source: command.source,
+    queries: [command.searchQuery],
+    icp,
+    vertical: command.vertical,
+    slackChannelId: batch.slack_channel_id,
+    slackThreadTs: batch.slack_thread_ts,
+  });
+  if (!started.ok) {
+    await fail(batch, started.error);
+    return;
+  }
+  await bindRunToBatch(started.runId, batch.id);
+  await updateBatch(batch.id, { list_run_id: started.runId });
+
+  const fresh = (await getBatch(batch.id)) ?? batch;
+  await postPullEstimate(fresh, command);
+}
+
+/**
+ * The spend card, guarded so the cron may re-enter forever and change nothing.
+ *
+ * Structurally identical to postDropReview: guarded on its own *_ts, posts once, advances never.
+ * That is what makes `awaiting_pull_approval` safe to list in ACTIVE_STATUSES.
+ */
+async function postPullEstimate(batch: BatchRow, command?: MapsCommand): Promise<void> {
+  const runId = batch.list_run_id;
+  if (!runId) return;
+  const run = await getRun(runId);
+  if (!run) return;
+  if (run.pull_approval_ts) return; // Already asked. This is the guard.
+
+  let parsed = command ?? null;
+  if (!parsed) {
+    const reparsed = parseMapsCommand(batch.batch_label ?? "");
+    if (reparsed.ok) parsed = reparsed.command;
+  }
+  if (!parsed) {
+    await fail(batch, "I cannot re-read the pull command off this batch, so I will not guess what to buy.");
+    return;
+  }
+
+  const ts = await say(
+    batch,
+    [
+      ":four: *Pull local businesses*",
+      "  Source: `" + parsed.source + "`" +
+        (parsed.source === "dataforseo" ? "  (about $" + (0.012 + parsed.limit * 0.00036).toFixed(3) + " for this pull)" : ""),
+      "  Vertical: `" + parsed.vertical + "`",
+      parsed.source === "dataforseo"
+        ? "  Where: `" + parsed.locationName + "`\n  Categories: `" + parsed.categories.join("`, `") + "`"
+        : "  Search: `" + parsed.searchQuery + "`",
+      "  Limit: *" + parsed.limit + "* records",
+      "",
+      // ‼️ THE RECORDS ARE THE CHEAP HALF AND THE CARD SAYS SO. Qualification is a Claude sweep over
+      // every row this returns, so the limit is a decision about model spend, not about record price.
+      "Both vendors bill per record, so nothing is bought until you react. Every row returned then " +
+        "goes through the qualification sweep, which is the part that actually costs money.",
+      ":white_check_mark: to pull. The results go into :three:, the same engine a dropped CSV uses.",
+    ].join("\n")
+  );
+  if (ts) await updateRun(runId, { pull_approval_ts: ts });
+}
+
+/**
+ * The check mark on the estimate card. THIS is the function that spends money.
+ *
+ * THE WEBHOOK URL CARRIES THE RUN ID, so a callback finds its own run without a lookup table and a
+ * replay lands on the same row. pull_request_id is stored so a pull that never comes back can be
+ * named in its failure message rather than guessed at.
+ */
+async function releaseMapsPull(batch: BatchRow): Promise<void> {
+  const runId = batch.list_run_id;
+  if (!runId) return fail(batch, "this pull has no run to attach results to");
+  const run = await getRun(runId);
+  if (!run) return fail(batch, "the run row for this pull has gone");
+
+  // THE SECOND GUARD, AND IT IS NOT THE STATUS CHECK IN THE REACTION HANDLER. Two check marks
+  // arriving in the same tick both see `awaiting_pull_approval`; only one of them may submit.
+  if (run.spend_approved_at) return;
+
+  const reparsed = parseMapsCommand(batch.batch_label ?? "");
+  if (!reparsed.ok) return fail(batch, "I cannot re-read the pull command: " + reparsed.reason);
+  const command = reparsed.command;
+
+  // ‼️ EXHAUSTIVE, WITH A `never`, for the third time in this file and for the same reason as the
+  // other two: a source that fell through would run the WRONG vendor's path, and one of them submits
+  // to a webhook the other never registered.
+  switch (command.source) {
+    case "dataforseo":
+      return pullFromDataForSeo(batch, runId, command);
+    case "outscraper":
+      break;
+    default: {
+      const _never: never = command.source;
+      throw new Error("unhandled pull source: " + String(_never));
+    }
+  }
+
+  // Outscraper only from here down: submit, then wait for the callback.
+  //
+  // ‼️ IT REFUSES LOUDLY AND WRITES THE REASON DOWN. The two paused med-spa routes answer
+  // {ok:true, paused:...} and say nothing, which for a NEW door would leave this batch polling for six
+  // hours over an unset env var. The operator is told, and the run carries the reason.
+  if (!mapsPullEnabled()) {
+    await updateRun(runId, { error: "LISTPREP_MAPS_ENABLED is not set to 1" });
+    await say(
+      batch,
+      ":no_entry: *The Outscraper door is switched off*, so nothing was bought. Set " +
+        "`LISTPREP_MAPS_ENABLED=1` to turn it on, or drop `| via outscraper` to use DataForSEO, which " +
+        "is already configured and roughly eight times cheaper. That switch is also NOT " +
+        "`MAPS_PULL_ENABLED`, which still guards the old paused med spa and TRT pulls."
+    );
+    await fail(batch, "the Outscraper door is disabled");
+    return;
+  }
+
+  const webhook = pullWebhookUrl(runId);
+  if (!webhook) {
+    return fail(
+      batch,
+      "neither `LISTPREP_MAPS_WEBHOOK_URL` nor `OUTSCRAPER_WEBHOOK_URL` is set, so Outscraper would " +
+        "have nowhere to deliver and the pull would be bought and lost."
+    );
+  }
+
+  const now = new Date().toISOString();
+  await updateRun(runId, { spend_approved_at: now, spend_approved_by: "slack_reaction" });
+
+  const res = await submitMapsSearch([command.searchQuery], { limit: command.limit, webhook });
+  if (!res.ok || !res.requestId) {
+    // Nothing was bought, so the approval is taken back rather than left to block a retry.
+    await updateRun(runId, { spend_approved_at: null });
+    return fail(batch, "Outscraper refused the request: " + (res.error ?? "no id returned"));
+  }
+
+  await updateRun(runId, { pull_request_id: res.requestId, stage: "pulling", started_at: now });
+  await updateBatch(batch.id, { status: "pulling" });
+  await say(
+    batch,
+    "Submitted to Outscraper (`" + res.requestId + "`). It calls back when the pull finishes, so this " +
+      "thread goes quiet for a few minutes."
+  );
+}
+
+/**
+ * The DataForSEO half of the check mark: fetch, store and mark finished, all in one pass.
+ *
+ * ‼️ SYNCHRONOUS, SO THERE IS NO WEBHOOK AND NOTHING TO LOSE IN TRANSIT. The Outscraper path submits
+ * and waits for a callback, which is why it needs pull_request_id, a six hour timeout and a route that
+ * cannot be allowed to swallow a delivery. None of that applies here: if this function returns, the
+ * rows are in raw_leads, and if it throws, nothing was marked and the reaction can be given again.
+ *
+ * It still writes pull_finished_at, because sweepPullMaps is the one thing that advances the stage and
+ * it reads that marker regardless of which vendor filled the table. One poll, two doors.
+ */
+async function pullFromDataForSeo(batch: BatchRow, runId: string, command: MapsCommand): Promise<void> {
+  if (!dfsPlacesConfigured()) {
+    await updateRun(runId, { error: "DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD are not set" });
+    await say(
+      batch,
+      ":no_entry: *DataForSEO is not configured*, so nothing was bought. Set `DATAFORSEO_LOGIN` and " +
+        "`DATAFORSEO_PASSWORD`, or run the command again with `| via outscraper`."
+    );
+    await fail(batch, "DataForSEO has no credentials");
+    return;
+  }
+
+  // ‼️ GEOCODE BEFORE SPENDING, AND REFUSE RATHER THAN GUESS. The listings endpoint ignores a location
+  // NAME and answers globally, so a pull with no coordinate does not fail, it quietly buys med spas in
+  // Doncaster and Shenzhen and charges for them. The coordinate is the filter; without one there is
+  // nothing to buy.
+  const place = await geocodeMetro(command.locationName);
+  if (!place) {
+    await fail(
+      batch,
+      "I could not find `" + command.metro + "` on the map, so I will not guess a coordinate and buy " +
+        "the wrong city. Try it as `City ST`, for example `Dallas TX`."
+    );
+    return;
+  }
+
+  const now = new Date().toISOString();
+  await updateRun(runId, { spend_approved_at: now, spend_approved_by: "slack_reaction", started_at: now });
+  await updateBatch(batch.id, { status: "pulling" });
+
+  const found = await searchListings({
+    categories: command.categories,
+    locationCoordinate: place.lat + "," + place.lon + "," + command.radiusKm,
+    limit: command.limit,
+  });
+  if (!found.ok) {
+    await updateRun(runId, { spend_approved_at: null });
+    await fail(batch, found.error ?? "DataForSEO refused the query");
+    return;
+  }
+
+  const rows = found.items
+    .map((item) =>
+      fromDataForSeo(item, {
+        runId,
+        sourceQuery: command.query,
+        sourceMetro: command.metro,
+        verticalSlug: command.vertical,
+      })
+    )
+    .filter((r): r is NonNullable<typeof r> => r !== null);
+
+  const stored = await storeRawLeads(rows);
+
+  // pull_finished_at is set even on an empty result, for the reason sweepPullMaps states: an empty
+  // metro is a real answer, and a row count can never be the marker.
+  await updateRun(runId, {
+    pull_finished_at: new Date().toISOString(),
+    raw_count: stored.inserted,
+    cost_usd: found.costUsd,
+    error: stored.error ?? null,
+  });
+
+  await say(
+    batch,
+    [
+      "Pulled *" + stored.inserted + "* businesses from DataForSEO for $" + found.costUsd.toFixed(4) + ".",
+      "  `" + place.label + "` within " + command.radiusKm + "km has *" + found.totalCount +
+        "* matching these categories in total, so raise `limit` to go deeper or `radius` to go wider.",
+      stored.skipped ? "  " + stored.skipped + " were already in this run and were not stored twice." : "",
+    ].filter(Boolean).join("\n")
+  );
+
+  const fresh = await getBatch(batch.id);
+  if (fresh) await advanceBatch(fresh);
+}
+
+/**
+ * Stage 1 for a Maps pull: wait for the webhook, then hand over to `qualifying`.
+ *
+ * THE MARKER IS pull_finished_at, NEVER raw_count. A metro with no results is a REAL ANSWER, and
+ * polling on a row count would leave that batch inside ACTIVE_STATUSES forever, with the cron
+ * re-reading it every five minutes and nothing to say.
+ *
+ * AND IT HAS A TIMEOUT, because a webhook that never arrives is the other way to poll forever. The
+ * thing being trusted here is Outscraper's delivery, and that is not ours.
+ */
+async function sweepPullMaps(batch: BatchRow): Promise<boolean> {
+  const runId = batch.list_run_id;
+  if (!runId) {
+    await fail(batch, "this pull has no run");
+    return false;
+  }
+  const run = await getRun(runId);
+  if (!run) {
+    await fail(batch, "the run row for this pull has gone");
+    return false;
+  }
+  if (run.error) {
+    await fail(batch, run.error);
+    return false;
+  }
+
+  if (!run.pull_finished_at) {
+    const startedAt = run.started_at ? Date.parse(run.started_at) : Date.now();
+    if (Number.isFinite(startedAt) && Date.now() - startedAt > PULL_TIMEOUT_MS) {
+      await fail(
+        batch,
+        "Outscraper never delivered request `" + (run.pull_request_id ?? "unknown") + "`, and it has been " +
+          Math.round((Date.now() - startedAt) / 3600000) + " hours. Nothing was qualified and nothing " +
+          "further was spent. Re-run the command to try again."
+      );
+      return false;
+    }
+    return false; // Still waiting. The cron asks again on the next tick.
+  }
+
+  const funnel = await funnelFor(runId);
+  if (!funnel.raw) {
+    await say(
+      batch,
+      ":mag: *That pull came back empty.* Outscraper found nothing for `" + (run.label ?? "that search") +
+        "`, so nothing was qualified and nothing more will be spent. A different search term or metro is " +
+        "the thing to change."
+    );
+    await updateRun(runId, { stage: "done", finished_at: new Date().toISOString() });
+    await updateBatch(batch.id, { status: "done" });
+    return false;
+  }
+
+  await say(
+    batch,
+    "Pulled *" + funnel.raw + "* businesses. Qualifying them against the `" +
+      (run.vertical_slug ?? DEFAULT_VERTICAL) + "` profile next."
+  );
+  await updateRun(runId, { stage: "qualifying", raw_count: funnel.raw });
+  await updateBatch(batch.id, { status: "qualifying", total_rows: funnel.raw });
+  return true;
+}
+
+/**
+ * Stage 1, whichever door the rows came through.
+ *
+ * ‼️ AN EXHAUSTIVE SWITCH WITH A `never` DEFAULT, FOR THE REASON beginWorkflow STATES. This is the
+ * second place in the lane that dispatches on the arm, and a fall-through here would be the same
+ * class of bug as the four `else -> score` ones: a Maps batch running the CSV path would call
+ * reloadCsv, throw on a null slack_file_id, and fail() terminally.
+ *
+ * ‼️ AND IT BRANCHES ON THE WORKFLOW, NEVER ON `slack_file_id === null`. Inferring intent from the
+ * absence of a value is exactly the bug family this file's comments are about: a CSV batch whose
+ * file id failed to store would silently become a Maps pull.
+ */
+async function sweepPull(batch: BatchRow): Promise<boolean> {
+  switch (batch.workflow) {
+    case "mapspull":
+      return sweepPullMaps(batch);
+    case "listprep":
+      return sweepPullCsv(batch);
+    case "filter":
+    case "score":
+    case null:
+      // `pulling` belongs to workflow C and to 4️⃣. Anything else here is a batch that was moved into
+      // a status its arm does not own, which is a bug worth naming rather than guessing past.
+      await fail(batch, "a `" + String(batch.workflow) + "` batch reached the pull stage, which it does not own.");
+      return false;
+    default: {
+      const _never: never = batch.workflow;
+      throw new Error("unhandled workflow at the pull stage: " + String(_never));
+    }
+  }
+}
+
+/** Stage 1 for a dropped file: the CSV into `raw_leads`. Synchronous, so it finishes in one tick. */
+async function sweepPullCsv(batch: BatchRow): Promise<boolean> {
+  if (!batch.list_run_id) {
+    await fail(batch, "the pipeline run is missing, so there is nothing to pull into.");
+    return false;
+  }
+
+  const parsed = await reloadCsv(batch);
+  const cols = dedupeColumns(parsed.headers);
+  if (!cols.company || !cols.website) {
+    await fail(batch, "the company or website column vanished between the pick and the pull.");
+    return false;
+  }
+
+  // Read the vertical back off the run rather than re-resolving it from the caption. beginListPrep
+  // already decided, and this arm can be re-driven on a later tick.
+  const verticalSlug = (await getRun(batch.list_run_id))?.vertical_slug || DEFAULT_VERTICAL;
+
+  const headers = parsed.headers;
+  const pick = (names: string[]): string | null =>
+    headers.find((h) => names.includes(h.trim().toLowerCase())) ?? null;
+
+  const csvCols: CsvColumns = {
+    company: cols.company,
+    website: cols.website,
+    city: cols.city,
+    state: resolveStateColumn(headers),
+    phone: cols.phone,
+    email: cols.email,
+    // Maps-shaped extras. Absent is normal and costs verdict quality, not correctness: qualify.ts
+    // feeds category and review count to the model, so a file without them is judged on less.
+    rating: pick(["rating", "stars", "average rating"]),
+    reviews: pick(["reviews", "review count", "reviews count", "number of reviews", "user ratings total"]),
+    categories: pick(["categories", "category", "type", "types", "subtypes", "primary type"]),
+    placeId: pick(["place_id", "place id", "google_id", "google id", "cid"]),
+  };
+
+  // ‼️ THE DROP'S DUPLICATES NEVER ENTER raw_leads. Same reasoning as beginScoreWorkflow's Riga
+  // comment: a row that is not in the table is never qualified, never crawled, and never has a
+  // MillionVerifier credit spent on it. Filtering here is cheaper than filtering at every stage.
+  const skip = skipIndexesOf(batch);
+  const inputs: RawLeadInput[] = [];
+  parsed.rows.forEach((row, i) => {
+    if (skip.has(i)) return;
+    const mapped = fromCsv(row, {
+      runId: batch.list_run_id as string,
+      rowIndex: i,
+      cols: csvCols,
+      sourceQuery: batch.batch_label,
+      verticalSlug,
+    });
+    if (mapped) inputs.push(mapped);
+  });
+
+  const stored = await storeRawLeads(inputs);
+  if (stored.error) {
+    await fail(batch, stored.error);
+    return false;
+  }
+
+  const nameless = parsed.rows.length - skip.size - inputs.length;
+  await updateRun(batch.list_run_id, { stage: "qualifying", raw_count: inputs.length });
+  await updateBatch(batch.id, { status: "qualifying" });
+
+  await say(
+    batch,
+    ":inbox_tray: " + stored.inserted + " leads in, qualifying against the profile now." +
+      (nameless > 0 ? "  _" + nameless + " had no business name and could not be stored._" : "")
+  );
+  return true;
+}
+
+/** Stage 2: keep or drop, in chunks, writing each chunk before the next is asked for. */
+async function sweepQualify(batch: BatchRow, deadline: number): Promise<boolean> {
+  const runId = batch.list_run_id;
+  if (!runId) return false;
+
+  // The free rule first, exactly as filter.ts runs its string checks before the DNS lookup.
+  await dropWebsiteless(runId);
+
+  while (Date.now() < deadline) {
+    const chunk = await pendingQualify(runId, QUALIFY_CHUNK);
+    if (!chunk.length) break;
+
+    // ‼️ NO FALLBACK PROFILE. This used to fall back to the med spa ICP when icp_text was somehow
+    // missing, which would judge a dentist list against the wrong buyer and spend a model call per
+    // row doing it, with drop reasons that read like a bad list rather than a bad lookup. startRun
+    // writes icp_text on every run, so a null here means something is wrong that guessing hides.
+    const icp = (await getRun(runId))?.icp_text;
+    if (!icp) {
+      await fail(batch, "this run has no buyer profile on file, so nothing can be judged.");
+      return false;
+    }
+    let verdicts = await qualifyChunk(chunk, icp);
+
+    // ‼️ ONE RETRY, THEN THE ROW IS PARKED AS UNJUDGED. A model timeout is usually transient, so
+    // re-asking once inside the same tick is worth it. Re-asking FOREVER is not: without the
+    // second write below, a chunk the model deterministically chokes on comes back every five
+    // minutes and the batch never leaves `qualifying`.
+    const unjudged = verdicts.filter((v) => v.keep === null).map((v) => v.id);
+    if (unjudged.length) {
+      const retry = await qualifyChunk(chunk.filter((c) => unjudged.includes(c.id)), icp);
+      const byId = new Map(retry.map((v) => [v.id, v]));
+      verdicts = verdicts.map((v) => (v.keep === null && byId.get(v.id) ? byId.get(v.id)! : v));
+    }
+    // Anything still unjudged gets a reason written WITHOUT a keep, which is the middle state that
+    // takes it off the worklist while keeping it out of the drop counts. See listprep.ts.
+    verdicts = verdicts.map((v) =>
+      v.keep === null && !v.reason ? { ...v, reason: "the model did not return a verdict twice" } : v
+    );
+
+    await writeVerdicts(verdicts, QUALIFY_MODEL);
+  }
+
+  const left = await pendingQualify(runId, 1);
+  if (left.length) return false; // Budget ran out. Same worklist next tick, nothing re-asked.
+
+  const tally = await qualifyTally(runId);
+  await updateRun(runId, { stage: "qualified", qualified_count: tally.kept });
+  await updateBatch(batch.id, { status: "qualified" });
+  return true;
+}
+
+/** The human checkpoint. Guarded on `drop_review_ts`, posts once, advances never. */
+async function postDropReview(batch: BatchRow): Promise<void> {
+  const runId = batch.list_run_id;
+  if (!runId) return;
+  const run = await getRun(runId);
+  if (!run || run.drop_review_ts) return;
+
+  const tally = await qualifyTally(runId);
+  const reasons = await dropReasons(runId);
+  const groups = groupDrops(
+    reasons.map((r) => ({ id: r.name, keep: false, reason: r.reason, businessName: r.name }))
+  );
+
+  const dropped = await droppedRows(runId);
+  if (dropped.length) {
+    await uploadCsv(
+      batch,
+      "dropped.csv",
+      toCsv(["business_name", "website", "city", "state", "qualify_reason"], dropped)
+    );
+  }
+
+  const ts = await say(
+    batch,
+    dropReviewLines({
+      raw: tally.raw,
+      kept: tally.kept,
+      unjudged: tally.unjudged,
+      groups,
+    }).join("\n")
+  );
+  if (ts) await updateRun(runId, { drop_review_ts: ts });
+}
+
+/** Stage 4: the owner's name, then the address. Both free. */
+async function sweepEnrich(batch: BatchRow, deadline: number): Promise<boolean> {
+  const runId = batch.list_run_id;
+  if (!runId) return false;
+
+  while (Date.now() < deadline) {
+    const batchOf = await pendingEnrich(runId, 25);
+    if (!batchOf.length) break;
+
+    for (const lead of batchOf) {
+      if (Date.now() >= deadline) break;
+
+      // ‼️ ONE PASS OVER THE SITE, ANSWERING BOTH QUESTIONS. This used to be two: scrapeOwnerName
+      // walked seven paths, then the site-scrape rung walked seven more, five of them the same URLs,
+      // with no HTTP cache between them. At a 6000 ms timeout that is 84 seconds for one dead site,
+      // and the deadline below is checked per LEAD rather than per page, so three dead sites in a
+      // row ate a whole 240 second tick and the batch made no progress.
+      //
+      // ‼️ THE NAME STILL COMES BEFORE THE ADDRESS, AND STILL IS NOT A WATERFALL RUNG. `ownerName`
+      // is an INPUT the later rungs search on (a permutation rung cannot permute without it), it
+      // decides whether a same-domain address ranks as the owner or below info@, and a site that
+      // yields a name but no address must still store the name. A Provider that returns null on
+      // "no email" cannot carry any of that.
+      let ownerName = lead.ownerName;
+      let siteEmail: { email: string; source: string | null } | null | undefined;
+      if (lead.website) {
+        try {
+          const pass = await crawlSite(lead.website, { deadline, ownerName });
+          if (!ownerName && pass.ownerName) {
+            ownerName = pass.ownerName;
+            await setOwnerName(lead.id, ownerName);
+          }
+          // ‼️ A MISS IS RECORDED AS null, NOT LEFT undefined. Leaving it undefined tells the rung
+          // "nobody has crawled this", and it fetches the whole site again.
+          siteEmail = pass.email ? { email: pass.email, source: pass.source } : null;
+        } catch {
+          // A site that refuses a crawl is not a failed lead, and it is not a crawled one either:
+          // leaving siteEmail undefined lets the rung try, which is the old behaviour.
+        }
+      }
+
+      // Who runs this domain's mail decides which rungs are worth asking. One cached DNS lookup per
+      // domain, and the free pre-filter before the upload reads the same cache entry.
+      const mailProvider = lead.domain ? await mailProviderOf(lead.domain) : null;
+
+      const fileEmail = sourceEmailOf(lead.raw, batch.headers ?? []);
+      const result = await enrichOne({
+        id: lead.id,
+        businessName: lead.businessName,
+        domain: lead.domain ?? "",
+        ownerName,
+        city: lead.city,
+        state: lead.state,
+        website: lead.website,
+        fileEmail,
+        siteEmail,
+        mailProvider,
+      });
+      await recordEnrichment({
+        runId,
+        rawLeadId: lead.id,
+        hit: result.hit,
+        attempts: result.attempts,
+      });
+    }
+  }
+
+  const left = await pendingEnrich(runId, 1);
+  if (left.length) return false;
+
+  const funnel = await funnelFor(runId);
+  await updateRun(runId, { stage: "verifying", enriched_count: funnel.enriched });
+
+  const unverified = await unverifiedEmails(runId);
+  if (!unverified.length) {
+    // Nothing to verify means nothing to send, and saying so beats an empty MillionVerifier card.
+    await say(
+      batch,
+      ":warning: *No addresses were found* on any of the " + funnel.qualified +
+        " kept sites, so there is nothing to verify. `dropped.csv` above shows what was cut; if " +
+        "that looks wrong the ICP is the thing to change."
+    );
+    await updateRun(runId, { stage: "done", finished_at: new Date().toISOString() });
+    await updateBatch(batch.id, { status: "done" });
+    return false;
+  }
+
+  await updateBatch(batch.id, { status: "verifying", mv_awaiting_approval: true });
+  await say(
+    batch,
+    [
+      ...enrichLines(summarize(await enrichAttemptsFor(runId))),
+      "",
+      ":white_check_mark: to verify those " + unverified.length +
+        " addresses with MillionVerifier. Nothing is uploaded until you react.",
+    ].join("\n")
+  );
+  return false;
+}
+
+/** What the free pre-filter threw away, for the card. Counts, never rates. */
+interface FreeRejectTally {
+  bad_syntax: number;
+  disposable: number;
+  no_mx: number;
+  duplicate_in_run: number;
+}
+
+/**
+ * Throw away everything answerable for $0 before the upload.
+ *
+ * ‼️ MILLIONVERIFIER BILLS PER ADDRESS UPLOADED, NOT PER ADDRESS THAT COMES BACK OK. So a syntax
+ * failure, a disposable domain, a domain with no MX and a duplicate within this run are all things
+ * we currently PAY to be told. 23% of the med spa batch has no MX at all.
+ *
+ * ‼️ AN UNDETERMINED MX VERDICT IS UPLOADED, NOT REJECTED. `resolveMxBatch` returns null for
+ * "could not tell", and mx.ts exists to keep that separate from false. Collapsing the two here is
+ * worse than it looks: after this filter a false no-MX does not merely mislabel a row, it DROPS a
+ * deliverable address before anything can correct it.
+ *
+ * Order is cheapest first: no lookup, then a set membership, then a map lookup, then DNS.
+ */
+async function freeRejects(
+  rows: readonly { id: string; email: string }[],
+  deadline: number
+): Promise<{ rejects: { id: string; kind: FreeRejectKind }[]; tally: FreeRejectTally }> {
+  const tally: FreeRejectTally = { bad_syntax: 0, disposable: 0, no_mx: 0, duplicate_in_run: 0 };
+  const rejects: { id: string; kind: FreeRejectKind }[] = [];
+  const keep: { id: string; email: string; domain: string }[] = [];
+  const seen = new Set<string>();
+
+  for (const row of rows) {
+    const email = row.email.trim().toLowerCase();
+    const domain = emailDomain(email);
+    if (!domain) {
+      rejects.push({ id: row.id, kind: "bad_syntax" });
+      tally.bad_syntax++;
+      continue;
+    }
+    if (isDisposableDomain(domain)) {
+      rejects.push({ id: row.id, kind: "disposable" });
+      tally.disposable++;
+      continue;
+    }
+    // ‼️ THE GRAIN OF sendable_leads IS ONE ROW PER RAW LEAD, so two locations of one chain sharing
+    // info@chain.com are two rows and MillionVerifier bills for both.
+    if (seen.has(email)) {
+      rejects.push({ id: row.id, kind: "duplicate_in_run" });
+      tally.duplicate_in_run++;
+      continue;
+    }
+    seen.add(email);
+    keep.push({ id: row.id, email, domain });
+  }
+
+  // One batched DNS pass over the distinct domains, so a chain's ten locations cost one lookup.
+  const domains = new Set(keep.map((k) => k.domain));
+  const mx = await resolveMxBatch(domains, { deadline });
+  for (const k of keep) {
+    if (mx.verdicts.get(k.domain) === false) {
+      rejects.push({ id: k.id, kind: "no_mx" });
+      tally.no_mx++;
+    }
+  }
+
+  return { rejects, tally };
+}
+
+/** The line that makes the saving visible instead of asserted. */
+function freeRejectLine(tally: FreeRejectTally, uploading: number): string[] {
+  const total = tally.bad_syntax + tally.disposable + tally.no_mx + tally.duplicate_in_run;
+  if (!total) return ["All " + uploading + " addresses cleared the free checks, so none were dropped."];
+  const parts: string[] = [];
+  if (tally.no_mx) parts.push(tally.no_mx + " no MX");
+  if (tally.bad_syntax) parts.push(tally.bad_syntax + " bad syntax");
+  if (tally.disposable) parts.push(tally.disposable + " disposable");
+  if (tally.duplicate_in_run) parts.push(tally.duplicate_in_run + " duplicate in this run");
+  return [
+    ":moneybag: *" + total + " rejected for free* before anything was bought (" + parts.join(", ") + ").",
+    "  Uploading " + uploading + ". MillionVerifier bills per address uploaded, so those " + total +
+      " were the ones worth not sending.",
+  ];
+}
+
+/** Stage 5: MillionVerifier, reusing workflow 1's gate and client. */
+async function pollListPrepVerification(batch: BatchRow): Promise<void> {
+  const runId = batch.list_run_id;
+  if (!runId) return;
+  if (batch.mv_awaiting_approval) return; // Still behind the ✅.
+
+  if (!batch.mv_file_id) {
+    const rows = await unverifiedEmails(runId);
+    if (!rows.length) {
+      await updateBatch(batch.id, { status: "catchall_recheck" });
+      return;
+    }
+
+    // ‼️ THE FREE FILTER RUNS BEFORE THE UPLOAD, AND ITS VERDICTS ARE WRITTEN DOWN. Filtering in
+    // memory alone would save nothing: unverifiedEmails selects on `verified_at is null`, so an
+    // unwritten reject comes back on the next tick and gets uploaded then.
+    const { rejects, tally } = await freeRejects(rows, Date.now() + MX_BUDGET_MS);
+    if (rejects.length) await applyFreeRejects(runId, rejects);
+
+    const rejected = new Set(rejects.map((r) => r.id));
+    const toUpload = rows.filter((r) => !rejected.has(r.id));
+
+    if (!toUpload.length) {
+      await say(
+        batch,
+        [
+          ...freeRejectLine(tally, 0),
+          "",
+          ":warning: *Nothing is left to verify*, so nothing was uploaded and nothing was spent.",
+        ].join("\n")
+      );
+      await updateBatch(batch.id, { status: "catchall_recheck" });
+      const afterAll = await getBatch(batch.id);
+      if (afterAll) await advanceBatch(afterAll);
+      return;
+    }
+
+    if (rejects.length) await say(batch, freeRejectLine(tally, toUpload.length).join("\n"));
+
+    const info = await uploadEmails(
+      toUpload.map((r) => r.email),
+      (batch.file_name ?? "sendable") + ".txt"
+    );
+    await updateBatch(batch.id, { mv_file_id: info.file_id, mv_status: info.status });
+    return;
+  }
+
+  const info = await fileInfo(batch.mv_file_id);
+  await updateBatch(batch.id, { mv_status: info.status, mv_counts: info as unknown as Record<string, unknown> });
+  if (info.status !== "finished") return;
+
+  const text = await downloadResult(batch.mv_file_id, "all");
+  const verdicts = parseResultLines(text);
+  await applyVerification(runId, verdicts);
+
+  const funnel = await funnelFor(runId);
+  await updateRun(runId, { stage: "catchall_recheck", verified_count: funnel.verified });
+  await updateBatch(batch.id, { status: "catchall_recheck" });
+
+  const fresh = await getBatch(batch.id);
+  if (fresh) await advanceBatch(fresh);
+}
+
+/**
+ * Stage 5b: a second look at the catch-alls, free.
+ *
+ * ‼️ AN MX LOOKUP CANNOT PROVE AN ADDRESS EXISTS, AND THIS DOES NOT CLAIM IT DOES. A domain with no
+ * mail exchanger cannot receive mail, so `invalid` is sound. A domain WITH one is still catch-all
+ * and stays catch-all: the recheck resolved nothing, which is a finding rather than a failure, and
+ * the tri-state is what lets it be recorded as one. MillionVerifier's paid single-address verify is
+ * the upgrade if catch-all volume ever justifies it.
+ */
+async function sweepCatchall(batch: BatchRow, deadline: number): Promise<boolean> {
+  const runId = batch.list_run_id;
+  if (!runId) return false;
+
+  const rows = await pendingCatchall(runId);
+  for (const row of rows) {
+    if (Date.now() >= deadline) return false;
+    const domain = row.email.split("@")[1] ?? "";
+    if (!domain) {
+      await recordCatchallRecheck(row.id, "invalid");
+      continue;
+    }
+    const verdict = await hasMx(domain);
+    // null is "we could not tell", which is NOT evidence of anything. Stamped anyway so the row
+    // leaves the worklist; it stays catch_all, which is the honest answer.
+    //
+    // ‼️ THE `false` BRANCH IS NOW ALL BUT UNREACHABLE, AND IT IS KEPT ON PURPOSE. The free
+    // pre-filter in pollListPrepVerification drops no-MX domains before the upload, so a row
+    // arriving here as catch_all has already had an MX answer. It can still fire on a domain whose
+    // MX was UNDETERMINED at filter time (uploaded deliberately, see freeRejects) and resolves to a
+    // definite no by the time this runs. Kept rather than deleted, and noted rather than left to
+    // read as dead code the next person removes.
+    await recordCatchallRecheck(row.id, verdict === false ? "invalid" : "catch_all");
+  }
+
+  await updateRun(runId, { stage: "suppressing" });
+  await updateBatch(batch.id, { status: "suppressing" });
+  return true;
+}
+
+/** Stage 6: has anyone here been contacted before, on any channel. */
+async function sweepSuppression(batch: BatchRow, deadline: number): Promise<boolean> {
+  const runId = batch.list_run_id;
+  if (!runId) return false;
+
+  while (Date.now() < deadline) {
+    const rows = await pendingSuppression(runId, 200);
+    if (!rows.length) break;
+
+    const { hits } = await checkMany(
+      rows.map((r) => ({
+        id: r.id,
+        email: r.email,
+        domain: r.domain,
+        companyName: r.companyName,
+        phone: r.phone,
+      }))
+    );
+    for (const row of rows) {
+      // ‼️ EVERY ROW CHECKED IS STAMPED, INCLUDING THE CLEAN ONES. `suppressed_at` is the worklist
+      // marker; `suppressed_reason` is the verdict. Stamping only the hits would leave the clean
+      // rows indistinguishable from the unchecked ones and the sweep would never finish.
+      await recordSuppression(row.id, hits.get(row.id)?.reason ?? null);
+    }
+  }
+
+  const left = await pendingSuppression(runId, 1);
+  return left.length === 0;
+}
+
+/** The terminal artifact, plus the negative that goes with it. */
+async function publishSendable(batch: BatchRow): Promise<void> {
+  const runId = batch.list_run_id;
+  if (!runId) return;
+
+  const rows = await sendableRows(runId);
+  const held = await heldBackRows(runId);
+  const funnel = await funnelFor(runId);
+
+  if (rows.length) {
+    await uploadCsv(batch, "sendable.csv", toCsv(SENDABLE_HEADERS, rows as unknown as Array<Record<string, string>>));
+  }
+  if (held.length) {
+    await uploadCsv(
+      batch,
+      "held-back.csv",
+      toCsv(
+        ["business_name", "website", "city", "state", "email", "email_status", "suppressed_reason"],
+        held
+      )
+    );
+  }
+
+  // ‼️ THE BOARD IS WRITTEN BEFORE THE BATCH IS CALLED DONE. suppression.ts answers "have we mailed
+  // this person" out of `outreach_prospects`, and until now nothing wrote a row there except a
+  // REPLY, so everyone who ignored us stayed invisible to the next list. Measured on production
+  // 2026-09-19: that table held zero rows while a 136 address campaign had already gone out.
+  const handoff = await recordHandoff(runId, rows, batch.batch_label || batch.file_name);
+
+  await updateRun(runId, {
+    stage: "done",
+    sendable_count: rows.length,
+    finished_at: new Date().toISOString(),
+  });
+  await updateBatch(batch.id, { status: "done" });
+
+  const valid = rows.filter((r) => r.email_status === "valid").length;
+  await say(
+    batch,
+    [
+      rows.length
+        ? ":white_check_mark: *" + rows.length + " sendable leads* in `sendable.csv`. " +
+          valid + " verified valid, " + (rows.length - valid) + " catch-all."
+        : ":warning: *Nothing survived to the send list.* `held-back.csv` and `dropped.csv` above " +
+          "say where they went.",
+      "",
+      ...funnelLines(funnel),
+      ...(rows.length
+        ? [
+            "",
+            handoff.error
+              ? ":rotating_light: *" +
+                handoff.recorded +
+                " of " +
+                rows.length +
+                " recorded as contacted, then it failed:* " +
+                handoff.error +
+                "  The rest are NOT on the board, so a future list will not suppress them and they " +
+                "can be mailed twice. Worth fixing before the next drop."
+              : ":ledger: All " +
+                handoff.recorded +
+                " are now on the outreach board as contacted, so the next list suppresses them." +
+                (handoff.alreadyKnown
+                  ? "  " + handoff.alreadyKnown + " were already there."
+                  : "") +
+                "  *If you do not actually upload this file, say so:* they are suppressed from now " +
+                "on either way.",
+          ]
+        : []),
+      "",
+      "_Upload `sendable.csv` to ReachInbox. Split on `email_status` if you want the catch-alls in " +
+        "their own campaign._",
+    ].join("\n")
+  );
+}
+
+const SENDABLE_HEADERS = [
+  "email", "first_name", "last_name", "company", "owner_name", "website", "domain",
+  "city", "state", "phone", "email_status", "provider", "qualify_reason",
+];
+
+/**
+ * The address the SOURCE already carried, if it had one.
+ *
+ * ‼️ THIS WAS csvEmailOf, AND IT BLINDED THE CHEAPEST RUNG FOR EVERY NON-CSV SOURCE. It resolved an
+ * email COLUMN out of `batch.headers`, which is null when there is no dropped file, so the `file`
+ * rung went dark for a Maps pull and would have gone dark for an Instagram pull too. That matters
+ * most for Instagram, where the business-profile contact button is owner-declared and most leads
+ * have no website at all, so the file rung is the ONLY rung that can answer. `raw_leads.raw` already
+ * holds the whole source record, and OutscraperRecord already declares `email`, so nothing new has
+ * to be stored for this to work.
+ */
+function sourceEmailOf(raw: Record<string, unknown>, headers: string[]): string | null {
+  const fromColumn = headers.length ? resolveEmailColumn(headers) : null;
+  const candidates = fromColumn ? [fromColumn, "email"] : ["email", "email_1", "emails"];
+  for (const key of candidates) {
+    const v = raw[key];
+    if (typeof v === "string" && v.includes("@")) return v.trim().toLowerCase();
+    // Outscraper sometimes hands back a list rather than a scalar.
+    if (Array.isArray(v)) {
+      const first = v.find((x) => typeof x === "string" && x.includes("@"));
+      if (typeof first === "string") return first.trim().toLowerCase();
+    }
+  }
+  return null;
+}
+
+/** The attempt trail for the run, so `summarize` can report per-rung coverage. */
+async function enrichAttemptsFor(runId: string): Promise<EnrichResult[]> {
+  const { data } = await supabaseAdmin
+    .from("raw_leads")
+    .select("id, enrich_attempts")
+    .eq("run_id", runId)
+    .not("enriched_at", "is", null);
+  const { data: hits } = await supabaseAdmin
+    .from("sendable_leads")
+    .select("raw_lead_id, email, first_name, last_name, provider, provider_cost_usd")
+    .eq("run_id", runId);
+  const byRaw = new Map((hits ?? []).map((h) => [String((h as Record<string, unknown>).raw_lead_id), h]));
+
+  return (data ?? []).map((r) => {
+    const row = r as Record<string, unknown>;
+    const hit = byRaw.get(String(row.id)) as Record<string, unknown> | undefined;
+    return {
+      id: String(row.id),
+      hit: hit
+        ? {
+            email: String(hit.email ?? ""),
+            firstName: (hit.first_name as string | null) ?? null,
+            lastName: (hit.last_name as string | null) ?? null,
+            title: null,
+            provider: String(hit.provider ?? ""),
+            costUsd: Number(hit.provider_cost_usd ?? 0),
+          }
+        : null,
+      attempts: (row.enrich_attempts as EnrichAttempt[]) ?? [],
+    };
+  });
 }
 
 /** Returns true when nothing is pending any more and the batch has moved to `filtered`. */
@@ -1647,7 +3000,8 @@ export async function handleScraperReaction(input: {
 
   switch (gate) {
     case "workflow_pick": {
-      if (!keycap || keycap > 2) return false;
+      const picked = PICK[keycap ?? 0];
+      if (!picked) return false;
       // ‼️ STILL GUARDED, BUT IT SAYS SO NOW. A second reaction on the picker must not re-parse
       // and re-insert the whole file. For one release this returned here SILENTLY, and on
       // 2026-09-04 that ate a :two: on a batch workflow 1 had just refused for a missing email
@@ -1655,10 +3009,10 @@ export async function handleScraperReaction(input: {
       // again, and a picker that was dead forever. In this lane the reaction IS the interface, so a
       // swallowed gate reaction is the one failure that cannot be afforded.
       if (batch.workflow) {
-        waitUntil(noteLatePick(batch, keycap === 1 ? "filter" : "score"));
+        waitUntil(noteLatePick(batch, picked));
         return true;
       }
-      waitUntil(runWorkflowPick(batch, keycap === 1 ? "filter" : "score"));
+      waitUntil(runWorkflowPick(batch, picked));
       return true;
     }
 
@@ -1688,7 +3042,34 @@ export async function handleScraperReaction(input: {
       waitUntil(releaseMvUpload(batch));
       return true;
     }
+
+    case "drop_review": {
+      if (!isCheck) return false;
+      // Guarded on the STATUS, not on the reaction: a second ✅ on a review card for a batch
+      // already past `qualified` must not restart the crawl.
+      if (batch.status !== "qualified") return true;
+      waitUntil(releaseEnrichment(batch).catch((e) => fail(batch, (e as Error).message)));
+      return true;
+    }
+
+    case "pull_approval": {
+      if (!isCheck) return false;
+      // ‼️ GUARDED ON THE STATUS, BECAUSE THIS IS THE REACTION THAT BUYS RECORDS FROM OUTSCRAPER. A
+      // second ✅ on the estimate card must not submit the same queries twice, and the status has
+      // already moved to `pulling` by the time the first submit returns.
+      if (batch.status !== "awaiting_pull_approval") return true;
+      waitUntil(releaseMapsPull(batch).catch((e) => fail(batch, (e as Error).message)));
+      return true;
+    }
   }
+}
+
+/** The ✅ on the drop-review card: the kept rows go into the crawl. */
+async function releaseEnrichment(batch: BatchRow): Promise<void> {
+  if (batch.list_run_id) await updateRun(batch.list_run_id, { stage: "enriching" });
+  await updateBatch(batch.id, { status: "enriching" });
+  const fresh = await getBatch(batch.id);
+  if (fresh) await advanceBatch(fresh);
 }
 
 /**
@@ -1729,8 +3110,7 @@ async function runWorkflowPick(batch: BatchRow, workflow: Workflow): Promise<voi
     await updateBatch(batch.id, { workflow, status: "parsing" });
     const parsed = await reloadCsv(batch);
     const fresh = (await getBatch(batch.id)) ?? batch;
-    if (workflow === "filter") await beginFilterWorkflow(fresh, parsed);
-    else await beginScoreWorkflow(fresh, parsed);
+    await beginWorkflow(workflow, fresh, parsed);
   } catch (e) {
     await fail(batch, (e as Error).message);
   }

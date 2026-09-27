@@ -18,6 +18,38 @@ import { companiesConflict, type CompanyIdentity } from "@/lib/company-identity"
 import { logActivity } from "@/lib/crm";
 import { normalizeLeadPhone } from "@/lib/phone";
 
+/**
+ * The page a lead came from, for `sourcePage`.
+ *
+ * ‼️ THE REFERER FIRST, THE KNOWN PATH SECOND, AND THE DIFFERENCE MATTERS. Every funnel route knows
+ * which funnel it is, and that is what they were putting in a thread reply as "Funnel: /scan". What none
+ * of them knew is the HOST, and our funnels are served from at least two: srtagency.com rewrites to
+ * mission.srtagency.com for /scan, /onboardingfree and the rest, and a Webflow page can post to the same
+ * route from a third. "The lead came from /scan" and "the lead came from srtagency.com/scan" are
+ * different facts once there is more than one front door, and attribution is the whole point of this.
+ *
+ * ‼️ AND IT IS BROWSER REPORTED, SO IT IS DATA AND NEVER A DECISION. A Referer can be absent,
+ * stripped by a privacy setting, or forged. Nothing branches on it: it is printed on a card for a person
+ * to read. The fallback is what the route already knew about itself, so a stripped header degrades to the
+ * old behaviour rather than to nothing.
+ */
+export function pageFromRequest(req: { headers: { get(name: string): string | null } }, fallbackPath: string): string {
+  const referer = (req.headers.get("referer") || "").trim();
+  if (referer) {
+    try {
+      const u = new URL(referer);
+      // Query strings are attribution of their own (utm_*, fbclid) and are already captured in their
+      // own columns. On a card they would push the useful half of the line off the screen.
+      const page = `${u.host}${u.pathname}`.replace(/\/+$/, "");
+      if (u.host) return page.slice(0, 300);
+    } catch {
+      // A malformed Referer is no worse than a missing one. Fall through.
+    }
+  }
+  const path = fallbackPath.startsWith("/") ? fallbackPath : `/${fallbackPath}`;
+  return `srtagency.com${path}`;
+}
+
 export interface IngestLeadInput {
   firstName?: string;
   lastName?: string;
@@ -28,6 +60,22 @@ export interface IngestLeadInput {
   city?: string;
   /** Internal origin tag written to contacts.source, e.g. "audit" | "pdf" | "facebook_lead". */
   source: string;
+  /**
+   * WHICH page they came from. Host and path, no scheme, e.g. "srtagency.com/scan".
+   *
+   * ‼️ IT IS ON THE CARD, WHICH IS THE ONLY REASON THIS FIELD EXISTS. `headline` and `detailLines`
+   * already carried a "Page:" line for the callers that knew one, and both land in the THREAD REPLY.
+   * That is the "1 reply" under a lead card that nobody opens, so nothing in #hot-leads was
+   * attributable without a click. This is written to contacts.source_page and rendered beside Source.
+   *
+   * ‼️ AND IT IS NOT `source`. That is an origin TAG ("concierge", "pdf", "facebook_lead") and is
+   * what the channel and every query group by; this is the URL a human recognises. A lane that put a
+   * path in `source` would break all of them.
+   *
+   * Omitted where there genuinely is no page: a Meta lead ad never touches the site and an email reply
+   * has no page at all. An empty value is left off the card rather than printed blank.
+   */
+  sourcePage?: string;
   /** Meta's leadgen_id. The only join key back to the ad for Conversions API
    *  for Leads — a lead ad never touches the site, so there is no fbc/fbclid. */
   fbLeadId?: string;
@@ -126,6 +174,9 @@ export async function ingestLead(input: IngestLeadInput): Promise<IngestLeadResu
   const utmMedium = input.utmMedium?.trim() || "";
   const utmCampaign = input.utmCampaign?.trim() || "";
   const utmContent = input.utmContent?.trim() || "";
+  // Host and path as the caller reported them, trimmed and bounded. The value is browser-reported on
+  // every caller that has one, so it is data about the visit and never trusted as anything else.
+  const sourcePage = input.sourcePage?.trim().slice(0, 300) || "";
   const leadName = [firstName, lastName].filter(Boolean).join(" ") || businessName || email || phone;
 
   // ── Supabase contact upsert ──
@@ -148,6 +199,10 @@ export async function ingestLead(input: IngestLeadInput): Promise<IngestLeadResu
           ...(utmMedium ? { utm_medium: utmMedium } : {}),
           ...(utmCampaign ? { utm_campaign: utmCampaign } : {}),
           ...(utmContent ? { utm_content: utmContent } : {}),
+          // ‼️ CONDITIONAL, LIKE EVERY utm ABOVE IT AND FOR THE SAME REASON. A second touch must
+          // never blank the page a first touch recorded: somebody who arrived through /scan and later
+          // replies to an email is still a /scan lead, and the reply knows no page to overwrite it with.
+          ...(sourcePage ? { source_page: sourcePage } : {}),
           source: input.source,
           updated_at: new Date().toISOString(),
         })
@@ -168,6 +223,7 @@ export async function ingestLead(input: IngestLeadInput): Promise<IngestLeadResu
           utm_medium: utmMedium || null,
           utm_campaign: utmCampaign || null,
           utm_content: utmContent || null,
+          source_page: sourcePage || null,
           source: input.source,
         })
         .select("id")
@@ -225,10 +281,15 @@ export async function ingestLead(input: IngestLeadInput): Promise<IngestLeadResu
       threadTs = refreshed?.slack_thread_ts ?? null;
       const channel = refreshed?.slack_channel || process.env.SLACK_HOT_LEADS_CHANNEL || "";
       if (channel && threadTs && input.headline) {
+        // ‼️ AND NOT IN THE REPLY EITHER. This one carries the "Website:" and "Page:" lines, so it
+        // is the post most likely to unfurl: a lead who gave a website got a preview of that website in
+        // our own channel, fetched by Slack, under a card about a person.
         await slack.postThreadReply(
           channel,
           threadTs,
-          [input.headline, ...detailLines].join("\n")
+          [input.headline, ...detailLines].join("\n"),
+          undefined,
+          { unfurl: false }
         );
       }
     } catch (err) {
@@ -293,7 +354,9 @@ export async function enrichLead(opts: {
   const channel = contact.slack_channel || process.env.SLACK_HOT_LEADS_CHANNEL || "";
   if (channel && contact.slack_thread_ts) {
     await slack
-      .postThreadReply(channel, contact.slack_thread_ts, [opts.headline, ...detailLines].join("\n"))
+      .postThreadReply(channel, contact.slack_thread_ts, [opts.headline, ...detailLines].join("\n"), undefined, {
+        unfurl: false,
+      })
       .catch((err) =>
         console.error("[lead-intake] enrich slack reply failed:", err instanceof Error ? err.message : err)
       );

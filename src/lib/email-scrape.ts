@@ -1,16 +1,29 @@
-// Free, self-hosted email scraper for lead websites (TRT vertical first).
-// Fetches each clinic's public pages (homepage + contact/about/team paths) and
-// extracts published emails: mailto: links, plain-text/JSON-LD addresses, cheap
-// "[at]/[dot]" de-obfuscation, and Cloudflare email-protection decoding. Candidates
-// are junk-filtered and ranked (same-domain role address first, personal webmail
-// allowed as fallback — many single-location clinics run on gmail).
+// Free, self-hosted email scraper for lead websites. Fetches each clinic's public pages (homepage
+// plus contact/about/team paths) and extracts published emails: mailto: links, plain-text and
+// JSON-LD addresses, cheap "[at]/[dot]" de-obfuscation, and Cloudflare email-protection decoding.
+// Candidates are junk-filtered and ranked by `emailTier` below, owner first.
 //
-// No paid enrichment, no API keys — plain fetch + regex, same approach as the
-// open-source extract-emails tools. Shares fetchText/textFromHtml with the
-// med-spa owner scraper. Used by scripts/enrich-trt-emails.ts and
-// /api/cron/enrich-trt-emails.
+// No paid enrichment and no API keys, just fetch plus regex, the same approach as the open-source
+// extract-emails tools. Shares fetchText/textFromHtml with the med-spa owner scraper.
+//
+// ‼️ THE ONLY IMPORTER IS src/lib/scraper/enrich.ts, WHICH LOADS IT LAZILY. The header used to name
+// scripts/enrich-trt-emails.ts and /api/cron/enrich-trt-emails; neither path exists, and
+// `enrichEmails` at the bottom of this file has no callers at all. Corrected 2026-09-25 rather than
+// left to mislead the next reader into thinking a change here has a blast radius it does not have.
 
-import { fetchText, textFromHtml } from "@/lib/medspa-owner-scrape";
+import {
+  NAME_SCORE_CEILING,
+  bestNameScore,
+  collectNames,
+  fetchText,
+  pickOwnerName,
+  textFromHtml,
+  type NameCandidate,
+} from "@/lib/medspa-owner-scrape";
+// The lane's wider role list. Imported rather than re-spelled: the two lists disagree, and
+// emailTier below needs to know about BOTH kinds of role address to rank them apart. rules.ts
+// imports only a type and a data file, so there is no cycle.
+import { ROLE_PATTERN } from "@/lib/scraper/rules";
 
 const CONTACT_PATHS = ["", "/contact", "/contact-us", "/about", "/about-us", "/team", "/staff"];
 
@@ -153,31 +166,148 @@ export function extractEmails(html: string): { email: string; viaMailto: boolean
 }
 
 /**
- * Rank candidates for a site. Tier order:
- *   1. same-domain role address (info@clinic.com)
- *   2. same-domain anything (drsmith@clinic.com)
- *   3. personal webmail (clinic runs on gmail)
- *   4. other-domain role address seen via mailto: (parent med group)
- *   Rejected: other-domain non-mailto (web-agency footer credits).
- * Tie-break within a tier: occurrence count desc, mailto first, shortest.
+ * Which band a candidate falls in. Lower wins. Exported so the early exit in `scrapeEmail` and the
+ * offline probe read the SAME rule this function states.
+ *
+ * ‼️ THE TIERS ARE SIX BANDS, NOT A SWAP OF THE OLD TWO, AND THE REASON IS THAT THE TWO ROLE LISTS
+ * DISAGREE. `ROLE_LOCAL_PARTS` here holds 15 front-office words; `ROLE_PATTERN` in scraper/rules.ts
+ * holds 22 and they are not nested. `careers`, `hr`, `billing`, `marketing`, `webmaster` and
+ * `noreply` are roles to rules.ts and NOT to this file. So simply preferring "same-domain non-role"
+ * over "same-domain role" would have promoted `careers@clinic.com` and `hr@clinic.com` above
+ * `info@clinic.com`: every clinic with a careers page would get its hiring inbox mailed. Splitting
+ * role into a FRONT office band above info@'s peers and a BACK office band below them is what makes
+ * owner-first safe.
+ *
+ * ‼️ AND THE ABSENCE OF A ROLE WORD IS NOT EVIDENCE OF A PERSON. Measured on 60 live med spa sites
+ * 2026-09-25: the same-domain non-role addresses were overwhelmingly business inboxes
+ * (`highpointmedspa@`, `zenfuldaymedspa@`), and exactly one, `marina@mmaestheticss.com`, was a
+ * person. So tier 1 needs a POSITIVE signal, and without one a candidate lands at tier 3, BELOW
+ * info@, which is the behaviour this file already had and the safe default to keep.
+ */
+export const EMAIL_TIER = {
+  /** A named human on the clinic's own domain. Confirmed by ownerName, or shaped like first.last. */
+  OWNER: 1,
+  /** A monitored front desk inbox on their domain. A single-location clinic reads this one itself. */
+  FRONT_OFFICE: 2,
+  /** Same domain, nothing to say about it. Usually the business's own name as a mailbox. */
+  SAME_DOMAIN: 3,
+  /** Same domain, but hiring / billing / bounces. Deliberately below the front desk. */
+  BACK_OFFICE: 4,
+  /** The clinic runs on gmail. */
+  WEBMAIL: 5,
+  /** A parent med group's role address, seen via mailto only. */
+  OTHER_DOMAIN_ROLE: 6,
+  /** Web-agency footer credits and the like. */
+  REJECT: 99,
+} as const;
+
+/** Front desk, per THIS file's list. The addresses a clinic owner actually reads. */
+function isFrontOfficeRole(local: string): boolean {
+  return ROLE_LOCAL_PARTS.has(local);
+}
+
+/** A role account by the lane's wider definition, which includes hiring, billing and bounces. */
+function isAnyRole(local: string): boolean {
+  return ROLE_LOCAL_PARTS.has(local) || ROLE_PATTERN.test(local + "@");
+}
+
+/**
+ * The mailbox is the business wearing a mailbox, not a person: `zenfuldaymedspa@zenfulday.com`.
+ * Compared both ways because the brand is sometimes the longer string and sometimes the shorter.
+ */
+function looksLikeBusinessInbox(local: string, siteDomain: string): boolean {
+  const brand = siteDomain.split(".")[0].replace(/[^a-z0-9]/g, "");
+  const l = local.replace(/[^a-z0-9]/g, "");
+  if (!brand || !l) return false;
+  return l.includes(brand) || brand.includes(l);
+}
+
+/** Tokens of a person's name, lowercased, letters only. */
+function nameTokens(ownerName: string): string[] {
+  return ownerName
+    .toLowerCase()
+    .split(/\s+/)
+    .map((t) => t.replace(/[^a-z]/g, ""))
+    .filter((t) => t.length > 1);
+}
+
+/**
+ * Is this local part a named human?
+ *
+ * A confirmed owner name is the strong answer and the only one worth tier 1 on its own. Failing
+ * that, `first.last` shaped local parts are person-shaped by convention. Anything else is not
+ * claimed to be a person.
+ */
+export function looksLikePerson(local: string, siteDomain: string, ownerName?: string | null): boolean {
+  if (looksLikeBusinessInbox(local, siteDomain)) return false;
+  if (isAnyRole(local)) return false;
+
+  const flat = local.replace(/[^a-z]/g, "");
+  if (ownerName) {
+    const tokens = nameTokens(ownerName);
+    const first = tokens[0];
+    const last = tokens.length > 1 ? tokens[tokens.length - 1] : "";
+    if (first && flat === first) return true;
+    if (last && flat === last) return true;
+    if (first && last) {
+      if (flat === first + last || flat === last + first) return true;
+      if (flat === first[0] + last || flat === first + last[0]) return true;
+      if (flat.includes(first) && flat.includes(last)) return true;
+    }
+  }
+
+  // first.last / first_last / first-last, both halves alphabetic and long enough to be names.
+  const parts = local.split(/[._-]/).filter(Boolean);
+  if (parts.length === 2 && parts.every((p) => /^[a-z]{2,}$/.test(p))) return true;
+
+  return false;
+}
+
+export function emailTier(
+  c: EmailCandidate,
+  siteDomain: string,
+  ownerName?: string | null
+): number {
+  const domain = domainOf(c.email);
+  const local = localPartOf(c.email);
+  if (registrableDomain(domain) === siteDomain) {
+    if (looksLikePerson(local, siteDomain, ownerName)) return EMAIL_TIER.OWNER;
+    if (isFrontOfficeRole(local)) return EMAIL_TIER.FRONT_OFFICE;
+    if (isAnyRole(local)) return EMAIL_TIER.BACK_OFFICE;
+    return EMAIL_TIER.SAME_DOMAIN;
+  }
+  if (WEBMAIL_DOMAINS.has(domain)) return EMAIL_TIER.WEBMAIL;
+  if (isAnyRole(local) && c.viaMailto) return EMAIL_TIER.OTHER_DOMAIN_ROLE;
+  return EMAIL_TIER.REJECT;
+}
+
+/** The best tier anything in the pool reached. REJECT when the pool holds nothing usable. */
+export function bestEmailTier(
+  candidates: Iterable<EmailCandidate>,
+  siteDomain: string,
+  ownerName?: string | null
+): number {
+  let best: number = EMAIL_TIER.REJECT;
+  for (const c of candidates) {
+    const tier = emailTier(c, siteDomain, ownerName);
+    if (tier < best) best = tier;
+  }
+  return best;
+}
+
+/**
+ * Rank candidates for a site and return the best, or null.
+ *
+ * Tie-break within a band: occurrence count desc, mailto first, shortest.
  */
 export function pickBestEmail(
   candidates: EmailCandidate[],
-  siteDomain: string
+  siteDomain: string,
+  ownerName?: string | null
 ): { email: string; source: string } | null {
-  const tierOf = (c: EmailCandidate): number => {
-    const domain = domainOf(c.email);
-    const sameDomain = registrableDomain(domain) === siteDomain;
-    const isRole = ROLE_LOCAL_PARTS.has(localPartOf(c.email));
-    if (sameDomain) return isRole ? 1 : 2;
-    if (WEBMAIL_DOMAINS.has(domain)) return 3;
-    if (isRole && c.viaMailto) return 4;
-    return 99;
-  };
-
   const ranked = candidates
-    .map((c) => ({ c, tier: tierOf(c) }))
-    .filter((r) => r.tier < 99)
+    .map((c) => ({ c, tier: emailTier(c, siteDomain, ownerName) }))
+    .filter((r) => r.tier < EMAIL_TIER.REJECT)
     .sort((a, b) =>
       a.tier - b.tier ||
       b.c.count - a.c.count ||
@@ -190,10 +320,63 @@ export function pickBestEmail(
   return { email: best.email, source: `scrape:${best.path || "/"}${best.viaMailto ? ":mailto" : ""}` };
 }
 
-/** Crawl one site's contact paths and return the best published email, or null. */
-export async function scrapeEmail(website: string): Promise<{ email: string; source: string } | null> {
-  // Outscraper websites often carry encoded tracking junk ("...%3Futm_source%3D...")
-  // that 404s when fetched verbatim — decode, then drop the query entirely.
+/**
+ * The ordered union of the email paths and the owner-name paths.
+ *
+ * Five of the fourteen URLs the two old passes fetched were identical, with no HTTP cache anywhere,
+ * so a site was downloaded twice to answer two questions about the same bytes.
+ */
+const CRAWL_PATHS = [
+  "", "/contact", "/contact-us", "/about", "/about-us", "/our-team", "/team", "/meet-the-team", "/staff",
+];
+
+export interface SiteCrawl {
+  /** The best owner name found, or the hint passed in if the pages offered nothing better. */
+  ownerName: string | null;
+  email: string | null;
+  source: string | null;
+  /** Pages actually requested, whether or not they answered. */
+  pagesFetched: number;
+  /** Every request failed. Distinguishes "a site with nothing on it" from "a site we cannot read". */
+  blocked: boolean;
+  /** Stopped on the page budget or the deadline rather than because it was finished. */
+  truncated: boolean;
+}
+
+export interface CrawlOptions {
+  /** Stop before fetching another page once Date.now() passes this. */
+  deadline?: number;
+  /** Hard cap on pages for one site. Defaults to every CRAWL_PATHS entry. */
+  maxPages?: number;
+  /** A name the caller already has, from the file or a previous pass. */
+  ownerName?: string | null;
+}
+
+/**
+ * One pass over a site that answers BOTH questions: who owns it, and where to write.
+ *
+ * ‼️ THIS IS A TICK SAFETY FIX BEFORE IT IS AN EFFICIENCY ONE. The two old passes fetched up to 14
+ * URLs at a 6000 ms timeout, so one dead site could burn 84 seconds, and sweepEnrich checks its
+ * deadline per LEAD rather than per page. Three dead sites in a row ate a whole 240 second cron
+ * tick and the batch made no progress. Hence `deadline` and `maxPages`, both honoured BETWEEN pages.
+ *
+ * ‼️ THE NAME AND THE ADDRESS ARE COLLECTED TOGETHER BUT USED SEPARATELY. The name is an INPUT to
+ * the enrichment waterfall (the permutation rung cannot permute without it) and it must be stored
+ * even when the site yields no address at all, so it cannot be folded into a Provider rung that
+ * returns null on "no email found".
+ */
+export async function crawlSite(website: string, opts: CrawlOptions = {}): Promise<SiteCrawl> {
+  const out: SiteCrawl = {
+    ownerName: opts.ownerName ?? null,
+    email: null,
+    source: null,
+    pagesFetched: 0,
+    blocked: false,
+    truncated: false,
+  };
+
+  // Outscraper websites often carry encoded tracking junk ("...%3Futm_source%3D...") that 404s when
+  // fetched verbatim. Decode, then drop the query entirely.
   const raw = website.replace(/%3F/gi, "?").replace(/%26/gi, "&").replace(/%3D/gi, "=");
   const withProto = raw.startsWith("http") ? raw : `https://${raw}`;
   let base: string;
@@ -202,17 +385,26 @@ export async function scrapeEmail(website: string): Promise<{ email: string; sou
   try {
     const url = new URL(withProto);
     origin = url.origin;
-    base = origin + url.pathname; // stored page (e.g. a franchise location) minus query
+    base = origin + url.pathname; // the stored page (a franchise location, say) minus the query
     siteDomain = registrableDomain(url.hostname);
   } catch {
-    return null;
+    return out;
   }
-  if (SKIP_SITE_DOMAINS.some((d) => siteDomain === d)) return null;
+  if (SKIP_SITE_DOMAINS.some((d) => siteDomain === d)) return out;
 
+  const paths = CRAWL_PATHS.slice(0, opts.maxPages ?? CRAWL_PATHS.length);
   const pool = new Map<string, EmailCandidate>();
-  for (const path of CONTACT_PATHS) {
+  const names: NameCandidate[] = [];
+  let reached = 0;
+
+  let finished = false;
+  for (const path of paths) {
+    if (opts.deadline !== undefined && Date.now() >= opts.deadline) break;
+    out.pagesFetched++;
     const html = await fetchText(path ? `${origin}${path}` : base);
     if (!html) continue;
+    reached++;
+
     for (const found of extractEmails(html)) {
       const existing = pool.get(found.email);
       if (existing) {
@@ -222,15 +414,42 @@ export async function scrapeEmail(website: string): Promise<{ email: string; sou
         pool.set(found.email, { ...found, path, count: 1 });
       }
     }
-    // Early-exit only on a tier-1 hit (same-domain role address) — for anything
-    // weaker the /contact page may still hold a better address than the homepage.
-    const hasTier1 = Array.from(pool.values()).some(
-      (c) => registrableDomain(domainOf(c.email)) === siteDomain && ROLE_LOCAL_PARTS.has(localPartOf(c.email))
-    );
-    if (hasTier1) break;
+    names.push(...collectNames(textFromHtml(html), path));
+
+    // ‼️ THE STOP CONDITION IS A CONJUNCTION, AND BOTH HALVES ARE DERIVED. Either question alone
+    // finishing is not a reason to stop asking the other, which is precisely the bug the two
+    // separate passes had: each stopped on its own first answer and neither saw the other's pages.
+    const bestName = pickOwnerName(names) ?? opts.ownerName ?? null;
+    const haveOwnerEmail = bestEmailTier(pool.values(), siteDomain, bestName) === EMAIL_TIER.OWNER;
+    if (haveOwnerEmail && bestNameScore(names) >= NAME_SCORE_CEILING) {
+      finished = true;
+      break;
+    }
   }
 
-  return pickBestEmail(Array.from(pool.values()), siteDomain);
+  // Either a budget cut it short, or it ran out of paths without both answers in hand. Both mean
+  // "there may be more on this site", which is what the caller needs to know.
+  out.truncated = !finished && out.pagesFetched < CRAWL_PATHS.length;
+  out.blocked = reached === 0;
+  out.ownerName = pickOwnerName(names) ?? opts.ownerName ?? null;
+  const picked = pickBestEmail([...pool.values()], siteDomain, out.ownerName);
+  out.email = picked?.email ?? null;
+  out.source = picked?.source ?? null;
+  return out;
+}
+
+/**
+ * Crawl one site's contact paths and return the best published email, or null.
+ *
+ * `ownerName`, when the caller already has one, is what lets `emailTier` promote a named human to
+ * tier 1. Without it a same-domain non-role address stays at tier 3, below info@.
+ */
+export async function scrapeEmail(
+  website: string,
+  ownerName?: string | null
+): Promise<{ email: string; source: string } | null> {
+  const pass = await crawlSite(website, { ownerName });
+  return pass.email ? { email: pass.email, source: pass.source ?? "scrape" } : null;
 }
 
 /**

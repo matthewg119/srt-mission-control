@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 // maps the /aivisibility field vocabulary onto it.
 
 import { NextRequest, NextResponse } from "next/server";
-import { ingestLead } from "@/lib/lead-intake";
+import { ingestLead, pageFromRequest } from "@/lib/lead-intake";
 import { normalizeLeadPhone } from "@/lib/phone";
 import { sendEvent } from "@/lib/meta-capi";
 import { hasMetaAttributionServer } from "@/lib/metaAttribution";
@@ -131,6 +131,7 @@ export async function POST(req: NextRequest) {
       businessName: clinic,
       city,
       source,
+      sourcePage: pageFromRequest(req, `/${source}`),
       speedToLead,
       utmSource,
       utmMedium,

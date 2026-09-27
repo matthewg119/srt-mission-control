@@ -61,6 +61,19 @@ export interface ConciergeEmbedProps {
    */
   magnetKey?: string | null;
   /**
+   * The one sentence this page uses to offer that magnet, from `client_pages.cta_line`.
+   *
+   * ‼️ IT RIDES ON THE TAG RATHER THAN BEING FETCHED, and embed.js's own comment has the reason:
+   * /api/concierge/config is unstable_cached on (slug, category, magnetKey) and is fetched once per
+   * page view from a third party's site. A per-page sentence in that key adds a dimension to the
+   * busiest endpoint in the lane; the same sentence NOT in that key gets one page's words served on
+   * every other page for five minutes. The page rendering the tag already knows it.
+   *
+   * Null means the widget falls back to the lines the config templates from the magnet's title, which
+   * is every page written before client_pages.cta_line existed.
+   */
+  ctaLine?: string | null;
+  /**
    * A signed preview token, which makes a SWITCHED-OFF widget render.
    *
    * ‼️ ONLY /preview/[token] MAY PASS THIS, AND IT IS NOT A WAY TO TURN THE WIDGET ON. `enabled`
@@ -97,6 +110,7 @@ export async function ConciergeEmbed({
   clientId,
   category,
   magnetKey,
+  ctaLine,
   preview,
   mascot,
 }: ConciergeEmbedProps) {
@@ -123,6 +137,7 @@ export async function ConciergeEmbed({
       data-client={client.slug}
       {...(category ? { "data-category": category } : {})}
       {...(magnetKey ? { "data-magnet": magnetKey } : {})}
+      {...(ctaLine ? { "data-cta": ctaLine } : {})}
       {...(token && mascot ? { "data-mascot": mascot } : {})}
     />
   );

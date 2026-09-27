@@ -13,6 +13,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { loadConciergeConfig } from "@/lib/concierge/config";
 import { conciergeAllowed, PREVIEW_TOKEN_PARAM } from "@/lib/concierge/preview-grant";
+import { chipsFor } from "@/lib/concierge/chips";
+import { asksToBook } from "@/lib/concierge/engine";
 import { runConciergeTurn } from "@/lib/concierge/engine";
 import { appendMessage, bumpTurns, loadConciergeSession, loadMessages } from "@/lib/concierge/session";
 import { supabaseAdmin } from "@/lib/db";
@@ -116,12 +118,27 @@ export async function POST(req: NextRequest) {
   await appendMessage(session.id, "assistant", result.reply, ordinal + 1);
   await bumpTurns(session);
 
+  // ‼️ THE BUTTONS ARE BUILT AFTER THE TURN, FROM ROWS, AND NOT FROM THE REPLY.
+  //
+  // Here rather than inside runConciergeTurn for two reasons. It keeps chips.ts importing
+  // engine.ts and not the other way round, so there is no cycle between the two. And it runs
+  // after the executor has already written session.magnetsDelivered back onto the session, so a
+  // magnet handed over in THIS reply is not then offered as a button under it.
+  //
+  // chipsFor takes no reply text. The model cannot name, order or veto one of these.
+  const actions = await chipsFor({
+    config,
+    session,
+    visitorAskedToBook: asksToBook(message),
+  });
+
   return NextResponse.json(
     {
       reply: result.reply,
       attachments: result.attachments,
       evidence: result.evidence,
       degraded: result.degraded,
+      actions,
     },
     { headers: { "cache-control": "no-store" } }
   );

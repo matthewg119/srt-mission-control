@@ -8,14 +8,23 @@
 // for an email address.
 //
 // ‼️ THE ORDER IS THE PRODUCT DECISION AND IT IS NOT ALPHABETICAL OR TECHNICAL.
-// Two taps, then the identity, then the day, then the calendar:
+// The two things we can act on, then the taps, then the rest, then the calendar:
 //
-//   daypart -> timezone -> website -> name -> email -> phone -> day -> Calendly
+//   website -> phone -> daypart -> timezone -> name -> email -> day -> Calendly
 //
-// The two taps cost nothing and commit somebody to booking. The website comes before the name
-// because it is the least personal of the four and because it is the field the whole delivery
-// lane is built from. The day is asked LAST of the conversational steps, immediately before the
-// calendar, so the three options are computed against a timezone we already hold.
+// ‼️ THE WEBSITE AND THE PHONE MOVED TO THE FRONT ON 2026-09-27, AND THAT REVERSES WHAT THIS
+// COMMENT USED TO ARGUE. It said: "The two taps cost nothing and commit somebody to booking. A
+// conversation that opens with mornings or afternoons has already started booking a call by the time
+// it asks for an email address." That is a real effect and it is being traded away deliberately.
+//
+// Matthew's call, and the trade is about what a drop-out leaves behind. Somebody who taps a daypart
+// and a timezone and then abandons has left us two facts we can do nothing with: we cannot audit a
+// timezone or ring a daypart. Somebody who gives a website and a phone and then abandons has left the
+// two fields the entire delivery lane is built from, and a person who can follow up. The commitment
+// argument still holds for the taps; it just no longer outranks having something to act on.
+//
+// The day is still asked LAST of the conversational steps, immediately before the calendar, so the
+// three options are computed against a timezone we already hold.
 //
 // ‼️ THE MODEL IS NOT IN ANY OF THIS. Every step here is matched by a plain function and answered
 // with fixed copy, on turns that never reach Claude, exactly as the scheduling close already was.
@@ -31,6 +40,7 @@
 //      those two fed is no longer signed in this funnel, and the business name is asked as the
 //      first post-booking question instead, where it costs nothing.
 
+import { ASK_PHONE, ASK_WEBSITE } from "@/config/onboarding2";
 import { clean, validEmail } from "@/lib/medspa/validate";
 import { normalizeLeadPhone } from "@/lib/phone";
 import { normalizeTarget } from "@/lib/scan/normalize";
@@ -39,12 +49,12 @@ import type { Onboarding2LeadRow, Onboarding2SigningRow } from "./types";
 
 /** The seven, in order. `day` is last and is handled by the caller, which needs dayOptions(). */
 export type IntakeKey =
+  | "website"
+  | "phone"
   | "daypart"
   | "timezone"
-  | "website"
   | "name"
   | "email"
-  | "phone"
   | "day";
 
 /**
@@ -63,12 +73,35 @@ export type IntakeKey =
  * Both are also promoted onto the lead's own typed columns the moment the lead is created, so
  * this replay only ever runs for the first four turns of a conversation.
  *
- * ‼️ FIRST MATCH WINS, AND THE ORDER OF THE TWO SEARCHES IS WHAT MAKES IT SAFE. The daypart is
- * the first turn that reads as one; the timezone is the first turn AFTER that which reads as a
- * zone. A later free-text answer that happens to contain a zone word ("Eastern Aesthetics" as a
- * business name) cannot win, because the real answer came first and questions one and two are
- * always answered before any of the free-text ones are asked.
+ * ‼️ THE REPLAY MATCHES EXACTLY, AND IT DID NOT HAVE TO UNTIL 2026-09-27. It used to use
+ * readDaypart and readTimezone, which match a word ANYWHERE in a turn, and that was safe for one
+ * reason only: the daypart and the zone were questions one and two, so no free text had been typed
+ * yet. The comment here said so, and said a business name like "Eastern Aesthetics" could not win
+ * "because the real answer came first".
+ *
+ * Moving the website and the phone in front of them inverted exactly that. Both matchers use word
+ * boundaries, so "morningstar.com" is safe, but "am-clinic.com" is not: the hyphen IS a word
+ * boundary, so `am` matches and a visitor typing their own website would have silently answered
+ * the daypart question and skipped it. "eastern-dental.com" does the same to the zone.
+ *
+ * So the replay now accepts a turn only when the WHOLE turn is the answer, which is what a tapped
+ * chip always sends. The loose matchers are still exactly right at the point of PARSING, where the
+ * question has just been asked and "mornings please" should be understood; they are wrong for
+ * guessing which of seven past turns was an answer to a question nobody has been asked yet.
  */
+const REPLAY_DAYPART: Record<string, "morning" | "afternoon"> = {
+  morning: "morning",
+  mornings: "morning",
+  am: "morning",
+  afternoon: "afternoon",
+  afternoons: "afternoon",
+  pm: "afternoon",
+};
+
+/** A turn stripped to the bare word, so "Mornings." and "mornings" are the same answer. */
+function bare(turn: string): string {
+  return turn.trim().toLowerCase().replace(/[.!,?]+$/, "");
+}
 export interface IntakeDraft {
   daypart?: "morning" | "afternoon";
   timezone?: string;
@@ -77,12 +110,14 @@ export interface IntakeDraft {
 export function replayDraft(userTurns: string[]): IntakeDraft {
   const out: IntakeDraft = {};
   for (let i = 0; i < userTurns.length; i++) {
-    const daypart = readDaypart(userTurns[i]);
+    const daypart = REPLAY_DAYPART[bare(userTurns[i])];
     if (!daypart) continue;
     out.daypart = daypart;
     for (let j = i + 1; j < userTurns.length; j++) {
-      const zone = readTimezone(userTurns[j]);
-      if (zone) {
+      // The zone is still read with readTimezone, but only from a turn that is nothing else: its
+      // own exact-match branch answers a bare "Eastern" and the loose one cannot be reached here.
+      const zone = readTimezone(bare(userTurns[j]));
+      if (zone && bare(userTurns[j]).split(/\s+/).length <= 2) {
         out.timezone = zone;
         break;
       }
@@ -112,12 +147,12 @@ export function nextIntakeStep(
 ): IntakeKey | null {
   const draft = replayDraft(userTurns);
 
+  if (!row.website) return "website";
+  if (!row.contact_phone) return "phone";
   if (!(lead?.call_daypart || draft.daypart)) return "daypart";
   if (!(lead?.call_timezone || draft.timezone)) return "timezone";
-  if (!row.website) return "website";
   if (!row.contact_name) return "name";
   if (!row.email) return "email";
-  if (!row.contact_phone) return "phone";
   if (!lead?.call_day) return "day";
   return null;
 }
@@ -137,8 +172,15 @@ export interface StepCopy {
  * dashes; there are none, and _probe-onboarding2-intake.ts asserts it.
  */
 export const INTAKE_COPY: Record<Exclude<IntakeKey, "day" | "daypart" | "timezone">, StepCopy> = {
+  // ‼️ THE FIRST TWO PROMPTS CARRY NO "Perfect" OR "Got it", BECAUSE NOTHING CAME BEFORE THEM.
+  // Every prompt here used to open by acknowledging the previous answer, which reads correctly in the
+  // middle of a conversation and reads like a non sequitur as the opening line of one.
   website: {
-    prompt: "Perfect. What is your website?",
+    prompt: ASK_WEBSITE,
+    options: [],
+  },
+  phone: {
+    prompt: ASK_PHONE,
     options: [],
   },
   name: {
@@ -147,10 +189,6 @@ export const INTAKE_COPY: Record<Exclude<IntakeKey, "day" | "daypart" | "timezon
   },
   email: {
     prompt: "Thanks. What is the best email for you?",
-    options: [],
-  },
-  phone: {
-    prompt: "Last one before we pick a time. Best phone number?",
     options: [],
   },
 };

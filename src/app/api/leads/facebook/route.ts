@@ -303,6 +303,10 @@ async function processLeadgen(value: Record<string, unknown>): Promise<void> {
       // nothing to report against, since a lead ad never sets fbc/fbclid.
       fbLeadId: leadgenId,
       source: "facebook_lead",
+      // ‼️ NO sourcePage ON PURPOSE, AND THIS COMMENT IS THE RECORD OF IT. A Meta lead ad is filled
+      // in INSIDE Facebook and never touches the site, which is the same reason this lane has no fbc and
+      // joins back through leadgen_id instead. The ad, ad set and campaign in detailLines below are its
+      // attribution. Inventing "facebook.com" would put a page on the card that nobody ever visited.
       noteTitle: "Facebook Lead Ad",
       headline: website
         ? `:mag: *AI visibility audit running now* on ${website}. The report lands in this thread in a few minutes.`

@@ -40,6 +40,13 @@ export interface SuppressionInput {
   domain?: string | null;
 }
 
+/**
+ * What a `closed_reason` looks like when the close was THEM asking us to stop, rather than a bounce
+ * or a no. Kept in step with classify-reply.ts's OPT_OUT patterns, which are what write these
+ * strings in the first place via `applyReply`'s `closed_reason: c.summary`.
+ */
+const OPT_OUT_CLOSE = /unsubscrib|opt(ed)? out|remove me|take me off|stop email|do not (contact|email)/i;
+
 /** Most final first. A row matching two reasons is reported by the one that matters more. */
 const PRECEDENCE: SuppressionReason[] = [
   "opted_out",
@@ -123,7 +130,7 @@ export async function checkSuppression(input: SuppressionInput): Promise<Suppres
   if (email || domain) {
     const q = supabaseAdmin
       .from("outreach_prospects")
-      .select("email, website, state, last_touch_at, last_reply_at")
+      .select("email, website, state, closed_reason, last_touch_at, last_reply_at")
       .limit(5);
     const { data, error } = email && domain
       ? await q.or(`email.eq.${email},website.ilike.%${domain}%`)
@@ -136,8 +143,27 @@ export async function checkSuppression(input: SuppressionInput): Promise<Suppres
         if (r.last_reply_at) {
           found.set("replied", `replied on ${String(r.last_reply_at).slice(0, 10)}`);
         }
-        if (String(r.state ?? "").toUpperCase().includes("CLOSED")) {
-          found.set("active_deal", `an open conversation (${String(r.state)})`);
+
+        // ‼️ THIS TEST USED TO READ `state.includes("CLOSED")` AND REPORT IT AS "an open
+        // conversation (CLOSED)", which is backwards on both halves. CLOSED is the one state that
+        // is definitively NOT open, and the four states that ARE open were the ones falling
+        // through. The row was still suppressed, so nothing looked broken, but it was suppressed
+        // under a reason that reads as nonsense on the card, and the obvious "fix" for somebody
+        // reading that card later is to delete the branch, which would un-suppress every opt-out
+        // that reached us by email. The states are a closed set in types.ts, so name them.
+        const state = String(r.state ?? "").toUpperCase();
+        if (state === "CLOSED") {
+          const why = String(r.closed_reason ?? "");
+          if (OPT_OUT_CLOSE.test(why)) {
+            found.set("opted_out", `asked not to be contacted${why ? `: ${why}` : ""}`);
+          } else {
+            // Bounced, or told us no. Either way the conversation ended and re-mailing it is the
+            // thing this file exists to stop. `replied` is set separately above when they actually
+            // wrote back, and it outranks this.
+            found.set("already_contacted", `a conversation that closed${why ? ` (${why})` : ""}`);
+          }
+        } else if (state === "REPLIED_INTERESTED" || state === "ASKED_PRICE_HOT" || state === "OBJECTION") {
+          found.set("active_deal", `an open conversation (${state})`);
         }
         const when = r.last_touch_at ? ` on ${String(r.last_touch_at).slice(0, 10)}` : "";
         found.set(

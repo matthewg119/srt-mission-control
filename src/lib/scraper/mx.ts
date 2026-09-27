@@ -15,9 +15,32 @@
 
 import dns from "dns/promises";
 import { getOrFetch, cacheKeyOf } from "@/lib/data/dataset-cache";
+// The one MX-provider classifier in the repo. Do not write a second.
+import { detectMailProvider } from "@/lib/clients/site-intel";
 
 /** true = has MX, false = definitively does not, null = could not determine, ask again later. */
 export type MxVerdict = boolean | null;
+
+/**
+ * Exchange hostnames for a domain, lowercased, trailing dot stripped, priority order preserved.
+ *
+ * An EMPTY LIST is a definitive "this domain accepts no mail". `null` anywhere this appears is
+ * "could not determine", exactly as before.
+ */
+export type MxExchanges = string[];
+
+/** Node renders the root exchange as "" or "."; both mean RFC 7505 null MX. */
+function isNullMxHosts(hosts: string[]): boolean {
+  if (hosts.length !== 1) return false;
+  const h = hosts[0].trim();
+  return h === "" || h === ".";
+}
+
+function normalizeExchanges(hosts: string[]): MxExchanges {
+  return hosts
+    .map((h) => h.trim().toLowerCase().replace(/\.$/, ""))
+    .filter((h) => h.length > 0);
+}
 
 const DNS_TIMEOUT_MS = 4000; // DNS_TIMEOUT_S = 4 in the Python.
 const DOH_TIMEOUT_MS = 5000;
@@ -25,23 +48,6 @@ const DOH_TIMEOUT_MS = 5000;
 /** Codes that are a real, authoritative "this domain has no mail exchanger". */
 const DEFINITIVE_NO = new Set(["ENOTFOUND", "ENODATA", "NXDOMAIN"]);
 
-/**
- * RFC 7505 "null MX": a single record whose exchange is the root, published to say THIS DOMAIN
- * ACCEPTS NO MAIL, deliberately and in writing.
- *
- * ‼️ COUNTING RECORDS IS NOT ENOUGH, AND example.com IS THE PROOF. The Python asked
- * `len(answers) > 0` and a null MX is one answer, so the strongest possible "do not email us"
- * signal on the internet reads as "has a mail server". Parked domains and holding companies
- * publish these, which is exactly the population an Apollo pull is full of, and every one of them
- * would survive the filter and then be paid for at MillionVerifier.
- *
- * Node renders the root exchange as "" or "."; both are checked.
- */
-function isNullMx(answers: Array<{ exchange?: string }>): boolean {
-  if (answers.length !== 1) return false;
-  const exchange = (answers[0].exchange ?? "").trim();
-  return exchange === "" || exchange === ".";
-}
 
 function errCode(e: unknown): string {
   const code = (e as { code?: unknown } | null)?.code;
@@ -68,12 +74,12 @@ async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise
 
 /**
  * DNS-over-HTTPS against Cloudflare. `fetch` is the one outbound primitive a serverless runtime is
- * guaranteed to have, so this works in environments where UDP/53 does not.
+ * guaranteed to have, so this works where UDP/53 does not.
  *
- * Status 3 is NXDOMAIN. Status 0 with no Answer of type 15 is NODATA. Both are real noes. Anything
- * else, including a non-200, is another failure to ask.
+ * Status 3 is NXDOMAIN. Status 0 with no Answer of type 15 is NODATA. Both are real noes, and both
+ * come back as an empty list. Anything else, including a non-200, is another failure to ask.
  */
-async function mxViaDoh(domain: string): Promise<MxVerdict> {
+async function mxViaDoh(domain: string): Promise<MxExchanges | null> {
   const url = `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=MX`;
   const res = await withTimeout(
     fetch(url, { headers: { accept: "application/dns-json" } }),
@@ -83,17 +89,15 @@ async function mxViaDoh(domain: string): Promise<MxVerdict> {
   if (!res.ok) return null;
 
   const body = (await res.json()) as { Status?: number; Answer?: Array<{ type?: number; data?: string }> };
-  if (body.Status === 3) return false;
+  if (body.Status === 3) return [];
   if (body.Status !== 0) return null;
 
   // DoH returns MX rdata as "<priority> <exchange>", so a null MX arrives as "0 ." here.
   const mx = (body.Answer ?? []).filter((a) => a.type === 15);
-  if (mx.length === 0) return false;
-  if (mx.length === 1) {
-    const exchange = (mx[0].data ?? "").trim().split(/\s+/).pop() ?? "";
-    if (exchange === "." || exchange === "") return false;
-  }
-  return true;
+  if (mx.length === 0) return [];
+  const hosts = mx.map((a) => (a.data ?? "").trim().split(/\s+/).pop() ?? "");
+  if (isNullMxHosts(hosts)) return [];
+  return normalizeExchanges(hosts);
 }
 
 /**
@@ -123,28 +127,32 @@ class MxUndetermined extends Error {
 const MX_TTL_DAYS = 14;
 
 /**
- * One domain, through the cache. Prefer `resolveMxBatch`, which also memoizes per run.
+ * One domain's exchanges, through the cache. Prefer `resolveMxBatch`, which also memoizes per run.
  *
- * The memo above this handles one batch; this handles the next batch, and the one after. An
- * Apollo export averages several contacts per company and the same companies recur across pulls,
- * which is why a persistent layer is worth having under a per-run one.
+ * ‼️ THE CACHE KIND IS VERSIONED, AND SKIPPING THAT WOULD HAVE BEEN A FOURTEEN DAY OUTAGE. The old
+ * entries under `dns.mx` are bare booleans. Reading one back as `{ exchanges }` gives `undefined`,
+ * which is falsy, so EVERY DOMAIN ALREADY IN THE CACHE would have answered "no MX" until its TTL
+ * expired. Before the free pre-filter that would merely have mislabelled rows; after it, a false
+ * no-MX DROPS a deliverable address before anything can correct it. A new kind costs one free
+ * re-lookup per domain and re-asks the cached falses, which the TTL comment above calls the
+ * expensive direction anyway.
  *
  * client_id is null because whether a domain accepts mail is a fact about the domain.
  */
-export async function hasMx(domain: string): Promise<MxVerdict> {
+export async function mxRecords(domain: string): Promise<MxExchanges | null> {
   try {
-    const { payload } = await getOrFetch<boolean>({
+    const { payload } = await getOrFetch<{ exchanges: MxExchanges }>({
       clientId: null,
-      kind: "dns.mx",
+      kind: "dns.mx.v2",
       cacheKey: cacheKeyOf({ domain }),
       ttlDays: MX_TTL_DAYS,
       provider: "node dns + cloudflare dns-over-https",
       params: { domain },
       // Both roads are free, so this zero is a measurement. What it saves is twenty thousand
       // lookups on the next overlapping pull.
-      fetch: async () => ({ payload: await readMx(domain), costUsd: 0 }),
+      fetch: async () => ({ payload: { exchanges: await readMx(domain) }, costUsd: 0 }),
     });
-    return payload;
+    return payload?.exchanges ?? null;
   } catch (e) {
     // Neither resolver answered. Undetermined, which is this file's whole point.
     if (e instanceof MxUndetermined) return null;
@@ -158,21 +166,58 @@ export async function hasMx(domain: string): Promise<MxVerdict> {
 }
 
 /**
+ * Does this domain accept mail at all.
+ *
+ * ‼️ DERIVED, NOT STORED SEPARATELY. "Has MX" and "which provider" are two readings of one answer,
+ * and two cache entries could disagree across a TTL boundary: the filter would drop a domain the
+ * router had just classified as Microsoft 365. One source, two accessors.
+ */
+export async function hasMx(domain: string): Promise<MxVerdict> {
+  const records = await mxRecords(domain);
+  if (records === null) return null;
+  return records.length > 0;
+}
+
+/**
+ * Which mail provider runs this domain, or null when it cannot be told.
+ *
+ * ‼️ THIS IS THE WHOLE ARGUMENT FOR MX ROUTING AND IT IS A PROPERTY OF THE RECEIVING SERVER, NOT OF
+ * A VERIFIER. Measured over all 561 US domains in the Apollo list on 2026-09-25: Microsoft 365
+ * returns a decisive verdict 93% of the time (163 valid, 12 catch-all, 6 invalid of 181), so
+ * guessing an address there is cheap and safe. Google Workspace is catch-all HALF the time (133 of
+ * 268), so a permutation is unresolvable and must never be sent. Nothing that speaks SMTP can beat
+ * that, because the server is answering yes to everything on purpose.
+ *
+ * `detectMailProvider` is reused rather than reimplemented: it already covers Google, Microsoft,
+ * Zoho, GoDaddy, Fastmail, Proofpoint, Mimecast, ImprovMX and Namecheap, and it splits each entry
+ * on whitespace and takes the last token, so bare hostnames work unchanged.
+ */
+export async function mailProviderOf(domain: string): Promise<string | null> {
+  const records = await mxRecords(domain);
+  if (!records || !records.length) return null;
+  return detectMailProvider(records);
+}
+
+/**
  * The lookup itself. Throws rather than returning null, so an undetermined verdict is not kept.
  *
- * A resolver that answers "no MX but the domain exists" is deliberately a NO here, matching the
- * Python. Mail can technically fall back to the A record, but a business domain with no MX is not
- * one that reads email, and this list is being paid for per address downstream.
+ * A resolver that answers "no MX but the domain exists" is deliberately an empty list here, matching
+ * the Python. Mail can technically fall back to the A record, but a business domain with no MX is
+ * not one that reads email, and this list is paid for per address downstream.
  */
-async function readMx(domain: string): Promise<boolean> {
+async function readMx(domain: string): Promise<MxExchanges> {
   try {
     const answers = await withTimeout(dns.resolveMx(domain), DNS_TIMEOUT_MS, "resolveMx");
-    if (isNullMx(answers)) return false;
-    return answers.length > 0;
+    const hosts = answers
+      .slice()
+      .sort((a, b) => (a.priority ?? 0) - (b.priority ?? 0))
+      .map((a) => a.exchange ?? "");
+    if (isNullMxHosts(hosts)) return [];
+    return normalizeExchanges(hosts);
   } catch (e) {
-    if (DEFINITIVE_NO.has(errCode(e))) return false;
+    if (DEFINITIVE_NO.has(errCode(e))) return [];
     // Everything else is "we could not ask". Try the other road before saying no.
-    let viaDoh: MxVerdict;
+    let viaDoh: MxExchanges | null;
     try {
       viaDoh = await mxViaDoh(domain);
     } catch {
