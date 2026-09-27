@@ -19,6 +19,7 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { normalizePhone, type OutscraperRecord } from "@/lib/outscraper";
+import type { DfsListing } from "@/lib/dataforseo-places";
 import { normalizeDomain } from "@/lib/outreach/suppression";
 
 export type LeadSource = "outscraper" | "dataforseo" | "socialscraper" | "csv" | "apollo";
@@ -117,6 +118,57 @@ export function fromOutscraper(
     businessType: null,
     avatarSlug: null,
     raw: rec as Record<string, unknown>,
+  };
+}
+
+
+/**
+ * A DataForSEO business listing into a raw lead.
+ *
+ * Sibling of `fromOutscraper` and deliberately the same shape: the pull stage, the qualify sweep, the
+ * crawl and the verifier all read `RawLeadInput` and none of them knows or cares which vendor filled
+ * it. That is what makes a source a DOOR rather than a second engine.
+ *
+ * ‼️ THE SYNTHETIC PLACE ID FALLBACK IS HERE TOO, for the reason it is in fromOutscraper: a null
+ * place_id is DISTINCT in the unique index, so without it a re-driven pull inserts the row again.
+ */
+export function fromDataForSeo(
+  item: DfsListing,
+  ctx: { runId: string; sourceQuery: string | null; sourceMetro: string | null; verticalSlug?: string | null }
+): RawLeadInput | null {
+  const businessName = str(item.title) ?? str(item.original_title);
+  if (!businessName) return null;
+
+  const website = str(item.url);
+  const domain = normalizeDomain(website);
+  const addr = item.address_info ?? {};
+
+  return {
+    runId: ctx.runId,
+    source: "dataforseo",
+    sourceQuery: ctx.sourceQuery,
+    sourceMetro: ctx.sourceMetro,
+    placeId: str(item.place_id) ?? str(item.cid) ?? (domain ? "site:" + domain : null),
+    businessName,
+    domain,
+    website,
+    phone: str(item.phone),
+    fullAddress: str(addr.address),
+    city: str(addr.city),
+    // DataForSEO returns the full region name ("Texas"), which is what geo.ts already reads.
+    state: str(addr.region),
+    postalCode: str(addr.zip),
+    categories: [str(item.category), ...(item.additional_categories ?? [])].filter(Boolean).join(", ") || null,
+    primaryType: str(item.category),
+    rating: typeof item.rating?.value === "number" ? item.rating.value : null,
+    reviewCount: typeof item.rating?.votes_count === "number" ? item.rating.votes_count : null,
+    // No Instagram field on this endpoint. Null rather than guessed.
+    instagramHandle: null,
+    ownerName: null,
+    verticalSlug: ctx.verticalSlug ?? null,
+    businessType: null,
+    avatarSlug: null,
+    raw: item as Record<string, unknown>,
   };
 }
 
