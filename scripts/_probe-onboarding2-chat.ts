@@ -38,6 +38,8 @@ import {
   CHAT_FAQS,
   CHAT_HARD_LINES,
   CLOSING_MESSAGES,
+  ASK_WEBSITE,
+  DAYPART_PROMPT,
   SCHEDULING_INTRO,
   QUALIFYING_QUESTIONS,
   SCHEDULING_UI,
@@ -656,14 +658,21 @@ async function main(): Promise<void> {
     CLOSING_MESSAGES.length === 3,
     `got ${CLOSING_MESSAGES.length}`
   );
-  // !! THE DAYPART QUESTION MOVED OUT OF THE CLOSE AND INTO THE OPENER (2026-09-04).
-  // CLOSING_MESSAGES used to end the questions by asking "mornings or afternoons?", because
-  // scheduling came last. Scheduling comes first now, so that line lives in SCHEDULING_INTRO and
-  // the close is the wrap-up after the last answer.
+  // !! THE DAYPART QUESTION MOVED OUT OF THE CLOSE AND INTO THE OPENER (2026-09-04), AND THEN OUT OF
+  // THE OPENER AGAIN (2026-09-27). CLOSING_MESSAGES used to end the questions with "mornings or
+  // afternoons?" because scheduling came last; then scheduling came first and it moved to the opener;
+  // now the website and the phone come first and it is the third question. It has never been in two
+  // places at once, which is what these two checks are really guarding.
   check(
-    "the opener asks mornings or afternoons",
-    SCHEDULING_INTRO.some((m) => /mornings or afternoons/i.test(m)),
+    "the opener asks for the website",
+    SCHEDULING_INTRO.some((m) => m === ASK_WEBSITE),
     SCHEDULING_INTRO.join(" | ")
+  );
+  check(
+    "and the daypart question is asked once, by the step that owns it",
+    !SCHEDULING_INTRO.some((m) => /mornings or afternoons/i.test(m)) &&
+      /mornings or afternoons/i.test(DAYPART_PROMPT),
+    DAYPART_PROMPT
   );
   // !! STILL NO LINK IN ANY MODEL-ADJACENT COPY, AND THIS IS THE ASSERTION WORTH KEEPING.
   // There IS a calendar in the funnel now, but its URL is a field on a route response that the
@@ -980,6 +989,63 @@ async function main(): Promise<void> {
       "the floor cannot beat the cap on a short window",
       Boolean(cap && floor) && Number(floor![1]) * 16 <= 505 - Number(cap![1]) * 16 + 48,
       "measured against the shortest window checked in a browser, 1280x600"
+    );
+  }
+
+  // ── The intake order, and the misread it opened up (2026-09-27) ──────────
+  //
+  // ‼️ SECTION 2 IS THE ONE WITH TEETH. Moving the website and the phone in front of the daypart
+  // inverted the safety property replayDraft was relying on. It used to scan turns with readDaypart and
+  // readTimezone, which match a word ANYWHERE, and that was safe only because no free text had been
+  // typed yet. Both matchers use word boundaries, and a hyphen IS one: readDaypart("am-clinic.com") is
+  // "morning" and readTimezone("eastern-dental.com") is New York. A visitor typing their own website
+  // would have answered the next two questions without being asked them.
+  console.log("\nThe intake order");
+  {
+    const { nextIntakeStep, replayDraft, INTAKE_COPY } = await import("../src/lib/onboarding2/intake-steps");
+    const { ASK_WEBSITE, ASK_PHONE } = await import("../src/config/onboarding2");
+
+    // 1. The order Matthew asked for.
+    const answered = { website: null as string | null, contact_phone: null as string | null,
+                       contact_name: null as string | null, email: null as string | null };
+    const turns: string[] = [];
+    let lead: { call_day?: string } | null = null;
+    const order: string[] = [];
+    for (let i = 0; i < 10; i++) {
+      const step = nextIntakeStep(answered as never, lead as never, turns);
+      if (!step) break;
+      order.push(step);
+      if (step === "website") answered.website = "clinic.com";
+      else if (step === "phone") answered.contact_phone = "+13365550142";
+      else if (step === "daypart") turns.push("Mornings");
+      else if (step === "timezone") turns.push("Eastern");
+      else if (step === "name") answered.contact_name = "Jo Smith";
+      else if (step === "email") answered.email = "jo@clinic.com";
+      else if (step === "day") lead = { call_day: "Mon" };
+    }
+    check(
+      "the website and the phone are asked first",
+      order.join(" ") === "website phone daypart timezone name email day",
+      order.join(" -> ")
+    );
+    check("and the opening question is the one the client seeds", INTAKE_COPY.website.prompt === ASK_WEBSITE, "");
+    check("and the phone prompt has one source too", INTAKE_COPY.phone.prompt === ASK_PHONE, "");
+
+    // 2. A website cannot answer a question nobody asked.
+    for (const site of ["am-clinic.com", "pm-aesthetics.com", "eastern-dental.com", "early-glow.com", "pt-skin.com"]) {
+      const draft = replayDraft([site]);
+      check(
+        `"${site}" answers nothing`,
+        draft.daypart === undefined && draft.timezone === undefined,
+        JSON.stringify(draft)
+      );
+    }
+    // 3. And a real tapped answer still does.
+    const tapped = replayDraft(["clinic.com", "+13365550142", "Mornings", "Eastern"]);
+    check(
+      "a tapped daypart and zone still replay",
+      tapped.daypart === "morning" && tapped.timezone === "America/New_York",
+      JSON.stringify(tapped)
     );
   }
 

@@ -441,6 +441,18 @@ export function Onboarding2Funnel({
   // `error` renders above the cards rather than replacing them: a failed /start must leave the
   // three buttons on screen and tappable, because the only recovery available to the visitor is
   // to tap one again.
+  // ‼️ THE WAIT GETS A SCREEN OF ITS OWN, AND THE ONLY REASON IS THE REFRESH. /start mints the
+  // signing row, the lead and the Slack card, and on a cold instance it is a few seconds. A disabled
+  // button that says "One moment" looks like a page that did not respond, and the thing somebody does
+  // to a page that did not respond is reload it, which abandons the row that was just created and
+  // starts a second one. So it says what is happening and asks them not to.
+  //
+  // ‼️ IT REPLACES THE CARDS RATHER THAN OVERLAYING THEM, which is also why `error` above must
+  // still put the cards back: if /start fails, the only recovery a visitor has is to tap a card again.
+  if (stage === "offer" && starting) {
+    return <Starting />;
+  }
+
   if (stage === "offer") {
     return (
       <>
@@ -552,4 +564,36 @@ export function Onboarding2Funnel({
 
 function Shell({ children }: { children: React.ReactNode }) {
   return <div className="mx-auto w-full max-w-2xl px-4 py-8 sm:py-12">{children}</div>;
+}
+
+/**
+ * The few seconds between tapping a card and the assistant opening.
+ *
+ * ‼️ IT ASKS THEM NOT TO REFRESH, AND THAT SENTENCE IS THE POINT OF THE SCREEN. /start creates
+ * the signing row, the lead and the Slack card in one request. A reload halfway through abandons all
+ * three and starts a second set, so the visitor most likely to do it is the one who has just committed.
+ *
+ * ‼️ NO PERCENTAGE AND NO PROGRESS BAR. Neither would be measuring anything: there is one request
+ * and it either returns or it does not, and a bar that fills at a rate we invented is a claim about how
+ * long something will take that we cannot make. The spinner says "working" and nothing else.
+ */
+function Starting() {
+  return (
+    <Shell>
+      <div className="flex flex-col items-center py-16 text-center">
+        <span
+          aria-hidden="true"
+          className="mb-5 h-8 w-8 animate-spin rounded-full border-2 border-white/15"
+          style={{ borderTopColor: "#00C9A7" }}
+        />
+        <p className="text-lg font-semibold text-white" role="status" aria-live="polite">
+          Setting up your account.
+        </p>
+        <p className="mt-2 max-w-sm text-sm text-white/60">
+          This takes a few seconds. Please do not refresh this page or go back, we are getting your
+          virtual assistant ready.
+        </p>
+      </div>
+    </Shell>
+  );
 }

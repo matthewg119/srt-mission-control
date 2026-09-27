@@ -120,15 +120,15 @@ export const PRODUCT_CONCIERGE = "AI Booking Bot";
  * listener to check arithmetic on camera. Same rule the tiers had, applied to values.
  */
 export const OFFER_INCLUDES = [
-  { work: "We re-write your current pages", value: "$2,400 value" },
-  { work: "We turn your happy customers into the evidence", value: "$499 / month value" },
-  { work: "We fix any NAP mismatches online", value: "$800 value, one-time build" },
+  { work: "ChatGPT Client Optimization", value: "$149 / month value" },
+  { work: "Custom Search Engine Optimization", value: "$99 / month value" },
+  { work: "Custom AI Engine Optimization", value: "$99 / month value" },
   // ‼️ PRICED ON 2026-09-16, HAVING BEEN THE ONE UNPRICED LINE ON PURPOSE. The reason it had no
   // figure was that inventing a fifth one to fill the gap is what the note above forbids. It has
   // a figure now because Matthew set one, not because the gap was filled. See PRICE_CONCIERGE,
   // and note the SMS Live Agent gave this number up rather than sharing it.
   { work: `Install the ${PRODUCT_CONCIERGE} on your site`, value: "$199 / month value" },
-  { work: "Your monthly AI Visibility Report", value: "$400 / month value" },
+  { work: "The AI Referral Engine", value: "$49 / month value" },
 ] as const;
 
 /**
@@ -144,7 +144,19 @@ export const OFFER_INCLUDES = [
  * $2,400 + $499 + $199 + $400 = $3,498. Said out loud, as required, rather than left to be
  * discovered by somebody adding the column up in a meeting.
  */
-export const VALUE_RECURRING = "$3,498";
+export const VALUE_RECURRING = "$595";
+
+/**
+ * ‼️ RE-STATED BY HAND ON 2026-09-27, SAID OUT LOUD, WHICH IS WHAT THE RULE ABOVE DEMANDS.
+ * The stack was rebuilt on Matthew's figures: $149 + $99 + $99 + $199 + $49 = $595 a month, which is
+ * $7,140 a year against a $3,300 year. It was $3,498 under the old five line items.
+ *
+ * ‼️ AND IT IS ONE STACK NOW, NOT TWO. The card listed products and OFFER_INCLUDES listed work,
+ * with different figures and different totals, and the agreement printed the OFFER_INCLUDES total as
+ * "Total delivered VALUE". A client reading the card at $595 and the contract at $3,498 is reading two
+ * claims about the same thing. The five items below are what the card shows, in the same order, at the
+ * same figures, and the contract's bullets now look up these keys.
+ */
 
 /**
  * ‼️ NULL, AND DELIBERATELY, UNTIL MATTHEW PICKS THE FIGURE (2026-08-25).
@@ -487,6 +499,15 @@ export interface FunnelLine {
   text: string;
   /** Struck through. What this would cost bought on its own. */
   was?: string;
+  /**
+   * What the line is worth, stated plainly and NOT struck through.
+   *
+   * ‼️ IT IS NOT `was`, AND THE DIFFERENCE IS THE WHOLE POINT. `was` is a price we are taking
+   * away, so it is struck: "$199 / month, FREE" reads as a discount. `worth` is a value we are
+   * asserting, so it is not: striking it would say we used to charge it and have stopped, which on the
+   * free card would be a claim about a price that never existed.
+   */
+  worth?: string;
   /** After the strike. "FREE", or a value. */
   tag?: string;
   /** Carries the weight of the card. One per card at most. */
@@ -535,6 +556,14 @@ export interface Offer {
   funnelHeadline: string;
   funnelCta: string;
   funnelIncludes: readonly FunnelLine[];
+  /**
+   * One line under the list, totalling it. Optional: only the free card has one.
+   *
+   * ‼️ THE PAID CARD DELIBERATELY HAS NO TOTAL. Its five figures come from OFFER_INCLUDES and
+   * sum to VALUE_RECURRING, which the AGREEMENT prints as "Total delivered VALUE". Printing it twice
+   * would mean two places to keep in step, and the one that matters is the one they sign.
+   */
+  funnelFooter?: string;
 }
 
 /**
@@ -580,15 +609,26 @@ export const OFFERS: readonly Offer[] = [
     inFunnel: true,
     funnelHeadline: "Free",
     funnelCta: "Start with the free tool",
+    // Matthew's line, verbatim. See the note over the lines below about the two one-time items.
+    funnelFooter: "$694 / month of value, $0.",
     funnelIncludes: [
       // ‼️ THE TOOL IS NAMED ON ITS OWN LINE AND TAGGED FREE, rather than being left implicit in
       // the four lines describing what it does. Matthew's ask: a visitor has to be able to see
       // that the thing they are being given is a real, named product.
-      { text: "The AI Referral Engine, set up on your site", tag: "FREE", strong: true },
-      { text: "Automatic review requests after every visit" },
-      { text: "The words your front desk says at checkout" },
-      { text: "A one tap request link for the counter" },
-      { text: "We watch your review profiles weekly" },
+      // ‼️ PRICED AND THEN GIVEN AWAY, ON MATTHEW'S EXACT FIGURES (2026-09-27). The free card used
+      // to name six things and value none of them, which asks a reader to take "free" on trust without
+      // ever saying free of WHAT. Every line now carries what it is worth and then the word FREE.
+      //
+      // ‼️ THE TOTAL BELOW SAYS "$694 / month" AND TWO OF THESE SIX ARE ONE-TIME. $99 + $149 + $99
+      // + $49 + $99 + $199 is $694, but the checkout wording and the counter link are one-time builds,
+      // so the genuinely monthly part is $546 and the other $148 is paid once. These are Matthew's
+      // figures and his total, written as he gave them. The one-word fix, if he wants the sum to survive
+      // a reader checking it, is to make those two "/ month value" as well.
+      { text: "The AI Referral Engine, set up on your site", worth: "$99 / month value", tag: "FREE", strong: true },
+      { text: "Automatic review requests after every visit", worth: "$149 / month value", tag: "FREE" },
+      { text: "The words your front desk says at checkout", worth: "$99 value", tag: "FREE" },
+      { text: "A one tap request link for the counter", worth: "$49 value", tag: "FREE" },
+      { text: "We watch your review profiles weekly", worth: "$99 / month value", tag: "FREE" },
       // ‼️ THE ONLY LINE ON THE FREE CARD THAT IS NOT ABOUT COLLECTING A REVIEW, AND IT IS THE
       // ONE THAT SELLS THE PROGRAM. Everything above it gets them more reviews, which every
       // reputation tool claims. This one says what we do with them afterwards, which is the
@@ -629,10 +669,14 @@ export const OFFERS: readonly Offer[] = [
       // ‼️ THE VALUE SITS ON THE OPTIMIZATION LINE AND IS NOT CALLED A TOTAL. See the note over
       // VALUE_PROGRAM_YEAR: $4,188 excludes the Concierge, so the lines below it are additions on top
       // rather than components of it.
-      { text: "ChatGPT Client Optimization", tag: VALUE_PROGRAM_YEAR },
-      // Added 2026-09-26. Two deliverables that were being done and not being said.
-      { text: "Custom Search Engine Optimization" },
-      { text: "Custom AI Engine Optimization" },
+      // ‼️ EVERY LINE CARRIES ITS FIGURE AS OF 2026-09-27, AND THAT CHANGED WHAT THE CARD CAN SAY.
+      // It used to show one number, VALUE_PROGRAM_YEAR, on the optimization line alone. The moment all
+      // five have figures a reader adds them up, so they come from OFFER_INCLUDES and they sum to
+      // VALUE_RECURRING. That is also why the card shows no grand total of its own: the one number a
+      // reader could check against is the one the contract prints.
+      { text: "ChatGPT Client Optimization", worth: OFFER_INCLUDES[0].value },
+      { text: "Custom Search Engine Optimization", worth: OFFER_INCLUDES[1].value },
+      { text: "Custom AI Engine Optimization", worth: OFFER_INCLUDES[2].value },
       // ‼️ "AI BOOKING BOT" IS THE SAME PRODUCT AS THE AI SKIN CONCIERGE, RENAMED ON THIS CARD ONLY
       // (Matthew, 2026-09-26). `was: PRICE_CONCIERGE` is what makes this line tappable and what records
       // Concierge interest on the lead, so the rename must not touch it: the label is what a buyer reads,
@@ -643,7 +687,7 @@ export const OFFERS: readonly Offer[] = [
       // this file was written about. Raised with Matthew; renaming it in the contract is his call and not
       // something to do quietly underneath a signature.
       { text: `${PRODUCT_CONCIERGE} on your site`, was: PRICE_CONCIERGE, tag: "FREE" },
-      { text: "The AI Referral Engine", tag: "FREE" },
+      { text: "The AI Referral Engine", worth: OFFER_INCLUDES[4].value, tag: "FREE" },
       {
         text: `${GUARANTEE_COUNT} booked appointments in ${GUARANTEE_WINDOW}, or your money back`,
         strong: true,

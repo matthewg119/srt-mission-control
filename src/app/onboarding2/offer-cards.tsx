@@ -261,6 +261,15 @@ function Card({
           );
         })}
       </ul>
+
+      {/*
+        ‼️ THE FOOTER SITS WITH THE LIST, WHICH MEANS BELOW THE BUTTON ON A PHONE. It totals the
+        lines above it, so it has to stay attached to them: floated to the bottom of the card it would
+        end up under the CTA on desktop and read as a line about the button instead.
+      */}
+      {offer.funnelFooter ? (
+        <p className="order-5 mt-4 text-sm font-semibold text-white lg:order-4">{offer.funnelFooter}</p>
+      ) : null}
     </section>
   );
 }
@@ -446,6 +455,13 @@ function Line({
           ) : (
             <span className="text-white/40 line-through">{line.was}</span>
           )}
+        </>
+      ) : null}
+
+      {line.worth && !struck ? (
+        <>
+          {", "}
+          <span className="text-white/45">{line.worth}</span>
         </>
       ) : null}
 

@@ -338,9 +338,25 @@ export const QUALIFYING_INTRO = guard(
  * somebody who books and then abandons question four has still done the thing that matters. The
  * gate did not move, it INVERTED: scheduling now runs before the model sees a turn at all.
  */
+/**
+ * The first two things the assistant says, and the second one is a question the SERVER also asks.
+ *
+ * ‼️ THE OPENING QUESTION IS THE WEBSITE NOW, NOT THE DAYPART (2026-09-27). The intake order
+ * changed so the two fields we can act on come first: see the header of lib/onboarding2/intake-steps.ts
+ * for the trade Matthew made and what it costs.
+ *
+ * ‼️ ASK_WEBSITE IS EXPORTED AND READ BY INTAKE_COPY, WHICH IS THE WHOLE POINT. The client seeds
+ * the conversation with these two lines and the server re-asks the same question whenever the answer
+ * does not validate. Two copies of that sentence means a visitor is asked one thing and re-asked
+ * another, which reads as the assistant having forgotten what it wanted.
+ */
+export const ASK_WEBSITE = guard("ask website", "What is your business website?");
+export const ASK_PHONE = guard("ask phone", "What is your best phone number?");
+export const DAYPART_PROMPT = guard("daypart prompt", "What works better for you, mornings or afternoons?");
+
 export const SCHEDULING_INTRO: string[] = [
-  guard("sched intro 1", "You are in. Let us get your onboarding call booked."),
-  guard("sched intro 2", "What works better for you, mornings or afternoons?"),
+  guard("sched intro 1", "You are in! Let us get you started."),
+  ASK_WEBSITE,
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────

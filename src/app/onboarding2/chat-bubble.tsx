@@ -31,7 +31,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   CHAT_UI,
   CLOSING_SUMMARY,
-  DAYPART_OPTIONS,
   OTHER_PROMPT,
   QUALIFYING_INTRO,
   SCHEDULING_INTRO,
@@ -305,7 +304,11 @@ export function ChatPanel({
     if (!open || started) return;
     setStarted(true);
     setMessages(SCHEDULING_INTRO.map((content) => ({ role: "assistant" as const, content })));
-    setOptions([DAYPART_OPTIONS.morning, DAYPART_OPTIONS.afternoon]);
+    // ‼️ NO CHIPS ON THE OPENING TURN ANY MORE (2026-09-27). It used to open on the daypart, which
+    // is a two-chip question, so the first thing on screen was two buttons. The first question is now
+    // the website, which is typed, and seeding the old options here would put Mornings and Afternoons
+    // under "What is your business website?". The daypart chips still arrive from the server on the
+    // turn that asks for them, which is where every other question's options already come from.
   }, [open, started]);
 
   function tapOption(value: string) {
