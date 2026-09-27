@@ -74,7 +74,7 @@ export async function PATCH(
     // the lead had stopped being worked.
     const { data: existing } = await supabaseAdmin
       .from("lead_tasks")
-      .select("contact_id, deal_id, title")
+      .select("contact_id, title")
       .eq("id", taskId)
       .maybeSingle();
 
@@ -87,7 +87,6 @@ export async function PATCH(
     if (existing?.contact_id) {
       await logActivity({
         contactId: existing.contact_id as string,
-        dealId: (existing.deal_id as string | null) ?? null,
         activityType: "task_cancelled",
         direction: "internal",
         subject: existing.title as string,

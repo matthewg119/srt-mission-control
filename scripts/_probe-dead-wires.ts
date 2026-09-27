@@ -184,6 +184,27 @@ function tableOf(raw: string): string {
 function declaredColumns(): { declared: Declared[]; dropped: Set<string> } {
   const declared: Declared[] = [];
   const dropped = new Set<string>();
+  /**
+   * Tables a migration DROPS, so their columns leave the census with them.
+   *
+   * ‼️ `drop column` WAS SUBTRACTED AND `drop table` WAS NOT, WHICH MADE A WHOLE-TABLE DROP INVISIBLE
+   * HERE. Found on 2026-09-27 by the funding decommission: it drops nine tables, and the funding count
+   * went 116 → 104 because only the three named `drop column` clauses were subtracted. Every column of
+   * nine tables that no longer exist stayed in the census, so FUNDING_BASELINE could never reach 0 and
+   * the probe would go on describing tables nobody could query. A census that reports columns of a
+   * dropped table is wrong in the same direction as the scan doc this file was written against.
+   */
+  const droppedTables = new Set<string>();
+
+  // First pass: collect the drops. A table dropped in a LATER migration than the one that created it is
+  // the normal case, and SQL_FILES is in readdir order rather than date order, so this cannot be folded
+  // into the loop below without depending on filename sorting.
+  for (const [, rawSql] of SQL_FILES) {
+    const sql = stripSqlComments(rawSql);
+    for (const m of sql.matchAll(new RegExp(`drop\\s+table\\s+(?:if\\s+exists\\s+)?((?:public\\.)?${COL})`, "gi"))) {
+      droppedTables.add(tableOf(m[1]));
+    }
+  }
 
   for (const [file, rawSql] of SQL_FILES) {
     const sql = stripSqlComments(rawSql);
@@ -255,6 +276,12 @@ function declaredColumns(): { declared: Declared[]; dropped: Set<string> } {
     }
   }
 
+  // Every column of a dropped table joins the dropped set, so one `drop table` subtracts what a hundred
+  // `drop column` clauses would have had to.
+  for (const d of declared) {
+    if (droppedTables.has(d.table)) dropped.add(`${d.table}.${d.column}`);
+  }
+
   return { declared, dropped };
 }
 
@@ -293,7 +320,11 @@ const has = (k: string): boolean => DECLARED.has(k);
 
 check("digits survive: clients.day_0_source", has("clients.day_0_source"), "[a-z_]+ collects this as `day_`");
 check("digits survive: contacts.phone_last10", has("contacts.phone_last10"));
-check("an UPPERCASE ADD COLUMN is seen: lenders.min_deal_size", has("lenders.min_deal_size"));
+// ‼️ THE FIXTURE MOVED OFF `lenders.min_deal_size` (2026-09-27) BECAUSE THE TABLE IS DROPPED. A probe
+// fixture on a table a migration removes is a check that fails for a reason unrelated to what it tests,
+// and the third one in this file to need moving for that shape of reason. `audit_reports` is a core
+// surviving table and docs/2026-07-24-audit-pending-drafts.sql declares this column in caps.
+check("an UPPERCASE ADD COLUMN is seen: audit_reports.pending_drafts", has("audit_reports.pending_drafts"));
 check(
   "a create-table body is parsed: keyword_serp_reads.ai_overview",
   has("keyword_serp_reads.ai_overview"),
@@ -997,11 +1028,11 @@ const OWED: Record<string, string> = {
   // so the page simply has no draft and the reason is in a column. The `draftError` in hub-form.tsx is
   // local React state for a different thing, which is what makes this look wired when it is not.
   "page_plan.draft_error": "a failed draft's reason, written and never surfaced. Owed a line on the step card, beside the page it failed to draft.",
-  // ‼️ FUNDING, ON THE AEO CLIENT ROW. Dropped by the funding decommission rather than excused: Matthew
-  // 2026-09-27, "my onboarding for AEO has nothing to do with funding so make sure they dont even see
-  // each other". It carries no foreign key (docs/2026-08-17-crm-core.sql:134 says so deliberately), so
-  // the drop is a column drop and nothing cascades.
-  "clients.deal_id": "a funding deal link on the AEO client row. Owed its drop, in the funding decommission SQL.",
+  // ‼️ `clients.deal_id` WAS HERE AND IS NOW DROPPED, by docs/2026-09-27-funding-decommission-drop.sql.
+  // Matthew, 2026-09-27: "my onboarding for AEO has nothing to do with funding so make sure they dont
+  // even see each other". It carried no foreign key (docs/2026-08-17-crm-core.sql:134 says so
+  // deliberately), so nothing cascaded; what it DID need was crm_read.clients dropped and recreated,
+  // because a view naming a column blocks the drop and `create or replace view` cannot remove one.
   "client_pages.audience_id": "which buyer a page is aimed at. Owed its writer: the migration deliberately landed first so the reader could not 500 the hub on deploy.",
   "client_headlines.audience_id": "which buyer a headline is aimed at, from the same audience model. Owed the same writer.",
   "page_magnet_candidates.audience_id": "which buyer a magnet is aimed at, from the same audience model. Owed the same writer.",
@@ -1033,7 +1064,7 @@ const READ_DYNAMICALLY: Record<string, string> = {
  * every one of them, so a new column fails by name and with the migration that declared it. This
  * number is kept because it is the thing a person reads, and §6c asserts the two cannot disagree.
  */
-const BOARD_BASELINE = 664;
+const BOARD_BASELINE = 547;
 
 type Verdict = "write_only" | "never_touched";
 interface Finding {
@@ -1288,13 +1319,20 @@ const FUNDING_WORDS = /factor_rate|underwriting|\blenders?\b|buy_rate|sell_rate|
  * exist. Failing on all 116 today would hold this probe red for work that is deliberately a separate
  * sweep, and a check that is always red is a check nobody reads.
  *
- * ‼️ ALL EIGHT TABLES ARE WHOLLY FUNDING, which is the finding worth acting on rather than the count:
- * standalone_applications, deal_submissions, statement_drops, lenders, email_submissions,
- * email_submission_funders, deals, deal_events. Dropping 116 individual columns would leave eight
- * crippled tables, so the real question is whether the funding HISTORY is archived and the tables
- * dropped. That is Matthew's call, not this probe's.
+ * ‼️ ALL EIGHT TABLES WERE WHOLLY FUNDING, AND THAT WAS ALWAYS THE FINDING RATHER THAN THE COUNT.
+ * Dropping 116 individual columns would have left eight crippled tables, so the real question was
+ * whether the funding HISTORY is archived and the tables dropped. That was Matthew's call and he made
+ * it on 2026-09-27: "I want to drop everything regarding to funding".
+ * docs/2026-09-27-funding-decommission-drop.sql drops all nine (the eight plus deal_notes) and the
+ * three deal_id columns on tables that stay, so this baseline is **0** and no funding column may ever
+ * be declared again.
+ *
+ * ‼️ IT ONLY REACHED 0 BECAUSE `drop table` IS SUBTRACTED NOW. It was not: the parser read
+ * `drop column` and ignored `drop table`, so the count went 116 → 104 on a migration that removes nine
+ * whole tables, and every column of a table nobody can query stayed in the census. See
+ * `droppedTables` in declaredColumns().
  */
-const FUNDING_BASELINE = 116;
+const FUNDING_BASELINE = 0;
 
 const fundingCols = counted.filter((f) => f.lane === "funding");
 console.log(`\n6b. funding: SRT does no business funding. ${fundingCols.length} unread funding column(s) still declared.`);

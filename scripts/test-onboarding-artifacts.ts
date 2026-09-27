@@ -3819,7 +3819,18 @@ import * as visionT from "../src/lib/hub/skin-vision";
   const numbered = contract.filter((l) => /^## \d+\. /.test(l));
   eq("the contract numbers every research section", numbered.length, drr.RESEARCH_SECTION_KEYS.length);
   ok("every printed number is its key's position", numbered.every((l, i) => l.startsWith(`## ${i + 1}. `)));
-  ok("the seventeen sections include the framework's eight", drr.RESEARCH_SECTION_KEYS.length === 17 && drr.RESEARCH_SECTION_KEYS.indexOf("awareness") === 15 && drr.RESEARCH_SECTION_KEYS.indexOf("emotional_language") === 16);
+  // ‼️ THE INDICES ARE THE POINT, NOT THE LENGTH. `buying_conditions` was appended as section 18 on
+  // 2026-09-27, and awareness and emotional_language are asserted to be at 15 and 16 STILL, which is
+  // what proves a tail append renumbered nothing. The parser maps section N to
+  // RESEARCH_SECTION_KEYS[N - 1], so a section inserted anywhere but the end re-files every stored
+  // report's answers, and this line is what catches that.
+  ok(
+    "the eighteen sections include the framework's eight, and the append renumbered nothing",
+    drr.RESEARCH_SECTION_KEYS.length === 18 &&
+      drr.RESEARCH_SECTION_KEYS.indexOf("awareness") === 15 &&
+      drr.RESEARCH_SECTION_KEYS.indexOf("emotional_language") === 16 &&
+      drr.RESEARCH_SECTION_KEYS.indexOf("buying_conditions") === 17
+  );
   const closeAt = contract.findIndex((l) => /^## Phrases worth building pages around/.test(l));
   ok("the ranked phrases close under an unnumbered heading after section 16", closeAt > contract.indexOf(numbered[numbered.length - 1]));
   ok("the KEYWORDS worked rows are in the contract", contract.includes("KEYWORDS") && contract.some((l) => l.split("|").length === 4));

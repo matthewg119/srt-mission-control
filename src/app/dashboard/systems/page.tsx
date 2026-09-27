@@ -1,6 +1,5 @@
 "use client";
 
-import { useState, useEffect } from "react";
 import { ExternalLink, LayoutGrid } from "lucide-react";
 
 interface SystemTile {
@@ -9,12 +8,11 @@ interface SystemTile {
   url: string;
   category: string;
   emoji: string;
-  dynamic?: boolean;
 }
 
 const STATIC_TILES: SystemTile[] = [
   // CRM
-  { name: "Mission Control CRM", description: "Internal CRM — contacts, deals, pipeline", url: "https://mission.srtagency.com/dashboard/pipeline", category: "CRM", emoji: "🎯" },
+  { name: "Mission Control CRM", description: "Internal CRM — contacts, leads, pipeline", url: "https://mission.srtagency.com/dashboard/pipeline", category: "CRM", emoji: "🎯" },
   // Email & Files
   { name: "Outlook", description: "Email inbox and calendar", url: "https://outlook.office365.com", category: "Email & Files", emoji: "📧" },
   { name: "OneDrive", description: "Deal documents and file storage", url: "https://onedrive.live.com", category: "Email & Files", emoji: "🗂️" },
@@ -30,31 +28,17 @@ const STATIC_TILES: SystemTile[] = [
   { name: "Anthropic Console", description: "Claude API usage and keys", url: "https://console.anthropic.com", category: "Infrastructure", emoji: "🤖" },
 ];
 
-const CATEGORY_ORDER = ["CRM", "Email & Files", "Marketing", "Lender Portals", "Infrastructure"];
+const CATEGORY_ORDER = ["CRM", "Email & Files", "Marketing", "Infrastructure"];
 
 export default function SystemsPage() {
-  const [lenderPortals, setLenderPortals] = useState<SystemTile[]>([]);
-
-  useEffect(() => {
-    fetch("/api/lenders")
-      .then((r) => r.json())
-      .then((data) => {
-        const portals: SystemTile[] = (data.lenders || [])
-          .filter((l: { portal_url: string | null; is_active: boolean }) => l.portal_url && l.is_active)
-          .map((l: { name: string; portal_url: string }) => ({
-            name: l.name,
-            description: "Lender submission portal",
-            url: l.portal_url,
-            category: "Lender Portals",
-            emoji: "🏦",
-            dynamic: true,
-          }));
-        setLenderPortals(portals);
-      })
-      .catch(() => {});
-  }, []);
-
-  const allTiles = [...STATIC_TILES, ...lenderPortals];
+  // ‼️ THE "Lender Portals" TILES ARE GONE, AND THEY WERE BROKEN BEFORE THEY WERE WRONG (2026-09-27).
+  // This fetched `/api/lenders`, which DOES NOT EXIST, so `.catch(() => {})` swallowed a 404 on every
+  // render, the list stayed empty, and the empty state then told the user to add lenders on
+  // `/dashboard/lenders` — a page that does not exist either. Two dead links and a silent failing fetch,
+  // on a dashboard whose whole job is telling somebody which systems are up.
+  //
+  // Funding is decommissioned and the `lenders` table is dropped, so there is nothing to restore here.
+  const allTiles = STATIC_TILES;
 
   const grouped = CATEGORY_ORDER.reduce<Record<string, SystemTile[]>>((acc, cat) => {
     const tiles = allTiles.filter((t) => t.category === cat);
@@ -95,9 +79,6 @@ export default function SystemsPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold text-white">{tile.name}</span>
-                      {tile.dynamic && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[rgba(27,101,167,0.2)] text-[#0E8C77]">Lender</span>
-                      )}
                     </div>
                     <p className="text-xs text-[rgba(255,255,255,0.4)] mt-0.5 truncate">{tile.description}</p>
                   </div>
@@ -107,12 +88,6 @@ export default function SystemsPage() {
             </div>
           </div>
         ))}
-
-        {lenderPortals.length === 0 && (
-          <p className="text-xs text-[rgba(255,255,255,0.3)] italic">
-            Add lenders with portal URLs in the <a href="/dashboard/lenders" className="text-[#00C9A7] hover:underline">Lenders</a> page to see them here.
-          </p>
-        )}
       </div>
     </div>
   );

@@ -83,6 +83,11 @@ export const SECTION_NAMES: ReadonlyArray<{ key: string; name: RegExp }> = [
   // complaints, in the offer dataset's own objections field and in half the framework headings, and
   // a loose pattern here would file one section's answer under another's key permanently.
   { key: "emotional_language", name: /\bemotional language|lenguaje emocional/i },
+  // ‼️ ANCHORED ON THE TWO-WORD PHRASE, for the same reason emotional_language is. "buying" alone
+  // appears in "buying questions" and "the buying journey" throughout the audit engine, "proof" and
+  // "price" are section headings in the framework documents, and "cost" is in half the offer fields.
+  // A loose pattern here files one section's answer under another's key permanently.
+  { key: "buying_conditions", name: /\bbuying conditions|condiciones de compra/i },
 ];
 
 /**

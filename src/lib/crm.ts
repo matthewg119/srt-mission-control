@@ -264,7 +264,6 @@ export async function resolveLeadCandidates(a: ResolveLeadInput): Promise<Resolv
 
 export interface LogActivityInput {
   contactId: string;
-  dealId?: string | null;
   /**
    * note | call | email | sms | meeting | task_created | task_completed
    * | status_change | portal | submission | snooze | system
@@ -308,7 +307,6 @@ export async function logActivity(input: LogActivityInput): Promise<string | nul
 
   const row = {
     contact_id: input.contactId,
-    deal_id: input.dealId ?? null,
     activity_type: input.activityType,
     direction: input.direction ?? null,
     channel: input.channel ?? null,
@@ -619,7 +617,6 @@ export interface AddNoteInput {
   actor?: string;
   /** Set when replaying an already-recorded note, for idempotency. */
   externalId?: string;
-  dealId?: string | null;
 }
 
 export async function addNote(input: AddNoteInput): Promise<{
@@ -639,7 +636,6 @@ export async function addNote(input: AddNoteInput): Promise<{
 
   const activityId = await logActivity({
     contactId: contact.id,
-    dealId: input.dealId ?? null,
     activityType: "note",
     direction: "internal",
     channel: input.origin === "zoho" ? "zoho" : "web",
@@ -668,7 +664,6 @@ export interface CreateTaskInput {
   priority?: "low" | "normal" | "high";
   origin: CrmOrigin;
   actor?: string;
-  dealId?: string | null;
 }
 
 export async function createTask(input: CreateTaskInput): Promise<{
@@ -687,7 +682,6 @@ export async function createTask(input: CreateTaskInput): Promise<{
     .from("lead_tasks")
     .insert({
       contact_id: input.contactId,
-      deal_id: input.dealId ?? null,
       title: input.title,
       description: input.description ?? null,
       task_type: input.taskType ?? "followup",
@@ -706,7 +700,6 @@ export async function createTask(input: CreateTaskInput): Promise<{
 
   await logActivity({
     contactId: input.contactId,
-    dealId: input.dealId ?? null,
     activityType: "task_created",
     direction: "internal",
     subject: input.title,

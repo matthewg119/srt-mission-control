@@ -8,13 +8,20 @@ interface BulkRow {
   business_name?: string;
   email?: string;
   phone?: string;
-  amount?: number;
-  pipeline?: string;
-  stage?: string;
-  assigned_to?: string;
 }
 
-// POST /api/contacts/bulk — bulk create contacts + deals (up to 500 per batch)
+// POST /api/contacts/bulk — bulk create contacts (up to 500 per batch)
+//
+// ‼️ IT USED TO CREATE A `deals` ROW PER CONTACT AND THAT HALF IS GONE (2026-09-27). It inserted
+// `pipeline: "New Deals"`, `stage: "Open - Not Contacted"` and an `amount` per imported contact, which
+// is the MCA funding pipeline, and `deals` is one of the eight wholly-funding tables being dropped.
+// Matthew, 2026-09-27: "my onboarding for AEO has nothing to do with funding so make sure they dont
+// even see each other I want to drop everything regarding to funding".
+//
+// ‼️ `amount`, `pipeline`, `stage` AND `assigned_to` ARE NO LONGER ACCEPTED, rather than accepted and
+// ignored. A caller still sending them gets a 400 naming them, because silently dropping a field
+// somebody supplied is how an importer looks like it worked. This route has no in-app caller, so the
+// only client is a script or a person with curl.
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -26,6 +33,20 @@ export async function POST(request: NextRequest) {
 
     if (rows.length > 500) {
       return NextResponse.json({ error: "Max 500 rows per batch" }, { status: 400 });
+    }
+
+    // ‼️ REFUSE THE FUNDING FIELDS BY NAME rather than ignoring them. See the header.
+    const FUNDING_FIELDS = ["amount", "pipeline", "stage", "assigned_to"] as const;
+    const sent = FUNDING_FIELDS.filter((f) => rows.some((r) => (r as unknown as Record<string, unknown>)[f] !== undefined));
+    if (sent.length) {
+      return NextResponse.json(
+        {
+          error:
+            `This route creates contacts only. It no longer creates a deal per contact, so ${sent.join(", ")} ` +
+            `${sent.length === 1 ? "is" : "are"} not accepted. Funding was decommissioned; remove the field(s) and retry.`,
+        },
+        { status: 400 }
+      );
     }
 
     // 1. Bulk insert contacts
@@ -49,27 +70,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "No contacts created" }, { status: 500 });
     }
 
-    // 2. Bulk insert deals
-    const dealInserts = contacts.map((c, i) => ({
-      contact_id: c.id,
-      pipeline: rows[i]?.pipeline || "New Deals",
-      stage: rows[i]?.stage || "Open - Not Contacted",
-      amount: rows[i]?.amount || 0,
-      assigned_to: rows[i]?.assigned_to || null,
-      source: "Import",
-    }));
-
-    const { data: deals, error: dealError } = await supabaseAdmin
-      .from("deals")
-      .insert(dealInserts)
-      .select("id");
-
-    if (dealError) throw dealError;
-
     return NextResponse.json({
       created: contacts.length,
       contacts: contacts.length,
-      deals: deals?.length || 0,
     });
   } catch (error) {
     console.error("Bulk import error:", error);

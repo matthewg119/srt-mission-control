@@ -25,7 +25,6 @@ const titleMap: Record<string, string> = {
   "/dashboard/pipeline": "Pipeline",
   "/dashboard/tasks": "Tasks",
   "/dashboard/email-agents": "Submissions",
-  "/dashboard/lenders": "Lenders",
   "/dashboard/automations": "Automations",
   "/dashboard/settings": "Settings",
 };

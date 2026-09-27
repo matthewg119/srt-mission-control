@@ -139,7 +139,12 @@ export const CRM_TOOLS = [
   {
     name: "get_lead_stats",
     description:
-      "Counts across the CRM — leads per status, per source, or new leads per day. Use for 'how many leads are in underwriting', 'how's the pipeline looking', 'how many new leads this week'.",
+      // ‼️ THE EXAMPLE QUESTION USED TO BE "how many leads are in underwriting" (fixed 2026-09-27). A
+      // tool DESCRIPTION is in the model's context on every CRM message, so a funding example there
+      // teaches the vocabulary that ai.ts:103 spends a paragraph forbidding. The two were in the same
+      // request, disagreeing. Same reason the audit engine keeps its market stats out of the default
+      // branch: a prose ban is not a ban while an example is pulling the other way.
+      "Counts across the CRM — leads per status, per source, or new leads per day. Use for 'how many leads are in each stage', 'how's the pipeline looking', 'how many new leads this week'.",
     input_schema: {
       type: "object" as const,
       properties: {
