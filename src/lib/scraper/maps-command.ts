@@ -98,9 +98,34 @@ export type MapsParse =
   | { ok: true; command: MapsCommand }
   | { ok: false; reason: string };
 
+/**
+ * Slack code formatting off the front and back of a command.
+ *
+ * ‼️ THIS COST A REAL PULL. An operator typed the command into Slack as CODE, which is the natural
+ * thing to do with something that looks like a command, so `event.text` arrived as
+ * `` `pull maps medspa | Dallas TX | med spa | limit 50` `` . The anchor below is `^pull maps`, so it
+ * did not match, `handleScraperEvent` returned false, and the message fell through to the general
+ * assistant, which answered it from the existing database. It looked like the command had run and
+ * returned 25 leads. Nothing had run, and nothing was bought.
+ *
+ * The lesson is not about backticks: a command surface that is ALSO a chat surface must be generous
+ * about formatting, because the fallback is not an error message, it is a different bot answering
+ * plausibly.
+ */
+function unwrapCode(text: string): string {
+  let t = text.trim();
+  // A fenced block, with or without a language tag, then a single or double backtick span.
+  const fenced = /^```(?:[a-z]+\r?\n|\r?\n)?([\s\S]*?)```$/i.exec(t);
+  if (fenced) t = fenced[1].trim();
+  // `...` or ``...``
+  const inline = /^`{1,2}([^`][\s\S]*?)`{1,2}$/.exec(t);
+  if (inline) t = inline[1].trim();
+  return t;
+}
+
 /** Does this message even claim to be a Maps pull. Checked before anything is parsed. */
 export function looksLikeMapsCommand(text: string): boolean {
-  return /^\s*pull\s+maps\b/i.test(text);
+  return /^\s*pull\s+maps\b/i.test(unwrapCode(text));
 }
 
 /**
@@ -112,7 +137,7 @@ export function looksLikeMapsCommand(text: string): boolean {
 export function parseMapsCommand(text: string): MapsParse {
   if (!looksLikeMapsCommand(text)) return { ok: false, reason: "that is not a `pull maps` command" };
 
-  const body = text.replace(/^\s*pull\s+maps\b/i, "").trim();
+  const body = unwrapCode(text).replace(/^\s*pull\s+maps\b/i, "").trim();
   if (!body) {
     return { ok: false, reason: "a Maps pull needs a vertical, a metro and something to search for" };
   }
