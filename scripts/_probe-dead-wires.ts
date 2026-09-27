@@ -578,15 +578,33 @@ check(
   !isRead("avatar_briefs", "business_noun"),
   "it arrives over the wire and is discarded, which is the finding"
 );
-// ‼️ THIS PIN ALSO MOVED, for the same reason the one above did: it was `approved_at`, which this
-// build wired up. `rationale` is the honest replacement and a sharper demonstration of the rule:
-// `page_angles.rationale` is in ANGLE_COLUMNS and read constantly, while `keyword_clusters.rationale`
-// is written by persistClusters and never selected back. The card does print a rationale, and it is
-// the RECOMPUTED one off clusterFinalists, which is exactly the confusion table-scoping prevents.
+// ‼️ THIS PIN HAS NOW MOVED TWICE, AND THE REASON IS THE SAME BOTH TIMES: a fixture chosen BECAUSE it
+// was dead stops being a fixture the moment somebody wires it. It was `approved_at`, then `rationale`,
+// which 2026-09-27 wired into the strategy card. `updated_at` is the replacement, and it is a better
+// one than either because nothing will ever wire it: it is row bookkeeping with a sentence in
+// WRITE_ONLY, while `srt_playbook.updated_at` is selected by name in api/call-coach/playbook.
+//
+// ‼️ `card_ts` WAS TRIED AND IS WRONG, which is worth recording so nobody tries it again: it LOOKS
+// like the ideal fixture, and docs/2026-09-25-drop-missing-pictures.sql:42 reinforces that by listing
+// it among "the three the card and the gate actually read". But serp-cards.ts:324 really does
+// `.from("keyword_clusters").select("card_ts")`, so the column is read and the pin failed immediately.
+// The probe was right and the assumption was wrong, which is the whole reason this pin exists.
+//
+// ‼️ IF THIS EVER FAILS, WIRE-UP IS THE LIKELY CAUSE, NOT A BROKEN PROBE. Check whether something began
+// reading keyword_clusters.updated_at before concluding the rule is broken, then move the pin again.
 check(
-  "an explicit-list table is not covered by another table's property: keyword_clusters.rationale",
-  !isRead("keyword_clusters", "rationale"),
-  "page_angles.rationale is read constantly; this one is not"
+  "an explicit-list table is not covered by another table's property: keyword_clusters.updated_at",
+  !isRead("keyword_clusters", "updated_at"),
+  "srt_playbook.updated_at is selected by name; this one is written by every update and read by nothing"
+);
+// ‼️ AND THE OTHER HALF OF THE SAME RULE, which the pin above cannot show on its own: the column whose
+// name it borrows really IS read somewhere. Without this, a bug that made isRead() return false for
+// EVERYTHING would leave the pin above passing for the wrong reason, which is exactly the failure §8
+// catches one check over. Proving a check can fail is not enough; it also has to be able to pass.
+check(
+  "and the borrowed name IS read on its own table: srt_playbook.updated_at",
+  isRead("srt_playbook", "updated_at"),
+  "api/call-coach/playbook selects it by name, so a false here means the reader side is broken"
 );
 check("a payload key is a WRITE, not a read: client_audiences.emotional_source", isWritten("client_audiences", "emotional_source"));
 
@@ -763,6 +781,9 @@ const WRITE_ONLY: Record<string, string> = {
   "policy_documents.created_by": "who ingested the document. policy-scan.ts keys idempotency on the content hash, which is the stronger key and the one read.",
   "time_log.logged_by": "who logged the hours. The step is confirmed by counting rows, which is what its verifier reads.",
   "client_delivery_steps.verified_at": "when the evidence was found, beside `verified_source`, which IS read and is what renders the two honest tiers.",
+  "client_audiences.confirmed_by": "who, beside `confirmed_at`, which IS read through the COLUMNS list and is what the card branches on.",
+  "client_audiences.vocabulary_confirmed_by": "who, beside `vocabulary_confirmed_at`, which IS read and gates whether the vocabulary is usable.",
+  "client_audiences.seeded_at": "when the audience was seeded, beside `seeded_from`, which IS read and is the provenance that matters: which preset it came from, not what time.",
   "client_field_values.superseded_by": "the link back to the row this one replaced, held true by a CHECK against `superseded_at`. The live index is what reads supersession.",
 
   // ── MODEL PROVENANCE: which model produced the row ────────────────────────────────────────────
@@ -938,25 +959,25 @@ const OWED: Record<string, string> = {
   "avatar_briefs.visit_noun": "shared-preset noun, never seeded and never read. Drop or seed: Matthew's call.",
 
   // ── the WHO beside a WHEN that is read ────────────────────────────────────
-  // Exactly the shape of keyword_clusters.rejected_by, which this build wired into the strategy card.
-  // These two need the same treatment on the audience card, which has no provenance line yet.
-  "client_audiences.confirmed_by":
-    "the who beside confirmed_at, which IS read. Same shape as keyword_clusters.rejected_by; the audience card has no provenance line yet.",
-  "client_audiences.vocabulary_confirmed_by":
-    "the who beside vocabulary_confirmed_at, which IS read. Owed the same provenance line.",
-  "client_audiences.seeded_at": "the when beside seeded_from, which IS read. Owed the same provenance line.",
-
-  // ── keyword_clusters: stored, and the card prints the recomputed value ────
-  // ‼️ THE SUBTLEST SHAPE IN THIS FILE, and worth reading before "fixing" any of the three. The card
-  // DOES print a rationale and an awareness pair, from the RECOMPUTED ProposedCluster off
-  // clusterFinalists, never from the stored row. So the information is on screen and the column is
-  // still dead, and the two can disagree after an offer change. Reading the stored values is a real
-  // improvement and a behaviour change, which is why it is not smuggled in here.
-  "keyword_clusters.rationale": "stored by persistClusters; the card prints the recomputed rationale instead. The two can disagree after an offer change.",
-  "keyword_clusters.awareness_entry": "stored by persistClusters; the card prints the recomputed pair instead.",
-  "keyword_clusters.awareness_target": "stored by persistClusters; the card prints the recomputed pair instead.",
-  "keyword_clusters.offer_fingerprint":
-    "written for the staleness check its own migration comment argues for, and that check still does not read it. Wiring it is the point of the column.",
+  //
+  // ‼️ MOVED TO WRITE_ONLY ON 2026-09-27, AND THE MOVE IS THE DECISION THE PROMPT ASKED FOR. These
+  // three sat here reading "owed the same provenance line", i.e. owed a rendering on a card. That is a
+  // product decision somebody may or may not ever want, not a bug, and an OWED entry is a promise that
+  // the code is coming. Audit provenance is the same class as the ~25 `*_by` columns the onboarding
+  // sweep enumerated in WRITE_ONLY: the decision itself is read in every case, and who made it is kept
+  // so a person can ask later. They are in WRITE_ONLY now, with the same sentence shape.
+  //
+  // ── keyword_clusters: WIRED, so these four are gone from this list ────────
+  //
+  // ‼️ THE FOUR keyword_clusters ENTRIES WERE RESOLVED RATHER THAN RE-WORDED, and what they said is
+  // worth keeping because it is the subtlest shape this file recorded: the card DID print a rationale
+  // and an awareness pair, from the recomputed ProposedCluster off clusterFinalists, never from the
+  // stored row. So the information was on screen and the columns were dead, and the two could disagree
+  // with nothing saying which you were looking at. `strategyLines` now prefers the stored values and
+  // compares `offer_fingerprint` against the offer the card is being drawn against, printing the
+  // disagreement rather than silently correcting it. Wiring `offer_fingerprint` was load-bearing, not
+  // a bonus: reading the stored values WITHOUT it would have made the card more wrong than recomputing,
+  // because a stale decision shown with no warning is worse than a fresh derivation.
 
   // ── THE AUDIENCE COLUMNS, WHICH LANDED BEFORE THEIR CODE ON PURPOSE ───────────────────────────
   //

@@ -18,7 +18,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { stepNumber } from "@/config/delivery-steps";
 import { normalizePhrase } from "./phrase-quality";
-import { isAwarenessStage, type AwarenessStage } from "@/lib/audit-engine/awareness";
+import { isAwarenessStage, awarenessTarget, type AwarenessStage } from "@/lib/audit-engine/awareness";
 import {
   AEO_ROUTING_RULE,
   SERP_TRIAGE_RULE,
@@ -770,6 +770,16 @@ export function shortlistLines(
   return lines;
 }
 
+/**
+ * A stored awareness stage, re-validated rather than cast.
+ *
+ * ‼️ A VALUE OUT OF THE DATABASE GETS NO MORE TRUST THAN A COMPUTED ONE JUST BECAUSE IT WAS WRITTEN
+ * DOWN. `awareness_entry` is a plain integer column with no CHECK, so a row written by an older build
+ * or edited by hand in the console can sit outside 1 to 5, and `stageName()` would then label it with
+ * whatever happens to be at that index. Same guard `clusterFinalists` applies before deriving a target.
+ */
+const asStage = (v: number | null | undefined): AwarenessStage | null => (isAwarenessStage(v) ? v : null);
+
 /** The strategy card: the clusters, what merged under what, and what each becomes. */
 export function strategyLines(
   clusters: ReturnType<typeof clusterFinalists>["clusters"],
@@ -781,7 +791,15 @@ export function strategyLines(
    * What a person decided about each STORED cluster, by label. Empty is a legitimate state: a
    * database without the strategy migration, or a strategy nobody has approved or rejected yet.
    */
-  verdicts: Map<string, ClusterVerdict> = new Map()
+  verdicts: Map<string, ClusterVerdict> = new Map(),
+  /**
+   * The offer the card is being drawn against, for the staleness comparison.
+   *
+   * ‼️ OPTIONAL, AND NULL MEANS "DO NOT CLAIM EITHER WAY". A caller that cannot resolve the current
+   * fingerprint must not make every stored cluster look stale, and it must not make one look current.
+   * Absent beats wrong, the rule this repo applies to every other unmeasurable comparison.
+   */
+  offerFingerprint: string | null = null
 ): string[] {
   const lines: string[] = [
     `*Keyword strategy for ${clientName}.* ${clusters.length} cluster${clusters.length === 1 ? "" : "s"}${locked ? ", locked" : ", not locked yet"}.`,
@@ -793,12 +811,38 @@ export function strategyLines(
     const kind = c.pageKind === "service_page" ? "Service page" : "Post";
     lines.push(`*${i + 1}. ${c.label}*  _(${kind})_`);
     if (pillar) lines.push(`      Keyword: \`${pillar.phrase}\``);
-    if (c.awarenessEntry && c.awarenessTarget) {
-      lines.push(
-        `      Reader: ${stageName(c.awarenessEntry)} (${c.awarenessEntry}), leaves ${stageName(c.awarenessTarget)} (${c.awarenessTarget})`
-      );
+
+    // ‼️ STORED WHEN PRESENT, RECOMPUTED OTHERWISE, AND IT SAYS WHICH. A straight swap to stored-only
+    // would blank these lines on the common first run, because `strategy` does not persist and only
+    // `strategy new` does. Preferring the stored row is what makes the column live; falling back is
+    // what keeps the card working before anything has been written.
+    const stored = verdicts.get(c.label);
+    const stale = Boolean(
+      stored?.offerFingerprint && offerFingerprint && stored.offerFingerprint !== offerFingerprint
+    );
+    const useStored = Boolean(stored?.rationale) && !stale;
+    // ‼️ THE STORED VALUES COME BACK AS PLAIN NUMBERS AND ARE RE-VALIDATED, NOT CAST. A stage written by
+    // an older build, or by hand in the console, is outside 1 to 5 as easily as inside it, and
+    // stageName() would then label it with whatever sits at that index. isAwarenessStage is the same
+    // guard clusterFinalists applies before it derives a target; a stored value gets no more trust than
+    // a computed one just because it was written down.
+    const entry = useStored ? asStage(stored?.awarenessEntry) ?? c.awarenessEntry : c.awarenessEntry;
+    const target = useStored ? asStage(stored?.awarenessTarget) ?? c.awarenessTarget : c.awarenessTarget;
+
+    if (entry && target) {
+      lines.push(`      Reader: ${stageName(entry)} (${entry}), leaves ${stageName(target)} (${target})`);
     }
-    lines.push(`      ${c.rationale}`);
+    lines.push(`      ${useStored ? stored?.rationale : c.rationale}`);
+
+    // ‼️ THE DISAGREEMENT IS PRINTED, NEVER SILENTLY CORRECTED. Same doctrine as thread-truth.ts, where
+    // derivedStage outranks the stored column and the conflict is stated. A stale cluster is shown as
+    // the recomputed reading WITH the warning, rather than the stored decision with no warning: the
+    // recomputation is true of the offer on the board today, and the stored row is true of one that is
+    // gone. Which of the two you are reading is the thing that was impossible to know before.
+    if (stale) {
+      lines.push("      :warning: decided against a previous offer. Recomputed above. `strategy new` re-groups.");
+    }
+
     const decided = clusterVerdictLine(verdicts.get(c.label));
     if (decided) lines.push(decided);
     for (const id of c.memberIds) {
@@ -1405,6 +1449,30 @@ export interface ClusterVerdict {
   approvedBy: string | null;
   rejectedAt: string | null;
   rejectedBy: string | null;
+  /**
+   * What persistClusters actually WROTE for this cluster, as opposed to what the card recomputes.
+   *
+   * ‼️ THESE THREE WERE WRITTEN AND READ BY NOTHING, WHICH IS THE CURATED-20 SHAPE. `persistClusters`
+   * stores `rationale`, `awareness_entry` and `awareness_target`; `strategyLines` printed
+   * `verdictLine(row.verdict)` and a freshly derived awareness pair instead. The information was on
+   * screen and the columns were dead, and the two can disagree by four measured routes: `strategy`
+   * without `new` never persists at all, `strategy approve` promotes rows it did not delete,
+   * `strategy service|post N` updates only page_kind, and an offer change moves the verdicts under
+   * everything. Nothing said which one you were looking at.
+   */
+  rationale: string | null;
+  awarenessEntry: number | null;
+  awarenessTarget: number | null;
+  /**
+   * The offer these values were decided against.
+   *
+   * ‼️ THE COLUMN EXISTED FOR EXACTLY THIS AND NOTHING READ IT. Its own migration comment argues for a
+   * staleness check; `persistClusters` writes it and no consumer ever compared it to anything, so a
+   * cluster written for the previous offer was indistinguishable from a current one. Reading the stored
+   * values without this would make the card MORE wrong than recomputing, because a stale decision shown
+   * with no warning is worse than a fresh derivation.
+   */
+  offerFingerprint: string | null;
 }
 
 async function storedClusterVerdicts(clientId: string): Promise<Map<string, ClusterVerdict>> {
@@ -1413,7 +1481,9 @@ async function storedClusterVerdicts(clientId: string): Promise<Map<string, Clus
   // without it must still draw the card rather than failing the whole command on one unknown name.
   const { data, error } = await supabaseAdmin
     .from("keyword_clusters")
-    .select("label, status, approved_at, approved_by, rejected_at, rejected_by")
+    .select(
+      "label, status, approved_at, approved_by, rejected_at, rejected_by, rationale, awareness_entry, awareness_target, offer_fingerprint"
+    )
     .eq("client_id", clientId);
   if (error || !data) return out;
   for (const c of data) {
@@ -1423,6 +1493,10 @@ async function storedClusterVerdicts(clientId: string): Promise<Map<string, Clus
       approvedBy: (c.approved_by as string | null) ?? null,
       rejectedAt: (c.rejected_at as string | null) ?? null,
       rejectedBy: (c.rejected_by as string | null) ?? null,
+      rationale: (c.rationale as string | null) ?? null,
+      awarenessEntry: (c.awareness_entry as number | null) ?? null,
+      awarenessTarget: (c.awareness_target as number | null) ?? null,
+      offerFingerprint: (c.offer_fingerprint as string | null) ?? null,
     });
   }
   return out;
@@ -1546,7 +1620,11 @@ async function strategyCommand(clientId: string, regroup: boolean): Promise<Stra
   const name = await clientNameFor(clientId);
   const locked = await isLocked(clientId);
   const verdicts = await storedClusterVerdicts(clientId);
-  const message = strategyLines(clusters, unplaced, byId, name, locked, verdicts).join("\n");
+  // The offer the card is being drawn against, so a cluster decided under a previous one says so.
+  // `fingerprintFor` returns null when the offer context cannot be resolved, and that null travels:
+  // strategyLines then claims nothing about staleness in either direction.
+  const currentFingerprint = await fingerprintFor(clientId);
+  const message = strategyLines(clusters, unplaced, byId, name, locked, verdicts, currentFingerprint).join("\n");
 
   if (!regroup) return { message };
   return { message, after: async () => void (await persistClusters(clientId, clusters, byId)) };
@@ -1885,7 +1963,11 @@ async function pillarCommand(clientId: string, n: number, by: string): Promise<S
       label: row.phrase,
       pillar_keyword_id: row.id,
       awareness_entry: row.awarenessStage,
-      awareness_target: row.awarenessStage && isAwarenessStage(row.awarenessStage) ? Math.max(1, row.awarenessStage - 1) : null,
+      // ‼️ awarenessTarget(), NOT AN INLINE Math.max. clusterFinalists calls that helper and this
+      // inlined the same formula, so one rule had two implementations that agreed only by luck. A
+      // change to how far a page is expected to move a reader would otherwise apply to a derived
+      // cluster and not to a promoted pillar, on the same card.
+      awareness_target: row.awarenessStage && isAwarenessStage(row.awarenessStage) ? awarenessTarget(row.awarenessStage) : null,
       page_kind: row.verdict === "service_page" ? "service_page" : "post",
       rationale: `Promoted by ${by}.`,
       rank: 999,
