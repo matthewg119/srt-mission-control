@@ -70,6 +70,17 @@ jobs:
       - name: Virtual Agent grammar probe (one agent, two surfaces)
         run: bun --no-env-file run scripts/_probe-virtual-agent-grammar.ts
 
+      # ‼️ THE SCRAPER LANE'S ONLY AUTOMATIC GUARD. The lane leans on four lists the
+      # compiler cannot check, because each is a plain array rather than a `Record<Workflow, ...>`:
+      # PICK and KEYCAPS in lane.ts, IN_FLIGHT in report.ts, ACTIVE_STATUSES in store.ts. A missing
+      # entry in any of them is a silent misroute, and the worst of them spends money per row. This
+      # probe reads them out of the source for exactly that reason, and until now nothing ran it.
+      #
+      # Offline by construction: the three real MX lookups sit behind --mx, so the default run
+      # touches no network, no database and no Slack.
+      - name: Scraper lane probe (the dispatch the compiler cannot check)
+        run: bun --no-env-file run scripts/_probe-scraper.ts
+
       - name: Headline probes
         run: |
           bun --no-env-file run scripts/_probe-aeo-headlines.ts

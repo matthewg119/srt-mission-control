@@ -1,0 +1,68 @@
+# The frozen crawl sample, chosen 2026-09-25 by md5(id) order over every med_spa_leads row
+# carrying a website (425 of 439 at the time).
+#
+# DO NOT REGENERATE THIS FILE TO REFRESH IT. The whole point is that the same clinics are
+# measured before and after a change. A new sample is a new population, and the comparison
+# silently stops meaning anything.
+#
+# <med_spa_leads.id> <website>
+3f79ee1b-9c04-4136-9252-a6ce4dbf4ead http://www.themedspachandler.com/
+1c778451-48f9-410d-b309-7cb0540ed455 https://cosmeticamedspa.com/%3Futm_campaign%3Dgmb%26utm_medium%3Dgbpinfo%26utm_source%3Dgooglebusinessprofile
+c26713ab-c4ce-43fb-8690-06e89552e9fb http://www.amariaesthetic.com/
+1dc97e98-d2a8-4531-bd4d-623c2e589109 https://www.precisionmedicinejax.com/
+7865786c-37d8-4239-9867-59df1d6bf4c7 http://www.texaslasermedspa.com/
+c5ef1a56-a304-4594-a7cd-8b2d491bc1ab https://www.aestheticenvy.com/%3Futm_source%3DGMBlisting%26utm_medium%3Dorganic%26utm_campaign%3Dgmb-Sacramento
+e2ac6824-2840-42a9-8c35-53a8512ffd55 https://www.myethosspa.com/%3Futm_campaign%3Dgbp%26utm_content%3Dholmdel
+08069e31-c926-4b34-8951-353be9671048 https://aurspa.com/
+7b80d76d-7c91-4ef9-98cb-c83c66792e86 https://poremedspa.com/%3Fy_source%3D1_MjA1NTI2OTA5OC03MTUtbG9jYXRpb24ud2Vic2l0ZQ%253D%253D
+d8831275-be92-4a78-ad6e-9eeea2305d66 https://one-medspa.com/%3Futm_source%3Dgoogle-gmb-maps%26utm_medium%3Dgmb-website-button%26utm_campaign%3Dlocl.io%26utm_content%3Dbb93af45-4414-4e9e-963d-d4e93ddc41de
+53194961-5cff-4198-af31-08e5a73fbf41 https://downtownmedspa.com/
+dfea0fc8-f808-4810-9a5d-e9e6602d8f6f https://priveglowkaty.com/
+83536525-5546-4bf2-9197-aa6dfc1f6ee4 https://www.omnihotels.com/hotels/amelia-island/spa%3Futm_source%3DGMBlisting%26utm_medium%3Dorganic
+50907f75-a295-43f8-b736-3881c1a1daca https://advancedwellnessaesthetics.com/%3FUTM_source%3DGBP_listing%26UTM_medium%3Dorganic%26source%3Dgmb
+82158f74-22ea-418a-9904-e777a2369dff https://coastalmedicalspa.com/%3Futm_source%3DGMB
+8c5bd68d-5b4d-4407-a189-6ddbb1fb44ad https://www.thepeelstudio.com/
+a579886c-ad02-4662-bb23-790b276bc6ca https://www.siliconvalleymedspa.com/
+8dc624ec-d2d5-4729-bf6c-08355e4ec835 https://book.pocketsuite.io/book/robin-eaddy
+9e73d733-26ce-4c94-ac2a-462c7fcf1dcf https://diamondadvancedaesthetics.com/
+35dca83f-4bf2-4068-869e-c703c3e37b30 https://aboutface.guru/
+498bb72f-6343-47cc-a664-1c517d3d9ae2 http://luminessmedspa.com/
+5a646225-606b-4dec-bda7-06bdd1c31572 https://www.pvps.com/annex/
+d32c046f-9b9e-4fdd-a921-c5a57c6f7c10 https://puravidaflemingisland.com/procedures
+149e086f-046d-4f4b-8057-c49ed7255a8a http://studiomspa.com/
+1e28e9cb-94e4-42a3-8219-1a0c24fe2cb3 https://purewellnessmedspa.com/
+9aaf929f-b68c-4821-9e8c-96a8a5553bcb https://nucellskinmedicalspa.com/
+dbbc0c2c-e48c-4e81-be34-ca1e9b352ddd https://infinitymedspa.com/
+ad6bd4ac-ce1c-4d10-8baa-05c99c8cb705 https://silkcdayspa.com/
+67a37a40-82cb-4c90-9771-bfb7f73f662c http://www.myrejuvemedspa.com/
+ace6cf2f-2108-45e9-a8ee-39bb4fc073ec https://medspaboutiqueny.com/
+15248521-d983-44f8-86ee-e30faf70141d http://trustedhandshw.com/
+3c8484a4-ea6b-4f5e-9bcc-4fb487b5236d https://claramedicalspa.com/
+38cc80ca-b38a-4d64-8a12-aa89a05b85e7 https://www.optimantra.com/optimus/patient/patientaccess/servicesall%3Fpid%3DM1dLM3FjbVN2aEtoKy84d3oybHJPQT09%26lid%3DY0luVFlidGlaY1Z4OWZ3UlV1K29HQT09
+9e049cb5-197b-4768-8d63-2b6a2c444818 https://www.baysidemedical.net/
+80b4c798-d8d6-4d65-ab19-ff2d97759146 https://www.equinox.com/clubs/new-york/uptown/sportsclubnewyork%3Fcid%3Dgmb
+15dd4f0e-36d2-41a8-9f95-5007f0fda008 https://valleyaesthetic.com/
+dcbfd256-b85e-4faa-a2d5-c66a2595faa7 https://www.manhattan-medspa.com/
+eb1ce670-f381-438b-9c3b-5ae103ec3ccb http://timelessmedspa.org/
+569d1ff7-5bf7-46c2-a5b1-b83b11c60bbd http://www.purelynaturalspa.com/
+0b4d80af-5e17-44a5-97ca-decb7dd97e1a https://purecosmeticsnc.com/
+e536cf16-3a32-4840-9fc4-17c4dd9d3b06 http://luxynailspa.mytime.com/
+a146e939-5359-4916-92a0-0c828ba58e18 http://dmandco.readyhubb.com/
+523be644-bcad-44e0-9e83-4d0d3593927c https://www.attainmedspa.com/
+b0757a8c-2202-42f9-8ae7-5b87c8b239d6 https://www.aesthetixplus.com/
+9ed3ad5f-ae9f-4ca7-afc0-60faffc2a522 https://insparationmedspa.com/%3Futm_source%3Dgoogle%26utm_medium%3Dorganic%26utm_campaign%3Dgbp
+5b032d0d-f15f-4d2b-b81b-74450f7c18cb https://www.newedenspa.com/
+78131ffd-9806-4554-8160-4e5296711592 https://daytonabeautyspot.com/
+2363b998-4c01-4915-908b-d147374c58a5 https://agelessjax.com/
+fb3570ee-aa09-43b3-a8fd-56bba7caead5 http://www.raynies.com/
+dfd30f69-4121-4261-9d0b-3aa4f9fea476 https://luxjapaneseheadspa.com/
+5f0df7e3-06a0-411f-88ed-0135f0051f76 https://www.rejuvenatepv.com/%3Futm_source%3Dgoogle%26utm_medium%3Dorganic%26utm_campaign%3Dgmb_listing
+2843714c-5ad5-41cb-a596-a6ff46482d32 https://jaxmedispa.com/
+bffb505e-6966-42ce-ac47-86ba400d6bef https://myethosspa.com/locations/cherry-hill/
+219f04f0-bb66-4686-94c2-efb7ac8d18ef https://www.therapeuticsolutionsofamelia.com/
+2190d512-8030-4856-9238-41c586831ac2 https://www.thefixocala.com/
+d54f781e-6ea9-4138-87af-c1b3b9eeba0c https://www.trueyouaesthetic.com/
+c15ec29c-12c3-490e-8dac-282f02b1d3d2 http://www.reviveaestheticsjax.com/
+b3fba65b-9512-4ca9-b9da-c20a5c94fa8b https://lacura-salt-spa-st-augustine.cloveronline.com/
+e81cdfb7-7182-4319-82c2-605e8e42817a https://skinneymedspa.com/%3Futm_source%3Dgoogle%26utm_medium%3Dorganic%26utm_campaign%3Dgmb-flagship-nyc
+adc6ebf5-334f-4cd6-bc90-2a854c3ce8e7 https://www.aimedspagrowth.com/

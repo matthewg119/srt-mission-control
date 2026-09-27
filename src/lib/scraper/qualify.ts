@@ -21,6 +21,15 @@ import { callClaudeJSON } from "@/lib/claude-calls";
 
 const MODEL = "claude-sonnet-4-6" as const;
 
+/**
+ * Stamped onto every verdict as `raw_leads.qualify_model`.
+ *
+ * ‼️ RECORDED PER ROW RATHER THAN PER RUN, because a run can span a model change: the sweep is
+ * re-entered every five minutes and a deploy lands between ticks. Comparing two runs' keep rates
+ * without knowing which model judged which half is comparing nothing.
+ */
+export const QUALIFY_MODEL: string = MODEL;
+
 /** Small enough that one bad row cannot cost the batch, big enough that the ICP is not re-sent per company. */
 export const QUALIFY_CHUNK = 20;
 
@@ -229,6 +238,23 @@ export function dropReviewLines(args: {
   }
 
   lines.push("");
-  lines.push("React :white_check_mark: to release the enrichment spend on the kept rows only.");
+  // ‼️ THE WORD "SPEND" LEFT THIS LINE WHEN THE FIRST RUNG TURNED OUT TO BE FREE, BUT THE GATE DID
+  // NOT. What it holds back changed rather than disappearing, and in this order:
+  //   1. The ICP being wrong. It costs nothing here and costs the WHOLE list downstream, and the
+  //      :mag: flag above is the only place that signal is ever read. Removing the gate because the
+  //      next stage got cheaper would delete the one checkpoint that catches it.
+  //   2. MillionVerifier credits. The spend moved one stage later, it did not vanish: every address
+  //      the crawl finds is an address MV is billed for.
+  //   3. Our crawl footprint. Free to us is not free to them. `fetchPage` models "blocked" as a
+  //      first-class outcome because small-business hosts push back, and releasing a thousand-site
+  //      crawl against a mis-qualified list is the reputational cost that replaced the dollar one.
+  //
+  // ‼️ KEEP THE LITERAL PREFIX "React :white_check_mark: to release" — _probe-list-prep.ts greps
+  // this file and this output for it.
+  lines.push(
+    "React :white_check_mark: to release the kept rows into enrichment. The crawl is free; what " +
+      "this holds back is a wrong ICP, the MillionVerifier credits after it, and a thousand " +
+      "fetches against real clinics' websites."
+  );
   return lines;
 }
