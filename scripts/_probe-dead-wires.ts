@@ -617,15 +617,6 @@ check("a payload key is a WRITE, not a read: client_audiences.emotional_source",
 // it leaves the count by leaving the schema.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Tables whose dead wires have been resolved, and which must therefore stay clean.
- *
- * ‼️ ADDING A TABLE HERE IS A CLAIM THAT SOMEBODY LOOKED AT EVERY UNREAD COLUMN ON IT. Do not add one
- * to make a finding go away, and do not remove one to make this probe green: removing a table from
- * this set is how a cleaned lane silently rots back, which is the exact failure the file is about.
- */
-const SCANNED = new Set(["avatar_briefs", "client_audiences", "keyword_clusters"]);
-
 /** The onboarding board and everything it reads. */
 const ONBOARDING = new Set([
   "clients", "client_archives", "client_audiences", "client_avatar_runs", "client_datasets",
@@ -641,6 +632,24 @@ const ONBOARDING = new Set([
   "policy_documents", "question_bank", "question_set_versions", "review_audit_rows",
   "review_tool_submissions", "time_log",
 ]);
+
+/**
+ * Tables whose dead wires have been resolved, and which must therefore stay clean.
+ *
+ * ‼️ MEMBERSHIP IS A CLAIM THAT SOMEBODY LOOKED AT EVERY UNREAD COLUMN ON IT. Do not add a table to
+ * make a finding go away, and do not remove one to make this probe green: removing a table from this
+ * set is how a cleaned lane silently rots back, which is the exact failure this file is about.
+ *
+ * ‼️ IT IS THE WHOLE ONBOARDING LANE AS OF 2026-09-27, and it is written as `new Set(ONBOARDING)`
+ * rather than fifty copied names on purpose. The lane went from 182 unread columns to zero: every one
+ * is read, dropped, in WRITE_ONLY with a sentence, or in OWED with what it owes. Re-listing the names
+ * here would be a second source of truth for lane membership, and the two would drift the first time a
+ * table was added to one and not the other — which would silently un-hold part of the lane.
+ *
+ * The consequence, which is the point: a NEW unread column on any onboarding table now fails
+ * IMMEDIATELY and BY NAME in §5, rather than being counted against a baseline.
+ */
+const SCANNED = new Set(ONBOARDING);
 
 /**
  * Funding, decommissioned 2026-08-17 and deleted on sight.
@@ -724,6 +733,132 @@ const WRITE_ONLY: Record<string, string> = {
   "keyword_clusters.updated_at": "row bookkeeping, written by every update and selected by nothing.",
   "keyword_clusters.created_at":
     "row bookkeeping, and it reads as untouched because the column DEFAULT writes it rather than the app.",
+
+  // ── PROVENANCE: the who, beside a flag that IS read ────────────────────────────────────────────
+  //
+  // ‼️ ENUMERATED, NOT PATTERN-MATCHED, AND THE ENUMERATION IS THE POINT. BOOKKEEPING_NAMES warns
+  // against adding `*_by` as a fourth name, and this is why the warning stands: each entry below is an
+  // assertion that somebody checked WHICH read flag the column sits beside. A `/_by$/` rule would make
+  // that claim automatically and therefore make it worthless. The decision itself is read in every
+  // case; what nothing reads is who made it, and no card renders that yet.
+  "client_keywords.approved_at": "who/when beside `approved`, which IS read: client-keywords.ts filters `r.approved && !r.dropped`.",
+  "client_keywords.approved_by": "who/when beside `approved`, which IS read: client-keywords.ts filters `r.approved && !r.dropped`.",
+  "client_keywords.picked_at": "who/when beside `role`, the anchor the ladder picked, which IS read. anchor-ladder.ts writes all three together.",
+  "client_keywords.picked_by": "who/when beside `role`, the anchor the ladder picked, which IS read. anchor-ladder.ts writes all three together.",
+  "client_headlines.approved_at": "who/when beside `approved`, which IS selected by client-headlines.ts and gates whether a headline can become a page.",
+  "client_headlines.approved_by": "who/when beside `approved`, which IS selected by client-headlines.ts and gates whether a headline can become a page.",
+  "client_field_proposals.decided_at": "who/when beside `status`, which IS selected and is what the proposal card branches on.",
+  "client_field_proposals.decided_by": "who/when beside `status`, which IS selected and is what the proposal card branches on.",
+  "dataset_suggestions.decided_at": "who/when beside `status`, which IS selected. dataset_suggestions proposes a field and never declares one.",
+  "dataset_suggestions.decided_by": "who/when beside `status`, which IS selected. dataset_suggestions proposes a field and never declares one.",
+  "page_angles.decided_at": "who/when beside the angle row itself, which is selected by id and idea.",
+  "page_angles.decided_by": "who/when beside the angle row itself, which is selected by id and idea.",
+  "page_magnet_candidates.decided_at": "who/when beside `status`, which IS selected alongside title, promise and cta_label.",
+  "page_magnet_candidates.decided_by": "who/when beside `status`, which IS selected alongside title, promise and cta_label.",
+  "competitor_candidates.selected_by": "who, beside `selected`, which IS read and is step 6's declared output in STEP_PRODUCES.",
+  "client_question_sets.approved_by": "who, beside `status` and `approved_at`, both of which ARE selected.",
+  "client_keyword_strategy.locked_by": "who, beside the lock itself. isLocked() reads the fingerprint, which is what decides whether the set is frozen.",
+  "page_plan.approved_by": "who, beside `status`, which every plan read filters on.",
+  "page_gate_runs.run_by": "who ran the gate. assertGatePassed reads the verdict and the body hash, which is what a pass describes.",
+  "policy_documents.created_by": "who ingested the document. policy-scan.ts keys idempotency on the content hash, which is the stronger key and the one read.",
+  "time_log.logged_by": "who logged the hours. The step is confirmed by counting rows, which is what its verifier reads.",
+  "client_delivery_steps.verified_at": "when the evidence was found, beside `verified_source`, which IS read and is what renders the two honest tiers.",
+  "client_field_values.superseded_by": "the link back to the row this one replaced, held true by a CHECK against `superseded_at`. The live index is what reads supersession.",
+
+  // ── MODEL PROVENANCE: which model produced the row ────────────────────────────────────────────
+  "page_angles.model": "which model wrote the angle. Recorded so a bad batch can be traced to a model, not read by anything that branches.",
+  "page_magnet_candidates.model": "which model wrote the magnet candidate. Same trace-only purpose as page_angles.model.",
+  "page_gate_runs.model": "which model did the read-through. A failed model read is a SKIP by design, so nothing branches on which one it was.",
+  "keyword_serp_reads.model": "which model read the SERP. bestVerdict() decides on `source` and recency, never on the model name.",
+  "keyword_serp_reads.actor": "who or what filed the reading. bestVerdict() prefers a typed correction by `source`, which is the field that carries that meaning.",
+  "keyword_serp_reads.confidence": "the vision pass's own confidence. Deliberately not a gate: a low-confidence reading is still a reading, and `source` plus doc_id is what makes one authoritative.",
+
+  // ── SUPERSEDED: a newer column or table carries the decision now ───────────────────────────────
+  "client_keywords.serp_verdict":
+    "‼️ A TRAP, NOT A CACHE. keyword-strategy.ts:198 says it in capitals: this column 'was a bug wearing a cache', because recordVerdict overwrote it on EVERY reading regardless of source, so a re-run of the vision pass silently replaced a correction a person had typed. attachReadings() now merges from keyword_serp_reads through bestVerdict(). NOBODY MAY READ THIS COLUMN AGAIN. It is still written, so it is available to be dropped once a deploy that stops writing it has landed.",
+  "client_keywords.serp_checked_at":
+    "the timestamp half of serp_verdict above, and the same trap. keyword_serp_reads.created_at is the honest answer to when a phrase was last looked at.",
+  "page_candidates.selected_at":
+    "superseded by the page_plan table on 2026-09-11, whose migration states the reason: page_candidates is REGENERATED and pruned, so 'a decision stored on a candidate row is a decision the next re-run deletes'. docs/2026-08-22-prepare-steps.sql:155 records that the upsert deliberately stops touching it. Nothing writes it and nothing reads it.",
+  "page_candidates.selected_by": "the who half of page_candidates.selected_at above, superseded by page_plan for the same stated reason.",
+  "page_plan.secondary_keyword_ids":
+    "the id form of page_plan.secondary_keywords, which IS read and whose comment says each phrase is stored 'verbatim from an approved client_keywords row'. Storing ids instead is exactly what client_pages.question refuses: a reference into a regenerated table lets a re-run turn an approved plan into a different page.",
+
+  // ── THE COLONY / FANOUT LANE, on tables that are otherwise live ───────────────────────────────
+  //
+  // ‼️ THE TABLES ARE IN AWAITING_CODE; THESE ARE THE SAME UNMERGED LANE REACHING INTO LIVE TABLES,
+  // which is why they cannot be exempted at the table level. Same rule: do not drop them to tidy up.
+  "page_candidates.colony_id": "the colony / fanout lane, whose code is not on main. See AWAITING_CODE for client_query_state.",
+  "page_candidates.query_id": "the colony / fanout lane, whose code is not on main. See AWAITING_CODE for client_query_state.",
+  "page_candidates.source_step": "same unmerged lane, added by docs/2026-08-31-colony-and-fanout.sql:192 alongside colony_id and query_id.",
+  "page_candidates.quotable_format": "same unmerged lane, added by docs/2026-08-31-colony-and-fanout.sql:193 alongside source_step.",
+
+  // ── A COPY OF A DECISION THAT IS READ ON ITS OWN TABLE ────────────────────────────────────────
+  "page_plan.page_kind": "the plan's copy of keyword_clusters.page_kind, which IS read by strategyView. The cluster is where the service-page-or-post decision is made and read.",
+  "page_plan.angle_id": "which angle the plan was built from. page_angles is read by id and idea when the angle itself is rendered; the plan reads its own target_keyword and working_title.",
+  "page_plan.cluster_id": "which cluster the plan came from. client_keywords.cluster_id carries the same link on the side that is read, and the plan stores its keyword verbatim rather than by reference for the client_pages.question reason.",
+  "page_magnet_candidates.angle_id": "which angle the magnet was built from, beside `plan_id`, which IS selected.",
+  "page_magnet_candidates.post_format":
+    "the magnet candidate's copy of the post format. page_angles.post_format IS read (it is in the angle select list), which is where the format axis is decided.",
+  "page_candidates.question_bank_id": "the harvested phrase this candidate came from. question_bank has no client_id, so `question` is stored verbatim on the candidate and that is what every reader selects.",
+  "page_candidates.derived_from":
+    "for a derived row, what it was built out of, in words, per its column comment. `origin` is the field that IS read, and the honest distinction it carries (harvested = a phrase a buyer typed, derived = an idea this system assembled) is what stops a derived idea collecting the visibility-gap bonus.",
+  "page_candidates.avatar":
+    "deliberately left NULL, and the reason is about the corpus rather than the column. The honest per-row tag is question_bank.avatar, which records which buyer a phrase was harvested FOR and is null on every row written before an avatar could be confirmed. Stamping the client's current avatar onto rows harvested before anybody chose it is inventing the tag and then treating it as evidence.",
+  "client_pages.scope": "the page's scope. The hub reads a page by slug and host; scope is carried for the magnet lane's three-scope model and nothing branches on it here.",
+  "client_pages.source_report_id": "which audit report the question came from. `question` is stored VERBATIM precisely so a regenerated audit cannot turn a published page into the answer to a question nobody asked, which is what makes the reference redundant.",
+  "client_keywords.audience": "which buyer the phrase was collected for. The audience model is keyed through client_audiences and audience_id; this is the earlier free-text form.",
+  "client_field_proposals.slack_channel": "where the proposal card posted. The thread is resolved from the step anchor, which is what every later reply is keyed to.",
+  "competitor_candidates.place_id": "the Google place id, kept so a candidate can be re-resolved by hand. The shortlist is decided on `name`, `times_named` and `selected`, all of which are read.",
+  "client_headlines.awareness_entry":
+    "‼️ THE SAME SHAPE AS keyword_clusters.awareness_entry, one table over. client-headlines.ts:831 updates the pair and nothing selects it back, so a stored awareness decision and whatever the reader recomputes can disagree with nothing saying which is on screen. Left as a named finding rather than fixed in this pass: the keyword_clusters instance is the one a person reads on a card.",
+  "client_headlines.awareness_target": "the target half of client_headlines.awareness_entry above, and the same finding.",
+
+  // ── CAPTURED ON PURPOSE, AND ROUTING IT WOULD BE THE BUG ──────────────────────────────────────
+  "review_tool_submissions.rating":
+    "‼️ CAPTURED, NEVER ROUTED, AND A PROBE ENFORCES IT. Its own column comment says so, and scripts/_probe-review-gating.ts fails the build if any code path branches on this value: a tool that shows the public link to happy customers and a private box to unhappy ones is the gating funnel this feature refuses to be. An unread column here is the feature working.",
+  "review_tool_submissions.private_note":
+    "offered to EVERY rating and never posted anywhere, per its column comment. Reading it to decide anything would rebuild the gating funnel rating refuses.",
+  "review_tool_submissions.attested_at":
+    "when she confirmed the words are her own. Its comment says it gates the Copy button and nothing else, and that gate runs in the browser before the row exists; the column is the evidence afterwards.",
+  "review_tool_submissions.posted_destination": "which destination she said she posted to, self-reported. Nothing verifies or branches on it: no code path can observe a Google review being published.",
+  "review_tool_submissions.question_set_version": "which wording she answered, so a later reading of the corpus knows what was asked. The answers themselves are what the tool reads back.",
+
+  // ── WRITTEN FOR THE RECORD, READ BY A PERSON ───────────────────────────────────────────────────
+  "client_pages.section_keywords":
+    "per-H2 long-tail phrases. Its comment states where they go: copied into the page_dataset corpus snapshot and passed to the body prompt as 'what the reader typed to get here'. It also states the negative, which is the part worth keeping: NOT read by keyword-placement.ts.",
+  "client_events.payload": "the event's detail, for a person reading the timeline. client_events.ts's rule is that the event is a record and never an input.",
+  "client_datasets.params": "what the dataset build was asked for. client_datasets is a CACHE that REPLACES on conflict, so it structurally cannot answer 'what changed since last week' and nothing tries.",
+  "client_workflow_runs.inputs": "what a workflow run was given, for a person reconstructing a run. The run's product is the artifact it wrote.",
+  "client_workflow_runs.slack_ts": "where the run posted. The step's own anchor is what every later post is threaded under.",
+  "client_weekly_reports.body": "the rendered report. Step 32 is a predicate about ongoing behaviour and is confirmed by COUNTING these rows, which is what its verifier reads.",
+  "client_weekly_reports.posted_at": "when the report went out, beside the row whose existence is the evidence step 32 counts.",
+  "client_delivery_steps.note": "free text about one step, for a person reading the board. The tick is decided by verifyStep, never by a note.",
+  "client_onboarding_steps.note": "free text on the eight client-facing pilot stages, same shape as client_delivery_steps.note.",
+  "client_docs.step_id": "the step row a document was filed against. uploadsFor resolves documents by `delivery_step_key` and the thread they were dropped in, which is the lookup that was broken once and fixed by keying on the anchor.",
+  "client_docs.web_url": "the OneDrive link. The board links documents through docLink, which composes from the stored path rather than trusting a URL that expires.",
+  "review_audit_rows.source": "where a competitor's review count was read from, kept so a number on the findings document can be traced. The counts are what §3 renders.",
+  "page_studio_sessions.claimed_at": "when a digit claimed a candidate. The claim itself is `page_id` being set, which is what the studio reads to decide whether a bare digit is a claim or something he said about the page.",
+  "question_set_versions.frozen_at": "when the tracked set was frozen. The freeze is the version row existing, which is what composeTrackedSet reads.",
+  "question_set_versions.materialization": "which substitution ruleset rendered this version, per its comment: changing a rule starts materialization_v2. It labels the row for a reader rather than selecting behaviour.",
+  "question_set_versions.note": "free text on why a version was cut.",
+  "question_bank.speaker": "who said the phrase, where the harvest could tell. The phrase itself and its scores are what the question set is built from.",
+  "question_bank.excluded_reason": "why a harvested phrase was held back. question_bank has no client_id and is shared across every client in a vertical, so this is a note on the corpus rather than a per-client decision.",
+  "client_field_values.extracted_confidence": "the extractor's own confidence. Its sibling comment on confirmed_by states the rule that makes this unreadable by design: there is no unconfirmed value in this table, because a low-confidence extraction is shown as a question on the proposal card and never written as a value.",
+  "client_field_values.origin": "how the value arrived. The proposal card is the only writer and every row it writes is confirmed, so nothing downstream branches on origin.",
+  "client_question_sets.composition": "how the tracked set was composed, kept beside the questions themselves. `questions`, `version` and `status` are what is read.",
+  "client_question_sets.sources": "which corpora fed the set. Same record-not-input rule as composition above.",
+  "client_keyword_strategy.summary": "the strategy as prose, for a person. The clusters and the lock are what code reads.",
+
+  // ── THE CLIENT ROW ─────────────────────────────────────────────────────────────────────────────
+  "clients.market_conflict_with":
+    "which subscription a market overlap was against. The market check is FLAGS, NEVER BLOCKS, so `market_conflict` is the boolean the board renders and this is the pointer behind it.",
+  "clients.market_locked_at": "when the market centre was locked. `market_center_lat`/`lng` and market_conflict are what the overlap check reads.",
+  "clients.onboarding_token_expires_at": "when the /onboarding link stops working. The token itself is what the route resolves, and an expired token fails on the lookup.",
+  "clients.pilot_started_at":
+    "when the pilot began. Deliberately NOT the measurement anchor: day 0 is day_zero_archive's completed_at, falling back to intake_completed_at and SAYING SO in the reminder, because the archive is what the day 30/60/90 numbers are measured against.",
+  "clients.testimonial_disclosure_required":
+    "whether a testimonial needs a disclosure line. It is carried through archive and restore and nothing branches on it; the AI Referral Engine's standing rule is stronger than a flag, since it never generates review content at all.",
 };
 
 /**
@@ -822,6 +957,33 @@ const OWED: Record<string, string> = {
   "keyword_clusters.awareness_target": "stored by persistClusters; the card prints the recomputed pair instead.",
   "keyword_clusters.offer_fingerprint":
     "written for the staleness check its own migration comment argues for, and that check still does not read it. Wiring it is the point of the column.",
+
+  // ── THE AUDIENCE COLUMNS, WHICH LANDED BEFORE THEIR CODE ON PURPOSE ───────────────────────────
+  //
+  // ‼️ OWED RATHER THAN WRITE_ONLY, BECAUSE THE MIGRATION SAYS SO IN ADVANCE.
+  // docs/2026-09-24-audience-on-pages.sql is explicit on all three points that decide the tier:
+  // "RUN THIS BEFORE THE CODE THAT SELECTS THESE COLUMNS DEPLOYS, NOT AFTER", because PostgREST fails
+  // the WHOLE select on one unknown column and hub/pages.ts builds its read as a single string
+  // literal, so deploying first 500s every hub page. "NULLABLE, AND EVERY EXISTING ROW STAYS NULL",
+  // because backfilling to the client's current primary audience would be inventing which buyer a page
+  // written weeks ago was aimed at and then treating that invention as evidence. And the composite
+  // foreign key exists so a row carrying both ids can never name another client's audience.
+  //
+  // So these are not columns somebody forgot to read. They are the schema half of a change whose code
+  // half is owed, and a null means "nobody recorded it", which is the truth about every row today.
+  // ‼️ A FAILURE NOBODY CAN SEE IS THE ONE FINDING ON THIS TABLE THAT COSTS SOMEBODY AN AFTERNOON.
+  // pre-call-pages.ts:578 records why a draft failed and releases the lease; nothing selects it back,
+  // so the page simply has no draft and the reason is in a column. The `draftError` in hub-form.tsx is
+  // local React state for a different thing, which is what makes this look wired when it is not.
+  "page_plan.draft_error": "a failed draft's reason, written and never surfaced. Owed a line on the step card, beside the page it failed to draft.",
+  // ‼️ FUNDING, ON THE AEO CLIENT ROW. Dropped by the funding decommission rather than excused: Matthew
+  // 2026-09-27, "my onboarding for AEO has nothing to do with funding so make sure they dont even see
+  // each other". It carries no foreign key (docs/2026-08-17-crm-core.sql:134 says so deliberately), so
+  // the drop is a column drop and nothing cascades.
+  "clients.deal_id": "a funding deal link on the AEO client row. Owed its drop, in the funding decommission SQL.",
+  "client_pages.audience_id": "which buyer a page is aimed at. Owed its writer: the migration deliberately landed first so the reader could not 500 the hub on deploy.",
+  "client_headlines.audience_id": "which buyer a headline is aimed at, from the same audience model. Owed the same writer.",
+  "page_magnet_candidates.audience_id": "which buyer a magnet is aimed at, from the same audience model. Owed the same writer.",
 };
 
 /**
@@ -838,15 +1000,19 @@ const READ_DYNAMICALLY: Record<string, string> = {
  *
  * ‼️ A RATCHET, AND IT MAY ONLY EVER GO DOWN. Raise it and the next dead wire is invisible, which is
  * the whole bug. Lower it when a lane is cleaned, and move that table into SCANNED so the zero it
- * reached is held. Measured 2026-09-27 on feat/keyword-decisions: 957 before the bookkeeping rule, the AWAITING_CODE tables, the four write-only ledgers and
- * the two AWAITING_CODE tables resolved 163 of them.
+ * reached is held.
+ *
+ * Measured 2026-09-27 on feat/keyword-decisions. It was 957. The onboarding lane went from 182 unread
+ * columns to ZERO and is now held by SCANNED; the row-bookkeeping rule, four write-only ledgers, two
+ * tables whose code is not on main and one false positive in the `.or()` filter parser account for the
+ * rest. 293 columns, and not one of them was fixed by raising a number.
  *
  * ‼️ AND IT IS NO LONGER THE AUTHORITY, `UNREAD_COLUMNS` IS. A count going up by one told you a dead
  * wire had arrived and nothing about WHICH, so the only way to find it was to bisect. The list names
  * every one of them, so a new column fails by name and with the migration that declared it. This
  * number is kept because it is the thing a person reads, and §6c asserts the two cannot disagree.
  */
-const BOARD_BASELINE = 755;
+const BOARD_BASELINE = 664;
 
 type Verdict = "write_only" | "never_touched";
 interface Finding {
