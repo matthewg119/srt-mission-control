@@ -29,11 +29,15 @@ import { hasMx } from "../src/lib/scraper/mx";
 import { hasBannedDash } from "../src/lib/copy-guard";
 import { COLD_EMAIL_1, COLD_MERGE_FIELDS, renderColdEmail } from "../src/config/cold-email-1";
 import {
-  MAPS_LIMIT_DEFAULT,
   MAPS_GRAMMAR,
+  MAPS_LIMIT_DEFAULT,
+  MAPS_RADIUS_KM_DEFAULT,
+  MAPS_SOURCE_DEFAULT,
   looksLikeMapsCommand,
   parseMapsCommand,
 } from "../src/lib/scraper/maps-command";
+import { cityNameFrom, locationVerdict, stateNameFrom } from "../src/lib/scraper/geo";
+import { knownVerticals } from "../src/lib/scraper/icp";
 import {
   EMAIL_TIER,
   bestEmailTier,
@@ -870,6 +874,32 @@ async function liveMx(): Promise<void> {
   // The anchor must not swallow ordinary chat, because returning true hides the message from the
   // general assistant.
   check("it claims only messages that start with the command", looksLikeMapsCommand("pull maps medspa | A | B"));
+
+  // ‼️ SLACK CODE FORMATTING COST A REAL PULL ON 2026-09-27. The operator typed the command as code,
+  // which is the natural thing to do with something that looks like a command, so the text arrived
+  // wrapped in backticks, the anchor missed, handleScraperEvent returned false, and the message fell
+  // through to the general assistant, which answered it from the existing database. It LOOKED like the
+  // command had run and returned 25 leads. Nothing ran and nothing was bought.
+  //
+  // A command surface that is also a chat surface has to be generous about formatting, because the
+  // fallback is not an error, it is a different bot answering plausibly.
+  const wrapped: Array<[string, string]> = [
+    ["inline backticks", "`pull maps medspa | Dallas TX | med spa | limit 50`"],
+    ["double backticks", "``pull maps medspa | Dallas TX | med spa``"],
+    ["one-line fence", "```pull maps medspa | Dallas TX | med spa | limit 50```"],
+    ["fence with newlines", "```\npull maps medspa | Dallas TX | med spa | limit 50\n```"],
+    ["fence with a language", "```sh\npull maps medspa | Dallas TX | med spa\n```"],
+  ];
+  for (const [label, text] of wrapped) {
+    check("a command wrapped in " + label + " is still claimed", looksLikeMapsCommand(text));
+    const parsed = parseMapsCommand(text);
+    check("and still parses: " + label, parsed.ok, parsed.ok ? "" : parsed.reason);
+  }
+  // The one-line fence is the case a lazy language-tag matcher gets wrong by eating the word "pull".
+  const oneLine = parseMapsCommand("```pull maps medspa | Dallas TX | med spa | limit 50```");
+  check("a one-line fence keeps its limit", oneLine.ok && oneLine.command.limit === 50);
+  // Unwrapping must not turn ordinary chat into a command.
+  check("wrapping something else does not make it a command", !looksLikeMapsCommand("`status`"));
   check("not a sentence that merely mentions it", !looksLikeMapsCommand("can you pull maps for dallas"));
   check("and not a status check", !looksLikeMapsCommand("status"));
 
@@ -925,6 +955,96 @@ async function liveMx(): Promise<void> {
   check("no banned dash in the subject", !hasBannedDash(COLD_EMAIL_1.subject));
   check("no banned dash in the body", !hasBannedDash(COLD_EMAIL_1.body));
   check("no links in a first touch", !/https?:\/\//.test(COLD_EMAIL_1.body));
+}
+
+
+// ── geo.ts: the state table that deletes rows ───────────────────────────────────────────────────
+// ‼️ locationVerdict RETURNS not_us FOR AN UNKNOWN CODE, AND not_us DELETES THE ROW. "WA" was absent
+// from STATE_CODES until 2026-09-27, so every Seattle, Spokane, Tacoma and Bellevue business written
+// with the abbreviation was classified foreign and dropped from every list. Nothing was left behind to
+// look at, which is why it survived. This enumerates all 51 rather than sampling.
+{
+  const CODES = [
+    "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME",
+    "MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA",
+    "RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY","DC",
+  ];
+  eq("all 51 postal codes are covered", CODES.length, 51);
+  const missed = CODES.filter((c) => locationVerdict({ city: "Somewhere", state: c }) !== "us");
+  check("every one reads as US", missed.length === 0, "not recognised: " + missed.join(","));
+  eq("Seattle WA specifically, the one that was dropped", locationVerdict({ city: "Seattle", state: "WA" }), "us");
+  eq("a foreign row is still refused", locationVerdict({ city: "Prague", state: "Praha" }), "not_us");
+
+  // The derived code-to-name map, which is what makes a metro geocodable.
+  eq("a code becomes a full state name", stateNameFrom("Dallas TX"), "Texas");
+  eq("so does the one that was missing", stateNameFrom("Seattle WA"), "Washington");
+  eq("a two-word state survives", stateNameFrom("New York NY"), "New York");
+  eq("a spelled-out state is taken as given", stateNameFrom("Miami, Florida"), "Florida");
+  eq("a multi-word city keeps its words", cityNameFrom("Salt Lake City UT"), "Salt Lake City");
+  eq("and no state is null, never a guess", stateNameFrom("London"), null);
+}
+
+// ── The pull command's optional tail ────────────────────────────────────────────────────────────
+{
+  eq("the default source is the one with credit already paid", MAPS_SOURCE_DEFAULT, "dataforseo");
+
+  const a = parseMapsCommand("pull maps medspa | Dallas TX | med spa");
+  check("a bare command defaults sensibly", a.ok);
+  if (a.ok) {
+    eq("location is shaped for a geocoder", a.command.locationName, "Dallas,Texas,United States");
+    eq("radius defaults to a metro", a.command.radiusKm, MAPS_RADIUS_KM_DEFAULT);
+    eq("categories come from the vertical", a.command.categories.includes("medical_spa"), true);
+  }
+
+  // Any order, because an operator will not remember one.
+  const b = parseMapsCommand("pull maps medspa | Dallas TX | med spa | radius 50 | limit 100");
+  const c = parseMapsCommand("pull maps medspa | Dallas TX | med spa | limit 100 | radius 50");
+  check("limit then radius parses", b.ok && b.command.limit === 100 && b.command.radiusKm === 50);
+  check("and radius then limit parses the same", c.ok && c.command.limit === 100 && c.command.radiusKm === 50);
+  const d = parseMapsCommand("pull maps medspa | Dallas TX | med spa | via outscraper | limit 30");
+  check("via mixes in too", d.ok && d.command.source === "outscraper" && d.command.limit === 30);
+
+  check("an absurd radius is refused", !parseMapsCommand("pull maps medspa | Dallas TX | med spa | radius 9000").ok);
+  check("two limits are refused rather than chosen between", !parseMapsCommand("pull maps medspa | A TX | b | limit 5 | limit 9").ok);
+  check("an unknown source is refused", !parseMapsCommand("pull maps medspa | Dallas TX | med spa | via bogus").ok);
+
+  // ‼️ A VERTICAL WITH NO CATEGORY MAP MUST REFUSE ON THE DATAFORSEO PATH. Pulling with an empty
+  // category list searches for nothing and bills for the privilege.
+  for (const v of knownVerticals()) {
+    const r = parseMapsCommand("pull maps " + v + " | Dallas TX | anything");
+    check("a known vertical has categories mapped: " + v, r.ok && r.command.categories.length > 0);
+  }
+
+  // The grammar's examples all have to parse, or the refusal card teaches a command that fails.
+  // Only the lines BELOW "For example:". The first backticked line is the syntax template, with
+  // <placeholders> that are not meant to parse.
+  const exampleBlock = MAPS_GRAMMAR.split("For example:")[1] ?? "";
+  const examples = [...exampleBlock.matchAll(/`(pull maps [^`]+)`/g)].map((m) => m[1]);
+  check("the grammar shows at least two examples", examples.length >= 2, String(examples.length));
+  for (const ex of examples) check("grammar example parses: " + ex, parseMapsCommand(ex).ok);
+  check(
+    "the syntax template is above the examples, not among them",
+    MAPS_GRAMMAR.indexOf("<vertical>") < MAPS_GRAMMAR.indexOf("For example:")
+  );
+}
+
+// ── The geo filter the vendor ignores ──────────────────────────────────────────────────────────
+// ‼️ THE BUG THIS PINS COST A WHOLE BUILD PASS. DataForSEO accepts `location_name` and `location_code`,
+// returns status 20000 Ok, and then answers GLOBALLY: 85,179 matches from Miami, Doncaster and
+// Vancouver where a coordinate returned 804, all in Dallas. Checking the status code proved nothing.
+{
+  const dfs = readFileSync("src/lib/dataforseo-places.ts", "utf8");
+  const code = dfs.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+  check("the query filters by coordinate", /location_coordinate: args\.locationCoordinate/.test(code));
+  check("and never by a name the endpoint ignores", !/location_name:/.test(code));
+  check("nor by a code it also ignores", !/location_code:/.test(code));
+
+  const lane = readFileSync("src/lib/scraper/lane.ts", "utf8");
+  check("the lane geocodes before it spends", lane.indexOf("await geocodeMetro(") < lane.indexOf("await searchListings("));
+  check(
+    "and refuses when the metro cannot be found",
+    /I could not find `" \+ command\.metro \+ "` on the map/.test(lane)
+  );
 }
 
 // Wrapped rather than top-level await: tsx transforms this to CJS and rejects one.
