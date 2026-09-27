@@ -394,7 +394,13 @@ function readsIn(chunk: string, constValues: Map<string, string>): Set<string> {
     const first = m[1].split(",")[0].trim();
     if (new RegExp(`^${COL}$`, "i").test(first)) out.add(first.toLowerCase());
   }
-  for (const m of chunk.matchAll(/\.or\(\s*"([^"\n]*)"/g)) {
+  // ‼️ BOTH QUOTE STYLES, AND THE BACKTICK ONE IS THE COMMON CASE. An `.or()` filter almost always
+  // interpolates a value, so it is written as a template literal: 22 of them in src/, against a handful
+  // in double quotes. Reading only the double-quoted form reported `page_plan.draft_lease_at` as
+  // write-only when pre-call-pages.ts:567 filters on it directly, which is a FALSE POSITIVE, and those
+  // are worse than a miss: an exemption written for a column that is genuinely read is a sentence
+  // asserting something untrue, and it stays in the file being believed.
+  for (const m of chunk.matchAll(/\.or\(\s*["`]([^"`\n]*)["`]/g)) {
     for (const part of m[1].split(",")) {
       const lead = new RegExp(`^\\s*(${COL})\\.`, "i").exec(part);
       if (lead) out.add(lead[1].toLowerCase());
@@ -693,6 +699,20 @@ const WRITE_ONLY_TABLES: Record<string, string> = {
     "the archive of a deleted client. It is restored by hand with `Import data from duplicate`, so its columns are a record for a person to read rather than inputs this app selects.",
   keyword_runs:
     "the keyword-set archive, snapshotted before `keywords delete all`. It exists to be exported and diffed, and reading a snapshot back in app code is the bug keyword_clusters.missing_pictures records.",
+  // ‼️ THE TWIN OF keyword_runs, BUILT IN THE SAME COMMIT AND FOR THE SAME REASON. Exempting one and
+  // failing the other would be an accident of which got a sentence first.
+  keyword_decisions:
+    "one row per approve / drop / add / pick, with the phrase as it was then. keyword-dataset.ts's own header states the purpose in Matthew's words: the keyword history is kept 'to train our own model in the future'. self-review.ts reads `action` and `created_at` to measure the drop rate, which is the page_dataset shape exactly: written wide, read narrow, on purpose.",
+  page_plan_runs:
+    "what the plan was before a rerun replaced it. proposePreCallPlan deletes every proposed row, so without this the decisions that produced a page body were gone the moment somebody typed `rerun`. Its own header says it is keyword_runs' solution applied to the plan, deliberately, and that it is a research artifact rather than the product.",
+  // ‼️ MEASURED, NOT ASSUMED: this table has no `.select()` ANYWHERE in src/. Not a narrow read, none.
+  // DATA-AND-WORKFLOWS §5.9 already lists it as a single writer with zero readers.
+  client_avatar_runs:
+    "the history of which avatar was confirmed, when, and by whom. `clients.primary_avatar` is the CURRENT answer and is read (it is step 7's declared output); this is the trail behind it, and nothing selects a single column of it. Keep it or drop the table, but do not wire a reader to a history row: confirmedAvatarFor() is the one answer.",
+  client_messages:
+    "the client-draft send ledger, written wide and read narrow. The BODY went to Slack at write time for a person to send by hand, so `body`, `channel`, `recipient`, `vars`, `wa_link` and `slack_ts` are the record of what was drafted rather than inputs anything selects. What IS read is `draft_key`, `generated_at` and `sent_at`, which is what makes `unique (client_id, draft_key)` load-bearing: a step ticked, unticked and re-ticked must not post the same message three times.",
+  harvest_runs:
+    "a run ledger for the phrase harvest. `id` and `sources` are read; `vertical`, `seed_terms`, `results_count` and `error` are the record of one run. The per-client evidence step 11 is confirmed on is `output_ref`, which its own refusal leads with, precisely because question_bank has no client_id.",
 };
 
 /** Individual columns written and never read, ON PURPOSE. Each entry is a SENTENCE, not a name. */
@@ -818,7 +838,7 @@ const READ_DYNAMICALLY: Record<string, string> = {
  *
  * ‼️ A RATCHET, AND IT MAY ONLY EVER GO DOWN. Raise it and the next dead wire is invisible, which is
  * the whole bug. Lower it when a lane is cleaned, and move that table into SCANNED so the zero it
- * reached is held. Measured 2026-09-27 on feat/keyword-decisions: 957 before the bookkeeping rule and
+ * reached is held. Measured 2026-09-27 on feat/keyword-decisions: 957 before the bookkeeping rule, the AWAITING_CODE tables, the four write-only ledgers and
  * the two AWAITING_CODE tables resolved 163 of them.
  *
  * ‼️ AND IT IS NO LONGER THE AUTHORITY, `UNREAD_COLUMNS` IS. A count going up by one told you a dead
@@ -826,7 +846,7 @@ const READ_DYNAMICALLY: Record<string, string> = {
  * every one of them, so a new column fails by name and with the migration that declared it. This
  * number is kept because it is the thing a person reads, and §6c asserts the two cannot disagree.
  */
-const BOARD_BASELINE = 794;
+const BOARD_BASELINE = 755;
 
 type Verdict = "write_only" | "never_touched";
 interface Finding {
