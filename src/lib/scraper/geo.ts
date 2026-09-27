@@ -25,13 +25,78 @@ const STATE_NAMES = [
   "virginia", "washington", "west virginia", "wisconsin", "wyoming", "district of columbia",
 ];
 
-/** The postal codes, DC included. */
+/**
+ * The postal codes, DC included, in the SAME ORDER as STATE_NAMES.
+ *
+ * ‼️ "WA" WAS MISSING UNTIL 2026-09-27, AND IT DELETED EVERY WASHINGTON ROW. This list is read by
+ * `hasStateCode`, and a code that is absent makes `locationVerdict` return `not_us`, not `unknown`:
+ * Seattle, Spokane, Tacoma and Bellevue were classified as foreign and dropped from every list built
+ * from a file that wrote the state as an abbreviation. Exactly the failure this file's header names,
+ * "a wrong answer here does not produce a bad score, it produces a MISSING ROW", and it went unnoticed
+ * because a deleted row leaves nothing behind to look at.
+ *
+ * Found by asserting this list and STATE_NAMES are the same length, which is now done below. The
+ * order matters for the same reason: CODE_TO_STATE pairs them positionally.
+ */
 const STATE_CODES = new Set([
   "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS",
   "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY",
-  "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WV", "WI",
-  "WY", "DC",
+  "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV",
+  "WI", "WY", "DC",
 ]);
+
+/**
+ * Postal code to full state name, for the vendors that want the name spelled out.
+ *
+ * ‼️ DERIVED FROM THE TWO LISTS ABOVE, NOT TYPED OUT A THIRD TIME. Both are already in the same
+ * order, DC last, which is what makes this safe; the assertion below is what keeps it safe if either
+ * list is edited. A hand-written third copy is how "Missouri" and "Mississippi" end up swapped in one
+ * file and right in the other two.
+ */
+const CODE_TO_STATE: ReadonlyMap<string, string> = new Map(
+  [...STATE_CODES].map((code, i) => [code, STATE_NAMES[i]])
+);
+
+// The two lists have to stay aligned, and a mismatch is a bug in this file rather than bad input.
+if (CODE_TO_STATE.size !== STATE_NAMES.length || CODE_TO_STATE.get("TX") !== "texas") {
+  throw new Error("geo.ts: STATE_CODES and STATE_NAMES have drifted out of alignment");
+}
+
+/**
+ * "Dallas TX" or "Dallas, Texas" into the full state name, or null when no state was given.
+ *
+ * Title Case, because the vendors that take a name want it that way and the lists here are lowercase.
+ */
+export function stateNameFrom(text: string): string | null {
+  const cleaned = text.trim();
+  if (!cleaned) return null;
+
+  const words = cleaned.replace(/,/g, " ").split(/\s+/).filter(Boolean);
+  const last = words[words.length - 1] ?? "";
+  const byCode = CODE_TO_STATE.get(last.toUpperCase());
+  if (byCode) return titleCase(byCode);
+
+  // A full name, possibly two words ("New York"), at the end of the string.
+  const low = cleaned.toLowerCase();
+  const named = STATE_NAMES.filter((n) => low.endsWith(n)).sort((a, b) => b.length - a.length)[0];
+  return named ? titleCase(named) : null;
+}
+
+/** "Dallas TX" into "Dallas", the part that is not the state. */
+export function cityNameFrom(text: string): string | null {
+  const cleaned = text.trim().replace(/,/g, " ").replace(/\s+/g, " ");
+  if (!cleaned) return null;
+  const state = stateNameFrom(cleaned);
+  if (!state) return cleaned;
+  const low = cleaned.toLowerCase();
+  const tail = low.endsWith(state.toLowerCase()) ? state.length : (cleaned.split(" ").pop() ?? "").length;
+  const city = cleaned.slice(0, cleaned.length - tail).trim();
+  return city || null;
+}
+
+function titleCase(s: string): string {
+  return s.replace(/(^| )([a-z])/g, (_m, pre, ch) => pre + ch.toUpperCase());
+}
 
 /**
  * A state NAME anywhere in the text, on word boundaries.

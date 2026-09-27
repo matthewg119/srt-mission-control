@@ -36,6 +36,7 @@ import {
   fromCsv,
   funnelLines,
   startRun,
+  fromDataForSeo,
   storeRawLeads,
   type CsvColumns,
   type RawLeadInput,
@@ -87,6 +88,10 @@ import {
 import { allKeys, countTruncatedNames, dedupeColumns, isKeyActive, splitDuplicates } from "./dedup";
 import { mailProviderOf, resolveMxBatch } from "./mx";
 import { MAPS_GRAMMAR, looksLikeMapsCommand, parseMapsCommand, type MapsCommand } from "./maps-command";
+// The default source. Its endpoint is synchronous, so this half needs no webhook at all.
+import { isConfigured as dfsPlacesConfigured, searchListings } from "@/lib/dataforseo-places";
+// The listings endpoint honours a coordinate and silently ignores a name, so this is not optional.
+import { geocodeMetro } from "@/lib/geocode";
 // The async submit. The transport already existed and is not rebuilt: the 4️⃣ door is the caller
 // it never had.
 import { submitMapsSearch } from "@/lib/outscraper";
@@ -1243,13 +1248,19 @@ async function postPullEstimate(batch: BatchRow, command?: MapsCommand): Promise
   const ts = await say(
     batch,
     [
-      ":four: *Pull from Google Maps*",
+      ":four: *Pull local businesses*",
+      "  Source: `" + parsed.source + "`" +
+        (parsed.source === "dataforseo" ? "  (about $" + (0.012 + parsed.limit * 0.00036).toFixed(3) + " for this pull)" : ""),
       "  Vertical: `" + parsed.vertical + "`",
-      "  Metro: `" + parsed.metro + "`",
-      "  Search: `" + parsed.searchQuery + "`",
+      parsed.source === "dataforseo"
+        ? "  Where: `" + parsed.locationName + "`\n  Categories: `" + parsed.categories.join("`, `") + "`"
+        : "  Search: `" + parsed.searchQuery + "`",
       "  Limit: *" + parsed.limit + "* records",
       "",
-      "Outscraper bills per record, so nothing is submitted until you react.",
+      // ‼️ THE RECORDS ARE THE CHEAP HALF AND THE CARD SAYS SO. Qualification is a Claude sweep over
+      // every row this returns, so the limit is a decision about model spend, not about record price.
+      "Both vendors bill per record, so nothing is bought until you react. Every row returned then " +
+        "goes through the qualification sweep, which is the part that actually costs money.",
       ":white_check_mark: to pull. The results go into :three:, the same engine a dropped CSV uses.",
     ].join("\n")
   );
@@ -1273,24 +1284,41 @@ async function releaseMapsPull(batch: BatchRow): Promise<void> {
   // arriving in the same tick both see `awaiting_pull_approval`; only one of them may submit.
   if (run.spend_approved_at) return;
 
-  if (!mapsPullEnabled()) {
-    // IT REFUSES LOUDLY AND WRITES THE REASON DOWN. The two paused med-spa routes answer
-    // {ok:true, paused:...} and say nothing, which for a NEW door would leave this batch polling for
-    // six hours over an unset env var. The operator is told, and the run carries the reason.
-    await updateRun(runId, { error: "LISTPREP_MAPS_ENABLED is not set to 1" });
-    await say(
-      batch,
-      ":no_entry: *The Maps door is switched off*, so nothing was bought. Set `LISTPREP_MAPS_ENABLED=1` " +
-        "to turn it on. That is a different switch from `MAPS_PULL_ENABLED`, which still guards the old " +
-        "paused med spa and TRT pulls into their own tables."
-    );
-    await fail(batch, "the Maps door is disabled");
-    return;
-  }
-
   const reparsed = parseMapsCommand(batch.batch_label ?? "");
   if (!reparsed.ok) return fail(batch, "I cannot re-read the pull command: " + reparsed.reason);
   const command = reparsed.command;
+
+  // ‼️ EXHAUSTIVE, WITH A `never`, for the third time in this file and for the same reason as the
+  // other two: a source that fell through would run the WRONG vendor's path, and one of them submits
+  // to a webhook the other never registered.
+  switch (command.source) {
+    case "dataforseo":
+      return pullFromDataForSeo(batch, runId, command);
+    case "outscraper":
+      break;
+    default: {
+      const _never: never = command.source;
+      throw new Error("unhandled pull source: " + String(_never));
+    }
+  }
+
+  // Outscraper only from here down: submit, then wait for the callback.
+  //
+  // ‼️ IT REFUSES LOUDLY AND WRITES THE REASON DOWN. The two paused med-spa routes answer
+  // {ok:true, paused:...} and say nothing, which for a NEW door would leave this batch polling for six
+  // hours over an unset env var. The operator is told, and the run carries the reason.
+  if (!mapsPullEnabled()) {
+    await updateRun(runId, { error: "LISTPREP_MAPS_ENABLED is not set to 1" });
+    await say(
+      batch,
+      ":no_entry: *The Outscraper door is switched off*, so nothing was bought. Set " +
+        "`LISTPREP_MAPS_ENABLED=1` to turn it on, or drop `| via outscraper` to use DataForSEO, which " +
+        "is already configured and roughly eight times cheaper. That switch is also NOT " +
+        "`MAPS_PULL_ENABLED`, which still guards the old paused med spa and TRT pulls."
+    );
+    await fail(batch, "the Outscraper door is disabled");
+    return;
+  }
 
   const webhook = pullWebhookUrl(runId);
   if (!webhook) {
@@ -1318,6 +1346,94 @@ async function releaseMapsPull(batch: BatchRow): Promise<void> {
     "Submitted to Outscraper (`" + res.requestId + "`). It calls back when the pull finishes, so this " +
       "thread goes quiet for a few minutes."
   );
+}
+
+/**
+ * The DataForSEO half of the check mark: fetch, store and mark finished, all in one pass.
+ *
+ * ‼️ SYNCHRONOUS, SO THERE IS NO WEBHOOK AND NOTHING TO LOSE IN TRANSIT. The Outscraper path submits
+ * and waits for a callback, which is why it needs pull_request_id, a six hour timeout and a route that
+ * cannot be allowed to swallow a delivery. None of that applies here: if this function returns, the
+ * rows are in raw_leads, and if it throws, nothing was marked and the reaction can be given again.
+ *
+ * It still writes pull_finished_at, because sweepPullMaps is the one thing that advances the stage and
+ * it reads that marker regardless of which vendor filled the table. One poll, two doors.
+ */
+async function pullFromDataForSeo(batch: BatchRow, runId: string, command: MapsCommand): Promise<void> {
+  if (!dfsPlacesConfigured()) {
+    await updateRun(runId, { error: "DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD are not set" });
+    await say(
+      batch,
+      ":no_entry: *DataForSEO is not configured*, so nothing was bought. Set `DATAFORSEO_LOGIN` and " +
+        "`DATAFORSEO_PASSWORD`, or run the command again with `| via outscraper`."
+    );
+    await fail(batch, "DataForSEO has no credentials");
+    return;
+  }
+
+  // ‼️ GEOCODE BEFORE SPENDING, AND REFUSE RATHER THAN GUESS. The listings endpoint ignores a location
+  // NAME and answers globally, so a pull with no coordinate does not fail, it quietly buys med spas in
+  // Doncaster and Shenzhen and charges for them. The coordinate is the filter; without one there is
+  // nothing to buy.
+  const place = await geocodeMetro(command.locationName);
+  if (!place) {
+    await fail(
+      batch,
+      "I could not find `" + command.metro + "` on the map, so I will not guess a coordinate and buy " +
+        "the wrong city. Try it as `City ST`, for example `Dallas TX`."
+    );
+    return;
+  }
+
+  const now = new Date().toISOString();
+  await updateRun(runId, { spend_approved_at: now, spend_approved_by: "slack_reaction", started_at: now });
+  await updateBatch(batch.id, { status: "pulling" });
+
+  const found = await searchListings({
+    categories: command.categories,
+    locationCoordinate: place.lat + "," + place.lon + "," + command.radiusKm,
+    limit: command.limit,
+  });
+  if (!found.ok) {
+    await updateRun(runId, { spend_approved_at: null });
+    await fail(batch, found.error ?? "DataForSEO refused the query");
+    return;
+  }
+
+  const rows = found.items
+    .map((item) =>
+      fromDataForSeo(item, {
+        runId,
+        sourceQuery: command.query,
+        sourceMetro: command.metro,
+        verticalSlug: command.vertical,
+      })
+    )
+    .filter((r): r is NonNullable<typeof r> => r !== null);
+
+  const stored = await storeRawLeads(rows);
+
+  // pull_finished_at is set even on an empty result, for the reason sweepPullMaps states: an empty
+  // metro is a real answer, and a row count can never be the marker.
+  await updateRun(runId, {
+    pull_finished_at: new Date().toISOString(),
+    raw_count: stored.inserted,
+    cost_usd: found.costUsd,
+    error: stored.error ?? null,
+  });
+
+  await say(
+    batch,
+    [
+      "Pulled *" + stored.inserted + "* businesses from DataForSEO for $" + found.costUsd.toFixed(4) + ".",
+      "  `" + place.label + "` within " + command.radiusKm + "km has *" + found.totalCount +
+        "* matching these categories in total, so raise `limit` to go deeper or `radius` to go wider.",
+      stored.skipped ? "  " + stored.skipped + " were already in this run and were not stored twice." : "",
+    ].filter(Boolean).join("\n")
+  );
+
+  const fresh = await getBatch(batch.id);
+  if (fresh) await advanceBatch(fresh);
 }
 
 /**
