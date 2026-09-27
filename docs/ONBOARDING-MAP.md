@@ -319,7 +319,7 @@ Competitor shortlist of 10, top 3 pre-picked, I confirm
 ```
 Step 6 can complete. 1 thing would make it better.
 :warning: the two things a comparison page may weigh against each other
-    nothing asks for this yet
+    no research is stored for this avatar
 ```
 
 ### 7. `avatar_confirmed`
@@ -518,7 +518,7 @@ Buyer-phrase harvest and the deep research for the confirmed avatar
 
 ```
 Step 11 needs 4 more things before it can complete.
-:no_entry: 17 fields: who buys (age, income, work, the week before they look), what they use now, what they like about it, and more
+:no_entry: 10 fields: who buys (age, income, work, the week before they look), what they use now, what they like about it, and more
     no research is stored for this avatar
 :no_entry: 20 fields: age range, gender split, where they live, and more
     → `avatar sheet:` in step 11's thread (message 4)
@@ -526,8 +526,8 @@ Step 11 needs 4 more things before it can complete.
     → `short offer:` in step 11's thread (message 5)
 :no_entry: the necessary beliefs (up to 6, "I believe that")
     → `beliefs:` in step 11's thread (message 7 of the framework script)
-:warning: 5 fields: the cost of doing nothing, who else weighs in on the decision, the proof they need before buying, and more
-    nothing asks for this yet
+:warning: 12 fields: hopes and dreams, beyond the product, victories and failures around the problem, prejudices, and more
+    no research is stored for this avatar
 ```
 
 ### 12. `keyword_set`

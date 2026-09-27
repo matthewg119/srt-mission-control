@@ -172,10 +172,23 @@ function docField(
   return { dataset, key, label, usedFor, filledBy: { kind: "document", doc, answer }, present: answeredIn(doc, answer) };
 }
 
-/** A section only the step 11 framework script asks for (research sections 10 to 16). */
-function scriptSection(key: string, label: string, usedFor: string, sectionKey: string): FieldSpec {
+/**
+ * A section only the step 11 framework script asks for (research sections 10 to 18).
+ *
+ * ‼️ `dataset` IS LAST AND DEFAULTS TO "avatar" so the seven existing calls did not have to change.
+ * It exists because `audience.comparison_subjects` is answered by the same section 18 as the five
+ * avatar fields beside it, and splitting one decision across two shapes is how the six stop looking
+ * like the single decision they are.
+ */
+function scriptSection(
+  key: string,
+  label: string,
+  usedFor: string,
+  sectionKey: string,
+  dataset: DatasetKey = "avatar"
+): FieldSpec {
   return {
-    dataset: "avatar",
+    dataset,
     key,
     label,
     usedFor,
@@ -195,7 +208,20 @@ function scriptSection(key: string, label: string, usedFor: string, sectionKey: 
  */
 export const EMOTIONAL_FLOOR = 20;
 
-/** Worth knowing, and nothing asks for it yet. Declared so the card shows the gap instead of it not existing. */
+/**
+ * Worth knowing, and nothing asks for it yet. Declared so the card shows the gap instead of it not existing.
+ *
+ * ‼️ NO CALLER AS OF 2026-09-27, AND IT STAYS. Its six users were the avatar buying-condition fields,
+ * which section 18 now asks for, so this helper and the whole `asked: false` arm of `Filler` are
+ * correct and UNEXERCISED. Deleting either is the tidy-up that costs the next person the mechanism:
+ * `evaluateDatasets` would still say "nothing asks for this yet", `step-gaps.ts` would still classify
+ * `never_asked`, and `final-prompt.ts` would still skip the field, with nothing able to produce the
+ * state those three handle. Same reasoning client_field_values.audience_id records for its own
+ * unexercised NULLS NOT DISTINCT half: the alternative is discovering the gap on the first field that
+ * needs it, by which time the rendering has quietly not existed for months.
+ *
+ * It is four lines. The reason to keep them is that the five readers of `asked` are not.
+ */
 function notAsked(dataset: DatasetKey, key: string, label: string, usedFor: string): FieldSpec {
   return { dataset, key, label, usedFor, filledBy: { kind: "research", sectionKey: null, asked: false }, present: NOT_ASKED };
 }
@@ -284,23 +310,44 @@ export const DATASET_FIELDS: readonly FieldSpec[] = [
   docField("avatar", "urgency_quotes", "motivation and urgency quotes", "the call to adventure", "avatar_sheet", ["urgency_quotes"]),
   docField("avatar", "emotional_journey", "the emotional journey (awareness, frustration, search, relief)", "a story's beats", "avatar_sheet", ["emotional_journey"]),
 
-  // ── AVATAR, worth knowing and asked by nothing yet ──────────────────────────
-  notAsked("avatar", "cost_of_inaction", "the cost of doing nothing", "the stakes if the hero refuses the call"),
-  notAsked("avatar", "decision_influencers", "who else weighs in on the decision", "a story's secondary characters"),
-  notAsked("avatar", "proof_they_need", "the proof they need before buying", "which evidence sits beside a story"),
-  notAsked("avatar", "price_sensitivity", "how price-sensitive they are", "how the price is framed"),
-  notAsked("avatar", "booking_behaviour", "how they book (call, form, walk in, when)", "the call to action inside a story"),
-  // ‼️ DECLARED BECAUSE A SHAPE NOW DEPENDS ON IT AND NOTHING COLLECTS IT (2026-09-22).
+  // ── AVATAR: HOW THEY DECIDE. Asked by section 18 as of 2026-09-27 ───────────
+  //
+  // ‼️ THESE SIX WERE `notAsked()` FROM THE DAY THEY WERE DECLARED, AND THAT IS WHAT CHANGED.
+  // Matthew's call, 2026-09-27: deep research asks for them. They were the entirety of
+  // `fieldsNoStepFills()` in step-needs.ts, so every client's completeness card carried the same six
+  // permanent gaps and the probe counted six holes that could never close. `notAsked()` was working as
+  // designed the whole time (show the gap rather than let the field quietly not exist); what was missing
+  // was the question.
+  //
+  // ‼️ ONE SECTION, SIX FIELDS, AND THEY MUST ALL POINT AT IT. `buying_conditions` is scriptOnly and is
+  // appended at the very END of SECTIONS, because the parser maps section N to
+  // RESEARCH_SECTION_KEYS[N - 1]: a non-scriptOnly section, or one inserted anywhere but the tail, would
+  // renumber the eight script-only sections and re-file every stored report's answers.
+  //
+  // ‼️ STILL `wants`, NEVER `needs`, in step-needs.ts. A field the research may legitimately come back
+  // empty on must not refuse a step: section 18 is explicitly allowed to answer "nothing found" per
+  // label, which is the honest outcome for a buyer nobody wrote about, not a reason to block step 11.
+  scriptSection("cost_of_inaction", "the cost of doing nothing", "the stakes if the hero refuses the call", "buying_conditions"),
+  scriptSection("decision_influencers", "who else weighs in on the decision", "a story's secondary characters", "buying_conditions"),
+  scriptSection("proof_they_need", "the proof they need before buying", "which evidence sits beside a story", "buying_conditions"),
+  scriptSection("price_sensitivity", "how price-sensitive they are", "how the price is framed", "buying_conditions"),
+  scriptSection("booking_behaviour", "how they book (call, form, walk in, when)", "the call to action inside a story", "buying_conditions"),
+  // ‼️ DECLARED BECAUSE A SHAPE DEPENDS ON IT (2026-09-22), AND NOW ASKED FOR (2026-09-27).
   // post-formats.ts's `comparison` shape requires subjectA and subjectB, and format-dataset.ts
   // refuses to infer either: "nothing here may default or infer a field". So a comparison page
-  // whose two subjects nobody named records them as MISSING for ever, and the step that would
-  // know them, competitor_shortlist, declared {kind:"nothing"}. This is the notAsked mechanism
-  // doing its job: the card shows the gap instead of the field not existing.
-  notAsked(
-    "audience",
+  // whose two subjects nobody named recorded them as MISSING for ever.
+  //
+  // ‼️ IT IS ASKED OF RESEARCH RATHER THAN OF competitor_shortlist, AND THE DISTINCTION IS THE POINT.
+  // That step knows which COMPETITORS were shortlisted, which is a different fact: a comparison page
+  // weighs two SUBJECTS a buyer is choosing between, and that is often two treatments, or a treatment
+  // against doing nothing. Filling it from the competitor list would answer a question nobody asked and
+  // then look like evidence. Section 18 asks which pair the buyer actually weighs, in their words.
+  scriptSection(
     "comparison_subjects",
     "the two things a comparison page may weigh against each other",
-    "a comparison page's subjectA and subjectB, which the shape refuses to invent"
+    "a comparison page's subjectA and subjectB, which the shape refuses to invent",
+    "buying_conditions",
+    "audience"
   ),
 
   // ── AUDIENCE: this client aiming at that avatar ───────────────────────────

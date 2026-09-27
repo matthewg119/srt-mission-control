@@ -236,11 +236,23 @@ export function gapLines(g: StepGaps, max: number = MAX_BULLETS): string[] {
   }
 
   // Group by the sentence that fills them: one ask per thing to do.
+  //
+  // ‼️ AND BY WHETHER THEY BLOCK, WHICH IS NOT THE SAME QUESTION AND USED TO BE FOLDED INTO IT. The key
+  // was `fill.text` alone, so a `wants` field sharing a remedy with a `needs` field landed in that
+  // field's group, and the group renders :no_entry: whenever ANY member blocks. The card then listed
+  // optional fields inside a refusal and counted them in its total.
+  //
+  // Measured when research section 18 was added (2026-09-27): the five buying-condition fields are
+  // `wants` on step 11 and their remedy is "no research is stored for this avatar", which is also the
+  // ten blocking research fields' remedy. Step 11's card went from "17 fields" under :no_entry: to "22",
+  // silently promoting five optional fields to required ones. The gate never moved, because `blocking`
+  // is what readinessFor reads, so this was the card disagreeing with the gate it explains.
   const groups = new Map<string, Gap[]>();
   for (const gap of g.gaps) {
-    const list = groups.get(gap.fill.text) ?? [];
+    const key = `${gap.blocking ? "needs" : "wants"} ${gap.fill.text}`;
+    const list = groups.get(key) ?? [];
     list.push(gap);
-    groups.set(gap.fill.text, list);
+    groups.set(key, list);
   }
 
   // Blocking asks first: they are the ones that stop the tick meaning something.
@@ -257,8 +269,11 @@ export function gapLines(g: StepGaps, max: number = MAX_BULLETS): string[] {
       : `Step ${g.number} can complete. ${ordered.length} thing${ordered.length === 1 ? "" : "s"} would make it better.`
   );
 
-  for (const [text, list] of ordered.slice(0, max)) {
+  for (const [, list] of ordered.slice(0, max)) {
     const blocking = list.some((x) => x.blocking);
+    // ‼️ THE REMEDY COMES OFF THE GAP, NOT OFF THE GROUP KEY. The key carries a needs/wants prefix and a
+    // NUL separator so two severities cannot share a group, and printing it would put both in the card.
+    const text = list[0].fill.text;
     const names = list.map((x) => x.field.label);
     const what = names.length === 1 ? names[0] : `${names.length} fields: ${names.slice(0, 3).join(", ")}${names.length > 3 ? ", and more" : ""}`;
     lines.push(`${blocking ? ":no_entry:" : ":warning:"} ${what}`);

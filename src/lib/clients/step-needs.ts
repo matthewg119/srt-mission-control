@@ -3,8 +3,8 @@
 // Matthew, 2026-09-17: "it asks bulletpoint questions with the things we are missing in order to
 // complete X onboarding step in the process."
 //
-// dataset-spec.ts declares 71 fields and what fills each one. It does NOT say which step each field
-// belongs to: only three of the 71 carry `blocks`, and `blocks` deliberately means something narrower
+// dataset-spec.ts declares 74 fields and what fills each one. It does NOT say which step each field
+// belongs to: only three of the 74 carry `blocks`, and `blocks` deliberately means something narrower
 // (the step's own gate already refuses without it). This file is the missing relation, and it is
 // written from the STEP side because that is the question being asked.
 //
@@ -97,13 +97,23 @@ const AVATAR_SHEET: readonly FieldRef[] = [
 ];
 
 /**
- * The five fields with a home and no question.
+ * How this buyer decides: research section 18, `buying_conditions`.
  *
- * ‼️ THEY ARE `wants`, NEVER `needs`. dataset-spec marks them `asked: false`, so nothing in the system
- * asks for them; making them block a step would refuse it for an answer nobody can give. They appear in
- * the gap list saying "nothing asks for this yet", which is what makes them a visible backlog.
+ * ‼️ THEY WERE "THE FIVE FIELDS WITH A HOME AND NO QUESTION" UNTIL 2026-09-27, and that is the only
+ * thing that changed. Matthew's call: deep research asks for them. dataset-spec no longer marks them
+ * `asked: false`, so the gap list stops saying "nothing asks for this yet" and starts pointing at a
+ * section somebody can actually run.
+ *
+ * ‼️ STILL `wants`, NEVER `needs`, AND THE REASON SURVIVES THE CHANGE. Being asked is not the same as
+ * being answerable: section 18 is explicitly allowed to report "nothing found" per label, because a
+ * buyer nobody wrote about publicly is a real outcome. Promoting these to `needs` would refuse step 11
+ * for an answer that may legitimately not exist, which is the same trap as before with one more step
+ * between it and the person.
+ *
+ * Renamed from NOT_ASKED_YET rather than left alone: a constant with that name listing fields that ARE
+ * now asked for is a lie every reader has to check against dataset-spec before trusting it.
  */
-const NOT_ASKED_YET: readonly FieldRef[] = [
+const BUYING_CONDITIONS: readonly FieldRef[] = [
   "avatar.cost_of_inaction",
   "avatar.decision_influencers",
   "avatar.proof_they_need",
@@ -217,7 +227,7 @@ export const STEP_NEEDS: Record<StepKey, StepNeed> = {
     // measured 2026-09-17 not one of avatar_sheet, short_offer or necessary_beliefs has EVER been
     // written for anybody. The headline engine's own refusal names the third one.
     needs: ["audience.avatar", ...RESEARCH, ...AVATAR_SHEET, ...SHORT_OFFER_SHEET, "offer.necessary_beliefs"],
-    wants: [...RESEARCH_SCRIPT_ONLY, ...NOT_ASKED_YET],
+    wants: [...RESEARCH_SCRIPT_ONLY, ...BUYING_CONDITIONS],
   },
   keyword_set: {
     kind: "fields",

@@ -495,6 +495,46 @@ const SECTIONS: SectionSpec[] = [
       `is worth more here than a right one in ours. If you cannot find enough real ones, say how many you ` +
       `found rather than inventing the rest.`,
   },
+  // ‼️ SECTION 18, APPENDED AT THE VERY END AND scriptOnly, FOR THE REASON THE BOX ABOVE GIVES.
+  // Sections 10 to 17 are already scriptOnly, so continuing the tail renumbers nothing. Inserting a
+  // NON-scriptOnly section anywhere would shift all eight and re-file every stored report's answers.
+  //
+  // ‼️ ONE SECTION FOR ALL SIX FIELDS, NOT SIX SECTIONS. Matthew's call on 2026-09-27 was "deep research
+  // asks for them", and six new sections would each need their own numbered heading in every stored
+  // report for six fields that were `asked: false` since they were declared. `emotional_language` above
+  // is the precedent: one section, several named answers under it, one heading to parse.
+  //
+  // These six were the whole of `fieldsNoStepFills()`. They had a home in dataset-spec and no question
+  // anywhere, so every client's completeness card showed the same six permanent gaps, and the probe
+  // counted them as holes that could never close. `notAsked()` had been doing its job for months: it
+  // showed the gap instead of letting the field quietly not exist.
+  {
+    key: "buying_conditions",
+    title: "Condiciones de compra: costo de no actuar, quien opina, que prueba piden",
+    heading: "Buying conditions: the cost of waiting, who else decides, what proof they need",
+    scriptOnly: true,
+    searches: 8,
+    brief: () =>
+      "Six things about HOW this buyer decides: the cost of doing nothing, who else weighs in, the proof they need, how price-sensitive they are, how they book, and what they weigh us against.",
+    instruction: (c) =>
+      `Six named answers about how ${c.avatarLabel} DECIDES, each under its own label, each with verbatim ` +
+      `quotes and links. Do not merge them and do not answer one you could not find: say "nothing found" ` +
+      `for that label instead.\n\n` +
+      `COST OF INACTION: what it costs them to keep doing nothing about ${val(spoken(c.primaryTreatment))}. ` +
+      `What gets worse, and on what timescale, in their words rather than ours.\n` +
+      `DECISION INFLUENCERS: who else is in the decision. A partner, a parent, a friend who had it done, a ` +
+      `doctor, a group chat. Quote them talking about asking somebody.\n` +
+      `PROOF THEY NEED: what convinces them it is real. Before-and-afters, a review from somebody like ` +
+      `them, credentials, a consultation, a guarantee. Which of those they ask for BY NAME.\n` +
+      `PRICE SENSITIVITY: how they talk about money here. Whether they compare prices, ask about financing, ` +
+      `treat cheap as a warning sign, or decide on price last. Quote them, and do not report a number ` +
+      `nobody said.\n` +
+      `BOOKING BEHAVIOUR: how they actually book, and when. Call, web form, DM, walk in; evening, lunch ` +
+      `break, straight after reading a review. Whether they want to speak to somebody first.\n` +
+      `COMPARISON SUBJECTS: the two things they genuinely weigh against each other when choosing. It may be ` +
+      `two treatments, a treatment against doing nothing, or a provider type against another. Name exactly ` +
+      `two and say which pair came up most, because a comparison page is written about one pair.`,
+  },
 ];
 
 /**
