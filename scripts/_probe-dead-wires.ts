@@ -2,6 +2,10 @@
 //
 //   bun run scripts/_probe-dead-wires.ts
 //   bun run scripts/_probe-dead-wires.ts --inventory    also list the non-failing lanes
+//   bun run scripts/_probe-dead-wires.ts --write         rewrite scripts/_dead-wires-baseline.ts
+//
+// ‼️ --write IS NEVER RUN IN CI. A probe that regenerates its own baseline on failure always passes.
+// Run it after deliberately resolving columns, and lower BOARD_BASELINE in the same commit.
 //
 // NO MODEL CALL, NO WRITES, NO NETWORK AND NO DATABASE. It reads docs/*.sql and src/ + scripts/ off
 // disk, which is the only reason it can be gated in CI: a probe that needs production is a probe
@@ -61,8 +65,9 @@
 // only because `ai_overview_satisfies` and `query_on_screen` are unique strings; board-wide,
 // `status`, `city`, `source`, `rank` and `theme` all match some other table and pass.
 
-import { readFileSync, readdirSync, statSync, existsSync } from "fs";
+import { readFileSync, readdirSync, statSync, existsSync, writeFileSync } from "fs";
 import { join } from "path";
+import { UNREAD_COLUMNS } from "./_dead-wires-baseline";
 
 let failures = 0;
 
@@ -72,6 +77,14 @@ function check(name: string, ok: boolean, detail = ""): void {
 }
 
 const SHOW_INVENTORY = process.argv.includes("--inventory");
+/**
+ * Rewrite scripts/_dead-wires-baseline.ts from what this run measured.
+ *
+ * ‼️ NEVER IN CI, AND NEVER AS THE DEFAULT. A probe that regenerates its own baseline when it fails is
+ * a probe that always passes, which is precisely the ratchet being filed off. It is a command somebody
+ * runs after deliberately resolving columns, and the commit is the record.
+ */
+const WRITE_BASELINE = process.argv.includes("--write");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The corpus
@@ -755,6 +768,11 @@ const READ_DYNAMICALLY: Record<string, string> = {
  * ‼️ A RATCHET, AND IT MAY ONLY EVER GO DOWN. Raise it and the next dead wire is invisible, which is
  * the whole bug. Lower it when a lane is cleaned, and move that table into SCANNED so the zero it
  * reached is held. Measured 2026-09-25 on feat/keyword-decisions.
+ *
+ * ‼️ AND IT IS NO LONGER THE AUTHORITY, `UNREAD_COLUMNS` IS. A count going up by one told you a dead
+ * wire had arrived and nothing about WHICH, so the only way to find it was to bisect. The list names
+ * every one of them, so a new column fails by name and with the migration that declared it. This
+ * number is kept because it is the thing a person reads, and §6c asserts the two cannot disagree.
  */
 const BOARD_BASELINE = 957;
 
@@ -846,6 +864,117 @@ check(
 );
 if (counted.length < BOARD_BASELINE) {
   console.log(`  --    ${BOARD_BASELINE - counted.length} fewer than the baseline. Lower BOARD_BASELINE to ${counted.length}.`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6c. A LIST, NOT A LOWER NUMBER
+//
+// ‼️ THE COUNT ABOVE CANNOT NAME THE COLUMN THAT BROKE IT, AND THAT WAS THE WHOLE COMPLAINT. A new
+// column on a SCANNED table already fails by name, in §5. A new column anywhere else raised
+// BOARD_BASELINE by one and the probe said only "the count grew", so finding it meant bisecting the
+// migrations by hand. Diffed against a checked-in list of the keys instead, the failure says which
+// column, and `files` already carries the migration that declared it, so it says that too.
+//
+// ‼️ A LIST, NOT A LOWER NUMBER. The point is not to make the list short. 957 keys is the backlog as
+// measured; shrinking it is W4's job, one lane at a time, and every reduction is locked in by
+// regenerating this file. Do not fix columns to make the list look better.
+//
+// ‼️ A MODULE, NOT A TEXT FILE, AND THAT IS DELIBERATE. A diffed .txt would have to normalise line
+// endings or this check would cry wolf on every Windows checkout, which is exactly what happened to
+// `_step-wiring.ts --check` and cost it a `sameText` helper. An imported module has no line endings to
+// disagree about. It also gets typechecked by the same CI step that typechecks everything else, and it
+// sits in scripts/ rather than src/ so it never reaches the app bundle.
+// ─────────────────────────────────────────────────────────────────────────────
+
+console.log("\n6c. every unread column is named, so a new one fails by name");
+
+const countedKeys = new Set(counted.map((f) => f.key));
+const declaredUnread = new Set(UNREAD_COLUMNS);
+
+const arrived = counted.filter((f) => !declaredUnread.has(f.key)).sort(byKey);
+const resolvedKeys = UNREAD_COLUMNS.filter((k) => !countedKeys.has(k));
+
+if (WRITE_BASELINE) {
+  // ‼️ REFUSES TO WRITE AN EMPTY LIST. A parse that silently collected nothing would otherwise write a
+  // file asserting the board has no dead wires at all, and every real one would then be invisible
+  // until somebody noticed the file was 0 lines long. Same guard refresh-disposable-domains.ts carries.
+  if (!counted.length) throw new Error("refusing to write an empty baseline: the census collected nothing");
+  const body = [
+    "// GENERATED FILE. Do not edit by hand.",
+    "//",
+    "// Every column the board writes that nothing reads back, outside the SCANNED tables and the",
+    "// WRITE_ONLY / OWED / READ_DYNAMICALLY declarations. _probe-dead-wires.ts diffs against this, so a",
+    "// column added by a migration and read by nothing fails BY NAME and names its own migration.",
+    "//",
+    "// ‼️ IT MAY ONLY GET SHORTER. Regenerate: bun run scripts/_probe-dead-wires.ts --write",
+    `// Columns: ${counted.length}`,
+    "",
+    "export const UNREAD_COLUMNS: readonly string[] = [",
+    ...counted
+      .map((f) => f.key)
+      .sort((a, b) => a.localeCompare(b))
+      .map((k) => `  ${JSON.stringify(k)},`),
+    "];",
+    "",
+  ].join("\n");
+  writeFileSync("scripts/_dead-wires-baseline.ts", body);
+  console.log(`  --    wrote scripts/_dead-wires-baseline.ts with ${counted.length} column(s)`);
+  if (counted.length !== BOARD_BASELINE) {
+    console.log(`  --    now set BOARD_BASELINE to ${counted.length} (it is ${BOARD_BASELINE})`);
+  }
+}
+
+// ‼️ THE DIFF IS SKIPPED ON A --write RUN, AND ONLY THERE. The module was imported before the file was
+// rewritten, so `UNREAD_COLUMNS` in memory is the list that was just REPLACED: diffing against it would
+// report all 957 as new on the bootstrap run and every deliberately resolved column as a failure on
+// every later one. A regeneration reports what it wrote; the next ordinary run is what judges it.
+if (WRITE_BASELINE) {
+  console.log("  --    diff skipped: --write replaced the list this run compared against. Re-run without --write.");
+}
+
+// ‼️ ONE FAILURE PER COLUMN, BY NAME, WITH ITS MIGRATION. The whole value of this check is the last
+// part: "the count grew" makes somebody bisect, "these two columns, added by docs/2026-10-xx-foo.sql,
+// are read by nothing" does not.
+for (const f of WRITE_BASELINE ? [] : arrived) {
+  check(
+    `${f.key} is read by something, or declared`,
+    false,
+    `NEW unread column. ${f.verdict === "write_only" ? "Written and never read" : "No writer and no reader"}. ` +
+      `Declared in ${f.files}. Wire it, drop it, or give it a sentence in WRITE_ONLY or OWED. ` +
+      "Do NOT add it to _dead-wires-baseline.ts to make this pass."
+  );
+}
+if (!WRITE_BASELINE) {
+  check(`no unread column arrived unnamed (${counted.length} counted, ${UNREAD_COLUMNS.length} declared)`, arrived.length === 0);
+}
+
+// ‼️ A RESOLVED COLUMN FAILS TOO, AND THAT IS THE RATCHET RATHER THAN A NUISANCE. The list may only get
+// shorter, and a gain that is not written down is a gain the next change can silently undo. This is the
+// same discipline `--check` applies to the generated docs: the fix is one command, and it is a commit
+// somebody makes on purpose.
+if (resolvedKeys.length && !WRITE_BASELINE) {
+  console.log(`  --    ${resolvedKeys.length} column(s) in the list are no longer unread:`);
+  for (const k of resolvedKeys.slice(0, 40)) console.log(`          ${k}`);
+  if (resolvedKeys.length > 40) console.log(`          ... and ${resolvedKeys.length - 40} more`);
+}
+if (!WRITE_BASELINE) {
+  check(
+    "the named list is current",
+    resolvedKeys.length === 0,
+    `${resolvedKeys.length} column(s) were resolved. Lock it in: bun run scripts/_probe-dead-wires.ts --write, ` +
+      `and lower BOARD_BASELINE to ${counted.length}.`
+  );
+}
+
+// ‼️ ONE FACT, TWO RENDERINGS, AND THEY CANNOT DRIFT. The count is what a person reads and the list is
+// what the check uses, so a baseline lowered without regenerating the list (or the reverse) would leave
+// the probe asserting two different things about the same board.
+if (!WRITE_BASELINE) {
+  check(
+    `BOARD_BASELINE matches the named list (${BOARD_BASELINE} against ${UNREAD_COLUMNS.length})`,
+    BOARD_BASELINE === UNREAD_COLUMNS.length,
+    "the count and the list disagree. Regenerate the list with --write and set BOARD_BASELINE to its length."
+  );
 }
 
 // ‼️ FUNDING IS CALLED OUT SEPARATELY RATHER THAN LEFT IN A LANE TOTAL, because it is the one lane
