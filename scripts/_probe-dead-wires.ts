@@ -697,14 +697,65 @@ const WRITE_ONLY_TABLES: Record<string, string> = {
 
 /** Individual columns written and never read, ON PURPOSE. Each entry is a SENTENCE, not a name. */
 const WRITE_ONLY: Record<string, string> = {
-  // Row bookkeeping. Every table in this lane carries these by convention, the DEFAULT writes
-  // created_at rather than the app, and nothing selects either: they are for a person reading the
-  // table in the console and for ordering in ad-hoc SQL. Naming them individually rather than
-  // exempting the pattern, so a `*_at` column that IS a decision cannot hide behind the convention.
+  // Row bookkeeping on the two tables that were cleaned before BOOKKEEPING_NAMES existed. Kept as
+  // named entries rather than folded into the rule, because they are also the worked example of what
+  // that rule covers.
   "client_audiences.updated_at": "row bookkeeping, written by every update and selected by nothing.",
   "keyword_clusters.updated_at": "row bookkeeping, written by every update and selected by nothing.",
   "keyword_clusters.created_at":
     "row bookkeeping, and it reads as untouched because the column DEFAULT writes it rather than the app.",
+};
+
+/**
+ * Row bookkeeping, exempted by EXACT column name.
+ *
+ * ‼️ THIS REVERSES A DELIBERATE DECISION, AND THE REASONING THAT WAS REVERSED IS WHY IT IS SAFE. The
+ * three entries above carried the note "naming them individually rather than exempting the pattern, so
+ * a `*_at` column that IS a decision cannot hide behind the convention." That objection is exactly
+ * right about a PATTERN — `/_at$/` would have swallowed `approved_at`, `decided_at`, `verified_at`,
+ * `selected_at` and `confirmed_at`, every one of which is a decision somebody recorded and the precise
+ * shape of the curated-20 bug.
+ *
+ * It is not an argument against an EXACT-NAME allowlist of three. `created_at`, `updated_at` and `id`
+ * mean the same thing on all fifty tables in this lane: the DEFAULT writes them, not the app, and they
+ * exist for a person reading the table in the console. No decision has ever been recorded under one of
+ * those three names, and §4b asserts the set never grows past them, so a decision column CANNOT hide
+ * here — which is a stronger guarantee than a convention that relies on somebody noticing.
+ *
+ * The alternative was ~40 entries reading "row bookkeeping, written by every update and selected by
+ * nothing", which is the same sentence forty times and buries the entries that say something.
+ *
+ * ‼️ DO NOT ADD A FOURTH NAME. Every candidate (`*_at`, `*_by`, `note`, `payload`, `model`) is a place
+ * a decision or an input gets recorded. If a fourth ever looks justified, that is the signal to write a
+ * named WRITE_ONLY entry instead.
+ */
+const BOOKKEEPING_NAMES = new Set(["created_at", "updated_at", "id"]);
+
+/**
+ * Tables whose storage is on main and whose CODE IS NOT.
+ *
+ * ‼️ A FOURTH CATEGORY, AND COLLAPSING IT INTO ANY OF THE OTHER THREE WOULD BE A LIE. These are not
+ * write-only (nothing writes them at all), not dead DDL to drop (the code that fills them exists, on
+ * another branch), and not per-column deferrals (the unit is the whole table). The colony / fanout gap
+ * map was migrated on 2026-08-31 and its lane has never been merged, which is recorded in memory as
+ * "tables in prod DB; code NOT on main".
+ *
+ * ‼️ DROPPING THESE IS THE EXPENSIVE MISTAKE, and it is the one a column scan invites: every column
+ * reads as never_touched, which looks exactly like dead DDL. Dropping them breaks the market-dataset
+ * branch the day it lands, and the evidence that they are wanted is not in this repo's main branch at
+ * all. The only thing keeping them visible is this entry.
+ *
+ * They are reachable dynamically today, through `CLIENT_TABLES` in src/lib/clients/archive.ts, which
+ * does `.from(table)` on a runtime string — so archive and restore already copy them, and that is
+ * table-agnostic plumbing rather than a consumer. It is why the scan cannot see a reader.
+ *
+ * An entry here is a CLAIM THAT THE CODE IS COMING. If a lane is abandoned, drop the tables instead.
+ */
+const AWAITING_CODE: Record<string, string> = {
+  client_query_state:
+    "the per-client gap map from docs/2026-08-31-colony-and-fanout.sql (`matched_url` / `title_match` are the video's layer 1 and layer 2). Nothing in src/ touches it: the colony / fanout lane's code is not on main. Drop it only if that lane is abandoned.",
+  client_url_inventory:
+    "the client's own pages, so a fanout query can be matched against what already exists. Same unmerged lane as client_query_state, same reason it reads as dead DDL.",
 };
 
 /**
@@ -767,14 +818,15 @@ const READ_DYNAMICALLY: Record<string, string> = {
  *
  * ‼️ A RATCHET, AND IT MAY ONLY EVER GO DOWN. Raise it and the next dead wire is invisible, which is
  * the whole bug. Lower it when a lane is cleaned, and move that table into SCANNED so the zero it
- * reached is held. Measured 2026-09-25 on feat/keyword-decisions.
+ * reached is held. Measured 2026-09-27 on feat/keyword-decisions: 957 before the bookkeeping rule and
+ * the two AWAITING_CODE tables resolved 163 of them.
  *
  * ‼️ AND IT IS NO LONGER THE AUTHORITY, `UNREAD_COLUMNS` IS. A count going up by one told you a dead
  * wire had arrived and nothing about WHICH, so the only way to find it was to bisect. The list names
  * every one of them, so a new column fails by name and with the migration that declared it. This
  * number is kept because it is the thing a person reads, and §6c asserts the two cannot disagree.
  */
-const BOARD_BASELINE = 957;
+const BOARD_BASELINE = 794;
 
 type Verdict = "write_only" | "never_touched";
 interface Finding {
@@ -788,9 +840,16 @@ const gated: Finding[] = [];
 const counted: Finding[] = [];
 const owed: Finding[] = [];
 
+const bookkeepingExempt: string[] = [];
+
 for (const [key, d] of DECLARED) {
   if (WRITE_ONLY_TABLES[d.table] || WRITE_ONLY[key] || READ_DYNAMICALLY[key]) continue;
   if (isRead(d.table, d.column)) continue;
+  if (AWAITING_CODE[d.table]) continue;
+  if (BOOKKEEPING_NAMES.has(d.column)) {
+    bookkeepingExempt.push(key);
+    continue;
+  }
 
   const f: Finding = {
     key,
@@ -804,6 +863,36 @@ for (const [key, d] of DECLARED) {
 }
 
 const byKey = (a: Finding, b: Finding): number => a.key.localeCompare(b.key);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4b. The bookkeeping rule stays narrow, and the unshipped lanes stay visible
+// ─────────────────────────────────────────────────────────────────────────────
+
+console.log(`\n4b. ${bookkeepingExempt.length} row-bookkeeping column(s) exempted by exact name`);
+
+// ‼️ THE RULE IS ASSERTED, NOT TRUSTED. A pattern like /_at$/ would swallow approved_at, decided_at,
+// verified_at and selected_at, every one of which is a decision somebody recorded and the exact shape
+// of the curated-20 bug. This proves the exemption never reached a name outside the three.
+const strayBookkeeping = bookkeepingExempt.filter((k) => !BOOKKEEPING_NAMES.has(k.split(".").slice(-1)[0] ?? ""));
+check(
+  `the bookkeeping exemption only ever covers ${[...BOOKKEEPING_NAMES].join(", ")}`,
+  strayBookkeeping.length === 0,
+  `it also exempted ${strayBookkeeping.join(", ")}, which is a decision hiding behind a convention`
+);
+check(
+  "the bookkeeping rule has not been widened",
+  BOOKKEEPING_NAMES.size === 3,
+  "a fourth name was added. Every candidate is a place a decision gets recorded: write a named WRITE_ONLY entry instead."
+);
+if (SHOW_INVENTORY) for (const k of bookkeepingExempt.sort()) console.log(`          ${k}`);
+
+for (const [table, why] of Object.entries(AWAITING_CODE)) {
+  // ‼️ NOT SILENT. These read as dead DDL to any column scan, so the one thing that must never happen
+  // is them passing without being named: that is how somebody drops them next quarter.
+  console.log(`  --    ${table}: storage on main, code is not. ${why}`);
+  const stillDeclared = [...DECLARED.values()].some((d) => d.table === table);
+  check(`${table} still exists to be filled`, stillDeclared, "the table is gone: remove the AWAITING_CODE entry");
+}
 
 console.log(`\n5. the ${SCANNED.size} cleaned tables stay clean`);
 
