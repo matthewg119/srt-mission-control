@@ -60,8 +60,25 @@ const CSS = "src/app/hub/[host]/hub.css";
 
 let failures = 0;
 
+/**
+ * Source, with CRLF normalised to LF.
+ *
+ * ‼️ WITHOUT THIS THE PROBE CRIES WOLF ON EVERY WINDOWS CHECKOUT, AND IT DID. Section 9 finds the end
+ * of `answerGate` with `indexOf("\n  }\n")`. `core.autocrlf=true` materialises the file with `\r\n`,
+ * so that marker is never found, `indexOf` returns -1, and `slice(start, -1)` takes the WHOLE REST OF
+ * THE FILE instead of one function: `store()`, `rating`, `privateNote` and `destinations` all land
+ * inside what the check believes is `answerGate`, and it reports a gating leak that does not exist.
+ *
+ * It passes in CI, because Linux checks out LF, so the failure is invisible to the author and red on
+ * the reviewer's machine. That asymmetry is worse than a plain bug: it teaches people that this probe
+ * is unreliable, and this is the one probe whose whole job is an FTC compliance rail.
+ *
+ * Third instance of this trap in this repo. _step-wiring.ts carries `sameText` for it and
+ * _probe-list-prep.ts's `normalize()` for the same reason. Fixed 2026-09-28.
+ */
 function read(file: string): string {
-  return fs.readFileSync(path.join(process.cwd(), file), "utf8");
+  const CR = String.fromCharCode(13);
+  return fs.readFileSync(path.join(process.cwd(), file), "utf8").split(CR).join("");
 }
 
 function check(ok: boolean, label: string, detail?: string): void {
