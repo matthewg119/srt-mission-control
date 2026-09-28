@@ -53,7 +53,14 @@ check("universe rules are scoped to two classes", rules.filter((r) => r.sel.incl
 // 3. The class is gated.
 check("an unknown universe never reaches a class", !hubRootClass(readSkin({ universe: "x onload=alert(1)" })).includes("hub-u"));
 check("a known universe does", hubRootClass(readSkin({ universe: "blueprint" })).includes("hub-u-blueprint"));
-check("six universes, all described", UNIVERSES.length === 6 && UNIVERSES.every((u) => u.blurb.length > 20 && !hasBannedDash(u.blurb)));
+// ‼️ THE COUNT IS ASSERTED AGAINST HUB_UNIVERSES, NOT AGAINST A LITERAL. It was `=== 6`, so adding the
+// review-first five on 2026-09-28 failed a check about DESCRIPTIONS for a reason that had nothing to do
+// with descriptions. The property worth holding is that every declared universe has a real blurb and
+// that the two lists cannot drift apart; the number itself is not the invariant.
+check(
+  `every universe is described (${UNIVERSES.length})`,
+  UNIVERSES.length === HUB_UNIVERSES.length && UNIVERSES.every((u) => u.blurb.length > 20 && !hasBannedDash(u.blurb))
+);
 const three = threeUniverses(axesOfRead({ bg: "#ffffff", headingFace: "serif-book" }));
 check("three distinct universes for a reference", new Set(three).size === 3, three.join(","));
 

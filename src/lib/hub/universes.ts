@@ -22,7 +22,15 @@
 //
 // The client's ACCENT still comes from the theme, so every universe is theirs in the one colour they own.
 
-export const HUB_UNIVERSES = ["blueprint", "atelier", "magazine", "brutalist", "noir", "botanica"] as const;
+// ‼️ THE SECOND FAMILY, ADDED 2026-09-28: focus, studio, folio, midnight, sunrise.
+// The first six were built for the LEARN pages and style the hub body. Not one of them carried a single
+// `rev-` rule, so reviews.{domain} rendered identically and plainly in all six, which is why Matthew
+// called it "really simple". These five are review-first: one thing on screen at a time, display-size
+// questions, a single large action. Typeform's shape, in this repo's tokens, with the client's accent.
+export const HUB_UNIVERSES = [
+  "blueprint", "atelier", "magazine", "brutalist", "noir", "botanica",
+  "focus", "studio", "folio", "midnight", "sunrise",
+] as const;
 export type HubUniverse = (typeof HUB_UNIVERSES)[number];
 
 export interface UniverseInfo {
@@ -70,6 +78,40 @@ export const UNIVERSES: readonly UniverseInfo[] = [
     name: "Botanica",
     blurb: "a calm clinic: sage and linen, soft rounded cards, a friendly serif and plenty of air",
     axes: { dark: 0, serif: 0.6, loud: 0.1, ornate: 0.3, technical: 0 },
+  },
+  {
+    key: "focus",
+    name: "Focus",
+    blurb: "one question, nothing else: white space, a display-size ask and a single accent button",
+    axes: { dark: 0, serif: 0, loud: 0.2, ornate: 0, technical: 0.2 },
+  },
+  {
+    key: "studio",
+    name: "Studio",
+    blurb: "a card floating on tinted ground, soft shadow and round corners, friendly on a phone",
+    axes: { dark: 0.1, serif: 0, loud: 0.3, ornate: 0.3, technical: 0 },
+  },
+  {
+    key: "folio",
+    name: "Folio",
+    blurb: "cream paper and a large serif ask, unhurried, the premium end of one-at-a-time",
+    axes: { dark: 0, serif: 1, loud: 0.2, ornate: 0.4, technical: 0 },
+  },
+  {
+    key: "midnight",
+    name: "Midnight",
+    blurb: "a dark room with one lit question, the accent doing all the pointing",
+    // ‼️ NOT dark: 1. Noir is the purpose-built dark universe for the SCREENSHOT lane, and a second
+    // one at the same extreme made a dark reference resolve to this instead, silently changing which
+    // look a client's own screenshot matches. Midnight is dark and QUIET; noir is a control room with
+    // telemetry labels and glass cards. The axes now say that, so both can exist.
+    axes: { dark: 0.88, serif: 0, loud: 0.35, ornate: 0.05, technical: 0.2 },
+  },
+  {
+    key: "sunrise",
+    name: "Sunrise",
+    blurb: "a warm wash behind a calm question, the softest of the five and the least clinical",
+    axes: { dark: 0, serif: 0, loud: 0.4, ornate: 0.5, technical: 0 },
   },
 ];
 

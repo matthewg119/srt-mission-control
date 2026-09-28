@@ -54,6 +54,15 @@ const FONTS: Record<HubUniverse, string> = {
   brutalist: [archivoBlack.variable, spaceGrotesk.variable, spaceMono.variable].join(" "),
   noir: [sora.variable, archivo.variable, jetbrains.variable].join(" "),
   botanica: [fraunces.variable, nunito.variable, dmSerif.variable].join(" "),
+  // ‼️ THE REVIEW-FIRST FIVE REUSE FACES ALREADY IMPORTED ABOVE, ON PURPOSE. Each new family here is
+  // another set of weights fetched and self-hosted at build, and this file already carries fourteen.
+  // These five are distinguished by ground, scale and air rather than by five more typefaces, which
+  // is also what makes them read as one family rather than five unrelated pages.
+  focus: [sora.variable, archivo.variable, jetbrains.variable].join(" "),
+  studio: [sora.variable, nunito.variable, plexMono.variable].join(" "),
+  folio: [cormorant.variable, karla.variable, plexMono.variable].join(" "),
+  midnight: [sora.variable, archivo.variable, jetbrains.variable].join(" "),
+  sunrise: [fraunces.variable, nunito.variable, plexMono.variable].join(" "),
 };
 
 /** The font-variable classes for a skin's universe, or "" for the classic look. */

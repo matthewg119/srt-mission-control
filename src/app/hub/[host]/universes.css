@@ -282,3 +282,293 @@ body:has(.hub-u-noir) { background: #07090c; }
   .hub-root.hub-u-blueprint .hub-head { padding: 1.25rem; box-shadow: 5px 5px 0 #2e3f49; }
   .hub-root.hub-u-botanica .hub-head { padding: 1.75rem; }
 }
+
+/*
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ * THE REVIEW-FIRST FIVE: focus, studio, folio, midnight, sunrise.
+ *
+ * ‼️ THE FIRST SIX UNIVERSES CARRY NOT ONE `rev-` RULE, AND THAT IS WHY THE REVIEW PAGE LOOKED THE
+ * SAME IN ALL OF THEM. They were built for the LEARN pages: every selector above styles .hub-answer,
+ * .hub-list, .hub-nap and the masthead. reviews.{domain} shares .hub-head and nothing else, so it fell
+ * through to hub.css's base in every universe. Matthew, 2026-09-28: "its really simple right now".
+ *
+ * These five are Typeform's SHAPE rather than its brand: one thing on screen, a display-size question,
+ * generous air, and exactly one obvious action. The flow was already one-at-a-time in the component
+ * (stage === "stars", then priming, then chat), so this is the look catching up with the behaviour.
+ *
+ * ‼️ NOTHING HERE HIDES, REORDERS OR RE-WORDS ANYTHING. No display:none, no visibility:hidden, no
+ * opacity:0 and no `order:` on a semantic element; `content:` only on ::before/::after.
+ * _probe-hub-universes.ts holds all of it, and _probe-review-gating.ts reads this file too: a rule that
+ * hid the destination links or the private note would be a gating funnel built in CSS, which is the
+ * one thing this page exists not to do. The stars are styled big; they still decide nothing.
+ *
+ * ‼️ THE ACCENT IS ALWAYS THE CLIENT'S. Each variant sets --u-accent as a FALLBACK only, and reads
+ * var(--hub-accent, var(--u-accent)), so a client whose brand colour was read off their own homepage
+ * keeps it in all five. A variant that hardcoded its own accent would be a variant no client can use.
+ * ══════════════════════════════════════════════════════════════════════════════════════════════
+ */
+
+/* ── Shared scaffolding for the five ───────────────────────────────────────────────────────────
+   Grouped rather than repeated five times. Every selector still begins .hub-root.hub-u-<key>, which
+   is what the probe checks per comma-separated part. */
+.hub-root.hub-u-focus .hub-wrap,
+.hub-root.hub-u-studio .hub-wrap,
+.hub-root.hub-u-folio .hub-wrap,
+.hub-root.hub-u-midnight .hub-wrap,
+.hub-root.hub-u-sunrise .hub-wrap {
+  max-width: 38rem;
+  padding-block: clamp(2rem, 9vh, 5.5rem);
+}
+
+/* The ask, at display size. This is the single biggest difference from the base look. */
+.hub-root.hub-u-focus .rev-stars legend,
+.hub-root.hub-u-studio .rev-stars legend,
+.hub-root.hub-u-folio .rev-stars legend,
+.hub-root.hub-u-midnight .rev-stars legend,
+.hub-root.hub-u-sunrise .rev-stars legend {
+  display: block;
+  font-family: var(--u-display, inherit);
+  font-size: clamp(1.6rem, 5.2vw, 2.6rem);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  margin-bottom: 1.5rem;
+  max-width: 18ch;
+}
+
+/* Stars big enough to hit with a thumb in a car park. */
+.hub-root.hub-u-focus .rev-stars-row,
+.hub-root.hub-u-studio .rev-stars-row,
+.hub-root.hub-u-folio .rev-stars-row,
+.hub-root.hub-u-midnight .rev-stars-row,
+.hub-root.hub-u-sunrise .rev-stars-row {
+  display: flex;
+  gap: clamp(0.4rem, 2.5vw, 1rem);
+  margin-bottom: 1.25rem;
+}
+.hub-root.hub-u-focus .rev-stars-row button,
+.hub-root.hub-u-studio .rev-stars-row button,
+.hub-root.hub-u-folio .rev-stars-row button,
+.hub-root.hub-u-midnight .rev-stars-row button,
+.hub-root.hub-u-sunrise .rev-stars-row button {
+  font-size: clamp(2.2rem, 9vw, 3.4rem);
+  line-height: 1;
+  background: none;
+  border: 0;
+  padding: 0.2rem;
+  cursor: pointer;
+  color: var(--u-star-off, #d6dbe0);
+  transition: transform 0.12s ease, color 0.12s ease;
+}
+.hub-root.hub-u-focus .rev-stars-row button:hover,
+.hub-root.hub-u-studio .rev-stars-row button:hover,
+.hub-root.hub-u-folio .rev-stars-row button:hover,
+.hub-root.hub-u-midnight .rev-stars-row button:hover,
+.hub-root.hub-u-sunrise .rev-stars-row button:hover { transform: translateY(-2px); }
+.hub-root.hub-u-focus .rev-stars-row button.is-on,
+.hub-root.hub-u-studio .rev-stars-row button.is-on,
+.hub-root.hub-u-folio .rev-stars-row button.is-on,
+.hub-root.hub-u-midnight .rev-stars-row button.is-on,
+.hub-root.hub-u-sunrise .rev-stars-row button.is-on { color: var(--hub-accent, var(--u-accent)); }
+
+/* The line under the stars that says what happens next. Quiet, and always present. */
+.hub-root.hub-u-focus .rev-after-stars,
+.hub-root.hub-u-studio .rev-after-stars,
+.hub-root.hub-u-folio .rev-after-stars,
+.hub-root.hub-u-midnight .rev-after-stars,
+.hub-root.hub-u-sunrise .rev-after-stars {
+  font-size: 1rem;
+  line-height: 1.55;
+  color: var(--u-muted, #5b6672);
+  max-width: 34ch;
+  margin: 0 0 2rem;
+}
+
+/* One obvious action, and it is large. */
+.hub-root.hub-u-focus .rev-primary,
+.hub-root.hub-u-studio .rev-primary,
+.hub-root.hub-u-folio .rev-primary,
+.hub-root.hub-u-midnight .rev-primary,
+.hub-root.hub-u-sunrise .rev-primary {
+  font-size: 1.05rem;
+  font-weight: 600;
+  padding: 0.95rem 2.1rem;
+  border: 0;
+  border-radius: var(--u-btn-radius, 10px);
+  background: var(--hub-accent, var(--u-accent));
+  color: var(--hub-on-accent, #fff);
+  cursor: pointer;
+  transition: transform 0.12s ease, filter 0.12s ease;
+}
+.hub-root.hub-u-focus .rev-primary:hover,
+.hub-root.hub-u-studio .rev-primary:hover,
+.hub-root.hub-u-folio .rev-primary:hover,
+.hub-root.hub-u-midnight .rev-primary:hover,
+.hub-root.hub-u-sunrise .rev-primary:hover { transform: translateY(-1px); filter: brightness(1.06); }
+/* ‼️ A disabled Next is dimmed, never removed. She has to see that the step exists. */
+.hub-root.hub-u-focus .rev-primary:disabled,
+.hub-root.hub-u-studio .rev-primary:disabled,
+.hub-root.hub-u-folio .rev-primary:disabled,
+.hub-root.hub-u-midnight .rev-primary:disabled,
+.hub-root.hub-u-sunrise .rev-primary:disabled { filter: grayscale(1) opacity(0.45); cursor: default; transform: none; }
+
+/* The chat half: roomier bubbles, and a composer that reads as the one live thing. */
+.hub-root.hub-u-focus .rev-msg,
+.hub-root.hub-u-studio .rev-msg,
+.hub-root.hub-u-folio .rev-msg,
+.hub-root.hub-u-midnight .rev-msg,
+.hub-root.hub-u-sunrise .rev-msg {
+  font-size: 1.08rem;
+  line-height: 1.55;
+  padding: 0.85rem 1.1rem;
+  border-radius: var(--u-bubble-radius, 14px);
+  max-width: 90%;
+}
+.hub-root.hub-u-focus .rev-composer textarea,
+.hub-root.hub-u-studio .rev-composer textarea,
+.hub-root.hub-u-folio .rev-composer textarea,
+.hub-root.hub-u-midnight .rev-composer textarea,
+.hub-root.hub-u-sunrise .rev-composer textarea {
+  font-size: 1.05rem;
+  line-height: 1.55;
+  border-radius: var(--u-field-radius, 12px);
+  padding: 0.9rem 1rem;
+}
+.hub-root.hub-u-focus .rev-composer textarea:focus-visible,
+.hub-root.hub-u-studio .rev-composer textarea:focus-visible,
+.hub-root.hub-u-folio .rev-composer textarea:focus-visible,
+.hub-root.hub-u-midnight .rev-composer textarea:focus-visible,
+.hub-root.hub-u-sunrise .rev-composer textarea:focus-visible {
+  outline: 2px solid var(--hub-accent, var(--u-accent));
+  outline-offset: 2px;
+}
+
+/* ‼️ THE HANDOFF IS THE POINT OF THE PAGE, so it is the loudest thing on the last screen. The links
+   are given MORE weight here, never less: they are the public path, and the private note sits beside
+   them rather than in front of them. */
+.hub-root.hub-u-focus .rev-mirror,
+.hub-root.hub-u-studio .rev-mirror,
+.hub-root.hub-u-folio .rev-mirror,
+.hub-root.hub-u-midnight .rev-mirror,
+.hub-root.hub-u-sunrise .rev-mirror { font-size: 1.05rem; line-height: 1.6; }
+
+/* ── 1. FOCUS ── white, one ask, one accent. The purest of the five. ───────────────────────────── */
+.hub-root.hub-u-focus {
+  --u-accent: #111418;
+  --u-muted: #6b7681;
+  --u-star-off: #dfe4e9;
+  --u-btn-radius: 8px;
+  --u-bubble-radius: 12px;
+  --u-field-radius: 10px;
+  background: #ffffff;
+  color: #14181f;
+}
+.hub-root.hub-u-focus .hub-head { border: 0; padding: 0; margin-bottom: 2.5rem; }
+.hub-root.hub-u-focus .hub-head h1 { font-size: clamp(1.9rem, 5.5vw, 2.9rem); letter-spacing: -0.03em; line-height: 1.08; }
+.hub-root.hub-u-focus .hub-eyebrow { font-size: 0.78rem; letter-spacing: 0.14em; text-transform: uppercase; color: #8a949e; }
+.hub-root.hub-u-focus .hub-lede { color: #5b6672; font-size: 1.02rem; max-width: 36ch; }
+.hub-root.hub-u-focus .u-top { justify-content: flex-start; padding: 1.25rem 0; border-bottom: 1px solid #eceff2; }
+.hub-root.hub-u-focus .u-top-label { font-size: 0.75rem; letter-spacing: 0.12em; text-transform: uppercase; color: #9aa4ae; }
+.hub-root.hub-u-focus .u-band { justify-content: flex-start; padding: 1.5rem 0; margin-top: 3rem; border-top: 1px solid #eceff2; }
+.hub-root.hub-u-focus .u-band-line { font-size: 0.95rem; color: #6b7681; }
+
+/* ── 2. STUDIO ── a card floating on tinted ground. Friendliest on a phone. ────────────────────── */
+.hub-root.hub-u-studio {
+  --u-accent: #2f6f62;
+  --u-muted: #5f6b76;
+  --u-star-off: #d3dbe2;
+  --u-btn-radius: 999px;
+  --u-bubble-radius: 18px;
+  --u-field-radius: 16px;
+  background: #eef2f6;
+  color: #17202a;
+}
+.hub-root.hub-u-studio .hub-wrap {
+  background: #ffffff;
+  border-radius: 24px;
+  box-shadow: 0 1px 2px rgba(20, 30, 40, 0.06), 0 18px 45px rgba(20, 30, 40, 0.09);
+  padding-inline: clamp(1.25rem, 5vw, 3rem);
+  margin-block: clamp(1rem, 5vh, 3rem);
+}
+.hub-root.hub-u-studio .hub-head { border: 0; padding: 0; margin-bottom: 2.25rem; }
+.hub-root.hub-u-studio .hub-head h1 { font-size: clamp(1.8rem, 5vw, 2.6rem); letter-spacing: -0.02em; }
+.hub-root.hub-u-studio .hub-eyebrow { font-size: 0.78rem; letter-spacing: 0.12em; text-transform: uppercase; color: #8894a0; }
+.hub-root.hub-u-studio .hub-lede { color: #5f6b76; }
+.hub-root.hub-u-studio .u-top { justify-content: center; padding: 1.5rem 0 0; }
+.hub-root.hub-u-studio .u-top-label { font-size: 0.78rem; color: #7c8894; }
+.hub-root.hub-u-studio .u-band { justify-content: center; padding: 1.75rem 0; }
+.hub-root.hub-u-studio .u-band-line { font-size: 0.95rem; color: #6b7681; }
+
+/* ── 3. FOLIO ── cream paper, a large serif ask. The unhurried one. ────────────────────────────── */
+.hub-root.hub-u-folio {
+  --u-accent: #7a5c3e;
+  --u-muted: #6d6459;
+  --u-star-off: #ddd5c8;
+  --u-btn-radius: 4px;
+  --u-bubble-radius: 8px;
+  --u-field-radius: 6px;
+  background: #faf6ef;
+  color: #22201c;
+}
+.hub-root.hub-u-folio .hub-head { border: 0; padding: 0; margin-bottom: 2.75rem; }
+.hub-root.hub-u-folio .hub-head h1 { font-family: var(--u-display); font-size: clamp(2rem, 6vw, 3.1rem); line-height: 1.1; letter-spacing: -0.01em; }
+.hub-root.hub-u-folio .hub-eyebrow { font-size: 0.76rem; letter-spacing: 0.2em; text-transform: uppercase; color: #9a8f80; }
+.hub-root.hub-u-folio .hub-lede { font-family: var(--u-display); font-size: 1.12rem; color: #6d6459; }
+.hub-root.hub-u-folio .rev-after-stars { font-family: var(--u-display); font-style: italic; }
+.hub-root.hub-u-folio .u-top { justify-content: center; padding: 1.75rem 0 0; }
+.hub-root.hub-u-folio .u-top-label { font-family: var(--u-display); font-style: italic; color: #9a8f80; }
+.hub-root.hub-u-folio .u-band { justify-content: center; padding: 2rem 0; border-top: 1px solid #e6ddd0; margin-top: 3rem; }
+.hub-root.hub-u-folio .u-band-line { font-family: var(--u-display); font-style: italic; font-size: 1.15rem; color: #6d6459; }
+
+/* ── 4. MIDNIGHT ── a dark room with one lit question. ─────────────────────────────────────────── */
+.hub-root.hub-u-midnight {
+  --u-accent: #5fd0b4;
+  --u-muted: #9aa7b4;
+  --u-star-off: #2c3440;
+  --u-btn-radius: 10px;
+  --u-bubble-radius: 14px;
+  --u-field-radius: 12px;
+  background: #0f141a;
+  color: #eef3f7;
+}
+.hub-root.hub-u-midnight .hub-head { border: 0; padding: 0; margin-bottom: 2.5rem; }
+.hub-root.hub-u-midnight .hub-head h1 { font-size: clamp(1.9rem, 5.5vw, 2.9rem); letter-spacing: -0.03em; color: #f6fafd; }
+.hub-root.hub-u-midnight .hub-eyebrow { font-size: 0.78rem; letter-spacing: 0.14em; text-transform: uppercase; color: #7c8b9a; }
+.hub-root.hub-u-midnight .hub-lede { color: #9aa7b4; }
+.hub-root.hub-u-midnight .rev-msg.is-them { background: #1a222b; color: #dfe8ef; }
+.hub-root.hub-u-midnight .rev-composer textarea { background: #151d25; color: #eef3f7; border-color: #2c3440; }
+.hub-root.hub-u-midnight .u-top { justify-content: flex-start; padding: 1.25rem 0; border-bottom: 1px solid #1d252e; }
+.hub-root.hub-u-midnight .u-top-label { font-size: 0.75rem; letter-spacing: 0.12em; text-transform: uppercase; color: #6e7d8c; }
+.hub-root.hub-u-midnight .u-band { justify-content: flex-start; padding: 1.5rem 0; margin-top: 3rem; border-top: 1px solid #1d252e; }
+.hub-root.hub-u-midnight .u-band-line { font-size: 0.95rem; color: #9aa7b4; }
+
+/* ── 5. SUNRISE ── a warm wash behind a calm question. The least clinical. ─────────────────────── */
+.hub-root.hub-u-sunrise {
+  --u-accent: #c9603f;
+  --u-muted: #7a6a62;
+  --u-star-off: #e7d9d1;
+  --u-btn-radius: 999px;
+  --u-bubble-radius: 20px;
+  --u-field-radius: 16px;
+  background: linear-gradient(180deg, #fff3ec 0%, #fdf8f4 42%, #ffffff 100%);
+  background-attachment: fixed;
+  color: #241c18;
+}
+.hub-root.hub-u-sunrise .hub-head { border: 0; padding: 0; margin-bottom: 2.4rem; }
+.hub-root.hub-u-sunrise .hub-head h1 { font-size: clamp(1.9rem, 5.4vw, 2.8rem); letter-spacing: -0.02em; }
+.hub-root.hub-u-sunrise .hub-eyebrow { font-size: 0.78rem; letter-spacing: 0.13em; text-transform: uppercase; color: #a89187; }
+.hub-root.hub-u-sunrise .hub-lede { color: #7a6a62; }
+.hub-root.hub-u-sunrise .rev-msg.is-them { background: #fdece4; color: #4a382f; }
+.hub-root.hub-u-sunrise .u-top { justify-content: center; padding: 1.5rem 0 0; }
+.hub-root.hub-u-sunrise .u-top-label { font-size: 0.78rem; color: #a89187; }
+.hub-root.hub-u-sunrise .u-band { justify-content: center; padding: 1.9rem 0; margin-top: 2.75rem; }
+.hub-root.hub-u-sunrise .u-band-line { font-size: 1rem; color: #7a6a62; }
+
+/* ── Small screens: the five stay one-column and keep their air ────────────────────────────────── */
+@media (max-width: 720px) {
+  .hub-root.hub-u-studio .hub-wrap { border-radius: 18px; margin-block: 0.75rem; }
+  .hub-root.hub-u-focus .rev-stars legend,
+  .hub-root.hub-u-studio .rev-stars legend,
+  .hub-root.hub-u-folio .rev-stars legend,
+  .hub-root.hub-u-midnight .rev-stars legend,
+  .hub-root.hub-u-sunrise .rev-stars legend { max-width: 14ch; }
+}

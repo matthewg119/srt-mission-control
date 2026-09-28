@@ -22,6 +22,13 @@ const LABELS: Record<HubUniverse, { top: string[]; band: string }> = {
   brutalist: { top: ["Questions", "Answers"], band: "Straight answers" },
   noir: { top: ["System online", "Answers indexed"], band: "Signal, not noise" },
   botanica: { top: ["Welcome", "Your questions, answered"], band: "Take your time" },
+  // The review-first five. Their chrome is quieter than the first six on purpose: this family is
+  // about one thing on screen, so a busy top bar would be arguing with the page underneath it.
+  focus: { top: ["A moment of your time"], band: "In your own words" },
+  studio: { top: ["Thanks for stopping"], band: "Your words, your review" },
+  folio: { top: ["A few words"], band: "Written by you, posted by you" },
+  midnight: { top: ["One question at a time"], band: "Say it how you say it" },
+  sunrise: { top: ["Good to see you"], band: "Take a minute, then post it" },
 };
 
 export function UniverseTop({ universe, name, where, pages }: ChromeProps) {

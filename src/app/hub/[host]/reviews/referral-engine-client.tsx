@@ -611,7 +611,17 @@ export function ReferralEngineClient({
             advance so that moving on learns THAT she tapped and never WHICH.
           */}
           <fieldset className="rev-stars">
-            <legend>How would you rate your experience?</legend>
+            {/*
+              ‼️ THE BUSINESS NAME IS IN THE QUESTION, AND THE QUESTION IS STILL THE SAME FOR EVERY
+              CLIENT. skin.ts's rule is that copy is not THEMABLE, meaning a client cannot rewrite it,
+              not that it can never be interpolated: line 326 already says "four short questions about
+              {businessName}" and the private-note summary already names them too.
+
+              ‼️ IT STILL DECIDES NOTHING. Naming the business in the legend changes what she reads and
+              not what the value does. Every one of the five leads to the same four questions, the same
+              box, the same links and the same private note.
+            */}
+            <legend>How many stars would you give {businessName}?</legend>
             <div
               className="rev-stars-row"
               role="radiogroup"
@@ -633,6 +643,20 @@ export function ReferralEngineClient({
               ))}
             </div>
           </fieldset>
+
+          {/*
+            ‼️ THE STAR ROW WAS THE FIRST THING ON SCREEN AND EXPLAINED NOTHING. She tapped a star
+            with no idea what happened next, which is the moment a review tool loses people: the tap
+            looks like it might submit something, or send something to the business, and neither is
+            true. This says the whole shape of the next ninety seconds in one line.
+
+            ‼️ IT DESCRIBES THE PATH EVERY RATING TAKES, NOT A PATH. One star and five stars reach
+            the same four questions and the same links, so this sentence is true for both. A line
+            here that hinted otherwise would be the gating funnel written in copy instead of code.
+          */}
+          <p className="rev-hint rev-after-stars">
+            Then four short questions. You keep your own words, copy them, and post them yourself.
+          </p>
 
           {needsSpanish && (
             // Rendered rather than hidden, because a Spanish-speaking customer being handed

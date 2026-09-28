@@ -46,6 +46,8 @@ export type HubTemplate = (typeof HUB_TEMPLATES)[number];
 
 export const DEFAULT_TEMPLATE: HubTemplate = "document";
 
+
+
 export interface TemplateInfo {
   key: HubTemplate;
   /** What it is called in Slack and in the dashboard. */

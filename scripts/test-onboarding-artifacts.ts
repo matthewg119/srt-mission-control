@@ -91,6 +91,7 @@ import {
   skinVariants,
   tokenVariants,
 } from "../src/lib/hub/skin-variants";
+import { UNIVERSES } from "../src/lib/hub/universes";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -1675,11 +1676,21 @@ eq(
   ok("each candidate is a universe", worlds.every((w) => typeof w.universe === "string"));
   eq("and no two are the same universe", new Set(worlds.map((w) => w.universe)).size, 3);
   ok("a universe candidate carries no read ground, which would flatten it back into the reference", worlds.every((w) => w.bg === null && w.fg === null));
-  ok("each blurb names its universe", worlds.every((w) => /Blueprint|Atelier|Magazine|Brutalist|Noir|Botanica/.test(w.blurb)));
+  // ‼️ DERIVED FROM UNIVERSES, NOT A LITERAL LIST. This was /Blueprint|Atelier|.../ and adding the
+  // review-first five failed a check about BLURBS for a reason that had nothing to do with blurbs.
+  // The property is that a candidate names the universe it is offering, whatever the catalogue holds.
+  const universeNames = new RegExp(UNIVERSES.map((u) => u.name).join("|"));
+  ok("each blurb names its universe", worlds.every((w) => universeNames.test(w.blurb)));
   ok("no banned dash in a universe blurb", !worlds.some((w) => hasBannedDash(w.blurb)));
   eq("the same reference always offers the same three", skinVariants(read, "again").map((w) => w.universe), worlds.map((w) => w.universe));
   const dark = skinVariants({ ...read, bg: "#07090c", fg: "#e8e8e8" }, "test");
-  eq("a dark reference is closest to Noir", dark[0]?.universe, "noir");
+  // ‼️ THE PROPERTY IS "DARK REFERENCE, DARK UNIVERSE", NOT "always noir". This asserted `noir`
+  // literally, which held only while noir was the ONLY dark universe. `midnight` arrived 2026-09-28 and
+  // wins this reference on merit: the fixture is a PLAIN dark page (flat surface, no mono label), and
+  // noir sits at technical 0.8 because it is a control room with telemetry labels and glass cards.
+  // Asserting the key again would pin the lane to whichever dark universe happened to exist first.
+  const darkPick = UNIVERSES.find((u) => u.key === dark[0]?.universe);
+  ok(`a dark reference resolves to a dark universe (${dark[0]?.universe})`, (darkPick?.axes.dark ?? 0) >= 0.8);
 
   // The round trip through storage. Anything malformed is nothing, because a half-read set sends
   // you back to the screenshot, which is where you would have to go anyway.
