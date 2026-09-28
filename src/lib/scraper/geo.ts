@@ -88,6 +88,28 @@ export function stateNameFrom(text: string): string | null {
   return named ? titleCase(named) : null;
 }
 
+/**
+ * A state name from somewhere else, validated against the list above, or null.
+ *
+ * ‼️ IT EXISTS BECAUSE A REVERSE GEOCODER ANSWERS FOR THE WHOLE PLANET. Nominatim returns "Ontario",
+ * "Baja California" and "Chihuahua" for cells just over the border, and the national crawl's seed
+ * circles are 384km across, so plenty of them straddle one. Printing those verbatim on a
+ * progress card would report Canadian and Mexican provinces as US states and quietly inflate the
+ * denominator of "how much of the country is done".
+ *
+ * Exact names only, and deliberately not the loose matching `stateNameFrom` does on a typed metro:
+ * the input here is a machine's answer rather than a person's shorthand, so anything unrecognised is a
+ * refusal rather than something to search inside.
+ */
+export function canonicalStateName(name: string | null | undefined): string | null {
+  const cleaned = (name ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  if (!cleaned) return null;
+  if (STATE_NAMES.includes(cleaned)) return titleCase(cleaned);
+  // A two-letter code is accepted too, because some sources answer that way.
+  const byCode = CODE_TO_STATE.get(cleaned.toUpperCase());
+  return byCode ? titleCase(byCode) : null;
+}
+
 /** "Dallas TX" into "Dallas", the part that is not the state. */
 export function cityNameFrom(text: string): string | null {
   const cleaned = text.trim().replace(/,/g, " ").replace(/\s+/g, " ");

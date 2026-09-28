@@ -36,9 +36,6 @@ import {
   MAPS_SOURCE_DEFAULT,
   laneHelp,
   looksLikeMapsCommand,
-  US_METROS,
-  metroProgress,
-  nextTarget,
   parseMapsCommand,
   parseNaturalPull,
   parseNextMetroCommand,
@@ -1076,7 +1073,29 @@ async function liveMx(): Promise<void> {
   check("nor by a code it also ignores", !/location_code:/.test(code));
 
   const lane = readFileSync("src/lib/scraper/lane.ts", "utf8");
-  check("the lane geocodes before it spends", lane.indexOf("await geocodeMetro(") < lane.indexOf("await searchListings("));
+  // ‼️ SCOPED TO pullFromDataForSeo, NOT THE WHOLE FILE, AND THE REASON IS THE MEASUREMENT STEP. This
+  // used to compare file-wide indexes of "await geocodeMetro(" and "await searchListings(". That broke
+  // when the cell crawl landed, because `releaseCellProbes` calls searchListings and CORRECTLY never
+  // geocodes: a cell key already IS the coordinate the endpoint wants. A file-wide index check cannot
+  // tell "spends without geocoding because it is already a coordinate" from "spends without geocoding
+  // because somebody deleted the geocode", so it is pinned to the function that resolves a place.
+  {
+    const fn = lane.slice(lane.indexOf("async function pullFromDataForSeo("));
+    const body = fn.slice(0, fn.indexOf("\n}\n"));
+    check("the record pull resolves a place before it spends", body.indexOf("geocodeMetro(") < body.indexOf("await searchListings("));
+    check("and it still refuses rather than guessing a coordinate", /if \(!place\)/.test(body));
+    // The other half of the same rule: a cell skips the geocoder because it needs no resolving, and
+    // what reaches the vendor is the cell key verbatim.
+    check("a cell pull sends its own key as the coordinate", /command\.cell[\s\S]*?lat: command\.cell\.lat/.test(body));
+  }
+  // The measurement step spends too, so it gets the same scrutiny: it must ask by coordinate only.
+  {
+    const fn = lane.slice(lane.indexOf("async function releaseCellProbes("));
+    const body = fn.slice(0, fn.indexOf("\n}\n"));
+    check("a probe asks by cell key, never by a name", /locationCoordinate: cellKey\(cell\)/.test(body));
+    check("and it asks for exactly one record, which is what makes it a count", /limit: 1,/.test(body));
+    check("a probe is guarded on spend_approved_at like every other spend", /spend_approved_at/.test(body));
+  }
   check(
     "and refuses when the metro cannot be found",
     /I could not find `" \+ command\.metro \+ "` on the map/.test(lane)
@@ -1144,98 +1163,15 @@ async function liveMx(): Promise<void> {
   check("an unknown vertical is still refused", parseNextMetroCommand("pull maps plumbers")?.ok === false);
   check("ordinary chat is not a queue command", parseNextMetroCommand("metros") === null);
 
-  // ‼️ DONE-NESS IS DERIVED FROM THE COMMANDS THEMSELVES. No queue table means nothing to drift, and
-  // a campaign that dies halfway resumes by asking the same question again.
-  // A pull is a label plus the row count it produced. Both halves decide where the queue goes next,
-  // so every case below states the count explicitly.
-  const pull = (metro: string, offset: number, rawCount: number, limit = 500) => ({
-    label: "pull maps medspa | " + metro + " | med spa | limit " + limit + " | offset " + offset,
-    rawCount,
-  });
-
-  eq("with no history, the first metro is next", nextTarget("medspa", [])?.metro, US_METROS[0]);
-  eq("and it starts at the top", nextTarget("medspa", [])?.offset, 0);
-
-  // The measured reason this exists: Dallas holds 1,765 med spas, so a full 500 means there is more.
-  eq(
-    "a FULL pull means the same metro again, deeper",
-    nextTarget("medspa", [pull(US_METROS[0], 0, 500)]),
-    { metro: US_METROS[0], offset: 500 }
-  );
-  eq(
-    "and it keeps going while pulls keep filling",
-    nextTarget("medspa", [pull(US_METROS[0], 0, 500), pull(US_METROS[0], 500, 500)]),
-    { metro: US_METROS[0], offset: 1000 }
-  );
-  eq(
-    "a SHORT pull finishes the metro and moves on",
-    nextTarget("medspa", [pull(US_METROS[0], 0, 500), pull(US_METROS[0], 500, 118)]),
-    { metro: US_METROS[1], offset: 0 }
-  );
-  eq(
-    "an empty pull also finishes it, rather than retrying forever",
-    nextTarget("medspa", [pull(US_METROS[0], 0, 0)]),
-    { metro: US_METROS[1], offset: 0 }
-  );
-  eq(
-    "a hand-typed deep offset does not rewind the frontier",
-    nextTarget("medspa", [pull(US_METROS[0], 1000, 500), pull(US_METROS[0], 0, 500)]),
-    { metro: US_METROS[0], offset: 1500 }
-  );
-
-  // ‼️ THE CASE A PAGE NUMBER GETS WRONG. The first real Dallas pull ran at limit 50. Storing "page 1"
-  // and then asking for "page 2" at the default limit 500 starts at 500 and skips results 50 to 499.
-  // Depth is offset + the limit THAT pull used, so the next pull starts at exactly 50.
-  eq(
-    "depth follows the limit each pull actually used, not the current one",
-    nextTarget("medspa", [pull(US_METROS[0], 0, 50, 50)]),
-    { metro: US_METROS[0], offset: 50 }
-  );
-  eq(
-    "another vertical's history does not count",
-    nextTarget("dentist", [pull(US_METROS[0], 0, 500)])?.metro,
-    US_METROS[0]
-  );
-  eq(
-    "an unreadable label is ignored rather than crashing",
-    nextTarget("medspa", [{ label: "some nonsense somebody typed", rawCount: 400 }])?.metro,
-    US_METROS[0]
-  );
-  // A label written before offsets existed has to keep working, or the queue re-buys every old metro.
-  eq(
-    "a legacy label with no offset reads as offset 0",
-    nextTarget("medspa", [{ label: "pull maps medspa | " + US_METROS[0] + " | med spa | limit 500", rawCount: 500 }]),
-    { metro: US_METROS[0], offset: 500 }
-  );
-
-  // `page <n>` is shorthand, and the shorthand has to resolve against the limit in the SAME command.
-  const paged = parseMapsCommand("pull maps medspa | Dallas TX | med spa | page 3 | limit 100");
-  eq("page 3 at limit 100 is offset 200", paged.ok ? paged.command.offset : null, 200);
-  const pagedFirst = parseMapsCommand("pull maps medspa | Dallas TX | med spa | page 1");
-  eq("page 1 is offset 0", pagedFirst.ok ? pagedFirst.command.offset : null, 0);
-  const bothWays = parseMapsCommand("pull maps medspa | Dallas TX | med spa | page 2 | offset 500");
-  check("offset and page together are refused rather than reconciled", !bothWays.ok);
-  const explicitOffset = parseMapsCommand("pull maps medspa | Dallas TX | med spa | offset 750");
-  eq("an explicit offset is taken verbatim", explicitOffset.ok ? explicitOffset.command.offset : null, 750);
-  const noOffset = parseMapsCommand("pull maps medspa | Dallas TX | med spa");
-  eq("no offset means the top", noOffset.ok ? noOffset.command.offset : null, 0);
-
-  const prog = metroProgress("medspa", [pull(US_METROS[0], 0, 500), pull(US_METROS[0], 500, 40), pull(US_METROS[1], 0, 500)]);
-  eq("progress counts only EXHAUSTED metros as done", prog.done.length, 1);
-  eq("a metro mid-way is reported separately", prog.started, [US_METROS[1]]);
-  eq("and what has never been touched", prog.remaining.length, US_METROS.length - 2);
-  eq("pulls are counted, not metros", prog.pulls, 3);
-  eq("rows are summed across pulls", prog.rows, 1040);
-
-  // The list itself has to be usable by the geocoder, or a campaign buys nothing 50 times.
-  check("every metro resolves a state", US_METROS.every((m) => stateNameFrom(m) !== null));
-  check("and a city", US_METROS.every((m) => (cityNameFrom(m) ?? "").length > 1));
-  check("no duplicates in the list", new Set(US_METROS.map((m) => m.toLowerCase())).size === US_METROS.length);
-  check(
-    "every metro round-trips through the explicit parser",
-    US_METROS.every((m) => parseMapsCommand("pull maps medspa | " + m + " | med spa").ok)
-  );
+  // ‼️ THE CELL WALK THAT REPLACED THE METRO QUEUE IS PROVEN IN scripts/_probe-cells.ts.
+  // US_METROS, nextTarget, metroStates, exhausted and metroProgress were deleted on 2026-09-28:
+  // a hand-picked list of fifty cities cannot express "cover the country", and done-ness is now
+  // DataForSEO's total_count rather than an inference from a short page. Every assertion that used
+  // to live here has a counterpart there, including the ones this file pinned first: depth is
+  // offset + the limit THAT pull used, the deepest pull wins, an unreadable label is skipped, and
+  // another vertical's history does not count.
 }
+
 // Wrapped rather than top-level await: tsx transforms this to CJS and rejects one.
 async function main(): Promise<void> {
   await liveMx();

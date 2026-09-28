@@ -54,6 +54,7 @@ import {
   bindRunToBatch,
   dropReasons,
   applyFreeRejects,
+  dropCrossRunDuplicates,
   dropWebsiteless,
   droppedRows,
   funnelFor,
@@ -89,11 +90,10 @@ import {
 import { allKeys, countTruncatedNames, dedupeColumns, isKeyActive, splitDuplicates } from "./dedup";
 import { mailProviderOf, resolveMxBatch } from "./mx";
 import {
+  DFS_CATEGORIES,
   MAPS_GRAMMAR,
-  US_METROS,
+  MAPS_LIMIT_DEFAULT,
   laneHelp,
-  metroProgress,
-  nextTarget,
   parseNextMetroCommand,
   type NextMetroCommand,
   looksLikeMapsCommand,
@@ -102,14 +102,26 @@ import {
   unwrapCodeText,
   type MapsCommand,
 } from "./maps-command";
+import { categoriesKey, cellKey, childrenOf, type Cell } from "./cells";
+import {
+  CELL_BUDGET_DEFAULT,
+  PROBE_BATCH_DEFAULT,
+  cellPullCommand,
+  nextCellAction,
+  parseCellsCommand,
+  stateProgress,
+} from "./coverage";
+import { bumpCellTotal, cellRows, cellsMissingState, insertCells, setCellState, type MeasuredCell } from "./cell-store";
 // The default source. Its endpoint is synchronous, so this half needs no webhook at all.
 import { isConfigured as dfsPlacesConfigured, searchListings } from "@/lib/dataforseo-places";
 // The listings endpoint honours a coordinate and silently ignores a name, so this is not optional.
-import { geocodeMetro } from "@/lib/geocode";
+// reverseGeocode goes the other way, and exists only so the coverage card can report by state.
+import { geocodeMetro, reverseGeocode } from "@/lib/geocode";
 // The async submit. The transport already existed and is not rebuilt: the 4️⃣ door is the caller
 // it never had.
 import { submitMapsSearch } from "@/lib/outscraper";
 import {
+  activeCellProbe,
   activeMapsPull,
   mapsPullHistory,
   addScoreCost,
@@ -204,7 +216,7 @@ import {
   type OptimizationKey,
 } from "./gbp-audit";
 import { researchWebsite, SiteFetchError } from "@/lib/audit-engine/site-research";
-import { describeLocation, locationVerdict } from "./geo";
+import { canonicalStateName, describeLocation, locationVerdict } from "./geo";
 import {
   applyCutoff,
   buildScoreQuery,
@@ -439,14 +451,27 @@ export async function handleScraperEvent(event: ScraperEvent): Promise<boolean> 
         await slack.postMessage(event.channel, [":no_entry: " + queued.reason, "", MAPS_GRAMMAR].join("\n"));
         return true;
       }
-      await startNextMetro(event, queued.command);
+      await startNextCell(event, queued.command);
       return true;
     }
   }
 
-  // `metros` on its own: how far through the list each vertical is.
-  if (/^\s*metros?\s*(medspa|dentist)?\s*$/i.test(unwrapCodeText(event.text))) {
-    await postMetroProgress(event.channel, unwrapCodeText(event.text));
+  // `cells <vertical>`: measure circles. A different purchase from a pull, so a different card.
+  {
+    const cells = parseCellsCommand(unwrapCodeText(event.text));
+    if (cells) {
+      if (!cells.ok) {
+        await slack.postMessage(event.channel, ":no_entry: " + cells.reason);
+        return true;
+      }
+      await beginCellProbe(event, cells.command.vertical, cells.command.probeBatch);
+      return true;
+    }
+  }
+
+  // `coverage`, and `metros` kept as an alias because that is what the muscle memory types.
+  if (/^\s*(coverage|metros?|cells)\s*(medspa|dentist)?\s*$/i.test(unwrapCodeText(event.text))) {
+    await postCoverage(event.channel, unwrapCodeText(event.text));
     return true;
   }
 
@@ -765,6 +790,10 @@ async function beginWorkflow(
       // `beginMapsPull` from a typed command. Throwing names the mistake instead of quietly running
       // a paid arm against whatever file happened to be in the thread.
       throw new Error("mapspull is not started from a dropped file");
+    case "mapsprobe":
+      // Same reasoning as mapspull above, one step earlier: a measurement step has no file and is
+      // started by the `cells` command. Naming the mistake beats running a paid arm on a stray file.
+      throw new Error("mapsprobe is not started from a dropped file");
     default: {
       const _never: never = workflow;
       throw new Error("unhandled workflow: " + String(_never));
@@ -1296,7 +1325,7 @@ async function beginMapsPull(event: ScraperEvent, command: MapsCommand): Promise
  * a command you give again, which each time takes the next unclaimed metro and refuses if the last
  * one has not finished. Nothing to start, nothing to stop, nothing to leave running by accident.
  */
-async function startNextMetro(event: ScraperEvent, want: NextMetroCommand): Promise<void> {
+async function startNextCell(event: ScraperEvent, want: NextMetroCommand): Promise<void> {
   const running = await activeMapsPull();
   if (running) {
     const where = parseMapsCommand(running.batch_label ?? "");
@@ -1310,68 +1339,454 @@ async function startNextMetro(event: ScraperEvent, want: NextMetroCommand): Prom
     return;
   }
 
-  const history = await mapsPullHistory();
-  const target = nextTarget(want.vertical, history);
-  if (!target) {
-    const progress = metroProgress(want.vertical, history);
+  const categories = DFS_CATEGORIES[want.vertical] ?? [];
+  if (!categories.length) {
     await slack.postMessage(
       event.channel,
-      ":checkered_flag: *Every metro on the list is exhausted for `" + want.vertical + "`* (" +
-        progress.done.length + " metros, " + progress.pulls + " pulls, " + progress.rows +
-        " rows). Add more to `US_METROS` in `src/lib/scraper/maps-command.ts`, or name a city directly."
+      ":no_entry: there are no DataForSEO categories mapped for `" + want.vertical + "`, so there is " +
+        "nothing to measure. Add them to `DFS_CATEGORIES` in `src/lib/scraper/maps-command.ts`."
+    );
+    return;
+  }
+  const catsKey = categoriesKey(categories);
+
+  const [rows, history] = await Promise.all([cellRows(want.vertical, catsKey), mapsPullHistory()]);
+  const action = nextCellAction({
+    vertical: want.vertical,
+    categoriesKey: catsKey,
+    rows,
+    history,
+    limit: want.limit,
+    probeBatch: PROBE_BATCH_DEFAULT,
+  });
+
+  if (action.kind === "refuse") {
+    await slack.postMessage(event.channel, ":no_entry: " + action.reason);
+    return;
+  }
+
+  if (action.kind === "done") {
+    await slack.postMessage(
+      event.channel,
+      ":checkered_flag: *Every measured cell is paged out for `" + want.vertical + "`* (" +
+        action.cells + " cells, " + action.records.toLocaleString() + " businesses). `coverage " +
+        want.vertical + "` shows it by state."
     );
     return;
   }
 
-  // Rebuilt as a normal command string so there is exactly ONE parser, and so the batch label that
-  // gets stored is the same shape a human would have typed. That label is what `nextTarget` reads
-  // back, so it has to round-trip -- including `page`, or the queue forgets how deep it went and
-  // re-buys page 1 forever.
-  const text =
-    "pull maps " + want.vertical + " | " + target.metro + " | " + want.vertical +
-    " | limit " + want.limit + " | radius " + want.radiusKm + " | offset " + target.offset +
-    " | via " + want.source;
+  // ‼️ AN UNMEASURED FRONTIER REFUSES TO SPEND RATHER THAN MEASURING ITSELF. `pull maps` buys
+  // records; measuring is a different purchase with a different card and its own check mark. Rolling
+  // them together would mean one reaction authorised an unbounded number of probes, which is exactly
+  // the property this lane's gates exist to prevent.
+  if (action.kind === "probe") {
+    await slack.postMessage(
+      event.channel,
+      ":straight_ruler: *The next cells have not been measured yet.* " + action.cells.length +
+        " circles, about $" + action.costUsd.toFixed(2) + " to count. Nothing was bought.\n" +
+        "  Run `cells " + want.vertical + "` to measure them, then ask again."
+    );
+    return;
+  }
+
+  // Rebuilt as a normal command string so there is exactly ONE parser, and so the stored label is the
+  // same shape a person would have typed. That label is what `cellDepthFrom` joins on, so it has to
+  // round-trip byte-identically.
+  const text = cellPullCommand({
+    vertical: want.vertical,
+    query: want.vertical,
+    cell: action.cell,
+    limit: action.limit,
+    offset: action.offset,
+    source: want.source,
+  });
   const parsed = parseMapsCommand(text);
   if (!parsed.ok) {
     await slack.postMessage(
       event.channel,
-      ":no_entry: I built a command for `" + target.metro + "` that I cannot read back: " + parsed.reason
+      ":no_entry: I built a command for `" + action.cell.key + "` that I cannot read back: " + parsed.reason
     );
     return;
   }
 
-  const progress = metroProgress(want.vertical, history);
+  const where = action.cell.stateName ?? "not yet placed";
   await slack.postMessage(
     event.channel,
-    ":round_pushpin: Next up: *" + target.metro + "*" +
-      (target.offset > 0
-        ? ", from result " + (target.offset + 1) + " (the last pull filled up, so there is more here)"
-        : "") +
-      "  (" + progress.done.length + " of " + US_METROS.length + " metros finished for `" +
-      want.vertical + "`, " + progress.rows + " rows so far)"
+    ":round_pushpin: Next up: *" + where + "*, cell `" + action.cell.key + "`  (page " +
+      action.pageOf[0] + " of " + action.pageOf[1] + " of " + action.cell.totalCount.toLocaleString() +
+      " businesses" + (action.offset > 0 ? ", from result " + (action.offset + 1) : "") + ")"
   );
   await beginMapsPull({ ...event, text }, parsed.command);
 }
 
-/** How far through the metro list each vertical is. */
-async function postMetroProgress(channel: string, text: string): Promise<void> {
-  const asked = /medspa|dentist/i.exec(text)?.[0]?.toLowerCase();
+/**
+ * Open a measurement step: one card, one check mark, up to `probeBatch` circles counted.
+ *
+ * ‼️ IT IS A BATCH AND A RUN LIKE EVERYTHING ELSE, AND THAT IS NOT CEREMONY. Money may only be spent
+ * behind a reaction; `batchByGateTs` resolves a reaction through a batch; and `scraper_batches` may not
+ * grow a fifth gate `*_ts` (GATE_COLUMNS says so). So a measurement step reuses the pull gate
+ * wholesale: `awaiting_pull_approval`, `pull_approval_ts`, `spend_approved_at` and `cost_usd` already
+ * mean exactly "the card, the check mark, and what it cost".
+ *
+ * ‼️ workflow = "mapsprobe", AND THE DISTINCT VALUE IS FOR CORRECTNESS RATHER THAN TIDINESS.
+ * `mapsPullHistory` filters `workflow = 'mapspull'` and re-parses each label into an offset and a
+ * limit. A measurement's label is not a page of records; read as one it would credit paging depth to a
+ * cell that was only counted, and the walk would skip 500 real businesses believing they were bought.
+ * A separate value is what makes a probe INVISIBLE to that query.
+ */
+async function beginCellProbe(event: ScraperEvent, vertical: string, probeBatch: number): Promise<void> {
+  if (!knownVerticals().includes(vertical)) {
+    await slack.postMessage(
+      event.channel,
+      ":no_entry: `" + vertical + "` is not a vertical I have a buyer profile for. Known: " +
+        knownVerticals().map((v) => "`" + v + "`").join(", ") + "."
+    );
+    return;
+  }
+  const categories = DFS_CATEGORIES[vertical] ?? [];
+  if (!categories.length) {
+    await slack.postMessage(
+      event.channel,
+      ":no_entry: there are no DataForSEO categories mapped for `" + vertical + "`, so there is nothing " +
+        "to measure. Add them to `DFS_CATEGORIES` in `src/lib/scraper/maps-command.ts`."
+    );
+    return;
+  }
+
+  const running = await activeCellProbe();
+  if (running) {
+    await slack.postMessage(
+      event.channel,
+      ":hourglass: *A measurement step is already running* at stage `" + running.status + "`. One at a " +
+        "time, so two steps cannot measure the same circles and pay twice. Ask again when it lands."
+    );
+    return;
+  }
+
+  const catsKey = categoriesKey(categories);
+  const [rows, history] = await Promise.all([cellRows(vertical, catsKey), mapsPullHistory()]);
+  const action = nextCellAction({
+    vertical,
+    categoriesKey: catsKey,
+    rows,
+    history,
+    limit: MAPS_LIMIT_DEFAULT,
+    probeBatch,
+  });
+
+  if (action.kind === "refuse") {
+    await slack.postMessage(event.channel, ":no_entry: " + action.reason);
+    return;
+  }
+  if (action.kind !== "probe") {
+    await slack.postMessage(
+      event.channel,
+      ":white_check_mark: Nothing needs measuring for `" + vertical + "` right now. " +
+        (action.kind === "done"
+          ? "Every measured cell is paged out too."
+          : "The next cell is already measured, so `pull maps " + vertical + "` will work it.")
+    );
+    return;
+  }
+
+  // The label is not a pull command and must never parse as one. It carries the vertical and the count
+  // so the card can be rebuilt after a restart, and nothing else.
+  const label = "cells " + vertical + " | probes " + action.cells.length;
+  const created = await createBatch({
+    channel: event.channel,
+    threadTs: event.messageTs,
+    fileId: null,
+    fileName: null,
+    status: "awaiting_pull_approval",
+    batchLabel: label,
+  });
+  // No falsy guard on `created`: createBatch returns a BatchRow or throws, the same as it does for the
+  // other three callers here. A guard would be unreachable code carrying a message nobody can ever see.
+  await updateBatch(created.id, { workflow: "mapsprobe" });
+
+  const started = await startRun({
+    label: label + " (measurement only)",
+    source: "dataforseo",
+    queries: action.cells.map(cellKey),
+    icp: null,
+    vertical,
+    slackChannelId: event.channel,
+    slackThreadTs: event.messageTs,
+  });
+  if (!started.ok) {
+    await fail(created, started.error);
+    return;
+  }
+  await bindRunToBatch(started.runId, created.id);
+  await updateBatch(created.id, { list_run_id: started.runId });
+
+  const fresh = (await getBatch(created.id)) ?? created;
+  await postCellProbeEstimate(fresh, action.cells, action.costUsd, vertical);
+}
+
+/**
+ * The measurement spend card. Guarded on its own `pull_approval_ts`, posts once, advances never.
+ *
+ * Structurally identical to postPullEstimate and postDropReview, which is what makes
+ * `awaiting_pull_approval` safe to leave in ACTIVE_STATUSES: the cron may re-enter forever and the
+ * only effect is re-reading one row.
+ */
+async function postCellProbeEstimate(
+  batch: BatchRow,
+  cells: readonly Cell[],
+  costUsd: number,
+  vertical: string
+): Promise<void> {
+  const runId = batch.list_run_id;
+  if (!runId) return;
+  const run = await getRun(runId);
+  if (!run || run.pull_approval_ts) return; // Already asked. This is the guard.
+
+  const radii = [...new Set(cells.map((c) => c.radiusKm))].sort((a, b) => b - a);
+  const ts = await say(
+    batch,
+    [
+      ":straight_ruler: *Measure " + cells.length + " circles* for `" + vertical + "`",
+      "  Cost: about $" + costUsd.toFixed(2) + "  ($0.0124 each: one task fee plus one record)",
+      "  Radius: " + radii.map((r) => r + "km").join(", "),
+      "  This buys COUNTS, not businesses. No leads are pulled and nothing enters the pipeline.",
+      "",
+      "  " + cells.slice(0, 8).map((c) => "`" + cellKey(c) + "`").join("  ") +
+        (cells.length > 8 ? "  _and " + (cells.length - 8) + " more_" : ""),
+      "",
+      "React :white_check_mark: to measure them.",
+    ].join("\n")
+  );
+  if (ts) await updateRun(runId, { pull_approval_ts: ts });
+}
+
+/**
+ * Spend the measurement. THIS is the function that costs money on the probe path.
+ *
+ * ‼️ GUARDED TWICE, the same way releaseMapsPull is: once on the batch status by the reaction router,
+ * and once here on `spend_approved_at`, so a double reaction cannot buy the same counts twice.
+ */
+async function releaseCellProbes(batch: BatchRow): Promise<void> {
+  const runId = batch.list_run_id;
+  if (!runId) {
+    await fail(batch, "this measurement step has no run");
+    return;
+  }
+  const run = await getRun(runId);
+  if (!run) {
+    await fail(batch, "the run row for this measurement step has gone");
+    return;
+  }
+  if (run.spend_approved_at) return; // Already released.
+
+  if (!dfsPlacesConfigured()) {
+    await say(batch, ":no_entry: *DataForSEO is not configured*, so nothing was measured.");
+    await fail(batch, "DataForSEO has no credentials");
+    return;
+  }
+
+  const vertical = run.vertical_slug ?? "";
+  const categories = DFS_CATEGORIES[vertical] ?? [];
+  if (!categories.length) {
+    await fail(batch, "no DataForSEO categories are mapped for `" + vertical + "`");
+    return;
+  }
+  const catsKey = categoriesKey(categories);
+
+  // ‼️ THE CELLS ARE RE-DERIVED FROM THE WALK, NOT READ OFF THE CARD. The card is a picture of a
+  // decision; the walk is the decision. Re-asking means a probe step released after somebody else
+  // measured the same circles measures what is still owed rather than what was owed an hour ago.
+  const [rows, history] = await Promise.all([cellRows(vertical, catsKey), mapsPullHistory()]);
+  const action = nextCellAction({
+    vertical,
+    categoriesKey: catsKey,
+    rows,
+    history,
+    limit: MAPS_LIMIT_DEFAULT,
+    probeBatch: PROBE_BATCH_DEFAULT,
+  });
+  if (action.kind !== "probe") {
+    await say(batch, ":white_check_mark: Those circles are already measured. Nothing was bought.");
+    await updateRun(runId, { pull_finished_at: new Date().toISOString(), stage: "done" });
+    await updateBatch(batch.id, { status: "done" });
+    return;
+  }
+
+  const now = new Date().toISOString();
+  await updateRun(runId, { spend_approved_at: now, spend_approved_by: "slack_reaction", started_at: now });
+  await updateBatch(batch.id, { status: "pulling" });
+
+  const byKey = new Map(rows.map((r) => [r.key, r]));
+  const measured: MeasuredCell[] = [];
+  let spent = 0;
+  let failures = 0;
+
+  for (const cell of action.cells) {
+    // ‼️ limit 1, WHICH IS THE WHOLE TRICK. total_count is returned for the price of one task plus one
+    // record, and it answers "how many are here" exactly, before a single business is bought.
+    const found = await searchListings({
+      categories,
+      locationCoordinate: cellKey(cell),
+      limit: 1,
+    });
+    spent += found.costUsd;
+    if (!found.ok) {
+      // ‼️ A FAILED TASK IS NOT BILLED (measured 2026-09-28: five HTTP 500s cost $0.0000), and a cell
+      // with no row is simply still unmeasured, so it comes back on the next step. Nothing to record.
+      failures += 1;
+      continue;
+    }
+    // Which parent asked for this one, for the card. Provenance only; the walk never reads it.
+    const parent = [...byKey.values()].find((r) => childrenOf(r).some((k) => cellKey(k) === cellKey(cell)));
+    measured.push({
+      cell,
+      verticalSlug: vertical,
+      categoriesKey: catsKey,
+      totalCount: found.totalCount,
+      parentKey: parent?.key ?? null,
+      depth: parent ? parent.depth + 1 : 0,
+      costUsd: found.costUsd,
+    });
+  }
+
+  const stored = await insertCells(measured);
+  if (stored.error) {
+    await fail(batch, stored.error);
+    return;
+  }
+
+  await updateRun(runId, {
+    pull_finished_at: new Date().toISOString(),
+    raw_count: 0,
+    cost_usd: spent,
+    stage: "done",
+  });
+  await updateBatch(batch.id, { status: "done" });
+
+  const over = measured.filter((m) => m.totalCount > CELL_BUDGET_DEFAULT.cellMax && m.cell.radiusKm > CELL_BUDGET_DEFAULT.floorKm);
+  const empty = measured.filter((m) => m.totalCount === 0);
+  const found = measured.reduce((a, m) => a + m.totalCount, 0);
+
+  await say(
+    batch,
+    [
+      "Measured *" + measured.length + "* circles for $" + spent.toFixed(4) + ".",
+      "  " + found.toLocaleString() + " businesses inside them.",
+      empty.length ? "  " + empty.length + " are empty and are finished for good." : "",
+      over.length
+        ? "  " + over.length + " are over the " + CELL_BUDGET_DEFAULT.cellMax +
+          " budget and will be split into four each (" + over.length * 4 + " more circles to measure)."
+        : "  None are over budget, so all of them can be paged as they are.",
+      failures ? "  :warning: " + failures + " could not be measured and were not recorded. Failed tasks are not billed." : "",
+      "",
+      "`coverage " + vertical + "` for the map. `pull maps " + vertical + "` to start pulling.",
+    ].filter(Boolean).join("\n")
+  );
+
+  // Place the new cells on the map, for free, so the coverage card can report by state.
+  await nameCellStates(vertical);
+}
+
+/**
+ * Give every unplaced cell a state, from its own centre.
+ *
+ * ‼️ FREE AND CACHED FOR A YEAR, so this runs after every measurement step rather than being a chore
+ * somebody has to remember. A place does not move. A failure leaves `state_name` null, which IS the
+ * worklist, so the next step picks it up again rather than writing a guess.
+ */
+async function nameCellStates(vertical: string): Promise<void> {
+  let todo: Array<{ id: string; lat: number; lon: number }>;
+  try {
+    todo = await cellsMissingState(vertical, 40);
+  } catch {
+    return; // Placing cells is a nicety; it must never fail a step that already spent money.
+  }
+
+  for (const cell of todo) {
+    const place = await reverseGeocode(cell.lat, cell.lon);
+    if (!place) continue;
+    // ‼️ A NON-US CENTRE IS RECORDED AS `offshore` RATHER THAN LEFT NULL. About a quarter of the seed
+    // grid is ocean, Canada or Mexico. Left null they would sit in the unplaced worklist forever, being
+    // re-looked-up every step; named once, they become a useful line on the card: measured, empty,
+    // done. canonicalStateName is what stops "Ontario" and "Baja California" being printed as states.
+    const state = place.countryCode === "us" ? canonicalStateName(place.stateName) : null;
+    try {
+      await setCellState(cell.id, state ?? "offshore");
+    } catch {
+      return;
+    }
+  }
+}
+
+/**
+ * How much of the country is measured and paged, by state.
+ *
+ * ‼️ TWO DIFFERENT QUESTIONS, PRINTED SIDE BY SIDE AND LABELLED. The cell figures say how much of the
+ * MAP is measured and paged; `raw_leads.state` says how many LEADS have actually been pulled per
+ * state. They will disagree, because a cell's state comes from its centre and a lead's comes from its
+ * address. One number pretending to be both is the failure to avoid here.
+ */
+async function postCoverage(channel: string, text: string): Promise<void> {
+  const asked = knownVerticals().find((v) => new RegExp("\\b" + v + "\\b", "i").test(text));
   const history = await mapsPullHistory();
   const lines: string[] = [];
+
   for (const vertical of knownVerticals()) {
     if (asked && vertical !== asked) continue;
-    const p = metroProgress(vertical, history);
-    const next = nextTarget(vertical, history);
-    lines.push(
-      "*" + vertical + "*: " + p.done.length + " of " + US_METROS.length + " metros finished, " +
-        p.pulls + " pulls, " + p.rows + " rows." +
-        (next ? "  Next: `" + next.metro + "`" + (next.offset > 0 ? " from " + next.offset : "") : "  Done.")
+    const categories = DFS_CATEGORIES[vertical] ?? [];
+    if (!categories.length) continue;
+    const catsKey = categoriesKey(categories);
+    const rows = await cellRows(vertical, catsKey);
+
+    if (!rows.length) {
+      lines.push(
+        "*" + vertical + "*: nothing measured yet. `cells " + vertical + "` measures the first " +
+          PROBE_BATCH_DEFAULT + " circles for about $" +
+          (PROBE_BATCH_DEFAULT * CELL_BUDGET_DEFAULT.probeUsd).toFixed(2) + "."
+      );
+      continue;
+    }
+
+    const prog = stateProgress({ vertical, categoriesKey: catsKey, rows, history });
+    const totals = prog.reduce(
+      (a, s) => ({
+        cells: a.cells + s.cells,
+        split: a.split + s.split,
+        done: a.done + s.done,
+        businesses: a.businesses + s.businesses,
+        paged: a.paged + s.paged,
+      }),
+      { cells: 0, split: 0, done: 0, businesses: 0, paged: 0 }
     );
-    if (p.started.length) lines.push("  _part way: " + p.started.join(", ") + "_");
-    if (p.done.length) lines.push("  _finished: " + p.done.slice(0, 12).join(", ") + (p.done.length > 12 ? ", ..." : "") + "_");
+
+    lines.push(
+      "*" + vertical + "* `" + catsKey + "`",
+      "  " + totals.cells + " cells measured, " + totals.split + " split, " +
+        totals.businesses.toLocaleString() + " businesses found, " +
+        totals.paged.toLocaleString() + " pulled."
+    );
+    for (const s of prog.slice(0, 20)) {
+      const leaves = s.cells - s.split;
+      lines.push(
+        "  • *" + s.state + "*  " + s.paged.toLocaleString() + " of " +
+          s.businesses.toLocaleString() + " pulled" +
+          (leaves ? "  _(" + s.done + " of " + leaves + " cells done" + (s.split ? ", " + s.split + " split" : "") + ")_" : "")
+      );
+    }
+    if (prog.length > 20) lines.push("  _and " + (prog.length - 20) + " more._");
   }
+
+  if (!lines.length) lines.push("No verticals have DataForSEO categories mapped, so there is nothing to crawl.");
+
   lines.push("");
-  lines.push("`pull maps <vertical>` takes the next one. `pull maps <vertical> | <metro> | <query>` names it yourself.");
+  // ‼️ THE CAVEAT IS ON THE CARD, because a 384km seed circle spans four states and somebody reading
+  // "Texas" off one would otherwise take it as a boundary claim rather than a bucket label.
+  lines.push(
+    "_A cell is filed under the state its CENTRE falls in, so a large unsplit circle is a rough " +
+      "bucket rather than a boundary. It is near-exact at the " + CELL_BUDGET_DEFAULT.floorKm +
+      "km floor, which is where the businesses are._"
+  );
+  lines.push("`pull maps <vertical>` works the next cell. `cells <vertical>` measures more of them.");
   await slack.postMessage(channel, lines.join("\n"));
 }
 
@@ -1533,7 +1948,12 @@ async function pullFromDataForSeo(batch: BatchRow, runId: string, command: MapsC
   // NAME and answers globally, so a pull with no coordinate does not fail, it quietly buys med spas in
   // Doncaster and Shenzhen and charges for them. The coordinate is the filter; without one there is
   // nothing to buy.
-  const place = await geocodeMetro(command.locationName);
+  // ‼️ A CELL ALREADY IS A COORDINATE, SO THERE IS NOTHING TO RESOLVE AND NOTHING TO GUESS. When the
+  // metro slot held a lat,lon,radiusKm triple the geocoder is skipped entirely, and `command.metro` is
+  // handed to the vendor verbatim, because cellKey is byte-identical to `location_coordinate`.
+  const place = command.cell
+    ? { lat: command.cell.lat, lon: command.cell.lon, label: command.metro }
+    : await geocodeMetro(command.locationName);
   if (!place) {
     await fail(
       batch,
@@ -1586,6 +2006,18 @@ async function pullFromDataForSeo(batch: BatchRow, runId: string, command: MapsC
     error: stored.error ?? null,
   });
 
+  // ‼️ EVERY RECORD PULL RE-MEASURES ITS OWN CELL FOR FREE, because total_count comes back on every
+  // response. Raised by max() only: the index is live, so following an upward drift means no row is
+  // lost, while a downward one must never lower the number a finished cell was finished against.
+  if (command.cell) {
+    await bumpCellTotal({
+      verticalSlug: command.vertical,
+      categoriesKey: categoriesKey(command.categories),
+      cellKey: command.metro,
+      observed: found.totalCount,
+    });
+  }
+
   await say(
     batch,
     [
@@ -1614,6 +2046,21 @@ async function sweepPullMaps(batch: BatchRow): Promise<boolean> {
   const runId = batch.list_run_id;
   if (!runId) {
     await fail(batch, "this pull has no run");
+    return false;
+  }
+
+  // ‼️ A MEASUREMENT STEP THAT IS STILL IN `pulling` DIED MID-STEP, AND THE CRON MUST NOT FINISH IT.
+  // `releaseCellProbes` does all its work inside the reaction and marks itself done; reaching here in
+  // `pulling` means the lambda was cut off part way through. The circles already measured ARE STORED
+  // (they are written per step, and the unique index makes a re-run idempotent), so the honest outcome
+  // is to fail this batch by name and let somebody run `cells` again. Re-driving it here would spend
+  // money on a tick nobody reacted to, which is the one thing the cron may never do.
+  if (batch.workflow === "mapsprobe") {
+    await fail(
+      batch,
+      "this measurement step stopped part way through. Whatever it had already counted is stored and " +
+        "was not paid for twice, so nothing is lost. Run the `cells` command again to measure the rest."
+    );
     return false;
   }
   const run = await getRun(runId);
@@ -1678,14 +2125,19 @@ async function sweepPullMaps(batch: BatchRow): Promise<boolean> {
 async function sweepPull(batch: BatchRow): Promise<boolean> {
   switch (batch.workflow) {
     case "mapspull":
+    // ‼️ A MEASUREMENT STEP IN `pulling` DIED MID-STEP, and sweepPullMaps refuses it by name at the
+    // top rather than finishing it. Routed here on purpose rather than to the fail() arm below, so
+    // the message says what actually happened and what is safe to re-run.
+    case "mapsprobe":
       return sweepPullMaps(batch);
     case "listprep":
       return sweepPullCsv(batch);
     case "filter":
     case "score":
     case null:
-      // `pulling` belongs to workflow C and to 4️⃣. Anything else here is a batch that was moved into
-      // a status its arm does not own, which is a bug worth naming rather than guessing past.
+      // `pulling` belongs to workflow C, to 4️⃣ and to the measurement step (which handles itself in
+      // sweepPullMaps above). Anything else here is a batch that was moved into a status its arm does
+      // not own, which is a bug worth naming rather than guessing past.
       await fail(batch, "a `" + String(batch.workflow) + "` batch reached the pull stage, which it does not own.");
       return false;
     default: {
@@ -1772,8 +2224,20 @@ async function sweepQualify(batch: BatchRow, deadline: number): Promise<boolean>
   const runId = batch.list_run_id;
   if (!runId) return false;
 
-  // The free rule first, exactly as filter.ts runs its string checks before the DNS lookup.
+  // The free rules first, exactly as filter.ts runs its string checks before the DNS lookup.
   await dropWebsiteless(runId);
+  // ‼️ AND THE CROSS-RUN DUPLICATE, WHICH IS FREE FOR THE SAME REASON AND SAVES THE SAME MONEY.
+  // Overlapping cells deliver the same clinic under several runs by design, and raw_leads is unique on
+  // (run_id, place_id) only WITHIN a run, so without this every duplicate is judged again at full
+  // price. It writes an ordinary drop reason, so it groups on the drop-review card like any verdict.
+  const reDropped = await dropCrossRunDuplicates(runId);
+  if (reDropped > 0) {
+    await say(
+      batch,
+      ":recycle: " + reDropped + " of these were already pulled under an earlier run, from a cell that " +
+        "overlaps this one. Dropped before the model was asked, so they cost nothing to judge."
+    );
+  }
 
   while (Date.now() < deadline) {
     const chunk = await pendingQualify(runId, QUALIFY_CHUNK);
@@ -3201,6 +3665,13 @@ export async function handleScraperReaction(input: {
       // second ✅ on the estimate card must not submit the same queries twice, and the status has
       // already moved to `pulling` by the time the first submit returns.
       if (batch.status !== "awaiting_pull_approval") return true;
+      // ‼️ ONE GATE, TWO PURCHASES, AND THE WORKFLOW DECIDES WHICH. A measurement step reuses this
+      // gate wholesale because scraper_batches may not grow a fifth *_ts (see GATE_COLUMNS), so the
+      // branch has to be on the workflow rather than on anything about the reaction.
+      if (batch.workflow === "mapsprobe") {
+        waitUntil(releaseCellProbes(batch).catch((e) => fail(batch, (e as Error).message)));
+        return true;
+      }
       waitUntil(releaseMapsPull(batch).catch((e) => fail(batch, (e as Error).message)));
       return true;
     }

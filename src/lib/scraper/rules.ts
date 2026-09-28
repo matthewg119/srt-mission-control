@@ -161,6 +161,10 @@ const REQUIRED_COLUMNS: Record<
   // offering a paid Maps pull as the way out. The entry exists so this Record stays exhaustive and
   // the compiler keeps forcing a decision here; FILE_WORKFLOWS is what decides who can be picked.
   mapspull: [],
+  // ‼️ EMPTY FOR THE SAME REASON AS mapspull AND WITH THE SAME WARNING. A measurement step has no
+  // file either, so it must never appear in FILE_WORKFLOWS: a requirement list of zero columns is
+  // satisfied by every header set, including none.
+  mapsprobe: [],
 };
 
 /**

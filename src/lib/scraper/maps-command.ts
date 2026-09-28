@@ -12,6 +12,7 @@
 
 import { knownVerticals, resolveVertical } from "./icp";
 import { cityNameFrom, stateNameFrom } from "./geo";
+import { cellKey, parseCellKey, type Cell } from "./cells";
 
 /** Printed verbatim on every refusal, so the operator never has to guess the shape. */
 export const MAPS_GRAMMAR = [
@@ -22,9 +23,11 @@ export const MAPS_GRAMMAR = [
   "  `pull maps dentist | Phoenix AZ | dental implants | limit 40`",
   "  `pull maps medspa | Miami FL | med spa | limit 200 | radius 50`",
   "  `pull maps medspa | Dallas TX | med spa | limit 500 | offset 500`   _(the next 500 in Dallas)_",
+  "  `pull maps medspa | 32.7767,-96.7970,24 | med spa | limit 500`   _(a measured cell, by coordinate)_",
   "",
   "`limit`, `radius`, `offset`, `page` and `via` are optional and can come in any order.",
-  "`offset <n>` skips the first n results, which is how one metro is pulled deeper than its limit.",
+  "`offset <n>` skips the first n results, which is how one cell is pulled deeper than its limit.",
+  "A `lat,lon,radiusKm` triple in place of the metro names a circle directly and is not geocoded.",
 ].join("\n");
 
 /** Outscraper is billed per record, so an unbounded pull is not expressible. */
@@ -33,7 +36,31 @@ export const MAPS_LIMIT_MAX = 500;
 
 /** A metro, roughly. Wide enough to cover the suburbs, tight enough to stay one market. */
 export const MAPS_RADIUS_KM_DEFAULT = 30;
-export const MAPS_RADIUS_KM_MAX = 200;
+
+/**
+ * The widest circle a RECORD pull may ask for.
+ *
+ * ‼️ RAISED FROM 200 TO 500 FOR THE NATIONAL CRAWL, AND THE CEILING IS THE OFFSET CAP RATHER THAN
+ * MONEY. It has to exceed SEED_RADIUS_KM (384), because a seed circle over open country comes back
+ * under the cell budget and is then PAGED at its own radius rather than split. It must not reach
+ * 3,000: that circle measured 159,075 on 2026-09-28, which cannot be paged under the 100,000 offset
+ * ceiling, so allowing it would be allowing a command that cannot finish. Same class of refusal as a
+ * vertical with no buyer profile: cheap to refuse, expensive to discover afterwards.
+ *
+ * A PROBE is not bound by this. It buys one record, so its radius decides only the shape of the
+ * tree; cells.ts caps that separately at CELL_RADIUS_KM_MAX.
+ */
+export const MAPS_RADIUS_KM_MAX = 500;
+
+/**
+ * The deepest offset that may be asked for.
+ *
+ * ‼️ MEASURED, NOT GUESSED. On 2026-09-28 against the national circle, offset 100,000 succeeded and
+ * 110,000, 120,000, 125,000, 130,000 and 140,000 all returned HTTP 500. That probe run also took
+ * over five minutes for five requests, so deep offsets are slow long before they are impossible. A
+ * cell that would need to go deeper is SPLIT, never paged.
+ */
+export const MAPS_OFFSET_MAX = 100_000;
 
 /**
  * Which vendor answers the pull.
@@ -63,6 +90,15 @@ export const DFS_CATEGORIES: Record<string, string[]> = {
 export interface MapsCommand {
   vertical: string;
   metro: string;
+  /**
+   * The circle this command names, when the metro slot held a coordinate triple rather than a name.
+   *
+   * ‼️ WHEN THIS IS SET THERE IS NOTHING TO GEOCODE, AND THAT IS THE POINT. A cell already IS a
+   * coordinate, so `pullFromDataForSeo` sends `metro` to the vendor verbatim. A named metro still
+   * resolves through Nominatim at pull time and becomes a cell there, so everything downstream of
+   * the geocoder handles one shape.
+   */
+  cell: Cell | null;
   source: MapsSource;
   /** DataForSEO category keys for this vertical. Empty for the Outscraper path, which searches text. */
   categories: string[];
@@ -106,6 +142,11 @@ export interface MapsCommand {
  * wrong one of thirty-four.
  */
 export function locationNameOf(metro: string): string {
+  // ‼️ A COORDINATE TRIPLE IS ALREADY A LOCATION AND MUST NOT BE DECORATED. Without this guard a
+  // cell pull would carry locationName "32.7767,-96.7970,24,United States", which is not a place, is
+  // not a coordinate, and would be handed to the geocoder on any path that still consults it.
+  if (parseCellKey(metro)) return metro;
+
   const city = cityNameFrom(metro);
   const state = stateNameFrom(metro);
   if (city && state) return city + "," + state + ",United States";
@@ -192,6 +233,7 @@ export function parseMapsCommand(text: string): MapsParse {
   let offset: number | null = null;
   let pageSugar: number | null = null;
   let sawLimit = false;
+  let sawRadius = false;
   for (const tail of parts.slice(3)) {
     const viaMatch = /^via\s+([a-z]+)$/i.exec(tail);
     if (viaMatch) {
@@ -204,18 +246,31 @@ export function parseMapsCommand(text: string): MapsParse {
     }
     const radiusMatch = /^radius\s+(\d{1,4})$/i.exec(tail);
     if (radiusMatch) {
+      sawRadius = true;
       radiusKm = Number(radiusMatch[1]);
       if (radiusKm < 1 || radiusKm > MAPS_RADIUS_KM_MAX) {
         return {
           ok: false,
-          reason: "a radius of " + radiusKm + "km is outside 1 to " + MAPS_RADIUS_KM_MAX + "km. A metro is about 30.",
+          reason:
+            "a radius of " + radiusKm + "km is outside 1 to " + MAPS_RADIUS_KM_MAX +
+            "km. A metro is about 30; a national seed cell is 384.",
         };
       }
       continue;
     }
-    const off = /^offset\s+(\d{1,6})$/i.exec(tail);
+    const off = /^offset\s+(\d{1,7})$/i.exec(tail);
     if (off) {
       offset = Number(off[1]);
+      // ‼️ THE CEILING IS A MEASUREMENT, SO THE REFUSAL CARRIES IT. See MAPS_OFFSET_MAX.
+      if (offset > MAPS_OFFSET_MAX) {
+        return {
+          ok: false,
+          reason:
+            "offset " + offset + " is past the ceiling of " + MAPS_OFFSET_MAX + ". Measured " +
+            "2026-09-28: offset 100,000 succeeded and 110,000 through 140,000 all returned HTTP 500. " +
+            "A cell that needs to go deeper is split, not paged.",
+        };
+      }
       continue;
     }
     // Resolved to an offset AFTER the loop, never here: `page 2 | limit 100` puts the limit to the
@@ -268,8 +323,40 @@ export function parseMapsCommand(text: string): MapsParse {
     };
   }
 
-  const metro = parts[1];
   const query = parts[2];
+
+  // ‼️ A COORDINATE TRIPLE IN THE METRO SLOT IS A CELL, AND IT IS RE-CANONICALISED BEFORE IT IS
+  // STORED. `cellKey(cell)` rather than the text as typed, because the label this command came from
+  // is written to scraper_batches.batch_label and later read back by postPullEstimate and joined on
+  // as a STRING by cellDepthFrom. "-96.797" and "-96.7970" are one circle and two strings; a cell
+  // whose label does not match its key has a paging depth of zero forever, so it would be re-bought
+  // from offset 0 on every tick.
+  const parsedCell = parseCellKey(parts[1]);
+  const metro = parsedCell ? cellKey(parsedCell) : parts[1];
+
+  if (parsedCell) {
+    // ‼️ TWO RADII IS A REFUSAL, NOT A RECONCILIATION. The triple already carries one, and silently
+    // preferring either would buy a circle the operator did not describe. Same discipline as
+    // `offset` and `page` together.
+    if (sawRadius) {
+      return {
+        ok: false,
+        reason:
+          "the coordinate triple already carries a radius of " + parsedCell.radiusKm + "km, and " +
+          "`radius " + radiusKm + "` says something different. Give one, not both.",
+      };
+    }
+    if (parsedCell.radiusKm > MAPS_RADIUS_KM_MAX) {
+      return {
+        ok: false,
+        reason:
+          "a radius of " + parsedCell.radiusKm + "km is outside 1 to " + MAPS_RADIUS_KM_MAX +
+          "km. A circle that big cannot be paged under the offset ceiling, so it has to be split " +
+          "rather than pulled.",
+      };
+    }
+    radiusKm = parsedCell.radiusKm;
+  }
 
   // ‼️ THE DATAFORSEO CATEGORY LIST IS REQUIRED FOR THAT SOURCE AND MUST NOT DEFAULT. Falling back to
   // a guess would buy a list filed under the wrong category, which is the same class of mistake as
@@ -290,6 +377,7 @@ export function parseMapsCommand(text: string): MapsParse {
     command: {
       vertical,
       metro,
+      cell: parsedCell ? { ...parsedCell } : null,
       source,
       categories,
       locationName: locationNameOf(metro),
@@ -374,14 +462,18 @@ export function laneHelp(): string {
     "*Two ways to start.*",
     "",
     "*A. Pull businesses from Google Maps.* Nothing is bought until you react.",
-    "  `pull maps medspa | limit 500`  takes the NEXT metro that vertical has not had yet, working " +
-      "down a list of 50 US metros. This is the one to use to cover a market: run it, work the batch, " +
-      "run it again.",
-    "  `pull maps medspa | Dallas TX | med spa | limit 500`  names the metro yourself.",
+    "  `cells medspa`  MEASURES the next circles: asks how many businesses are in each one, for about " +
+      "a penny each, before buying any of them. Do this first.",
+    "  `pull maps medspa | limit 500`  works the next measured circle, deepest-first, until the whole " +
+      "country is covered. Run it, work the batch, run it again.",
+    "  `coverage medspa`  how much of the map is measured and pulled, by state.",
+    "  `pull maps medspa | Dallas TX | med spa | limit 500`  names a place yourself.",
+    "  `pull maps medspa | 32.7767,-96.7970,24 | med spa`  names a circle yourself (lat,lon,km).",
     "  Or just ask: `get me med spa leads in Dallas TX`",
-    "  `metros` shows how far through the list each vertical is.",
     "  `limit`, `radius <km>` and `via <source>` are optional, in any order.",
     "  Only one pull runs at a time, so the crawl and the verifier are not fighting for the same tick.",
+    "  A circle holding more than 2,000 businesses is split into four and each part measured, so a " +
+      "dense city gets worked properly instead of skimmed.",
     "",
     "*B. Drop a CSV.* It needs a company column and a website column. The caption says which " +
       "vertical it is, which decides who the rows are judged against.",
@@ -404,28 +496,6 @@ export function laneHelp(): string {
 }
 
 /**
- * The metro list a campaign walks, largest first.
- *
- * ‼️ ORDER IS THE PLAN. A campaign has no queue table: "what is next" is "the first of these that has
- * no batch yet", which makes it idempotent, crash-safe and inspectable with one query. Reordering
- * this list reorders the campaign; removing an entry skips it; adding one appends to the end.
- *
- * Written as "City ST" because that is what `stateNameFrom` reads and what an operator would type.
- */
-export const US_METROS: readonly string[] = [
-  "New York NY", "Los Angeles CA", "Chicago IL", "Dallas TX", "Houston TX",
-  "Atlanta GA", "Washington DC", "Philadelphia PA", "Miami FL", "Phoenix AZ",
-  "Boston MA", "Riverside CA", "San Francisco CA", "Detroit MI", "Seattle WA",
-  "Minneapolis MN", "San Diego CA", "Tampa FL", "Denver CO", "Baltimore MD",
-  "St Louis MO", "Orlando FL", "Charlotte NC", "San Antonio TX", "Portland OR",
-  "Sacramento CA", "Pittsburgh PA", "Austin TX", "Las Vegas NV", "Cincinnati OH",
-  "Kansas City MO", "Columbus OH", "Indianapolis IN", "Cleveland OH", "Nashville TN",
-  "San Jose CA", "Virginia Beach VA", "Providence RI", "Jacksonville FL", "Milwaukee WI",
-  "Raleigh NC", "Oklahoma City OK", "Memphis TN", "Richmond VA", "Louisville KY",
-  "New Orleans LA", "Salt Lake City UT", "Hartford CT", "Buffalo NY", "Birmingham AL",
-];
-
-/**
  * Is this pipe-separated part an OPTION rather than a metro or a query?
  *
  * ‼️ THIS IS WHAT SEPARATES THE TWO COMMAND FORMS, AND COUNTING PARTS DOES NOT.
@@ -434,7 +504,14 @@ export const US_METROS: readonly string[] = [
  * the vertical are options, so that is the test.
  */
 function isOptionToken(part: string): boolean {
-  return /^(limit\s+\d{1,4}|radius\s+\d{1,4}|via\s+[a-z]+)$/i.test(part.trim());
+  // ‼️ `offset` AND `page` WERE MISSING UNTIL 2026-09-28, AND IT WAS A REAL BUG RATHER THAN AN
+  // OMISSION. `pull maps medspa | limit 500 | offset 500` has three parts and every part after the
+  // vertical is an option, so it is the queue form. With `offset` absent from this list it was not
+  // recognised as one, fell through to the explicit parser, and was read as a pull whose METRO IS
+  // LITERALLY NAMED "limit 500" -- which then reached the geocoder, failed, and did so only after a
+  // card had already been posted. Latent while the queue form was rarely typed with an offset; it is
+  // load-bearing now that walking the country is the primary command.
+  return /^(limit\s+\d{1,4}|radius\s+\d{1,4}|offset\s+\d{1,7}|page\s+\d{1,4}|via\s+[a-z]+)$/i.test(part.trim());
 }
 
 export interface NextMetroCommand {
@@ -502,6 +579,20 @@ export function parseNextMetroCommand(text: string): NextMetroParse | null {
       }
       continue;
     }
+    // ‼️ THE QUEUE DECIDES HOW DEEP TO GO, SO NAMING AN OFFSET HERE IS REFUSED RATHER THAN HONOURED.
+    // isOptionToken accepts `offset` and `page` so that the queue form is recognised at all (see the
+    // note there), which means they now arrive in this loop. Letting one through would set a depth
+    // the walk is about to compute for itself from the cell's own history, and the two would fight.
+    const depthToken = /^(offset|page)\s+\d+$/i.exec(tail);
+    if (depthToken) {
+      return {
+        ok: false,
+        reason:
+          "`" + tail + "` cannot be given to the queue form, because the queue works out how deep " +
+          "each cell already is from what has landed. Name the cell itself if you want a specific " +
+          "offset: `pull maps <vertical> | <lat,lon,radiusKm> | <query> | " + tail + "`.",
+      };
+    }
     const lim = /^limit\s+(\d{1,4})$/i.exec(tail);
     if (!lim) {
       return {
@@ -518,100 +609,18 @@ export function parseNextMetroCommand(text: string): NextMetroParse | null {
 export interface MapsPull {
   label: string;
   rawCount: number;
-}
-
-/** Where the queue should go next: a metro, and how far into it to start. */
-export interface MapsTarget {
-  metro: string;
-  offset: number;
-}
-
-interface MetroState {
-  /** Results consumed so far: the deepest pull's offset plus the limit it asked for. */
-  depth: number;
-  /** Rows that deepest pull produced. */
-  lastCount: number;
-  /** The limit that deepest pull asked for. */
-  lastLimit: number;
-}
-
-/**
- * Re-parse the labels into per-metro depth.
- *
- * Depth is `offset + limit` of the DEEPEST pull, not a count of pulls and not a sum of row counts.
- * Offset plus limit is where the vendor stopped looking, which is the only number the next pull can
- * safely start from: summing rows delivered would drift below it the moment any page returned fewer
- * rows than it asked for, and re-pull ground already covered.
- */
-function metroStates(vertical: string, history: readonly MapsPull[]): Map<string, MetroState> {
-  const byMetro = new Map<string, MetroState>();
-  for (const pull of history) {
-    const parsed = parseMapsCommand(pull.label);
-    if (!parsed.ok || parsed.command.vertical !== vertical) continue;
-    const key = parsed.command.metro.toLowerCase();
-    const depth = parsed.command.offset + parsed.command.limit;
-    const prior = byMetro.get(key);
-    // Pulls can arrive out of order if a human names a deep offset by hand, so keep the DEEPEST
-    // rather than the most recent. The deepest is the frontier, which is what the queue needs.
-    if (prior && prior.depth > depth) continue;
-    byMetro.set(key, { depth, lastCount: pull.rawCount, lastLimit: parsed.command.limit });
-  }
-  return byMetro;
-}
-
-/** A metro is finished when its deepest pull came back short of what it asked for. */
-function exhausted(state: MetroState): boolean {
-  return state.lastCount < state.lastLimit;
-}
-
-/**
- * Where to pull next: deeper into the current metro, or the start of the next one.
- *
- * ‼️ DONE-NESS IS DERIVED FROM THE COMMANDS THEMSELVES, NOT FROM A QUEUE TABLE. Every Maps batch
- * stores its command verbatim in `scraper_batches.batch_label`, so re-parsing those answers "which
- * metros has this vertical had, and how deep" exactly, with no second copy of the truth to drift. A
- * campaign that dies halfway resumes correctly because nothing was ever written down about its intent.
- *
- * ‼️ A SHORT PULL ENDS THE METRO, AND THAT INCLUDES ZERO. Dallas holds 1,765 med spas, so one
- * `limit 500` leaves 1,265 unseen and stepping straight to the next metro would abandon them. The
- * source returning fewer rows than the limit is the only signal available that a metro has run out,
- * short of storing DataForSEO's total_count. The cost is that a pull which errored to zero rows looks
- * identical to an exhausted metro and gets skipped. That is deliberate over the alternative: treating
- * zero as "not finished" would park a genuinely empty metro in an infinite retry. Name the metro
- * directly to redo it.
- */
-export function nextTarget(vertical: string, history: readonly MapsPull[]): MapsTarget | null {
-  const byMetro = metroStates(vertical, history);
-  for (const metro of US_METROS) {
-    const state = byMetro.get(metro.toLowerCase());
-    if (!state) return { metro, offset: 0 };
-    if (!exhausted(state)) return { metro, offset: state.depth };
-  }
-  return null;
-}
-
-/** How far through the list this vertical is. For the progress card. */
-export function metroProgress(
-  vertical: string,
-  history: readonly MapsPull[]
-): { done: string[]; started: string[]; remaining: string[]; pulls: number; rows: number } {
-  const byMetro = metroStates(vertical, history);
-  const done: string[] = [];
-  const started: string[] = [];
-  const remaining: string[] = [];
-  for (const metro of US_METROS) {
-    const state = byMetro.get(metro.toLowerCase());
-    if (!state) remaining.push(metro);
-    else if (exhausted(state)) done.push(metro);
-    else started.push(metro);
-  }
-  let pulls = 0;
-  let rows = 0;
-  for (const pull of history) {
-    const parsed = parseMapsCommand(pull.label);
-    if (!parsed.ok || parsed.command.vertical !== vertical) continue;
-    pulls += 1;
-    rows += pull.rawCount;
-  }
-  return { done, started, remaining, pulls, rows };
+  /**
+   * Did this pull actually LAND, meaning it finished and recorded no error.
+   *
+   * ‼️ WITHOUT THIS THE FRONTIER ADVANCES OVER RECORDS THAT WERE NEVER BOUGHT, AND THAT WAS A LIVE
+   * BUG. Depth is computed from the LABEL, and a label survives a pull that failed: the batch row and
+   * its `batch_label` are written before anything is spent, and `fail()` does not remove them. So a
+   * pull that errored to zero rows looked identical to a finished one, and the queue stepped past 500
+   * businesses nobody had paid for. The old short-pull rule hid this, because an errored pull also
+   * looked "short" and merely ended the metro early.
+   *
+   * With `total_count` as the stop condition the two cases finally separate, and they must: an
+   * unfinished pull leaves its cell UNFINISHED and the same offset is offered again.
+   */
+  finished: boolean;
 }

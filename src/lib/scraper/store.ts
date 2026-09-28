@@ -54,7 +54,15 @@ export type BatchStatus =
  * reaction on a CSV picker card start a paid Outscraper pull against that file. `FILE_WORKFLOWS` in
  * rules.ts is the list of arms a file can actually choose between, and this one is absent from it.
  */
-export type Workflow = "filter" | "score" | "listprep" | "mapspull";
+/**
+ * ‼️ "mapsprobe" IS A MEASUREMENT STEP, AND IT IS A SEPARATE ARM FOR CORRECTNESS RATHER THAN TIDINESS.
+ * `mapsPullHistory` filters on `workflow = 'mapspull'` and re-parses every label it finds into an
+ * offset and a limit. A measurement's label is not a page of records; read as one it would credit
+ * paging depth to a cell that had only been counted, and the walk would then skip 500 real businesses
+ * believing somebody had already bought them. A distinct value is what makes a probe INVISIBLE to that
+ * query, which is the property the whole cell walk rests on.
+ */
+export type Workflow = "filter" | "score" | "listprep" | "mapspull" | "mapsprobe";
 
 /**
  * The gate cards, one per `*_ts` column.
@@ -343,31 +351,49 @@ const ACTIVE_STATUSES: BatchStatus[] = [
  * there is no second copy of the intent to drift, nothing to reconcile after a crash, and a resumed
  * campaign is simply the same question asked again.
  *
- * Failed batches COUNT as claimed. A metro whose pull errored should not be silently re-bought by
- * the next `pull maps medspa`; somebody should look at why it failed and re-run it by name.
+ * ‼️ A FAILED PULL NO LONGER CLAIMS ITS GROUND, AND THAT IS A DELIBERATE REVERSAL. This comment used
+ * to read "failed batches COUNT as claimed", on the reasoning that a metro whose pull errored should
+ * not be silently re-bought. Under the old short-pull rule that was the safer of two bad options,
+ * because the alternative parked a genuinely empty metro in an infinite retry.
+ *
+ * `total_count` removes the dilemma: an empty cell is known to be empty from its measurement, so
+ * "unfinished" no longer risks a retry loop, and counting an errored pull as claimed is now the
+ * strictly worse error, because it steps the frontier past records nobody bought. So landedness is
+ * reported per pull and the walk advances over `finished` pulls only. A cell that keeps failing is
+ * refused BY NAME after three attempts rather than either skipped or retried forever.
  */
 /**
- * Every Maps pull with what it actually returned.
+ * Every Maps pull with what it actually returned, and whether it landed.
  *
- * ‼️ raw_count IS HOW THE QUEUE KNOWS A METRO IS FINISHED. A page that comes back short is the last
- * page, and that is the only signal available without storing DataForSEO's total_count: raw_leads is
- * unique on (run_id, place_id), so within one run inserted equals returned, and a short page means
- * the source ran out rather than that rows were deduped away.
+ * ‼️ raw_count IS NO LONGER A STOP CONDITION. It used to be the only signal that a metro had run out:
+ * a page that came back short was the last page. That inference is gone, replaced by `total_count` on
+ * the cell, and `raw_count` is now only a number for the card. `finished` is the one field the depth
+ * arithmetic is allowed to advance over.
  */
 export async function mapsPullHistory(): Promise<MapsPull[]> {
   const { data, error } = await supabaseAdmin
     .from("scraper_batches")
-    .select("batch_label, list_pipeline_runs!scraper_batches_list_run_id_fkey(raw_count)")
+    // ‼️ pull_finished_at AND error ARE BOTH READ, AND BOTH ARE LOAD-BEARING. A run can carry
+    // pull_finished_at and still have failed downstream, and a run can carry an error with no
+    // finish marker at all. Either one alone would mislabel a pull.
+    .select(
+      "batch_label, list_pipeline_runs!scraper_batches_list_run_id_fkey(raw_count, pull_finished_at, error)"
+    )
     .eq("workflow", "mapspull")
     .not("batch_label", "is", null)
     .order("created_at", { ascending: true });
   if (error) throw new Error("mapsPullHistory: " + error.message);
   return (data ?? []).map((r) => {
     const row = r as unknown as Record<string, unknown>;
-    const run = (row.list_pipeline_runs as { raw_count?: unknown } | null) ?? null;
+    const run =
+      (row.list_pipeline_runs as { raw_count?: unknown; pull_finished_at?: unknown; error?: unknown } | null) ?? null;
+    // ‼️ A MISSING RUN IS NOT FINISHED. A batch whose run row was never created, or was cleared, has
+    // bought nothing; reading that absence as "landed" is the same bug in a different coat.
+    const finished = Boolean(run?.pull_finished_at) && !run?.error;
     return {
       label: String(row.batch_label ?? ""),
       rawCount: typeof run?.raw_count === "number" ? run.raw_count : 0,
+      finished,
     };
   }).filter((p) => p.label);
 }
@@ -388,6 +414,28 @@ export async function activeMapsPull(): Promise<BatchRow | null> {
     .order("created_at", { ascending: true })
     .limit(1);
   if (error) throw new Error("activeMapsPull: " + error.message);
+  const rows = (data ?? []) as unknown as BatchRow[];
+  return rows[0] ?? null;
+}
+
+/**
+ * A measurement step that is still going, if there is one.
+ *
+ * ‼️ SEPARATE FROM activeMapsPull, AND THE TWO DO NOT BLOCK EACH OTHER. A pull is serialised because
+ * two of them mean two qualification sweeps, two crawls and two MillionVerifier uploads competing for
+ * one cron budget. A probe buys no records and starts no pipeline, so it competes with nothing; what it
+ * must not do is race ANOTHER PROBE, because both would re-derive the same owed circles and pay for
+ * them twice.
+ */
+export async function activeCellProbe(): Promise<BatchRow | null> {
+  const { data, error } = await supabaseAdmin
+    .from("scraper_batches")
+    .select(BATCH_COLUMNS)
+    .eq("workflow", "mapsprobe")
+    .in("status", ACTIVE_STATUSES)
+    .order("created_at", { ascending: true })
+    .limit(1);
+  if (error) throw new Error("activeCellProbe: " + error.message);
   const rows = (data ?? []) as unknown as BatchRow[];
   return rows[0] ?? null;
 }

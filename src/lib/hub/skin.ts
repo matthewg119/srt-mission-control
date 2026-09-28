@@ -287,6 +287,18 @@ export function readSkin(raw: unknown): StoredSkin {
     // `hub-tpl-${x}` with an unvalidated x is a class attribute somebody else gets to choose.
     template: isTemplate(s.template) ? s.template : DEFAULT_TEMPLATE,
     // Same gate as the template: it becomes `hub-u-${x}`, a class attribute nobody else may choose.
+    //
+    // ‼️ `null` IS THE DECISION, NOT AN OVERSIGHT. Matthew compared the classic look against all five
+    // review-first universes on 2026-09-28 and kept the classic one: "leave the old one, thats the best
+    // one. leave the old one as default for future onboardings." So a client nobody has styled gets no
+    // universe class, which is what this line already did and now says out loud.
+    //
+    // ‼️ DO NOT MAKE A UNIVERSE THE DEFAULT HERE. It was tried the same day and it is the wrong lever:
+    // this fallback fires for EXISTING clients with nothing stored, not just new ones, so it would move
+    // every current client off the classic look at once. It also puts `hub-u` and `hub-u-<key>` on every
+    // root, and _probe-hub-traits asserts hub.css has a rule for every class on the root, which it does
+    // not for those. Three probes caught it. A future default belongs where a client's skin is first
+    // WRITTEN, not where an absent one is read.
     universe: isUniverse(s.universe) ? s.universe : null,
     bg: safeSkinColor(s.bg),
     fg: safeSkinColor(s.fg),

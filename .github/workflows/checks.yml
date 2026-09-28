@@ -109,6 +109,15 @@ jobs:
       - name: Scraper lane probe (the dispatch the compiler cannot check)
         run: bun --no-env-file run scripts/_probe-scraper.ts
 
+      # ‼️ THE ONE THAT STOPS A HOLE OPENING IN THE MAP. The national crawl decides WHICH CIRCLES
+      # EXIST, so a mistake in its geometry does not produce a bad number, it produces a patch of the
+      # country no pull ever looks at, and an unfetched business leaves nothing behind to notice. The
+      # load-bearing check samples each parent's box and requires every point to land in one of its four
+      # children: the obvious "child radius is half the parent's" rule fails it by 1.3 to 3.3 km at
+      # every level. Offline by construction, no key and no spend.
+      - name: National coverage cells (the geometry, and that nowhere is uncovered)
+        run: bun --no-env-file run scripts/_probe-cells.ts
+
       # ‼️ THE ONE THAT STOPS DEAD WIRES COMING BACK. It reads docs/*.sql and src/ off disk and
       # touches no database, which is what makes it gateable: its whole value is that it runs without
       # anybody remembering to run it. It carries a board-wide baseline count that may only go DOWN.

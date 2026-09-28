@@ -14,6 +14,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import type { EnrichAttempt, EnrichHit } from "./enrich";
 import type { QualifyCandidate, Verdict } from "./qualify";
+import { isCrossRunIdentity } from "./dedup";
 import type { Funnel } from "./pull";
 
 export type RunStage =
@@ -173,6 +174,105 @@ export async function dropWebsiteless(runId: string): Promise<number> {
     .select("id");
   if (error) throw new Error("dropWebsiteless: " + error.message);
   return data?.length ?? 0;
+}
+
+/**
+ * Drop rows this lane has already pulled under an earlier run, before the model is paid to judge them.
+ *
+ * ‼️ THE GAP THIS CLOSES IS OPENED BY THE GEOMETRY ITSELF. `raw_leads` is unique on
+ * (run_id, place_id) only WITHIN a run, and circles cannot tile a plane, so overlapping cells deliver
+ * the same clinic under several runs by design. The record cost of that is trivial ($0.00036); the
+ * Claude sweep over every duplicate is not, and it is the expensive stage this whole pipeline was
+ * reordered to protect.
+ *
+ * ‼️ IT IS A FREE RULE AND IT RUNS BEFORE THE PAID ONE, the same order filter.ts uses for its string
+ * checks ahead of a DNS lookup, and the same shape `dropWebsiteless` above has: an ordinary drop with
+ * an ordinary written reason, so it groups and counts on the existing drop-review card and explains
+ * itself in dropped.csv instead of being invisible bookkeeping.
+ *
+ * ‼️ `created_at < started_at`, NEVER `run_id != runId`. A symmetric "some other run has this too"
+ * test lets two runs each drop the other's copy and lose the lead entirely. A strict time comparison is
+ * a total order with no ties, because every row of this run is created after the run's own
+ * `started_at`, so exactly one copy survives: the earliest.
+ *
+ * ‼️ AND NOT ON `domain`. The existing scraper_seen ledger keys on domain (ACTIVE_KEYS), which is right
+ * for "have we contacted this company" and wrong here: a twelve-location med spa chain shares one
+ * domain, so a domain rule would drop eleven real clinics. `place_id` is per location.
+ */
+export async function dropCrossRunDuplicates(runId: string): Promise<number> {
+  const run = await getRun(runId);
+  if (!run?.started_at) return 0;
+
+  // This run's candidates: rows not yet judged, that carry an identity worth comparing.
+  const { data: mine, error: mineError } = await supabaseAdmin
+    .from("raw_leads")
+    .select("id, place_id")
+    .eq("run_id", runId)
+    .is("qualify_keep", null)
+    .is("qualify_reason", null)
+    .not("place_id", "is", null);
+  if (mineError) throw new Error("dropCrossRunDuplicates(read): " + mineError.message);
+
+  const byPlace = new Map<string, string[]>();
+  for (const r of mine ?? []) {
+    const row = r as Record<string, unknown>;
+    const placeId = (row.place_id as string | null) ?? null;
+    if (!isCrossRunIdentity(placeId)) continue;
+    const key = String(placeId);
+    const ids = byPlace.get(key) ?? [];
+    ids.push(String(row.id));
+    byPlace.set(key, ids);
+  }
+  if (!byPlace.size) return 0;
+
+  // ‼️ CHUNKED AT 100, NOT 500. supabase-js puts `.in()` filters in the QUERY STRING, so the bound is
+  // proxy URL length rather than anything Postgres cares about. store.ts states this above IN_CHUNK.
+  const IN_CHUNK = 100;
+  const keys = [...byPlace.keys()];
+  const seenEarlier = new Set<string>();
+  for (let i = 0; i < keys.length; i += IN_CHUNK) {
+    const slice = keys.slice(i, i + IN_CHUNK);
+    const { data, error } = await supabaseAdmin
+      .from("raw_leads")
+      .select("place_id")
+      .in("place_id", slice)
+      .lt("created_at", run.started_at)
+      .limit(slice.length * 4);
+    if (error) throw new Error("dropCrossRunDuplicates(prior): " + error.message);
+    for (const r of data ?? []) {
+      const placeId = (r as Record<string, unknown>).place_id;
+      if (typeof placeId === "string") seenEarlier.add(placeId);
+    }
+  }
+  if (!seenEarlier.size) return 0;
+
+  const doomed: string[] = [];
+  for (const [placeId, ids] of byPlace) {
+    if (seenEarlier.has(placeId)) doomed.push(...ids);
+  }
+  if (!doomed.length) return 0;
+
+  const now = new Date().toISOString();
+  let dropped = 0;
+  for (let i = 0; i < doomed.length; i += IN_CHUNK) {
+    const slice = doomed.slice(i, i + IN_CHUNK);
+    const { data, error } = await supabaseAdmin
+      .from("raw_leads")
+      .update({
+        qualify_keep: false,
+        qualify_reason: "already pulled under an earlier run (overlapping cell)",
+        qualify_model: "rule",
+        qualified_at: now,
+      })
+      .in("id", slice)
+      // Re-checked at write time: a chunk that took a while must not overwrite a verdict the model
+      // wrote in the meantime.
+      .is("qualify_keep", null)
+      .select("id");
+    if (error) throw new Error("dropCrossRunDuplicates(write): " + error.message);
+    dropped += data?.length ?? 0;
+  }
+  return dropped;
 }
 
 export interface QualifyTally {

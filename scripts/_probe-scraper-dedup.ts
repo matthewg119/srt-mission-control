@@ -26,6 +26,7 @@ import {
   companyCityKey,
   countTruncatedNames,
   dedupeColumns,
+  isCrossRunIdentity,
   isKeyActive,
   editDistanceWithin,
   looksTruncated,
@@ -37,6 +38,7 @@ import {
 import { filterRows } from "../src/lib/scraper/filter";
 import { resolvePhoneColumn } from "../src/lib/scraper/rules";
 import { buildDuplicatesCsv, formatDedupeSplit, formatWorkflowPicker } from "../src/lib/scraper/report";
+
 
 let passed = 0;
 const failures: string[] = [];
@@ -699,6 +701,29 @@ eq("edit distance: empty against empty", editDistanceWithin("", "", 1), 0);
   });
   eq("seed: a second run writes nothing", [fresh.length, dupes.length], [0, 1]);
   eq("seed: and reports the ledger hit as a domain match", dupes[0].matchedOn, "domain");
+}
+
+// ── The cross-run identity rule, which is the one that DELETES ROWS ─────────────────────────────
+// ‼️ THE CATASTROPHE THIS PREVENTS IS SPECIFIC AND IT WOULD HAVE LOOKED LIKE A WORKING FILTER.
+// `fromCsv` in pull.ts synthesises place_id = "csv:" + rowIndex, which is correct there: it makes a
+// dropped file idempotent within its own run. But it means ROW 17 OF EVERY FILE ANYBODY HAS EVER
+// DROPPED is "csv:17". dropCrossRunDuplicates asks "has this place_id been seen in an earlier run",
+// so without this rule it would drop row 17 of every future file as a duplicate of an unrelated
+// business from months ago, at scale, with a plausible count and a plausible drop reason.
+{
+  check("a Google place id is an identity", isCrossRunIdentity("ChIJN1t_tDeuEmsRUsoyG83frY4"));
+  check("a cid is an identity", isCrossRunIdentity("17924418093902313876"));
+  check("this lane's own domain fallback is an identity", isCrossRunIdentity("site:example.com"));
+
+  // The row-index keys. Every one of these would delete real leads.
+  check("a CSV row index is NOT an identity", !isCrossRunIdentity("csv:17"));
+  check("row 0 is not an identity either", !isCrossRunIdentity("csv:0"));
+  check("and the check is case-insensitive, because nobody should rely on the casing", !isCrossRunIdentity("CSV:17"));
+
+  check("null is not an identity", !isCrossRunIdentity(null));
+  check("undefined is not an identity", !isCrossRunIdentity(undefined));
+  check("empty is not an identity", !isCrossRunIdentity(""));
+  check("whitespace is not an identity", !isCrossRunIdentity("   "));
 }
 
 console.log("\n" + passed + " passed, " + failures.length + " failed");

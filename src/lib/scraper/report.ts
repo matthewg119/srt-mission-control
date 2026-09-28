@@ -391,12 +391,18 @@ const KEYCAP: Record<Workflow, string> = {
   listprep: ":three:",
   // The operator does say "four", even though it is never a reaction on a picker card.
   mapspull: ":four:",
+  // ‼️ NOT A KEYCAP AT ALL, AND IT MUST NOT BORROW ONE. A measurement step is never offered on the
+  // picker; it exists only because the exhaustiveness of this Record is what makes a new arm fail the
+  // build until somebody decides what it looks like. Giving it ":four:" too would put two arms on one
+  // reaction, which is how a check mark buys the wrong thing.
+  mapsprobe: ":straight_ruler:",
 };
 const WORKFLOW_NAME: Record<Workflow, string> = {
   filter: "filter and verify",
   score: "score first",
   listprep: "build a send list",
   mapspull: "pull from Google Maps",
+  mapsprobe: "measure how many are there",
 };
 
 /**

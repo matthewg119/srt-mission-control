@@ -94,6 +94,54 @@ roughly 107 leaf cells plus interior probes, call it 150 probes.
 Against the ZIP queue: 41,700 cells at $0.012 of task fee each is **$500 in fees alone**, before a
 single record, to reach the same businesses.
 
+## What was actually built, 2026-09-28, and the four places this prompt was wrong
+
+Built and on this branch. `src/lib/scraper/cells.ts` (geometry, pure), `coverage.ts` (the walk, pure),
+`cell-store.ts` (the one new table), `docs/2026-09-28-national-coverage-cells.sql` (applied),
+`scripts/_probe-cells.ts` (5,611 offline checks, in CI) and `scripts/_probe-cells-live.ts` (opt-in,
+about $0.06). Commands: `cells <vertical>` measures, `pull maps <vertical>` works the next measured
+cell, `coverage <vertical>` reports by state.
+
+**1. "Split it into four" leaves gaps if the children are half the radius.** The obvious rule gives a
+clean 384 → 192 → 96 → 48 → 24 → 12 ladder and it is wrong: half a parent's box measured in DEGREES OF
+LONGITUDE is wider than a box of half its kilometre half-side placed at the child's own latitude.
+Measured for a 384km parent: **1.32km uncovered at 25N, 1.64km at 30N, 2.39km at 40N, 3.29km at 49N**,
+recurring at every level and widest where the country is widest. A cell is therefore the inscribed
+SQUARE and each child's radius is derived from the box it must cover, rounded up, which gives 192 for
+poleward children and 195 for equatorward ones. `_probe-cells.ts` samples each parent's box and
+requires every point to land in a child; the naive rule fails it by 22 of 484 points.
+
+**2. `total_count` was already being fetched, printed, and thrown away.**
+`src/lib/dataforseo-places.ts:131` has parsed it since the door was built, and `lane.ts` prints it on
+every pull card. Nothing stored it. This build did not gain access to the number; it made the number
+already on screen authoritative.
+
+**3. An errored pull already advanced the frontier, which is worse than the bug this prompt names.**
+This prompt says a pull that errors to zero rows is indistinguishable from an exhausted cell and gets
+skipped. True, and there was a second half: depth came from the LABEL, and a label survives a failed
+pull, so the queue stepped past 500 records nobody had bought. Fixed by `MapsPull.finished`
+(`pull_finished_at` set and no error) in `mapsPullHistory`; depth advances over landed pulls only, and
+a cell that fails three times at one offset is refused BY NAME rather than skipped or retried forever.
+This reverses store.ts's old "failed batches count as claimed" rule, deliberately: that was the safer
+option only while an empty cell could not be told from a broken one.
+
+**4. The probe cost is 2 to 3 times this prompt's estimate.** About 25 of the 57 contiguous-US seed
+circles are ocean, Canada or Mexico and read 0 once, forever. Seed layer: 76 circles, $0.94. With
+splits expect **300 to 400 probes, $3.70 to $5.00**, not 150 and $1.86. Still 6 to 8% of the ~$63
+total, and every card states its own maximum before the reaction.
+
+Also: the cross-run dedupe keys on `place_id`, never `domain` (a twelve-location chain shares one
+domain, so a domain rule drops eleven real clinics), and never on `csv:<rowIndex>` (row 17 of every
+dropped file carries that key, so a naive rule would delete row 17 of every future file and look like
+a working filter). `zip_centroids` looked like a free reverse geocoder and is not: 33,791 rows, and
+`state` is 100% NULL because the ZCTA Gazetteer has no state field.
+
+**Decided by Matthew, recorded here:** the 50-metro list and `nextTarget` are DELETED rather than kept
+alongside; probe spend is one check mark per `cells` invocation, run by hand; and foreign rows are
+KEPT rather than filtered. That last one means a Toronto med spa is kept, enriched and emailed, because
+the ICP judges "is this an owner-operated med spa" and not geography. One sentence in `MED_SPA_ICP`
+would change that and no code would need to.
+
 ## Definition of done
 
 - A cell whose `total_count` is 0 is recorded as done, not retried.

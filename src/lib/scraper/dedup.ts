@@ -295,6 +295,34 @@ export type KeyField = "domain" | "phone" | "email" | "companyCity";
  */
 export const ACTIVE_KEYS: readonly KeyField[] = ["domain"];
 
+/**
+ * Is this `place_id` a real identity for a business, or a within-run row number?
+ *
+ * ‼️ THIS FUNCTION EXISTS TO PREVENT A CATASTROPHE, AND THE CATASTROPHE IS SPECIFIC. `fromCsv` in
+ * pull.ts synthesises `place_id = "csv:" + rowIndex` for a dropped file, which is correct there: it
+ * makes a CSV pull idempotent within its own run, and the header says so. But it means row 17 of EVERY
+ * file anybody has ever dropped is `"csv:17"`.
+ *
+ * The cross-run duplicate check asks "has this place_id been seen in an earlier run". Run that against
+ * a synthetic key and it drops row 17 of every future file as a duplicate of a completely unrelated
+ * business in some batch from months ago. It would delete real leads, at scale, and it would look
+ * exactly like a filter that is working: the counts would be plausible and the drop reason would read
+ * "already pulled under an earlier run".
+ *
+ * So the rule is narrow and positive: a Google place id or cid identifies a LOCATION, and `site:` is
+ * this lane's own domain-derived fallback which also identifies a business. A row index identifies a
+ * position in a file, which is not a thing that can be duplicated across runs.
+ *
+ * ‼️ PURE, AND ASSERTED BY NAME IN THE PROBE, because it decides whether rows get deleted.
+ */
+export function isCrossRunIdentity(placeId: string | null | undefined): boolean {
+  const id = (placeId ?? "").trim();
+  if (!id) return false;
+  // A row index in a dropped file. Never an identity.
+  if (/^csv:/i.test(id)) return false;
+  return true;
+}
+
 export function isKeyActive(field: KeyField): boolean {
   return ACTIVE_KEYS.includes(field);
 }
