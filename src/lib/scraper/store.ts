@@ -11,6 +11,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { splitCompanyCity, type DedupeRow, type KnownKeys } from "./dedup";
 import type { FilteredRow } from "./filter";
+import type { MapsPull } from "./maps-command";
 import type { JunkReason } from "./rules";
 
 export type BatchStatus =
@@ -345,15 +346,30 @@ const ACTIVE_STATUSES: BatchStatus[] = [
  * Failed batches COUNT as claimed. A metro whose pull errored should not be silently re-bought by
  * the next `pull maps medspa`; somebody should look at why it failed and re-run it by name.
  */
-export async function mapsCommandLabels(): Promise<string[]> {
+/**
+ * Every Maps pull with what it actually returned.
+ *
+ * ‼️ raw_count IS HOW THE QUEUE KNOWS A METRO IS FINISHED. A page that comes back short is the last
+ * page, and that is the only signal available without storing DataForSEO's total_count: raw_leads is
+ * unique on (run_id, place_id), so within one run inserted equals returned, and a short page means
+ * the source ran out rather than that rows were deduped away.
+ */
+export async function mapsPullHistory(): Promise<MapsPull[]> {
   const { data, error } = await supabaseAdmin
     .from("scraper_batches")
-    .select("batch_label")
+    .select("batch_label, list_pipeline_runs!scraper_batches_list_run_id_fkey(raw_count)")
     .eq("workflow", "mapspull")
     .not("batch_label", "is", null)
     .order("created_at", { ascending: true });
-  if (error) throw new Error("mapsCommandLabels: " + error.message);
-  return (data ?? []).map((r) => String((r as { batch_label?: unknown }).batch_label ?? "")).filter(Boolean);
+  if (error) throw new Error("mapsPullHistory: " + error.message);
+  return (data ?? []).map((r) => {
+    const row = r as unknown as Record<string, unknown>;
+    const run = (row.list_pipeline_runs as { raw_count?: unknown } | null) ?? null;
+    return {
+      label: String(row.batch_label ?? ""),
+      rawCount: typeof run?.raw_count === "number" ? run.raw_count : 0,
+    };
+  }).filter((p) => p.label);
 }
 
 /**

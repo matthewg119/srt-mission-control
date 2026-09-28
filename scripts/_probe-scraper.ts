@@ -38,7 +38,7 @@ import {
   looksLikeMapsCommand,
   US_METROS,
   metroProgress,
-  nextMetro,
+  nextTarget,
   parseMapsCommand,
   parseNaturalPull,
   parseNextMetroCommand,
@@ -1146,25 +1146,86 @@ async function liveMx(): Promise<void> {
 
   // ‼️ DONE-NESS IS DERIVED FROM THE COMMANDS THEMSELVES. No queue table means nothing to drift, and
   // a campaign that dies halfway resumes by asking the same question again.
-  eq("with no history, the first metro is next", nextMetro("medspa", []), US_METROS[0]);
+  // A pull is a label plus the row count it produced. Both halves decide where the queue goes next,
+  // so every case below states the count explicitly.
+  const pull = (metro: string, offset: number, rawCount: number, limit = 500) => ({
+    label: "pull maps medspa | " + metro + " | med spa | limit " + limit + " | offset " + offset,
+    rawCount,
+  });
+
+  eq("with no history, the first metro is next", nextTarget("medspa", [])?.metro, US_METROS[0]);
+  eq("and it starts at the top", nextTarget("medspa", [])?.offset, 0);
+
+  // The measured reason this exists: Dallas holds 1,765 med spas, so a full 500 means there is more.
   eq(
-    "a pulled metro is skipped",
-    nextMetro("medspa", ["pull maps medspa | " + US_METROS[0] + " | med spa"]),
-    US_METROS[1]
+    "a FULL pull means the same metro again, deeper",
+    nextTarget("medspa", [pull(US_METROS[0], 0, 500)]),
+    { metro: US_METROS[0], offset: 500 }
+  );
+  eq(
+    "and it keeps going while pulls keep filling",
+    nextTarget("medspa", [pull(US_METROS[0], 0, 500), pull(US_METROS[0], 500, 500)]),
+    { metro: US_METROS[0], offset: 1000 }
+  );
+  eq(
+    "a SHORT pull finishes the metro and moves on",
+    nextTarget("medspa", [pull(US_METROS[0], 0, 500), pull(US_METROS[0], 500, 118)]),
+    { metro: US_METROS[1], offset: 0 }
+  );
+  eq(
+    "an empty pull also finishes it, rather than retrying forever",
+    nextTarget("medspa", [pull(US_METROS[0], 0, 0)]),
+    { metro: US_METROS[1], offset: 0 }
+  );
+  eq(
+    "a hand-typed deep offset does not rewind the frontier",
+    nextTarget("medspa", [pull(US_METROS[0], 1000, 500), pull(US_METROS[0], 0, 500)]),
+    { metro: US_METROS[0], offset: 1500 }
+  );
+
+  // ‼️ THE CASE A PAGE NUMBER GETS WRONG. The first real Dallas pull ran at limit 50. Storing "page 1"
+  // and then asking for "page 2" at the default limit 500 starts at 500 and skips results 50 to 499.
+  // Depth is offset + the limit THAT pull used, so the next pull starts at exactly 50.
+  eq(
+    "depth follows the limit each pull actually used, not the current one",
+    nextTarget("medspa", [pull(US_METROS[0], 0, 50, 50)]),
+    { metro: US_METROS[0], offset: 50 }
   );
   eq(
     "another vertical's history does not count",
-    nextMetro("dentist", ["pull maps medspa | " + US_METROS[0] + " | med spa"]),
+    nextTarget("dentist", [pull(US_METROS[0], 0, 500)])?.metro,
     US_METROS[0]
   );
   eq(
     "an unreadable label is ignored rather than crashing",
-    nextMetro("medspa", ["some nonsense somebody typed"]),
+    nextTarget("medspa", [{ label: "some nonsense somebody typed", rawCount: 400 }])?.metro,
     US_METROS[0]
   );
-  const prog = metroProgress("medspa", ["pull maps medspa | " + US_METROS[0] + " | med spa"]);
-  eq("progress counts what is done", prog.done.length, 1);
-  eq("and what is left", prog.remaining.length, US_METROS.length - 1);
+  // A label written before offsets existed has to keep working, or the queue re-buys every old metro.
+  eq(
+    "a legacy label with no offset reads as offset 0",
+    nextTarget("medspa", [{ label: "pull maps medspa | " + US_METROS[0] + " | med spa | limit 500", rawCount: 500 }]),
+    { metro: US_METROS[0], offset: 500 }
+  );
+
+  // `page <n>` is shorthand, and the shorthand has to resolve against the limit in the SAME command.
+  const paged = parseMapsCommand("pull maps medspa | Dallas TX | med spa | page 3 | limit 100");
+  eq("page 3 at limit 100 is offset 200", paged.ok ? paged.command.offset : null, 200);
+  const pagedFirst = parseMapsCommand("pull maps medspa | Dallas TX | med spa | page 1");
+  eq("page 1 is offset 0", pagedFirst.ok ? pagedFirst.command.offset : null, 0);
+  const bothWays = parseMapsCommand("pull maps medspa | Dallas TX | med spa | page 2 | offset 500");
+  check("offset and page together are refused rather than reconciled", !bothWays.ok);
+  const explicitOffset = parseMapsCommand("pull maps medspa | Dallas TX | med spa | offset 750");
+  eq("an explicit offset is taken verbatim", explicitOffset.ok ? explicitOffset.command.offset : null, 750);
+  const noOffset = parseMapsCommand("pull maps medspa | Dallas TX | med spa");
+  eq("no offset means the top", noOffset.ok ? noOffset.command.offset : null, 0);
+
+  const prog = metroProgress("medspa", [pull(US_METROS[0], 0, 500), pull(US_METROS[0], 500, 40), pull(US_METROS[1], 0, 500)]);
+  eq("progress counts only EXHAUSTED metros as done", prog.done.length, 1);
+  eq("a metro mid-way is reported separately", prog.started, [US_METROS[1]]);
+  eq("and what has never been touched", prog.remaining.length, US_METROS.length - 2);
+  eq("pulls are counted, not metros", prog.pulls, 3);
+  eq("rows are summed across pulls", prog.rows, 1040);
 
   // The list itself has to be usable by the geocoder, or a campaign buys nothing 50 times.
   check("every metro resolves a state", US_METROS.every((m) => stateNameFrom(m) !== null));

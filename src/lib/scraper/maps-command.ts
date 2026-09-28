@@ -21,8 +21,10 @@ export const MAPS_GRAMMAR = [
   "  `pull maps medspa | Dallas TX | med spa`",
   "  `pull maps dentist | Phoenix AZ | dental implants | limit 40`",
   "  `pull maps medspa | Miami FL | med spa | limit 200 | radius 50`",
+  "  `pull maps medspa | Dallas TX | med spa | limit 500 | offset 500`   _(the next 500 in Dallas)_",
   "",
-  "`limit`, `radius` and `via` are optional and can come in any order.",
+  "`limit`, `radius`, `offset`, `page` and `via` are optional and can come in any order.",
+  "`offset <n>` skips the first n results, which is how one metro is pulled deeper than its limit.",
 ].join("\n");
 
 /** Outscraper is billed per record, so an unbounded pull is not expressible. */
@@ -68,6 +70,23 @@ export interface MapsCommand {
   locationName: string;
   /** How far around the metro centre to look. DataForSEO takes kilometres. */
   radiusKm: number;
+  /**
+   * How many results into this metro to start. Sent to the vendor verbatim.
+   *
+   * ‼️ WITHOUT THIS A METRO IS SEEN ONCE, AND SHALLOWLY. Dallas holds 1,765 businesses matching the
+   * med spa categories. A single `limit 500` pull takes the first 500 and the other 1,265 are never
+   * looked at again, because the queue marks the metro done. An offset is what turns "we pulled
+   * Dallas" into "we finished Dallas".
+   *
+   * ‼️ AN OFFSET, NOT A PAGE NUMBER, AND THE DIFFERENCE IS A MEASURED BUG. The first real Dallas
+   * pull ran at `limit 50`. Had the queue stored "page 1" and then asked for "page 2" at the default
+   * `limit 500`, the second pull would have started at (2-1) x 500 = 500 and silently skipped results
+   * 50 through 499: 450 businesses nobody would ever have known were missed. A page number only means
+   * something next to the limit it was paged at, and the limit changes between pulls. The grammar
+   * still accepts `page <n>` as shorthand, resolved to an offset once, against the limit given in the
+   * SAME command.
+   */
+  offset: number;
   /** What to search for, without the metro. Kept separate so the card can say both. */
   query: string;
   /** The string actually sent to Outscraper. */
@@ -170,6 +189,8 @@ export function parseMapsCommand(text: string): MapsParse {
   let limit = MAPS_LIMIT_DEFAULT;
   let source: MapsSource = MAPS_SOURCE_DEFAULT;
   let radiusKm = MAPS_RADIUS_KM_DEFAULT;
+  let offset: number | null = null;
+  let pageSugar: number | null = null;
   let sawLimit = false;
   for (const tail of parts.slice(3)) {
     const viaMatch = /^via\s+([a-z]+)$/i.exec(tail);
@@ -192,13 +213,26 @@ export function parseMapsCommand(text: string): MapsParse {
       }
       continue;
     }
+    const off = /^offset\s+(\d{1,6})$/i.exec(tail);
+    if (off) {
+      offset = Number(off[1]);
+      continue;
+    }
+    // Resolved to an offset AFTER the loop, never here: `page 2 | limit 100` puts the limit to the
+    // right of the page, so converting in place would use whatever limit had been seen so far.
+    const pg = /^page\s+(\d{1,4})$/i.exec(tail);
+    if (pg) {
+      pageSugar = Number(pg[1]);
+      if (pageSugar < 1) return { ok: false, reason: "page " + pageSugar + " does not exist; pages start at 1." };
+      continue;
+    }
     const m = /^limit\s+(\d{1,4})$/i.exec(tail);
     if (!m) {
       return {
         ok: false,
         reason:
-          "I did not understand `" + tail + "`. After the query you can add `limit <n>`, `radius <km>` " +
-          "or `via <source>`, in any order.",
+          "I did not understand `" + tail + "`. After the query you can add `limit <n>`, `radius <km>`, " +
+          "`offset <n>`, `page <n>` or `via <source>`, in any order.",
       };
     }
     if (sawLimit) return { ok: false, reason: "two limits were given and I will not choose between them" };
@@ -214,6 +248,11 @@ export function parseMapsCommand(text: string): MapsParse {
       };
     }
   }
+
+  if (offset !== null && pageSugar !== null) {
+    return { ok: false, reason: "`offset` and `page` say the same thing two ways. Give one, not both." };
+  }
+  const startAt = offset ?? (pageSugar !== null ? (pageSugar - 1) * limit : 0);
 
   // ‼️ THE VERTICAL IS MATCHED AGAINST THE REGISTRY, NOT RESOLVED WITH A FALLBACK. icpFor returns
   // null for anything outside the registry and beginListPrepWorkflow fails hard on that, so
@@ -255,6 +294,7 @@ export function parseMapsCommand(text: string): MapsParse {
       categories,
       locationName: locationNameOf(metro),
       radiusKm,
+      offset: startAt,
       query,
       // Outscraper takes one string. The metro goes on the end, which is the shape medspa.ts's
       // buildQuery already uses for ZIPs.
@@ -474,35 +514,104 @@ export function parseNextMetroCommand(text: string): NextMetroParse | null {
   return { ok: true, command: { vertical, limit, radiusKm, source } };
 }
 
+/** One past pull: the command that ran, and how many rows it actually produced. */
+export interface MapsPull {
+  label: string;
+  rawCount: number;
+}
+
+/** Where the queue should go next: a metro, and how far into it to start. */
+export interface MapsTarget {
+  metro: string;
+  offset: number;
+}
+
+interface MetroState {
+  /** Results consumed so far: the deepest pull's offset plus the limit it asked for. */
+  depth: number;
+  /** Rows that deepest pull produced. */
+  lastCount: number;
+  /** The limit that deepest pull asked for. */
+  lastLimit: number;
+}
+
 /**
- * The first metro with no pull yet, given the labels of every pull that has happened.
+ * Re-parse the labels into per-metro depth.
+ *
+ * Depth is `offset + limit` of the DEEPEST pull, not a count of pulls and not a sum of row counts.
+ * Offset plus limit is where the vendor stopped looking, which is the only number the next pull can
+ * safely start from: summing rows delivered would drift below it the moment any page returned fewer
+ * rows than it asked for, and re-pull ground already covered.
+ */
+function metroStates(vertical: string, history: readonly MapsPull[]): Map<string, MetroState> {
+  const byMetro = new Map<string, MetroState>();
+  for (const pull of history) {
+    const parsed = parseMapsCommand(pull.label);
+    if (!parsed.ok || parsed.command.vertical !== vertical) continue;
+    const key = parsed.command.metro.toLowerCase();
+    const depth = parsed.command.offset + parsed.command.limit;
+    const prior = byMetro.get(key);
+    // Pulls can arrive out of order if a human names a deep offset by hand, so keep the DEEPEST
+    // rather than the most recent. The deepest is the frontier, which is what the queue needs.
+    if (prior && prior.depth > depth) continue;
+    byMetro.set(key, { depth, lastCount: pull.rawCount, lastLimit: parsed.command.limit });
+  }
+  return byMetro;
+}
+
+/** A metro is finished when its deepest pull came back short of what it asked for. */
+function exhausted(state: MetroState): boolean {
+  return state.lastCount < state.lastLimit;
+}
+
+/**
+ * Where to pull next: deeper into the current metro, or the start of the next one.
  *
  * ‼️ DONE-NESS IS DERIVED FROM THE COMMANDS THEMSELVES, NOT FROM A QUEUE TABLE. Every Maps batch
  * stores its command verbatim in `scraper_batches.batch_label`, so re-parsing those answers "which
- * metros has this vertical had" exactly, with no second copy of the truth to drift. A campaign that
- * dies halfway resumes correctly because nothing was ever written down about its intent.
+ * metros has this vertical had, and how deep" exactly, with no second copy of the truth to drift. A
+ * campaign that dies halfway resumes correctly because nothing was ever written down about its intent.
+ *
+ * ‼️ A SHORT PULL ENDS THE METRO, AND THAT INCLUDES ZERO. Dallas holds 1,765 med spas, so one
+ * `limit 500` leaves 1,265 unseen and stepping straight to the next metro would abandon them. The
+ * source returning fewer rows than the limit is the only signal available that a metro has run out,
+ * short of storing DataForSEO's total_count. The cost is that a pull which errored to zero rows looks
+ * identical to an exhausted metro and gets skipped. That is deliberate over the alternative: treating
+ * zero as "not finished" would park a genuinely empty metro in an infinite retry. Name the metro
+ * directly to redo it.
  */
-export function nextMetro(vertical: string, pastLabels: readonly string[]): string | null {
-  const done = new Set<string>();
-  for (const label of pastLabels) {
-    const parsed = parseMapsCommand(label);
-    if (parsed.ok && parsed.command.vertical === vertical) done.add(parsed.command.metro.toLowerCase());
+export function nextTarget(vertical: string, history: readonly MapsPull[]): MapsTarget | null {
+  const byMetro = metroStates(vertical, history);
+  for (const metro of US_METROS) {
+    const state = byMetro.get(metro.toLowerCase());
+    if (!state) return { metro, offset: 0 };
+    if (!exhausted(state)) return { metro, offset: state.depth };
   }
-  return US_METROS.find((m) => !done.has(m.toLowerCase())) ?? null;
+  return null;
 }
 
 /** How far through the list this vertical is. For the progress card. */
 export function metroProgress(
   vertical: string,
-  pastLabels: readonly string[]
-): { done: string[]; remaining: string[] } {
-  const seen = new Set<string>();
-  for (const label of pastLabels) {
-    const parsed = parseMapsCommand(label);
-    if (parsed.ok && parsed.command.vertical === vertical) seen.add(parsed.command.metro.toLowerCase());
+  history: readonly MapsPull[]
+): { done: string[]; started: string[]; remaining: string[]; pulls: number; rows: number } {
+  const byMetro = metroStates(vertical, history);
+  const done: string[] = [];
+  const started: string[] = [];
+  const remaining: string[] = [];
+  for (const metro of US_METROS) {
+    const state = byMetro.get(metro.toLowerCase());
+    if (!state) remaining.push(metro);
+    else if (exhausted(state)) done.push(metro);
+    else started.push(metro);
   }
-  return {
-    done: US_METROS.filter((m) => seen.has(m.toLowerCase())),
-    remaining: US_METROS.filter((m) => !seen.has(m.toLowerCase())),
-  };
+  let pulls = 0;
+  let rows = 0;
+  for (const pull of history) {
+    const parsed = parseMapsCommand(pull.label);
+    if (!parsed.ok || parsed.command.vertical !== vertical) continue;
+    pulls += 1;
+    rows += pull.rawCount;
+  }
+  return { done, started, remaining, pulls, rows };
 }

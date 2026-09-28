@@ -93,7 +93,7 @@ import {
   US_METROS,
   laneHelp,
   metroProgress,
-  nextMetro,
+  nextTarget,
   parseNextMetroCommand,
   type NextMetroCommand,
   looksLikeMapsCommand,
@@ -111,7 +111,7 @@ import { geocodeMetro } from "@/lib/geocode";
 import { submitMapsSearch } from "@/lib/outscraper";
 import {
   activeMapsPull,
-  mapsCommandLabels,
+  mapsPullHistory,
   addScoreCost,
   allRows,
   applyMvResults,
@@ -1310,36 +1310,45 @@ async function startNextMetro(event: ScraperEvent, want: NextMetroCommand): Prom
     return;
   }
 
-  const labels = await mapsCommandLabels();
-  const metro = nextMetro(want.vertical, labels);
-  if (!metro) {
-    const progress = metroProgress(want.vertical, labels);
+  const history = await mapsPullHistory();
+  const target = nextTarget(want.vertical, history);
+  if (!target) {
+    const progress = metroProgress(want.vertical, history);
     await slack.postMessage(
       event.channel,
-      ":checkered_flag: *Every metro on the list has been pulled for `" + want.vertical + "`* (" +
-        progress.done.length + " of " + progress.done.length + "). Add more to `US_METROS` in " +
-        "`src/lib/scraper/maps-command.ts`, or name a city directly."
+      ":checkered_flag: *Every metro on the list is exhausted for `" + want.vertical + "`* (" +
+        progress.done.length + " metros, " + progress.pulls + " pulls, " + progress.rows +
+        " rows). Add more to `US_METROS` in `src/lib/scraper/maps-command.ts`, or name a city directly."
     );
     return;
   }
 
   // Rebuilt as a normal command string so there is exactly ONE parser, and so the batch label that
-  // gets stored is the same shape a human would have typed. That label is what `nextMetro` reads
-  // back, so it has to round-trip.
+  // gets stored is the same shape a human would have typed. That label is what `nextTarget` reads
+  // back, so it has to round-trip -- including `page`, or the queue forgets how deep it went and
+  // re-buys page 1 forever.
   const text =
-    "pull maps " + want.vertical + " | " + metro + " | " + want.vertical +
-    " | limit " + want.limit + " | radius " + want.radiusKm + " | via " + want.source;
+    "pull maps " + want.vertical + " | " + target.metro + " | " + want.vertical +
+    " | limit " + want.limit + " | radius " + want.radiusKm + " | offset " + target.offset +
+    " | via " + want.source;
   const parsed = parseMapsCommand(text);
   if (!parsed.ok) {
-    await slack.postMessage(event.channel, ":no_entry: I built a command for `" + metro + "` that I cannot read back: " + parsed.reason);
+    await slack.postMessage(
+      event.channel,
+      ":no_entry: I built a command for `" + target.metro + "` that I cannot read back: " + parsed.reason
+    );
     return;
   }
 
-  const progress = metroProgress(want.vertical, labels);
+  const progress = metroProgress(want.vertical, history);
   await slack.postMessage(
     event.channel,
-    ":round_pushpin: Next up: *" + metro + "*  (" + (progress.done.length + 1) + " of " +
-      US_METROS.length + " metros for `" + want.vertical + "`)"
+    ":round_pushpin: Next up: *" + target.metro + "*" +
+      (target.offset > 0
+        ? ", from result " + (target.offset + 1) + " (the last pull filled up, so there is more here)"
+        : "") +
+      "  (" + progress.done.length + " of " + US_METROS.length + " metros finished for `" +
+      want.vertical + "`, " + progress.rows + " rows so far)"
   );
   await beginMapsPull({ ...event, text }, parsed.command);
 }
@@ -1347,16 +1356,19 @@ async function startNextMetro(event: ScraperEvent, want: NextMetroCommand): Prom
 /** How far through the metro list each vertical is. */
 async function postMetroProgress(channel: string, text: string): Promise<void> {
   const asked = /medspa|dentist/i.exec(text)?.[0]?.toLowerCase();
-  const labels = await mapsCommandLabels();
+  const history = await mapsPullHistory();
   const lines: string[] = [];
   for (const vertical of knownVerticals()) {
     if (asked && vertical !== asked) continue;
-    const p = metroProgress(vertical, labels);
+    const p = metroProgress(vertical, history);
+    const next = nextTarget(vertical, history);
     lines.push(
-      "*" + vertical + "*: " + p.done.length + " of " + US_METROS.length + " metros pulled." +
-        (p.remaining.length ? "  Next: `" + p.remaining[0] + "`" : "  Done.")
+      "*" + vertical + "*: " + p.done.length + " of " + US_METROS.length + " metros finished, " +
+        p.pulls + " pulls, " + p.rows + " rows." +
+        (next ? "  Next: `" + next.metro + "`" + (next.offset > 0 ? " from " + next.offset : "") : "  Done.")
     );
-    if (p.done.length) lines.push("  _pulled: " + p.done.slice(0, 12).join(", ") + (p.done.length > 12 ? ", ..." : "") + "_");
+    if (p.started.length) lines.push("  _part way: " + p.started.join(", ") + "_");
+    if (p.done.length) lines.push("  _finished: " + p.done.slice(0, 12).join(", ") + (p.done.length > 12 ? ", ..." : "") + "_");
   }
   lines.push("");
   lines.push("`pull maps <vertical>` takes the next one. `pull maps <vertical> | <metro> | <query>` names it yourself.");
@@ -1396,7 +1408,12 @@ async function postPullEstimate(batch: BatchRow, command?: MapsCommand): Promise
       parsed.source === "dataforseo"
         ? "  Where: `" + parsed.locationName + "`\n  Categories: `" + parsed.categories.join("`, `") + "`"
         : "  Search: `" + parsed.searchQuery + "`",
-      "  Limit: *" + parsed.limit + "* records",
+      // The offset is on the card because it changes WHICH rows are bought, and a human approving a
+      // second pull of the same metro needs to see that it is a different slice, not a re-buy.
+      "  Limit: *" + parsed.limit + "* records" +
+        (parsed.offset > 0
+          ? ", starting at result " + (parsed.offset + 1) + " (the shallower ones are already in)"
+          : ""),
       "",
       // ‼️ THE RECORDS ARE THE CHEAP HALF AND THE CARD SAYS SO. Qualification is a Claude sweep over
       // every row this returns, so the limit is a decision about model spend, not about record price.
@@ -1530,10 +1547,16 @@ async function pullFromDataForSeo(batch: BatchRow, runId: string, command: MapsC
   await updateRun(runId, { spend_approved_at: now, spend_approved_by: "slack_reaction", started_at: now });
   await updateBatch(batch.id, { status: "pulling" });
 
+  // ‼️ THE OFFSET IS WHAT MAKES A SECOND PULL DIFFERENT ROWS RATHER THAN THE SAME 500 AGAIN. Without
+  // it every pull of a metro returns the same top slice, so a deeper pull would buy a duplicate list
+  // and pay for it (raw_leads is unique on run_id + place_id only WITHIN a run, so the same
+  // businesses land again as new rows under the new run). Measured against DataForSEO on 2026-09-28:
+  // offsets 0 / 100 / 200 for Dallas returned 300 distinct businesses with zero overlap.
   const found = await searchListings({
     categories: command.categories,
     locationCoordinate: place.lat + "," + place.lon + "," + command.radiusKm,
     limit: command.limit,
+    offset: command.offset,
   });
   if (!found.ok) {
     await updateRun(runId, { spend_approved_at: null });
