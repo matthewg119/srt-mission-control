@@ -107,6 +107,18 @@ export const CLIENT_WORKFLOWS: Record<string, ClientWorkflow> = {
       return runQuoteRequest(ctx);
     },
   },
+  citation_outreach: {
+    key: "citation_outreach",
+    label: "Off-site outreach drafts",
+    description:
+      "Draft one email per off-site target: the sites an AI engine cited while answering this client's market, and the subjects we named on our own roundups and reviews. Reviewed drafts only; nothing is queued and nothing sends.",
+    needs: "off-site targets on file and a locked offer",
+    needsAudience: false,
+    run: async (ctx) => {
+      const { runCitationOutreach } = await import("./citation-outreach");
+      return runCitationOutreach(ctx);
+    },
+  },
   post_call_email: {
     key: "post_call_email",
     label: "Post-call email",
