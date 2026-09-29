@@ -119,14 +119,24 @@ comment on column public.clients.onboarding_lane is
 --
 -- It does NOT weaken the read-once rule in src/config/audience-presets.ts: the proposal is read
 -- once, confirmed by a person, and written to this row. Nothing reads documents at request time.
+-- ‼️ ALL FIVE VALUES ARE LISTED, AND 'borrowed' IS THE ONE THAT ALMOST WENT MISSING.
+-- The CREATE TABLE in docs/2026-09-14-client-audiences.sql declares three, and reading only that
+-- file makes four look like the complete set. docs/2026-09-24-borrowed-audience.sql added a
+-- fourth ten days later. A re-declared CHECK is a REPLACEMENT, not an addition, so dropping
+-- 'borrowed' here would either fail this ALTER outright against a database that already holds a
+-- borrowed row, or pass today and refuse the next borrowAvatar() write with a constraint
+-- violation nobody would connect to this migration.
+--
+-- The rule: a constraint being re-declared is a constraint whose CURRENT definition has to be
+-- read out of the database or out of the LAST migration that touched it, never the first.
 alter table public.client_audiences drop constraint if exists client_audiences_vocabulary_source_check;
 alter table public.client_audiences
   add constraint client_audiences_vocabulary_source_check
   check (vocabulary_source is null
-         or vocabulary_source in ('preset', 'legacy_default', 'typed', 'documents'));
+         or vocabulary_source in ('preset', 'legacy_default', 'typed', 'borrowed', 'documents'));
 
 comment on column public.client_audiences.vocabulary_source is
-  '''preset'' a code preset seeded it; ''legacy_default'' inherited from the old two-lane defaults, recording the status quo rather than a decision; ''typed'' a person wrote it; ''documents'' proposed from the client''s own foundation documents and confirmed by a person. A null vocabulary_confirmed_at with source legacy_default is the case the card must ask about.';
+  '''preset'' a code preset seeded it; ''legacy_default'' inherited from the old two-lane defaults, recording the status quo rather than a decision; ''typed'' a person wrote it; ''borrowed'' copied from another client''s audience for the same avatar slug, the weakest of the five; ''documents'' proposed from this client''s own foundation documents and confirmed by a person. A null vocabulary_confirmed_at with source legacy_default is the case the card must ask about.';
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 4. client_hosts.kind gains 'site'

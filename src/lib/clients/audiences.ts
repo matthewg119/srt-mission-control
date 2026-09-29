@@ -52,12 +52,18 @@ export interface ResolvedAudience {
 
   vocabulary: AudienceVocabulary;
   /**
-   * Where the six nouns came from. ‼️ 'borrowed' is the weakest of the four and is kept distinct
+   * Where the six nouns came from. ‼️ 'borrowed' is the weakest of the five and is kept distinct
    * from 'preset' on purpose: those words were copied off ANOTHER client's audience for the same
    * avatar slug, so it is the one a person should check before a card tells this client what their
    * own buyers are called.
+   *
+   * 'documents' is the Launch Lane: a model read this client's OWN four foundation documents and
+   * proposed the words, and a person confirmed them. Stronger than 'borrowed', which took another
+   * client's words, and weaker than 'typed', which is somebody writing them from knowledge. It is
+   * a separate value rather than 'typed' because this column's whole job is to say where the words
+   * came from, and "a person wrote it" is not true of that path.
    */
-  vocabularySource: "preset" | "legacy_default" | "typed" | "borrowed" | null;
+  vocabularySource: "preset" | "legacy_default" | "typed" | "borrowed" | "documents" | null;
   vocabularyConfirmedAt: string | null;
 
   laneName: string | null;
