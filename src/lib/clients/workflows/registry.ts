@@ -82,6 +82,19 @@ export const CLIENT_WORKFLOWS: Record<string, ClientWorkflow> = {
       return runGbpSocialPosts(ctx);
     },
   },
+  offsite_targets: {
+    key: "offsite_targets",
+    label: "Off-site targets",
+    description:
+      "Read every source the AI engines cited while answering this client's audit questions, roll them up by domain, classify each one, and save the list. Use it when somebody asks where the engines get their answers, or who to approach for a mention.",
+    needs: "an audit on file for this client",
+    // About the engines' sources, not about one buyer.
+    needsAudience: false,
+    run: async (ctx) => {
+      const { runOffsiteTargets } = await import("./offsite-targets");
+      return runOffsiteTargets(ctx);
+    },
+  },
   post_call_email: {
     key: "post_call_email",
     label: "Post-call email",

@@ -31,6 +31,28 @@
 -- client filter. One bad row turns the probe red for every client, so a house offer that
 -- fails it is a house offer that breaks the check for everybody.
 
+-- ‼️ DELETE THEN INSERT, NOT ON CONFLICT, AND THE FIRST ATTEMPT FAILED FOR A REASON WORTH
+-- WRITING DOWN. lead_magnets_placement_key is a PARTIAL unique index --
+-- `... where magnet_key is not null` (docs/2026-09-03-concierge-audience.sql:104-112). ON
+-- CONFLICT infers its arbiter by matching key expressions AND the index predicate, so naming
+-- the six columns without repeating `where magnet_key is not null` matches no index at all:
+-- 42P10, at PLAN time, which aborts the whole file before anything runs.
+--
+-- Repeating the predicate would work and would tie this migration to the exact text of an
+-- index defined in another file. These two keys are NEW and client-null, so nothing is
+-- serving them and there is nothing to protect with an upsert: deleting them first makes the
+-- insert unconditional and the file idempotent, with no inference involved.
+--
+-- Same family as the nap_discrepancies 42P10 this repo already records, one level deeper: that
+-- one was a column list against an expression index, this one is a full match against a
+-- PARTIAL index.
+delete from public.lead_magnets
+ where magnet_key in ('book_consult', 'referral_engine')
+   and client_id is null
+   and vertical is null
+   and treatment is null
+   and category is null;
+
 insert into public.lead_magnets
   (magnet_key, audience, title, promise, cta_label, concierge_entry, category, client_id, vertical, treatment, active, sort_order)
 values
@@ -60,15 +82,7 @@ values
     null, null, null,
     true,
     91
-  )
-on conflict (magnet_key, audience, coalesce(client_id::text, ''), coalesce(vertical, ''), coalesce(treatment, ''), coalesce(category, ''))
-do update set
-  title = excluded.title,
-  promise = excluded.promise,
-  cta_label = excluded.cta_label,
-  concierge_entry = excluded.concierge_entry,
-  active = true,
-  updated_at = now();
+  );
 
 -- `visibility_scan` already exists exactly as a house offer wants it: owner, client-null,
 -- vertical-null, with an asset behind it. It is left alone rather than deleted and rewritten,
@@ -109,6 +123,46 @@ update public.client_pages
 -- The per-page candidate table goes entirely. Its whole purpose was minting five invented
 -- offers per page, and approveMagnetCandidate was its only writer.
 drop table if exists public.page_magnet_candidates;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 2b. The orphans, AFTER the delete
+-- ─────────────────────────────────────────────────────────────────────────────
+--
+-- ‼️ THREE COLUMNS POINT AT A magnet_key AND THE FIRST CUT OF THIS FILE CLEANED ONE. Found by
+-- _probe-concierge-lane.ts on the run straight after the delete, which is exactly what that
+-- check is for: "no chain points at a magnet that does not exist".
+--
+-- A dangling key is not a crash. magnetByKey returns null and every reader degrades to the
+-- ladder, so the failure is a widget quietly offering the generic thing while a column still
+-- says it offers something specific. That is the shape nobody notices.
+
+-- The chain. `visibility_scan` chained to `city_rivals`, which was vertical-scoped and went.
+-- Nulled rather than repointed: what comes after an offer is a decision somebody makes, and
+-- guessing one here would put a second offer in front of a visitor that nobody chose.
+update public.lead_magnets
+   set chains_to_key = null, updated_at = now()
+ where chains_to_key is not null
+   and chains_to_key not in (select magnet_key from public.lead_magnets where magnet_key is not null);
+
+-- The framing pointer, same rule.
+update public.lead_magnets
+   set frames_key = null, updated_at = now()
+ where frames_key is not null
+   and frames_key not in (select magnet_key from public.lead_magnets where magnet_key is not null);
+
+-- ‼️ AND THE CLIENT'S ANCHOR, WHICH IS THE ONE THAT WOULD HAVE BEEN MISSED. client_offers
+-- .magnet_key is what anchorFor() resolves, so a dangling one means the page studio's card
+-- and every "what does this client hand over" read return null. SRT's pointed at
+-- `srt-agency-llc-the-three-pillar-gap-check`, a client-scoped row that was already INACTIVE
+-- before this migration and is now deleted.
+--
+-- Nulled, not repointed at a house offer. Which offer a client anchors on is a decision
+-- setAnchorMagnet exists to record, and picking one on their behalf in a migration is the
+-- same class of silent write this whole file is removing.
+update public.client_offers
+   set magnet_key = null, updated_at = now()
+ where magnet_key is not null
+   and magnet_key not in (select magnet_key from public.lead_magnets where magnet_key is not null);
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 3. The tool lane

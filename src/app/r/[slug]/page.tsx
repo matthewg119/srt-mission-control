@@ -11,6 +11,8 @@ import { ReportHeader } from "@/components/audit-report/ReportHeader";
 import { ScoreGauge } from "@/components/audit-report/ScoreGauge";
 import { BlockBreakdown } from "@/components/audit-report/BlockBreakdown";
 import { PromptTable } from "@/components/audit-report/PromptTable";
+import { SourcesSection } from "@/components/audit-report/SourcesSection";
+import { targetsForReport } from "@/lib/clients/offsite-targets";
 import { CompetitorSection } from "@/components/audit-report/CompetitorSection";
 import { MethodologyFooter } from "@/components/audit-report/MethodologyFooter";
 import { PricingCta } from "@/components/audit-report/PricingCta";
@@ -73,6 +75,12 @@ export default async function ReportPage({ params }: { params: { slug: string } 
             citedDomains={view.citedDomains}
             likelyCompetitors={row.competitors}
           />
+          {/*
+            Where the engines read before answering. The data was always collected and never
+            shown: see SourcesSection. It renders nothing when a report has no citations, which
+            is every report run before the engines started returning them.
+          */}
+          <SourcesSection targets={await targetsForReport(row.id)} />
         </>
       )}
 
