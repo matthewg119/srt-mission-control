@@ -78,6 +78,16 @@ export const NOT_GATED = [
   // client host. A gate exists to stop something publishable from publishing badly; there is
   // nothing publishable here. See src/lib/clients/site-replica.ts.
   "the site replica",
+  // Export (src/lib/hub/page-export.ts, GET /api/clients/[id]/hub/export). A file, handed to
+  // the person who commissioned the page. It writes nothing -- not status, not published_at,
+  // not destination_id -- so there is no publication for a gate to stand in front of and no
+  // baseline for the Day 0 wall to protect.
+  //
+  // ‼️ AND IT MUST NOT BECOME GATED, because gating it is how the gate gets waived out of
+  // habit. A client on Wix cannot publish through us at all; refusing to let them read what
+  // they paid for until a quality verdict passes would make the waiver the normal way to
+  // hand somebody their own pages, and a rail everybody steps over is worse than none.
+  "export",
 ] as const;
 
 export type CheckTier = "block" | "warn";

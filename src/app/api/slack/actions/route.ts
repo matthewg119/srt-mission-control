@@ -660,13 +660,21 @@ async function pageApproveAction(args: {
 
       if (!res.ok) {
         const r = res.refusal;
+        // ‼️ THE DESTINATION REFUSAL SENDS THEM TO THE BOARD, AND IT DOES NOT GROW A SLACK
+        // GRAMMAR FOR CHOOSING. Approve is one press meaning "yes, this page is ready"; a
+        // second question answered by typing a number into the same thread is a different
+        // decision wearing the same clothes, and the bare digits already mean something in
+        // the drafting channel. The picker exists on the board, where the destinations are
+        // visible with their URLs.
         const extra =
-          r.blockedBy === "quality_gate" && r.waivable
-            ? "\n\nIf this is a refusal you mean to overrule, type `waive: <the reason>` in this thread. " +
-              "The reason is recorded on the verdict and posted to the infra channel."
-            : r.blockedBy === "quality_gate" && r.gateReason !== "blocked"
-              ? "\n\nRun `check` again in this thread: the verdict no longer describes what is on the page."
-              : "";
+          r.blockedBy === "destination"
+            ? "\n\nChoose where it goes on the client board and publish it there. Approve cannot pick a domain."
+            : r.blockedBy === "quality_gate" && r.waivable
+              ? "\n\nIf this is a refusal you mean to overrule, type `waive: <the reason>` in this thread. " +
+                "The reason is recorded on the verdict and posted to the infra channel."
+              : r.blockedBy === "quality_gate" && r.gateReason !== "blocked"
+                ? "\n\nRun `check` again in this thread: the verdict no longer describes what is on the page."
+                : "";
         await slack.postThreadReply(args.channel, args.slackTs, `:no_entry: Not published. ${r.error}${extra}`);
         return;
       }

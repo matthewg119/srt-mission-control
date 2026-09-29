@@ -97,13 +97,20 @@ interface Loaded {
   client: HubClient;
   host: string;
   themed: boolean;
-  channel: string;
-  threadTs: string;
+  /**
+   * ‼️ NULLABLE, AND THE CHECK MOVED TO THE ONE CALLER THAT POSTS.
+   * These used to be fatal here, which made rendering a page depend on a Slack env var and
+   * on the client having an ops thread. That was harmless while the only thing rendered was
+   * a Slack upload, and it is wrong now: an export is a file handed to the client, so
+   * "SLACK_CLIENT_ONBOARDING_CHANNEL is not set" is a refusal that has nothing to do with
+   * what was asked for. postPagePreview refuses on its own behalf instead.
+   */
+  channel: string | null;
+  threadTs: string | null;
 }
 
 async function load(clientId: string): Promise<Loaded | { error: string }> {
-  const channel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL;
-  if (!channel) return { error: "SLACK_CLIENT_ONBOARDING_CHANNEL is not set." };
+  const channel = process.env.SLACK_CLIENT_ONBOARDING_CHANNEL ?? null;
 
   const { data } = await supabaseAdmin
     .from("clients")
@@ -114,7 +121,6 @@ async function load(clientId: string): Promise<Loaded | { error: string }> {
     .maybeSingle();
 
   if (!data) return { error: "That client could not be read." };
-  if (!data.ops_thread_ts) return { error: "This client has no ops thread to post into." };
   if (!data.domain) return { error: "No domain on file, so there is no hostname to preview." };
 
   const stored = readTheme(data.theme);
@@ -156,17 +162,30 @@ async function load(clientId: string): Promise<Loaded | { error: string }> {
     host: hub?.host ?? (data.domain as string),
     themed: theme !== null,
     channel,
-    threadTs: data.ops_thread_ts as string,
+    threadTs: (data.ops_thread_ts as string | null) ?? null,
   };
 }
 
 /**
- * Build the standalone file. Exported so it can be rendered without posting.
+ * The page's markup, with no document around it.
+ *
+ * ‼️ EXPORTED SO THE EXPORT LANE DOES NOT RENDER ITS OWN. This was a local inside
+ * renderPagePreview, consumed only by the template literal below. An export that built its
+ * own body would be the second copy of the markup that hub-bodies.tsx's header already
+ * refuses to allow: "a preview that renders its own copy of the markup is a demo mode with
+ * extra steps, and it drifts silently". The same sentence is true of a file we hand a client
+ * to paste into their CMS, and worse, because that one is the page.
+ *
+ * The client and theme come back with it: every consumer needs them to wrap the body, and
+ * loading them twice is two chances to disagree about whether a theme is confirmed.
  */
-export async function renderPagePreview(
+export async function renderPageBody(
   clientId: string,
   page: PreviewPage
-): Promise<{ ok: true; html: string; host: string; themed: boolean } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; body: string; client: HubClient; host: string; themed: boolean }
+  | { ok: false; error: string }
+> {
   const loaded = await load(clientId);
   if ("error" in loaded) return { ok: false, error: loaded.error };
 
@@ -184,6 +203,31 @@ export async function renderPagePreview(
       page,
     })
   );
+
+  return { ok: true, body, client: loaded.client, host: loaded.host, themed: loaded.themed };
+}
+
+/** The style attribute a wrapper needs to carry the client's skin and theme. */
+export function hubStyleAttr(client: HubClient): string {
+  return styleAttr(client);
+}
+
+/** hub.css, for anything building a standalone document around a rendered body. */
+export async function hubStylesheet(): Promise<string> {
+  return hubCss();
+}
+
+/**
+ * Build the standalone file. Exported so it can be rendered without posting.
+ */
+export async function renderPagePreview(
+  clientId: string,
+  page: PreviewPage
+): Promise<{ ok: true; html: string; host: string; themed: boolean } | { ok: false; error: string }> {
+  const rendered = await renderPageBody(clientId, page);
+  if (!rendered.ok) return { ok: false, error: rendered.error };
+  const loaded = { client: rendered.client, host: rendered.host, themed: rendered.themed };
+  const body = rendered.body;
 
   const css = await hubCss();
   const title = `${page.title} · ${loaded.client.displayName}`;
@@ -239,6 +283,13 @@ export async function postPagePreview(
   const loaded = await load(clientId);
   if ("error" in loaded) return { ok: false, error: loaded.error };
 
+  // The two conditions this function, and only this function, actually needs. They used to
+  // live in load() and made every renderer depend on Slack being configured.
+  if (!loaded.channel) return { ok: false, error: "SLACK_CLIENT_ONBOARDING_CHANNEL is not set." };
+  if (!loaded.threadTs) return { ok: false, error: "This client has no ops thread to post into." };
+  const channel = loaded.channel;
+  const threadTs = loaded.threadTs;
+
   const rendered = await renderPagePreview(clientId, page);
   if (!rendered.ok) return { ok: false, error: rendered.error };
 
@@ -263,15 +314,15 @@ export async function postPagePreview(
 
   // Text first, file second: a file upload with a comment renders the comment small and
   // under the attachment, which is the wrong way round for something read on a call.
-  await slack.postThreadReply(loaded.channel, loaded.threadTs, lines.join("\n")).catch(() => {});
+  await slack.postThreadReply(channel, threadTs, lines.join("\n")).catch(() => {});
 
   const res = await slack
     .uploadFile(
-      loaded.channel,
+      channel,
       `${page.slug || "page"}-preview.html`,
       Buffer.from(rendered.html, "utf8"),
       "text/html",
-      loaded.threadTs
+      threadTs
     )
     .catch((e) => ({ ok: false, error: (e as Error).message }));
 

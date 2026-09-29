@@ -293,11 +293,25 @@ export async function POST(
         pageId,
         publish: action === "page_publish",
         by: actor,
+        // Absent until the picker has been touched, which is the normal case for a client
+        // with one destination. publishPage refuses rather than guessing when there are
+        // several, and hands back the list to render.
+        destinationId: typeof body.destinationId === "string" ? body.destinationId : null,
       });
 
       if (!res.ok) {
         const r = res.refusal;
         if (r.blockedBy === "not_found") return NextResponse.json({ ok: false, error: r.error });
+        // ‼️ NOT A 409, AND NOT waivable. The other two refusals are rails: something is
+        // wrong and the page must not go live. This one is a question, so it is a 400 with
+        // the options attached and no waive control anywhere near it -- a "publish anyway"
+        // here would have to pick a domain on somebody's behalf.
+        if (r.blockedBy === "destination") {
+          return NextResponse.json(
+            { ok: false, error: r.error, blockedBy: "destination", choices: r.choices },
+            { status: 400 }
+          );
+        }
         // The board turns blockedBy into the waive control rather than hard-coding the step key.
         return NextResponse.json(
           r.blockedBy === "day_0"
