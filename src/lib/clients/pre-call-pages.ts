@@ -83,7 +83,7 @@ async function frameContext(
   const { loadOffer, isLocked } = await import("./offers");
   const { confirmedAvatarFor } = await import("./avatars");
   const { conciergeTenant } = await import("@/lib/concierge/for-client");
-  const { anchorFor } = await import("@/lib/concierge/magnet-drafts");
+  const { anchorFor } = await import("@/lib/concierge/magnet-anchor");
   const { stepNumber } = await import("@/config/delivery-steps");
 
   const [offer, avatar, tenant, client] = await Promise.all([
@@ -707,22 +707,16 @@ async function draftOne(
     // candidate would otherwise mint a second magnet. Non-fatal, and deliberately so. The page is
     // already saved by this point, so a failure here costs an offer and never the draft, which is
     // the right way round.
+    // ‼️ THE FRAME NO LONGER MINTS A MAGNET, AND THIS IS WHERE IT DID (2026-09-29).
+    // A drafted page used to stage its planned framing as a candidate and approve it straight
+    // through, which was the one insert into lead_magnets. Matthew's call: a page does not get
+    // its own invented offer.
+    //
+    // page_plan.magnet_frame SURVIVES and is still written by `magnet N pick K` at step 21.
+    // It is the framing of the anchor -- the words this page uses to hand over to the house
+    // offer -- and the CTA sentence below is exactly what it is for. What went is the step
+    // that turned that framing into a new row in the catalogue.
     let magnetNote = "";
-    if (!page.leadMagnetKey && row.frame) {
-      const { stageFrameCandidate, approveMagnetCandidate } = await import("@/lib/concierge/magnet-drafts");
-      const staged = await stageFrameCandidate({
-        clientId,
-        pageId: page.id,
-        frame: row.frame,
-        body: drafted.page.answerMd,
-      });
-      if (staged.ok) {
-        const minted = await approveMagnetCandidate({ clientId, pageId: page.id, candidateId: staged.candidateId, by: env.by });
-        if (!minted.ok) magnetNote = minted.error;
-      } else {
-        magnetNote = staged.error;
-      }
-    }
 
     // ‼️ THE CTA SENTENCE LANDS ON THE PAGE HERE, AND AFTER THE MINT RATHER THAN BEFORE IT.
     // The decision was made on the plan row, because it is made while the plan is approved and there

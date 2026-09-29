@@ -268,7 +268,6 @@ async function live() {
     ["page_plan", "post_format"],
     ["page_dataset", "post_format"],
     ["page_dataset", "format_dataset"],
-    ["page_magnet_candidates", "post_format"],
   ] as const) {
     const { error } = await supabaseAdmin.from(table).select(`id, ${column}`).limit(1);
     ok(

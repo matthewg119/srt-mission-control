@@ -78,9 +78,11 @@ export async function capturePage(input: CaptureInput): Promise<void> {
     // is just a bunch of different variation of all of the required datasets".
     const angle = input.planRowId ? await readAngle(input.clientId, input.planRowId) : null;
     const magnetKey = await readOne("client_pages", "lead_magnet_key", input.pageId, input.clientId);
-    const magnetCandidates = input.planRowId
-      ? await magnetsFor(input.clientId, input.planRowId, magnetKey as string | null)
-      : null;
+    // ‼️ THE CANDIDATE CORPUS IS GONE WITH THE TABLE (2026-09-29). This captured all five
+    // offers written for a page, rejects included, because "what made the chosen one better than
+    // the two beside it" was the interesting half. There are no candidates any more: a page hands
+    // over to a house offer, so the only thing to record is which one.
+    const magnetCandidates = null;
     // Which attempt this is. Counted from the runs table rather than held on a counter column: a
     // counter is a second source of truth that drifts the first time a row is inserted by hand.
     const { planRunCount } = await import("./page-plan-runs");
@@ -305,42 +307,6 @@ async function readAngle(clientId: string, planRowId: string): Promise<CapturedA
   };
 }
 
-/**
- * Every magnet offered for this page, marking which one won.
- *
- * ‼️ THE REJECTS ARE THE POINT, the same reasoning candidatesFor already carries for headlines. A
- * corpus of only the chosen offer shows what a good one looks like and says nothing about what made
- * it better than the two beside it.
- */
-async function magnetsFor(
-  clientId: string,
-  planRowId: string,
-  chosenKey: string | null
-): Promise<unknown | null> {
-  const { data, error } = await supabaseAdmin
-    .from("page_magnet_candidates")
-    .select("title, promise, cta_label, concierge_entry, status, minted_magnet_key, rationale")
-    .eq("client_id", clientId)
-    .eq("plan_id", planRowId)
-    .order("created_at", { ascending: true });
-
-  if (error) {
-    console.error(`[page-dataset] magnet candidates read failed: ${error.message}`);
-    return null;
-  }
-
-  const rows = (data ?? []).map((r) => ({
-    title: (r.title as string | null) ?? null,
-    promise: (r.promise as string | null) ?? null,
-    ctaLabel: (r.cta_label as string | null) ?? null,
-    conciergeEntry: (r.concierge_entry as string | null) ?? null,
-    status: String(r.status),
-    chosen: Boolean(chosenKey) && r.minted_magnet_key === chosenKey,
-    rationale: (r.rationale as string | null) ?? null,
-  }));
-
-  return rows.length ? rows : null;
-}
 
 /**
  * The headlines that were offered for this page, marking which one won.

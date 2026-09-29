@@ -54,23 +54,6 @@ export interface MagnetChoiceView {
   deliverable: boolean;
 }
 
-/**
- * One of the five offers drafted FOR a page, before anybody has picked it.
- *
- * ‼️ IT HAS NO magnetKey AND THAT IS THE DIFFERENCE THAT MATTERS. A MagnetChoiceView is a row in
- * the catalogue that any page can name. This is a proposal that exists only for this page and has
- * never been in the catalogue: it gets a key at the moment somebody approves it, which is what
- * mints it. So the dropdown carries `cand:<id>` for these, and the server resolves that into a
- * real key before anything is stored. See resolveMagnetChoice in the hub route.
- */
-export interface MagnetCandidateView {
-  id: string;
-  title: string;
-  promise: string;
-  ctaLabel: string;
-  rationale: string | null;
-}
-
 export interface AuditPromptView {
   text: string;
   block: string | null;
@@ -183,7 +166,6 @@ export function HubForm({
   pages,
   prompts,
   magnets,
-  magnetCandidates,
   day0ArchivedAt,
   day0Source,
   vercelConfigured,
@@ -199,13 +181,6 @@ export function HubForm({
   prompts: AuditPromptView[];
   /** Empty when this client has no concierge_configs row, which the panel says out loud. */
   magnets: MagnetChoiceView[];
-  /**
-   * The offers written for each page, keyed by page id.
-   *
-   * Empty for a page nobody has drafted offers for yet, which the picker answers with a button
-   * rather than with silence. The page studio fills this in automatically when a page is claimed.
-   */
-  magnetCandidates: Record<string, MagnetCandidateView[]>;
   /** NULL means the Day 0 wall is shut and Publish will be refused. */
   day0ArchivedAt: string | null;
   day0Source: string | null;
@@ -240,14 +215,8 @@ export function HubForm({
    * prop would be initialised once and then never update, so [Write five offers] would appear to
    * do nothing until a full page load.
    */
-  const pageCandidates = draft.id ? (magnetCandidates[draft.id] ?? []) : [];
-
   /** The row behind the chosen key, so the panel can say what the pill will read. */
   const chosenMagnet = magnets.find((m) => m.magnetKey === draft.leadMagnetKey) ?? null;
-  /** Or the candidate behind it, when the choice is one of this page's own five. */
-  const chosenCandidate = draft.leadMagnetKey.startsWith("cand:")
-    ? pageCandidates.find((c) => `cand:${c.id}` === draft.leadMagnetKey) ?? null
-    : null;
   const bodyRef = useRef<HTMLTextAreaElement | null>(null);
 
   // ‼️ THE GATE STATE IS FETCHED, NOT PASSED AS A PROP, for the same reason the page body is.
@@ -1136,20 +1105,13 @@ export function HubForm({
                 >
                   <option value="">Let the ladder decide (generic, same on every page)</option>
                   {/*
-                    Written for THIS page and listed first, because that is the whole point: until
-                    now every client saw the same shared catalogue and none of it was about them.
-                    These carry `cand:` and are minted server-side on Save or Draft it.
+                    ‼️ THE `cand:` OPTGROUP AND THE [Write five offers] BUTTON WERE HERE, AND
+                    THEY WENT WITH THE PER-PAGE MAGNET LANE ON 2026-09-29. A page does not get its
+                    own invented offer; it hands over to one of the house offers, or it IS a tool.
+                    The pointer itself, client_pages.lead_magnet_key, was always the right
+                    mechanism and is untouched. Only what can fill it changed.
                   */}
-                  {pageCandidates.length > 0 && (
-                    <optgroup label="Written for this page">
-                      {pageCandidates.map((c) => (
-                        <option key={c.id} value={`cand:${c.id}`}>
-                          {c.title}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                  <optgroup label={pageCandidates.length > 0 ? "Already in the catalogue" : "The catalogue"}>
+                  <optgroup label="The house offers">
                     {magnets.map((m) => (
                       <option key={m.magnetKey} value={m.magnetKey}>
                         {m.title} · {m.scope}
@@ -1159,36 +1121,6 @@ export function HubForm({
                   </optgroup>
                 </select>
 
-                <div className="mt-1 flex items-center gap-2">
-                  <button
-                    type="button"
-                    className="rounded border border-white/15 px-2 py-1 text-xs text-[rgba(255,255,255,0.7)] disabled:opacity-40"
-                    disabled={!draft.id || busy === "page_magnets_draft"}
-                    onClick={() => {
-                      void post({ action: "page_magnets_draft", pageId: draft.id }, "page_magnets_draft");
-                    }}
-                  >
-                    {busy === "page_magnets_draft"
-                      ? "Writing five offers..."
-                      : pageCandidates.length > 0
-                        ? "Write five different ones"
-                        : "Write five offers for this page"}
-                  </button>
-                  {!draft.id && (
-                    <span className="text-xs text-[rgba(255,255,255,0.35)]">
-                      Save the page first. Offers are written for a page, not for a form.
-                    </span>
-                  )}
-                </div>
-
-                {chosenCandidate && (
-                  <p className="mt-1 text-xs text-[rgba(255,255,255,0.45)]">
-                    Pill reads &ldquo;{chosenCandidate.ctaLabel}&rdquo;. {chosenCandidate.promise}{" "}
-                    <span className="text-[rgba(255,255,255,0.35)]">
-                      It joins this client&rsquo;s catalogue when you Save or Draft it.
-                    </span>
-                  </p>
-                )}
                 {chosenMagnet && (
                   <p className="mt-1 text-xs text-[rgba(255,255,255,0.45)]">
                     Pill reads &ldquo;{chosenMagnet.ctaLabel || chosenMagnet.title}&rdquo;.{" "}
@@ -1223,8 +1155,8 @@ export function HubForm({
               value={draft.ctaLine}
               maxLength={90}
               placeholder={
-                chosenCandidate?.ctaLabel
-                  ? `Free: ${chosenCandidate.ctaLabel}`
+                chosenMagnet?.ctaLabel
+                  ? `Free: ${chosenMagnet.ctaLabel}`
                   : "Free: the five questions to ask before you book."
               }
               onChange={(e) => setDraft((d) => ({ ...d, ctaLine: e.target.value }))}
@@ -1360,9 +1292,7 @@ export function HubForm({
               <span className="text-xs text-[rgba(255,255,255,0.4)]">
                 {draft.question.trim()
                   ? `Written from ${visibleSources.length} source${visibleSources.length === 1 ? "" : "s"}` +
-                    (chosenMagnet || chosenCandidate
-                      ? `, toward "${(chosenMagnet ?? chosenCandidate)!.title}"`
-                      : ", toward no particular offer") +
+                    (chosenMagnet ? `, toward "${chosenMagnet.title}"` : ", toward no particular offer") +
                     ". Read every line before you save it."
                   : "Pick a question first."}
               </span>
