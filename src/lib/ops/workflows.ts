@@ -39,8 +39,14 @@ export interface OpsWorkflow {
 /**
  * The registry.
  *
- * ‼️ TWO ENTRIES, AND BOTH ARE OBVIOUSLY NOT ABOUT ONE CLIENT. That is the test for belonging here:
+ * ‼️ THREE ENTRIES, AND NONE OF THEM IS ABOUT ONE CLIENT. That is the test for belonging here:
  * if a workflow has a subject, it is a client workflow and CLIENT_WORKFLOWS is its home.
+ *
+ * srt_foundation_listings looks like an exception and is not. Its subject is SRT, which does have a
+ * clients row, so the tempting place for it is the client registry. It cannot go there:
+ * client_workflow_runs.client_id is NOT NULL and workflowRuns() filters on it, so the run would be
+ * stored and then invisible to the only function that lists runs. The rule this file opens with is
+ * the whole reason it exists, and this entry is the case that proves it.
  */
 export const OPS_WORKFLOWS: Record<string, OpsWorkflow> = {
   day_review: {
@@ -117,6 +123,36 @@ export const OPS_WORKFLOWS: Record<string, OpsWorkflow> = {
         ok: true,
         output: { count: live.length },
         summary: [`*${live.length} open follow-up${live.length === 1 ? "" : "s"}.*`, "", ...named.slice(0, 25)].join("\n"),
+      };
+    },
+  },
+
+  srt_foundation_listings: {
+    key: "srt_foundation_listings",
+    label: "SRT's own foundation listings",
+    description:
+      "Open or refresh SRT's own board of foundation listings: the agency directories, review platforms, software " +
+      "catalogues, AI tool directories, company databases and business directories we should have a record on. " +
+      "Seeds any row that is missing, then prints the next batch strongest domain first, with the one description " +
+      "every submission uses. It submits nothing to anybody.",
+    needs:
+      "SRT's own client row, found by slug. For the description it also needs an offer locked at `offer_locked` and " +
+      "a short offer document on that offer; without them the board still opens and the card says not to submit yet.",
+    run: async () => {
+      const { openSrtListingBoard } = await import("@/lib/clients/foundation-listings");
+      const opened = await openSrtListingBoard();
+      if (!opened.ok) return { ok: false, error: opened.error };
+
+      const { seeded, already, counts, card } = opened.result;
+      const head =
+        seeded > 0
+          ? `${seeded} row${seeded === 1 ? "" : "s"} added to the board, ${already} already there.`
+          : `Nothing new to seed, ${already} rows already on the board.`;
+
+      return {
+        ok: true,
+        output: { seeded, already, live: counts.live, submitted: counts.submitted, missing: counts.missing },
+        summary: `${head}\n\n${card}`,
       };
     },
   },
