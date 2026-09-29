@@ -108,17 +108,53 @@ function buildUrl(
 }
 
 /**
+ * Where an audit report sends somebody, and which presentation they land on.
+ *
+ * ‼️ EVERY AUDIT SURFACE GOES THROUGH THESE TWO CONSTANTS, WHICH IS THE POINT OF THEM BEING
+ * CONSTANTS. The report's Get Started button, the delivery email, the Loom script and the lead
+ * action all resolve through buildOnboarding2Url() below, so switching the winning variant is one
+ * edit here rather than four edits in four lanes that would drift the first time one was missed.
+ *
+ * ‼️ THE FREE-FIRST ROUTE, NOT THE TWO-CARD PICKER (Matthew, 2026-09-29). A reader arriving from an
+ * audit report has just been told they are invisible in AI search; the picker asked them to price a
+ * PRICE_YEAR decision in the same glance as a free one. /onboarding2/free shows the free engine
+ * alone and puts the appointments offer behind its button. /onboarding2 still exists, still works,
+ * and is still what a /pricing link with ?offer= resolves to.
+ *
+ * ‼️ v IS EMITTED EXPLICITLY EVEN THOUGH "1" IS ALSO DEFAULT_VARIANT over in variants.ts. A link
+ * that relies on the default is a link that silently changes meaning the day somebody moves the
+ * default, and these URLs are pasted into emails and Loom scripts that outlive the deploy.
+ */
+export const REPORT_FUNNEL_PATH = "/onboarding2/free";
+export const REPORT_FUNNEL_VARIANT = "1";
+
+/**
  * The signing funnel, for somebody who has already decided.
  *
  * camelCase counts, because that is what src/app/onboarding2/page.tsx reads. See the note at the
  * top of this file before "fixing" the inconsistency with the other builder.
+ *
+ * ‼️ THIS CHANGES REPORTS THAT HAVE ALREADY BEEN SENT, AND THAT IS THE INTENDED BEHAVIOUR RATHER
+ * THAN A SIDE EFFECT. /r/[slug] is server-rendered on every request, so the button is built fresh
+ * from whatever this file says at the moment somebody opens the link. A report mailed last month
+ * and opened tomorrow gets the new funnel. The same property is why PricingCta.tsx's header bans
+ * stating a price or a guarantee on the report at all: a TERM that changes under an already-sent
+ * document is a contradiction, whereas a DESTINATION that changes is just the current front door.
  */
 export function buildOnboarding2Url(
   p: Partial<ReportLinkParams>,
   origin = FUNNEL_ORIGIN,
   utm?: ReportUtm
 ): string {
-  return buildUrl("/onboarding2", p, { user: "userShowed", comp: "compShowed" }, origin, utm);
+  const url = buildUrl(REPORT_FUNNEL_PATH, p, { user: "userShowed", comp: "compShowed" }, origin, utm);
+  // Appended rather than threaded through buildUrl(), which is shared with buildAdsFunnelUrl() and
+  // has no business knowing about variants.
+  //
+  // ‼️ THE ?/& CHECK IS NOT DEFENSIVE PADDING. buildUrl omits the `?` entirely when every param is
+  // empty, and that case is reachable: PricingCta renders on a pending or failed report with no
+  // score, no competitor and no counts, and every prop optional. Without the check that report's
+  // button would point at /onboarding2/freev=1.
+  return `${url}${url.includes("?") ? "&" : "?"}v=${REPORT_FUNNEL_VARIANT}`;
 }
 
 /**
