@@ -188,6 +188,73 @@ export async function attachHost(host: string): Promise<DomainState> {
   return { host, attached: true, verified, misconfigured, target, error: null };
 }
 
+/**
+ * Attach a hostname that REDIRECTS to another one, rather than serving anything itself.
+ *
+ * ‼️ THIS IS HOW www GETS HANDLED, AND WHY THE LAUNCH LANE NEEDS NO SECOND client_hosts ROW.
+ * client_hosts is unique on (client_id, kind), so a client cannot hold two 'site' rows, and
+ * widening that index would collide head-on with the in-flight destinations work which re-keys
+ * it to (client_id, kind, delivery). Vercel will do the redirect itself: POST
+ * /v10/projects/{id}/domains accepts `redirect` and `redirectStatusCode`, so www.example.com
+ * never reaches this application, never resolves a client, and never needs a row.
+ *
+ * 308, not 301: permanent AND method-preserving. A 301 is permitted to turn a POST into a GET,
+ * which would silently break a form posted to the www spelling of the site.
+ *
+ * ‼️ AN EXISTING ATTACHMENT IS NOT RECONFIGURED. If the hostname is already on the project this
+ * returns what is there and says so, the same idempotency split attachHost() draws: "already
+ * ours" and "somebody else's" are different outcomes and a 409 does not separate them. Silently
+ * rewriting a redirect somebody set by hand is the kind of change nobody goes looking for.
+ */
+export async function attachRedirectHost(host: string, redirectTo: string): Promise<DomainState> {
+  const base: DomainState = {
+    host,
+    attached: false,
+    verified: false,
+    misconfigured: null,
+    target: null,
+    error: null,
+  };
+
+  if (host === redirectTo) {
+    return { ...base, error: "A domain cannot redirect to itself." };
+  }
+
+  const cfg = vercelConfig();
+  if (!cfg) return { ...base, error: "HUB_VERCEL_TOKEN or HUB_VERCEL_PROJECT_ID is not set." };
+
+  const existing = await call(`/v9/projects/${cfg.projectId}/domains/${encodeURIComponent(host)}`, cfg);
+  if (existing.status === 200) {
+    const to = (existing.body.redirect as string | null) ?? null;
+    return {
+      ...base,
+      attached: true,
+      verified: existing.body.verified === true,
+      error:
+        to === redirectTo
+          ? null
+          : `${host} is already attached to this project ${to ? `redirecting to ${to}` : "serving directly"}, not redirecting to ${redirectTo}. Left alone.`,
+    };
+  }
+
+  const added = await call(`/v10/projects/${cfg.projectId}/domains`, cfg, {
+    method: "POST",
+    body: JSON.stringify({ name: host, redirect: redirectTo, redirectStatusCode: 308 }),
+  });
+
+  if (added.status !== 200 && added.status !== 201) {
+    const err = added.body.error as { code?: string; message?: string } | undefined;
+    const code = err?.code ?? `http_${added.status}`;
+    const message = err?.message ?? "Vercel refused the domain.";
+    if (code === "domain_already_in_use") {
+      return { ...base, error: `${host} is attached to a different Vercel project or account. ${message}` };
+    }
+    return { ...base, error: `${code}: ${message}` };
+  }
+
+  return { ...base, attached: true, verified: added.body.verified === true };
+}
+
 export interface WantedHost {
   host: string;
   kind: "hub" | "reviews";

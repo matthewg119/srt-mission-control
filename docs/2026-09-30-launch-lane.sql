@@ -195,12 +195,16 @@ alter table public.client_site_pages drop constraint if exists client_site_pages
 alter table public.client_site_pages add constraint client_site_pages_path_check
   check (path = '/' or path ~ '^/[a-z0-9]([a-z0-9-]{0,78}[a-z0-9])?$');
 
--- ‼️ /answers IS RESERVED AND THE DATABASE IS WHERE THAT IS SAID.
--- A static route segment beats a dynamic one in Next, so a site page stored at /answers would
--- be shadowed by the answer index and would render as a 404 nobody could explain.
+-- ‼️ /answers AND /api ARE RESERVED, AND THE DATABASE IS WHERE THAT IS SAID.
+-- /answers because a static route segment beats a dynamic one in Next, so a site page stored
+-- there would be shadowed by the answer index and would render as a 404 nobody could explain.
+-- /api because the bare word is shape-legal above (the middleware allowlist refuses anything
+-- starting '/api/', but a single segment carries no slash), so it would quietly serve a client's
+-- marketing page at their own /api. Not dangerous, just inexplicable at 2am.
+-- Kept in step with RESERVED_PATHS in src/lib/launch/site-pages.ts.
 alter table public.client_site_pages drop constraint if exists client_site_pages_reserved_check;
 alter table public.client_site_pages add constraint client_site_pages_reserved_check
-  check (path <> '/answers');
+  check (path not in ('/answers', '/api'));
 
 alter table public.client_site_pages drop constraint if exists client_site_pages_status_check;
 alter table public.client_site_pages add constraint client_site_pages_status_check
