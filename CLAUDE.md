@@ -4570,3 +4570,148 @@ SLACK_PAGE_STUDIO_CHANNEL=   # C09QPHZGPUY, #aeo-seo-page-drafting. Env-first wi
                              # file saying otherwise was stale and is corrected.
                              # Re-check: bunx tsx --env-file=.env.local scripts/_join-page-studio.ts
 ```
+
+## The Launch Lane (2026-09-30) — a second onboarding path, for clients with no website
+`src/config/launch-steps.ts`, `src/lib/launch/*`, `src/app/dashboard/launch/*`,
+`src/app/api/launch/*`. Migration: `docs/2026-09-30-launch-lane.sql`.
+Probes: `npm run launch:probe`.
+
+The 41-step board assumes a website. It crawls one at `site_dns_intel`, replicates it at
+`site_replica`, asks the client to point three DNS records at us at `dns_records`, and puts the
+pixel on it at `tracking_installed`. A business that has none cannot start. This is the other door:
+**16 steps, on the dashboard, with no Slack anywhere in it.**
+
+### It is a SECOND board, not a `track` flag on the first
+Two reasons, both already written into the Slack lane's own files:
+- `STEP_VERIFIERS` is `Record<StepKey, Verifier>` and exhaustive BY TYPE. A shared registry that
+  dropped a step would break the Slack board's build.
+- `seedDeliverySteps()` re-seeds whenever a client holds fewer rows than `DELIVERY_STEPS.length`,
+  so a client who legitimately skipped nine steps would have them silently re-created.
+
+**What IS shared is the data, deliberately all of it**: `clients`, `client_audiences`,
+`client_offers`, `audience_documents`, `page_sources`, `client_keywords`, `client_hosts`,
+`client_pages`, `concierge_configs`, `day-zero.ts`, and `publishPage()` with both rails intact.
+A client onboarded here is an ordinary `clients` row (`clients.onboarding_lane = 'launch'`), so every
+existing panel, metric and report keeps working without knowing this lane exists.
+
+> ‼️ **`scripts/_probe-launch-isolation.ts` enforces the separation in BOTH directions** and bans
+> the ENGINE, not the data: `step-engine`, `step-verify`, `step-board`, `delivery-checklist`,
+> `config/delivery-steps` and `lib/slack`. It reads dynamic `import()` too, because the Slack lane
+> already breaks its own cycles that way. It is tested against a planted violation.
+
+### The four documents land TWICE, and that is what replaces the site crawl
+`src/lib/launch/documents.ts`. Each of `deep_research`, `avatar_sheet`, `short_offer`,
+`necessary_beliefs` is written to **`audience_documents`** (the framework) AND to **`page_sources`
+with `source_type = 'CLIENT_DOCUMENT'` and `page_id = null`** (the client library that
+page-evidence.ts already documents as "every later page for that client reads it"). Without the
+second write, every page would be drafted from nothing, because `draftPage()` normally reads
+`researchWebsite()`.
+
+- `extractFileText()` does **no model transcription**, so a scanned PDF extracts to nothing. Under
+  200 characters is a refusal, not a stored empty document.
+- The framework row is **not rolled back** if the evidence write fails. There is no transaction
+  across the RPC and the insert; the state is visible and the repair is to upload again.
+
+> ‼️ **A PROVISIONAL AUDIENCE IS CREATED WITH THE CLIENT, AND IT HAS TO BE.** `audience_documents`
+> is keyed on an audience, and the vocabulary proposal READS those documents, so neither can go
+> first. `ensureProvisionalAudience()` writes an UNCONFIRMED row whose six nouns are **empty, not
+> prefilled**: plausible defaults would read as answered everywhere and be nobody's decision, which
+> is exactly what `legacy_default` exists to mark.
+>
+> ‼️ **`confirmVocabulary()` UPDATES that row in place and must never upsert by slug.** The
+> proposal generates its own slug, so an upsert would insert a second audience, demote the first,
+> and orphan all four documents against a row nothing reads. The board would then say the documents
+> were missing while they sat in the database.
+
+### Any niche, without a preset per niche
+`src/lib/launch/vocabulary.ts`. `proposePreset()` is tried FIRST and wins when the vertical is on
+the closed allowlist — no model call, no variance. Otherwise a model reads the client's own
+documents and proposes the `client_audiences` vocabulary, which a person confirms once.
+`vocabulary_source = 'documents'` is a **fifth** value added for this, rather than filing a model
+proposal under `'typed'`, because that column's whole job is to say where the words came from.
+
+> ‼️ **NEVER CALL `proposeVocabulary()` FROM A REQUEST PATH.** That is the read-time derivation
+> `audience-presets.ts` forbids in its header, and it is worse here: the words a client's widget
+> speaks would become whatever the model last said, with nothing recording which were live.
+>
+> ‼️ **`clients.vertical_slug` IS REQUIRED AT INTAKE IN THIS LANE.** In the Slack lane the baseline
+> scan of their website writes it. These clients have no website, and `verticalFor()` refuses on an
+> empty value rather than guessing, because a harvest filed under a guessed vertical poisons a
+> `question_bank` shared with every client in that vertical and has no `client_id` to unpick by.
+
+### One domain, two surfaces
+SRT buys the domain through the **Vercel registrar API** and holds it, so there is no client DNS
+step and nothing to wait for. Domains per project on Pro is unlimited (soft cap 100k), so one
+project serves every client.
+
+```
+clientdomain.com/            client_site_pages  (pasted marketing HTML)
+clientdomain.com/about       client_site_pages
+clientdomain.com/answers     the hub renderer, index
+clientdomain.com/answers/x   the hub renderer + JSON-LD + concierge
+```
+
+- `client_hosts.kind = 'site'`. **The apex gets the row; www does not** — it is attached to Vercel
+  with `redirect` + `redirectStatusCode: 308`, so it never reaches this app and never needs a row.
+  That also keeps this off the `(client_id, kind)` unique index the in-flight destinations work
+  re-keys.
+- **Raw HTML lives in `client_site_pages` and only there.** `skin.ts` still forbids markup in a
+  skin, for the reason it gives: a renderer that could carry its own HTML could silently delete the
+  JSON-LD and heading order that ARE the product. The pasted site sits BESIDE the answer pages.
+- The layout drops the hub shell for `site` hosts (`src/components/hub/hub-shell.tsx`). That works
+  only because `hub.css` touches the document exclusively through `body:has(.hub-root)` and has no
+  bare element selector. **Check that before adding one.**
+- **`/answers` is reserved** in `RESERVED_PATHS` and again in a CHECK, because a static Next segment
+  beats a dynamic one: adding the folder silently stole that URL from any hub client who published a
+  page slugged `answers`. `hub/[host]/answers/page.tsx` falls through to what `[slug]` did.
+
+> ‼️ **`sanitizeSiteHtml()` RUNS ON WRITE AND IS THE ONLY DOOR.** A library parses it, never a
+> regex: `<scr<script>ipt>` defeats the obvious implementation and the probe plants exactly that.
+> The allowlist is wide on purpose — `<style>`, inline styles, inline SVG and `data:` URIs all
+> survive — because a sanitiser that strips everything passes every security check and ships
+> unstyled text. Forms keep their markup and lose their `action`.
+
+### The money path, which is the only one in this repo
+`buyDomain()` writes a `client_domain_orders` row **before** the purchase call, because a buy that
+succeeds at Vercel and fails to return is indistinguishable from one that never happened, and
+without that row the obvious repair is a second charge. It refuses without an `expectedPriceCents`
+the caller was shown. Its fetch has **no timeout**, deliberately: aborting does not cancel the
+order, it only discards our knowledge of it. Env: `VERCEL_REGISTRAR_CONTACT` (one JSON object) plus
+registrar scope on `HUB_VERCEL_TOKEN`.
+
+### Two things that would have been silent
+- **`hub_hits.kind` had a CHECK of `('hub','reviews')`.** Its insert is called from a middleware
+  `waitUntil` whose catch swallows everything so analytics can never break a page. A site host would
+  have served and been crawled perfectly and recorded **zero hits forever**, on the table this
+  product is sold on. Widened here, and `isRealPath()` now knows a site host has two namespaces.
+- **The sitemap and `llms.txt` 404'd for site hosts** and, once fixed, would have listed every
+  answer page one level wrong. `linkBase`/`homeHref` follow the base for the same reason.
+
+### The path allowlist moved and is now testable
+`src/lib/hub/hub-paths.ts` — pure, imports nothing, same posture as `host-classify.ts`.
+`externalPathDecision(path)` returns the **whole** decision in order (`refuse` / `forward_api` /
+`rewrite`).
+
+> ‼️ **`/dashboard` IS SERVED BY THE SHAPE CHECK AND THAT IS NOT A HOLE.** Everything served is
+> rewritten into `/hub/{host}/...`, where it can only be a lookup for a page belonging to that
+> host's client, so it 404s as a missing page. An early version of the probe asserted it was
+> REFUSED; "fixing" the code to match would have replaced the real protection with a denylist. The
+> genuine protection is HUB_SLUG's no-slash rule, which refuses every multi-segment internal route
+> without naming one.
+
+### The concierge answers to the client's name
+`conciergeLaneName()` reads `client_audiences.lane_name` again (reversing the 2026-09-26
+single-name decision, on instruction). **Two retired names, `AI Skin Concierge` and
+`AI Visibility Concierge`, are read as "no opinion"** and fall through to `PRODUCT_CONCIERGE`: every
+med spa audience seeded before that rename still carries one, and a blind reversal would have put it
+back on live client domains. What the widget SAYS was already per-client; only the name was not.
+
+### What this lane deliberately does NOT do
+- No Slack channel, thread, anchor or card. `startPilot({ lane: "launch" })` suppresses exactly the
+  channel and nothing else.
+- No presence sweep, citation cleanup, competitor shortlist or review audit. For a business with no
+  website the presence work is CREATION, which is `gbp_buildout`, not cleanup.
+- No site replica and no pixel on their site: we ARE their site.
+- No GBP API, because none exists here. `gbp_access` and `gbp_buildout` are screenshot-evidence
+  steps filed through `client_docs.delivery_step_key`, exactly as the Slack lane does it. A business
+  with no profile yet needs the OWNER to pass Google's own verification; that cannot be done for them.

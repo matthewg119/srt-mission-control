@@ -238,10 +238,17 @@ alter table public.client_site_pages drop constraint if exists client_site_pages
 alter table public.client_site_pages add constraint client_site_pages_status_check
   check (status in ('draft', 'published', 'archived'));
 
--- A published page has a time; a draft does not claim one.
+-- A published page has a time. Nothing is said about the other two states, on purpose.
+--
+-- ‼️ NOT `(status = 'published') = (published_at is not null)`, WHICH IS THE OBVIOUS VERSION AND
+-- IS WRONG IN ONE DIRECTION. That biconditional also forbids an ARCHIVED page from carrying a
+-- published_at, so taking a live page down would mean erasing the date it went live: the one fact
+-- most worth keeping about a page that is no longer up, and the one a crawler-visibility argument
+-- is later made from. A draft that has never been published simply has null, and a draft that was
+-- published once and reverted keeps its history rather than being forced to lie about it.
 alter table public.client_site_pages drop constraint if exists client_site_pages_published_check;
 alter table public.client_site_pages add constraint client_site_pages_published_check
-  check ((status = 'published') = (published_at is not null));
+  check (status <> 'published' or published_at is not null);
 
 create unique index if not exists client_site_pages_client_path_uidx
   on public.client_site_pages (client_id, lower(path));

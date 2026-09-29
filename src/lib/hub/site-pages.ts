@@ -333,8 +333,13 @@ export async function storeSitePage(args: {
         nav_label: args.navLabel ?? (path.path === "/" ? "Home" : title),
         nav_order: args.navOrder ?? null,
         status: publish ? "published" : "draft",
-        // The CHECK pairs these: published has a time, a draft claims none.
-        published_at: publish ? now : null,
+        // ‼️ OMITTED WHEN NOT PUBLISHING, RATHER THAN SET TO NULL.
+        // An upsert writes only the columns it is given: on a conflict the omitted ones keep their
+        // existing values, and on an insert they take the column default. So reverting a page to
+        // draft leaves the date it first went live intact, which is the fact most worth keeping
+        // about a page that is no longer up. Writing null here would erase it, and the CHECK is
+        // deliberately loose enough to allow that erasure, so this is the only thing preventing it.
+        ...(publish ? { published_at: now } : {}),
         sanitized_note: removed.length ? removed.join("; ") : null,
         created_by: args.by,
         updated_at: now,

@@ -16,6 +16,7 @@
     "trt:run": "bun run scripts/run-trt.ts",
     "trt:owners": "bun run scripts/enrich-trt-owners.ts",
     "migration:check": "bun run scripts/_probe-migration-state.ts",
+    "launch:probe": "bun run scripts/_probe-launch-isolation.ts && bun run scripts/_probe-hub-allowlist.ts && bun run scripts/_probe-site-sanitize.ts && bun run scripts/_probe-concierge-naming.ts",
     "test:artifacts": "bun run scripts/test-onboarding-artifacts.ts",
     "notes:archive": "bun run scripts/export-funding-notes.ts",
     "scraper:disposable": "bun run scripts/refresh-disposable-domains.ts"
