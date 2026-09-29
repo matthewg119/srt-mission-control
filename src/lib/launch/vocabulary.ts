@@ -253,6 +253,62 @@ export async function proposeVocabulary(clientId: string): Promise<ProposalOutco
 }
 
 /**
+ * The empty audience a Launch Lane client starts with.
+ *
+ * ‼️ IT EXISTS TO BREAK A DEADLOCK, NOT TO DECIDE ANYTHING.
+ * audience_documents is keyed on (audience, offer, kind), so nothing can be uploaded until an
+ * audience row exists; and proposeVocabulary() reads those documents. One of the two has to come
+ * first, and an unconfirmed row is the honest way to do it: `confirmed_at` and
+ * `vocabulary_confirmed_at` are null, which is what every downstream reader already gates on, and
+ * the six nouns are left EMPTY rather than guessed.
+ *
+ * ‼️ THE NOUNS ARE NOT PREFILLED WITH PLAUSIBLE DEFAULTS, AND THAT IS THE WHOLE CARE HERE.
+ * Writing "customer" and "service" into them would produce a row that reads as answered
+ * everywhere, renders in a widget, and is nobody's decision. audiences.ts already names that
+ * failure: `legacy_default` exists precisely to mark words that "record the status quo rather
+ * than a decision". Empty is legible; a plausible guess is not.
+ *
+ * Idempotent: a client that already has a primary audience is left exactly as it is.
+ */
+export async function ensureProvisionalAudience(args: {
+  clientId: string;
+  vertical: string;
+  businessName: string | null;
+}): Promise<{ ok: true; audienceId: string; created: boolean } | { ok: false; error: string }> {
+  const { data: existing, error: readErr } = await supabaseAdmin
+    .from("client_audiences")
+    .select("id")
+    .eq("client_id", args.clientId)
+    .eq("is_primary", true)
+    .maybeSingle();
+
+  if (readErr) return { ok: false, error: readErr.message };
+  if (existing) return { ok: true, audienceId: existing.id as string, created: false };
+
+  const now = new Date().toISOString();
+  const { data, error } = await supabaseAdmin
+    .from("client_audiences")
+    .insert({
+      client_id: args.clientId,
+      slug: `${args.vertical}-buyer`.slice(0, 60),
+      label: args.businessName ? `Customers of ${args.businessName}` : "This client's buyers",
+      stance: LAUNCH_STANCE,
+      research_vertical: args.vertical,
+      is_primary: true,
+      // Nothing is confirmed and no vocabulary_source is claimed: no words have been chosen yet.
+      seeded_from: "launch_provisional",
+      seeded_at: now,
+      updated_at: now,
+    })
+    .select("id")
+    .maybeSingle();
+
+  if (error) return { ok: false, error: error.message };
+  if (!data) return { ok: false, error: "The provisional audience was not written back." };
+  return { ok: true, audienceId: data.id as string, created: true };
+}
+
+/**
  * Write the confirmed vocabulary to the client's primary audience row.
  *
  * ‼️ THIS IS THE ONLY WRITER, AND IT ONLY EVER RUNS BEHIND A PERSON.
@@ -302,7 +358,8 @@ export async function confirmVocabulary(args: {
   const now = new Date().toISOString();
 
   const row = {
-    client_id: args.clientId,
+    // client_id is deliberately absent: this UPDATEs a row already belonging to this client, and
+    // re-stating a foreign key in an update payload is how one gets changed by accident.
     slug,
     label: p.label,
     stance: LAUNCH_STANCE,
@@ -327,21 +384,56 @@ export async function confirmVocabulary(args: {
     updated_at: now,
   };
 
-  // ‼️ THE PARTIAL UNIQUE INDEX ON (client_id) WHERE is_primary MEANS THE OLD PRIMARY MUST GO
-  // FIRST. Upserting a second primary against a client that already has one violates it, and the
-  // error PostgREST returns for that reads like a bug rather than like "there is already one".
-  const { error: demoteErr } = await supabaseAdmin
+  // ‼️ IT UPDATES THE EXISTING PRIMARY ROW IN PLACE. IT DOES NOT UPSERT BY SLUG.
+  //
+  // The provisional audience created at provisioning time is what the four foundation documents
+  // are filed against, through audience_documents.audience_id. The proposal generates its own
+  // slug from the documents, which is almost never the provisional one, so an upsert on
+  // (client_id, slug) would INSERT a second row, demote the first, and leave every uploaded
+  // document attached to an audience nothing reads any more. The documents would still be there,
+  // the board would say they were missing, and re-uploading them would be the obvious and wrong
+  // repair.
+  //
+  // Updating in place also keeps the partial unique index on (client_id) where is_primary
+  // satisfied without a demote-then-insert dance that has a window where the client has none.
+  const { data: primary, error: readErr } = await supabaseAdmin
     .from("client_audiences")
-    .update({ is_primary: false, updated_at: now })
+    .select("id")
     .eq("client_id", args.clientId)
     .eq("is_primary", true)
-    .neq("slug", slug);
+    .maybeSingle();
 
-  if (demoteErr) return { ok: false, error: `The existing audience could not be stood down: ${demoteErr.message}` };
+  if (readErr) return { ok: false, error: readErr.message };
+  if (!primary) {
+    return {
+      ok: false,
+      error:
+        "This client has no primary audience to write to. It should have been created with the " +
+        "client. Re-run provisioning, or create one before confirming.",
+    };
+  }
+
+  // A slug collision against one of this client's OTHER audiences would violate
+  // (client_id, slug). Rare, and clearer said than caught.
+  const { data: clash } = await supabaseAdmin
+    .from("client_audiences")
+    .select("id")
+    .eq("client_id", args.clientId)
+    .eq("slug", slug)
+    .neq("id", primary.id as string)
+    .maybeSingle();
+
+  if (clash) {
+    return {
+      ok: false,
+      error: `This client already has another audience with the slug "${slug}". Rename one of them.`,
+    };
+  }
 
   const { data, error } = await supabaseAdmin
     .from("client_audiences")
-    .upsert(row, { onConflict: "client_id,slug" })
+    .update(row)
+    .eq("id", primary.id as string)
     .select("id")
     .maybeSingle();
 

@@ -122,6 +122,21 @@ export interface StartPilotInput {
    * `self_serve` is the legacy /start behaviour, unchanged.
    */
   door?: "booking" | "dashboard" | "self_serve";
+  /**
+   * Which onboarding board this client will be worked on. Defaults to 'slack', so every existing
+   * caller is unchanged.
+   *
+   * ‼️ IT SUPPRESSES EXACTLY ONE THING: THE SLACK OPS CHANNEL.
+   * The Launch Lane has no channel, no anchors and no threads (src/lib/launch/), so creating a
+   * private #srt-{slug} for it would leave an empty room implying a board that does not exist
+   * there, and `ops_channel_id` is WRITE-ONCE, so the row it wrote could not be corrected later.
+   *
+   * Everything else startPilot does is wanted in both lanes and still runs: the row claim and its
+   * slug retry, the seat count, the market overlap check, the subdomain choice, the intake token,
+   * the archive import and the CRM link. This is not a second provisioning path, it is one
+   * provisioning path with one Slack-shaped side effect made optional.
+   */
+  lane?: "slack" | "launch";
 }
 
 export type StartPilotResult =
@@ -428,13 +443,18 @@ export async function startPilot(input: StartPilotInput): Promise<StartPilotResu
   // ‼️ WITH MATTHEW INVITED. A private channel is invisible to anybody not in it, and until
   // 2026-09-15 this call passed no invite, so SRT Agency LLC's board sat in #srt-srt-agency-llc with
   // only the bot in it and "no channel was created" was the only reasonable reading.
+  // ‼️ THE LAUNCH LANE GETS NO CHANNEL. See StartPilotInput.lane. Everything below this block is
+  // lane-agnostic and still runs.
   const owner = onboardingOwnerId();
-  const made = await createOpsChannel(clientId, slug, { name: opsChannelNameFor(slug), invite: owner }).catch(
-    (e) => {
-      warn(`ops channel not created: ${(e as Error).message}`);
-      return null;
-    }
-  );
+  const made =
+    input.lane === "launch"
+      ? null
+      : await createOpsChannel(clientId, slug, { name: opsChannelNameFor(slug), invite: owner }).catch(
+          (e) => {
+            warn(`ops channel not created: ${(e as Error).message}`);
+            return null;
+          }
+        );
   if (made?.inviteError) warn(`could not invite ${owner} into #${made.name}: ${made.inviteError}`);
   const opsChannelId: string | null =
     made?.channelId ??
