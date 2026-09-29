@@ -825,6 +825,86 @@ export function offerFor(key: OfferKey): Offer {
   return found;
 }
 
+// ── The free-first upsell ladder, /onboarding2/free ──────────────────────────
+/**
+ * The two-step add-on offered behind the free card, and every word it may say.
+ *
+ * ‼️ THE LADDER IS THE WHOLE POINT AND IT ONLY WORKS ONE WAY ROUND. The picker at /onboarding2
+ * puts free and paid side by side, so a reader prices a $3,300 decision in the same glance as a
+ * free one. This route shows FREE ALONE, takes the yes, and only then asks the second question.
+ * Nothing here may be reused to put a price on the first screen: that would be the picker again,
+ * with extra steps.
+ *
+ * ‼️ NOT ONE FIGURE IS TYPED IN THIS BLOCK. Every price is a reference to a constant above, for
+ * the reason the header of this file gives at length. If a line below needs a number that does not
+ * already exist up there, the number goes up there first.
+ *
+ * ‼️ IT NAMES THE OUTCOME AND NEVER THE REMEDY (Matthew, 2026-09-29: "keep it vague"). The brief
+ * for this screen said "we will give your money back if we dont". The signed agreement promises
+ * something narrower and specific: REFUND_LINE, the first three months back and we keep working
+ * the rest of the year. A card that promised a full refund would be a promise the document
+ * underneath it withdraws, which is the exact fault PricingCta.tsx's header was written about.
+ *
+ * So the rule, stated once: THIS BLOCK MAY NAME THE OUTCOME AND THE PRICE. IT MAY NOT DESCRIBE A
+ * REMEDY. "5 booked appointments in 90 days, guaranteed" is the outcome and it is sayable, because
+ * it is the construction year_3300.funnelHeadline already renders on the live card. "Money back",
+ * "full refund" and "risk free" are remedies, they are paraphrases of REFUND_LINE, and
+ * delivery-guards.ts masks that sentence EXACT-LITERAL precisely so paraphrases keep failing. If a
+ * remedy ever has to appear here, it arrives as REFUND_LINE verbatim or not at all.
+ */
+export const UPSELL = {
+  /** Step one. The add-on, offered after they have said yes to free. */
+  one: {
+    eyebrow: "One more thing",
+    /**
+     * ‼️ THE SAME CONSTRUCTION AS year_3300.funnelHeadline, NOT A COPY OF ITS STRING. Both are
+     * built from GUARANTEE_COUNT and GUARANTEE_WINDOW, so the day either moves, both move.
+     */
+    headline: `${GUARANTEE_COUNT} booked appointments in ${GUARANTEE_WINDOW}, guaranteed`,
+    /** Matthew's framing, verbatim in shape: free is good, here is what it does not do. */
+    framing:
+      "The AI Referral Engine gets you found and quoted. What it does not do on its own is fill next month's calendar.",
+    price: PRICE_YEAR,
+    priceNote: `Works out at ${PRICE_YEAR_EQUIV}.`,
+    /** The objection-first opener, for the variant that leads on the gap rather than the offer. */
+    objection: "Free gets you found. It does not fill your calendar.",
+    /**
+     * ‼️ THE ONLY THING SAID ABOUT TERMS, AND IT DELIBERATELY SAYS NOTHING. Read the rule over
+     * this block before replacing it with anything that has a number or a mechanism in it.
+     */
+    terms: "We go through the full terms together on the call, before anything is signed.",
+  },
+  /**
+   * Step two. Same offer, second look, with the monthly alternative beside it.
+   *
+   * ‼️ IT DOES NOT VARY BY VARIANT AND THAT IS ON PURPOSE. The toggle is what does the arguing
+   * here, and six wordings of one toggle is a test of nothing. Only the PRESENTATION follows the
+   * variant; every word below is shared.
+   */
+  two: {
+    eyebrow: "Before you go",
+    headline: "Most of the first appointments land inside the 90 days.",
+    /**
+     * ‼️ GUARANTEE_COMMITMENT_NOTE VERBATIM, NOT A REWRITE OF IT (Matthew, 2026-09-29). The brief
+     * asked for "our average turnaround is 60-90 days". That constant already says 30 to 90 and is
+     * already on the live paid card, so a new window here would be the same claim told two
+     * different ways to one reader. Reused rather than restated.
+     */
+    turnaround: GUARANTEE_COMMITMENT_NOTE,
+    /** Above the toggle. Names the choice the toggle is about, so it is not just two buttons. */
+    togglePrompt: "Take the guarantee, or go month to month.",
+  },
+  /**
+   * The last exit, on step two.
+   *
+   * ‼️ IT IS A REAL BUTTON AND IT LEADS SOMEWHERE GOOD. Somebody who taps it starts on
+   * `review_free` and keeps the whole free engine. It is not a dismissal and it must never be
+   * styled as the cheap way out of a modal: the free offer is a real deliverable, nothing expires,
+   * and the ban on attaching scarcity to it (see the note over OFFERS) reaches this button too.
+   */
+  refuseNote: "You keep the AI Referral Engine either way. Nothing expires.",
+} as const;
+
 // ── ChatGPT Ads, the accelerator ────────────────────────────────────────────
 /**
  * ‼️ ADS ARE AN ACCELERATOR NOW, NOT A TIER, AND THEY CARRY NO PRICE (2026-08-25).

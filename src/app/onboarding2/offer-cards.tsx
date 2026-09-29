@@ -285,7 +285,7 @@ function Card({
  * which way the choice went. It is one element behind both labels, which also means the labels never
  * reflow: a background that moved between two differently sized buttons would jog the text.
  */
-function BillingToggle({
+export function BillingToggle({
   current,
   onBilling,
   disabled,
@@ -361,7 +361,7 @@ function BillingToggle({
  * the text of a live node animates nothing; replacing the node lets the mount transition play. The
  * whole block is 150ms, which is under the threshold where a reader starts waiting for it.
  */
-function Price({ billing }: { billing: BillingState }) {
+export function Price({ billing }: { billing: BillingState }) {
   return (
     <div className="mt-4 min-h-[58px]" aria-live="polite">
       <div key={billing.plan} className="animate-[priceIn_150ms_ease-out]">
@@ -397,7 +397,7 @@ function Price({ billing }: { billing: BillingState }) {
  * PRICE to say it is not being charged, which is good news. `struck` strikes the whole LINE in red
  * to say the guarantee is not included on monthly, which is not. They can appear on one card at once.
  */
-function Line({
+export function Line({
   line,
   struck,
   onConcierge,
@@ -499,7 +499,7 @@ function Line({
   );
 }
 
-function Tick() {
+export function Tick() {
   return (
     <svg
       viewBox="0 0 20 20"
@@ -517,7 +517,7 @@ function Tick() {
 }
 
 /** The tick's opposite, same box and same weight so the list does not shift when it swaps. */
-function Cross() {
+export function Cross() {
   return (
     <svg
       viewBox="0 0 20 20"

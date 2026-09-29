@@ -104,6 +104,13 @@ export async function POST(req: NextRequest) {
       agreement_sha256: snapshot.documentSha256,
       offer_key: offer,
       concierge_interest: body.conciergeInterest === true,
+      // ‼️ VALIDATED AGAINST CLOSED LISTS AND NULL ON ANYTHING ELSE, THE WAY `offer` IS. These two
+      // are not authorisation, so an unknown value is not a 400 the way a bad offer is: the worst a
+      // junk `?v=` can do is mislabel a row in a presentation test. But an unvalidated string from
+      // a query param going straight into a column is how a column stops being a closed list, and
+      // then the report that groups by it grows a long tail of one-row buckets nobody can read.
+      funnel_variant: variantOrNull(body.funnelVariant),
+      upsell_outcome: outcomeOrNull(body.upsellOutcome),
       started_ip_hash: ipHash,
       is_demo: isDemo,
       ...attributionForSigning(attribution),
@@ -129,6 +136,26 @@ export async function POST(req: NextRequest) {
     // The browser renders THIS and hashes THIS. It never hashes the DOM.
     agreement: publicAgreement(snapshot),
   });
+}
+
+/**
+ * Which of the six free-first presentations this session saw, or null.
+ *
+ * ‼️ THE LIST IS RESTATED HERE RATHER THAN IMPORTED FROM app/onboarding2/free/variants.ts, AND
+ * THAT DUPLICATION IS DELIBERATE. That module is a "use client" neighbour full of Tailwind class
+ * literals and JSX-shaped records; importing it into a route handler would pull a client module
+ * into the server bundle to read six one-character strings. The cost of the duplication is bounded
+ * because these are not names, they are the first six integers, and the column's comment in
+ * docs/2026-09-29-onboarding2-upsell-variants.sql records the same range.
+ */
+function variantOrNull(v: unknown): string | null {
+  return typeof v === "string" && ["1", "2", "3", "4", "5", "6"].includes(v) ? v : null;
+}
+
+/** Where the upsell ladder ended, or null for a session that never saw it. */
+function outcomeOrNull(v: unknown): string | null {
+  const allowed = ["accepted_year", "accepted_month", "declined", "free_direct"];
+  return typeof v === "string" && allowed.includes(v) ? v : null;
 }
 
 /** The snapshot as the browser gets it. Every field it needs to render and to re-hash. */

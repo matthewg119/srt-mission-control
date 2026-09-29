@@ -69,6 +69,23 @@ export interface Onboarding2SigningRow {
    */
   concierge_interest: boolean;
 
+  /**
+   * Which of the six /onboarding2/free presentations this session saw, "1" through "6".
+   *
+   * ‼️ NULLABLE, AND NULL IS A FACT RATHER THAN A GAP. Every row taken through the two-card picker
+   * at /onboarding2 has no variant, because that screen has none. Back-filling one would be
+   * inventing a presentation somebody never saw.
+   */
+  funnel_variant: string | null;
+  /**
+   * Where the upsell ladder ended: accepted_year, accepted_month, declined, free_direct.
+   *
+   * ‼️ "declined" MEANS THEY TOOK THE FREE ENGINE AFTER SEEING BOTH OFFERS, which is a real
+   * deliverable they keep and nothing about it expires. It is not a lost lead, and a report that
+   * counts it as one is reading this column backwards.
+   */
+  upsell_outcome: string | null;
+
   agreement_snapshot: AgreementSnapshot;
   template_version: string;
   agreement_sha256: string;

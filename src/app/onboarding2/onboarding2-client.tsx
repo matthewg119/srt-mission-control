@@ -48,6 +48,8 @@ import { formatPhoneUS } from "@/lib/clients/normalize";
 import { readAttribution, track } from "@/lib/medspa/pixel";
 import { ChatPanel } from "./chat-bubble";
 import { OfferCards } from "./offer-cards";
+import { FreeFirstPicker, type UpsellOutcome } from "./free/free-first-picker";
+import { variantFor, type VariantKey } from "./free/variants";
 import type { OfferKey } from "@/config/pitch";
 
 const REEF = "#00C9A7";
@@ -151,11 +153,24 @@ export function Onboarding2Funnel({
   report,
   utm,
   presetOffer,
+  picker = "cards",
+  variant = null,
 }: {
   report: Report;
   utm: { source: string; medium: string; campaign: string; content: string };
   /** Chosen on the marketing page, so the picker is skipped. Null means ask. */
   presetOffer: OfferKey | null;
+  /**
+   * Which offer screen this route shows.
+   *
+   * ‼️ DEFAULTED TO "cards" SO /onboarding2's OWN CALL SITE IS UNCHANGED. The two routes share this
+   * whole state machine, the session, the resume path and the rate limits; the only thing that
+   * differs is the screen that asks the question. A second copy of this component would have been a
+   * second place for the resume logic to drift.
+   */
+  picker?: "cards" | "free-first";
+  /** Which of the six free-first presentations. Null on the cards picker, which has none. */
+  variant?: VariantKey | null;
 }) {
   const [stage, setStage] = useState<Stage>("loading");
   const [agreement, setAgreement] = useState<Agreement | null>(null);
@@ -282,7 +297,7 @@ export function Onboarding2Funnel({
    * page mount rather than the tap, so the trap measures what it always measured.
    */
   const start = useCallback(
-    async (offer: OfferKey, conciergeInterest: boolean) => {
+    async (offer: OfferKey, conciergeInterest: boolean, outcome: UpsellOutcome | null = null) => {
       setStarting(true);
       setError(null);
       const res = await post("start", {
@@ -291,6 +306,11 @@ export function Onboarding2Funnel({
         attribution: attribution(),
         offer,
         conciergeInterest,
+        // ‼️ ONLY SENT WHEN THERE IS SOMETHING TO SAY. The cards picker passes neither, so its
+        // insert is byte-identical to what it was, and a database without the two columns still
+        // takes every signing from /onboarding2. See docs/2026-09-29-onboarding2-upsell-variants.sql.
+        funnelVariant: variant,
+        upsellOutcome: outcome,
       });
       if (res?.limited) {
         setStage("limited");
@@ -302,7 +322,7 @@ export function Onboarding2Funnel({
         setStarting(false);
       }
     },
-    [adopt, attribution, post, trap]
+    [adopt, attribution, post, trap, variant]
   );
 
   // ── Resume an open session, or ask which offer ──
@@ -463,7 +483,24 @@ export function Onboarding2Funnel({
             </p>
           </div>
         ) : null}
-        <OfferCards onPick={start} busy={starting} />
+        {/*
+          ‼️ ONE BRANCH, AND `Starting` ABOVE IT IS WHAT MAKES THE LADDER SAFE TO UNMOUNT. The
+          moment any ladder button calls start(), `starting` flips and the branch above this
+          replaces the whole subtree with the wait screen. There is no "close the modal, then show
+          the spinner" sequencing to get wrong, and no dismissal state to thread. What it does
+          require is that the modal's body scroll lock is released in an effect CLEANUP rather than
+          in a close handler, which is why upsell-surface.tsx says so at length.
+        */}
+        {picker === "free-first" ? (
+          <FreeFirstPicker
+            onPick={start}
+            busy={starting}
+            variant={variantFor(variant ?? "1")}
+            business={report.business}
+          />
+        ) : (
+          <OfferCards onPick={start} busy={starting} />
+        )}
         {/*
           The honeypot rides on this screen now that the identity form is gone. POST /start still
           reads company_url_hp and still answers a filled one with a cheerful 200, so keeping the
@@ -562,7 +599,7 @@ export function Onboarding2Funnel({
   );
 }
 
-function Shell({ children }: { children: React.ReactNode }) {
+export function Shell({ children }: { children: React.ReactNode }) {
   return <div className="mx-auto w-full max-w-2xl px-4 py-8 sm:py-12">{children}</div>;
 }
 
@@ -577,7 +614,7 @@ function Shell({ children }: { children: React.ReactNode }) {
  * and it either returns or it does not, and a bar that fills at a rate we invented is a claim about how
  * long something will take that we cannot make. The spinner says "working" and nothing else.
  */
-function Starting() {
+export function Starting() {
   return (
     <Shell>
       <div className="flex flex-col items-center py-16 text-center">
