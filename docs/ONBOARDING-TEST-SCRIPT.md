@@ -3,10 +3,8 @@
 A complete dry run from intake to day thirty. Everything you type is here verbatim. You should
 not need to open another document.
 
-> **‼️ THIS IS THE 41-STEP BOARD, WHICH IS WHAT IS DEPLOYED TODAY.** Stage 13 of the
-> destinations build merges and renames steps down to 37, which renumbers everything from the
-> merge point on. This file is regenerated after that lands. The COMMANDS do not change; the
-> numbers do.
+> **‼️ THIS IS THE 37-STEP BOARD.** The numbers below were printed from `DELIVERY_STEPS` itself
+> rather than written by hand, after the merge landed.
 >
 > Every command below was read out of the source grammar, not written from memory. Where a
 > command has an optional form, the form that works is the one printed.
@@ -216,8 +214,10 @@ Page candidates scored and ranked for the call.
 
 **You type:** nothing.
 
-## 15. `citation_cleanup_list` · auto
-Citation cleanup list built and ranked. *(Renamed to off-site targets in Stage 13.)*
+## 15. `offsite_target_list` · auto
+Off-site targets: listings to fix, listings to claim, cited sources to pitch.
+
+> ‼️ **Renamed from `citation_cleanup_list`.** A Slack card posted before the rename still works: `LEGACY_STEP_KEYS` resolves the old key.
 
 **You type:** nothing.
 
@@ -370,7 +370,7 @@ them. `added` is a human saying so; `verified` is the resolver seeing it. Two di
 
 ---
 
-# Phase 3 — Day 0 and build (steps 28 to 41)
+# Phase 3 — Day 0 and build (steps 28 to 37)
 
 ## 28. `day_zero_archive` · manual · **‼️ THE WALL**
 The Day-0 scan, archived **before any change lands**.
@@ -388,8 +388,10 @@ The Day-0 scan, archived **before any change lands**.
 ## 29. `gbp_buildout` · manual
 Categories, services, photos, Q&A seeded. **[Done]**.
 
-## 30. `citation_cleanup` · manual
-Executed from step 15's list. **[Done].** *(Renamed to off-site executed in Stage 13.)*
+## 30. `offsite_executed` · manual
+The listings fixed and claimed, the sources approached. **[Done]**.
+
+> ‼️ **Renamed from `citation_cleanup`.** Same legacy resolution as step 15.
 
 ## 31. `subdomain_live` · auto then manual
 Subdomain live and verified in Search Console. Gated on the hub CNAME specifically resolving.
@@ -468,35 +470,54 @@ The refusal now names **both** ways forward:
 ## 33. `cards_printed` · manual
 **[Done]**.
 
-## 34. `review_request_configured` · manual
-Set the mode on the board's Review handover panel, and the destination URLs:
+## 34. `review_handover` · manual — **two old steps, merged**
+
+Was `review_request_configured` **and** `referral_engine_handed`. They were always one
+conversation with one person: the named human at the clinic who will actually ask patients for
+reviews. Split, the handover could be ticked while nobody had been told how requests go out.
+
+**On the board's Review handover panel:** set the mode, name the person, and set the destination.
+**In the thread:**
 ```
 review link: https://g.page/r/xxxx/review
 ```
-> ‼️ Without these the review tool's "Post on Google" button never appears. Absent beats wrong:
-> a guessed review URL sends a real customer to somebody else's business.
 
-## 35. `referral_engine_handed` · manual
-Handed to the named person. **[Done]**.
+> ‼️ Without that URL the review tool's "Post on Google" button **never appears** and every
+> customer gets the fallback hint telling her to go and find the review page herself. Absent
+> beats wrong: a guessed URL sends a real customer to somebody else's business.
 
-## 36. `concierge_live` · manual
+The verifier checks all three: the mode, the named person, and the URL. It refuses by name, so a
+refusal tells you which one is missing.
+
+## 35. `concierge_live` · manual
 Audience confirmed, booking destination set, consent copy approved. This is the only thing that
 sets `concierge_configs.enabled`.
 
-## 37. `tracking_installed` · auto then manual
+> ‼️ Manual, and it must not become auto. This is the step that puts a camera in front of a
+> clinic's patients and starts storing photographs of their faces for twenty-four hours.
+
+## 36. `tracking_installed` · auto then manual
 SRT pixel live, first real session seen.
 
-## 38. `self_report_field` · manual
+## 37. `self_report_field` · manual
 Six "how did you hear about us" options on their booking form. **[Done]**.
 
-## 39. `time_log_entries` · auto
-Ticked by `/api/clients/[id]/time-log`. No button: it is not a button press.
+> ‼️ **This is the last step and it is the one that decides whether SRT gets paid.** The
+> guarantee counts an appointment where the patient TELLS them they came from AI. A pixel that
+> never fires costs a nicer monthly report; a booking form that never asks the question means
+> real appointments this work produced cannot be counted.
 
-## 40. `weekly_report` · auto
-Counts the reports that actually fired.
+### ‼️ Three steps that used to be here and are not
 
-## 41. `day_30_date` · manual
-**[Done]**. *(Deleted in Stage 13; day 30 is derived from the Day-0 stamp.)*
+`time_log_entries` and `weekly_report` were predicates about ongoing behaviour rather than work:
+one counted whether the log had rows, the other whether reports were firing. A board is a list of
+things to do, and a permanent row that is true this week and false next week is not one. Both
+already had a nudge in the daily digest, which is where an ongoing fact belongs.
+
+`day_30_date` asked somebody to write down Day 0 plus thirty. `report-reminders.ts` already
+derives it from the `day_zero_archive` stamp and nudges on the exact day.
+
+None of them lost a capability. They stopped being rows on a checklist.
 
 ---
 
@@ -540,10 +561,15 @@ The same data now renders as a section on the public report at `/r/<slug>`:
 > read the URLs, fetched forty of the pages, and stored a **count**.
 
 ### 6. Queue an outreach draft
-*(Stage 10 of the build. Not yet deployed.)*
+Run the workflow **`citation_outreach`**. One reviewed draft per target, with the postal address
+and the opt-out line already in the body.
+
+> ‼️ **It drafts and it does not queue, and that is arithmetic rather than caution.** A target is
+> a DOMAIN and the send queue needs a person. Find the right human, put their address on it, send
+> it from your own mailbox.
 
 ### 7. Submit one foundation listing
-*(Stage 9 of the build. Not yet deployed.)*
+*(Stage 9 of the build, running in a parallel session.)*
 
 ---
 
