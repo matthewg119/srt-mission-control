@@ -249,6 +249,42 @@ export function subdomainDestination(clientId: string, host: string): Destinatio
   };
 }
 
+/**
+ * May a subfolder destination be wired for this client right now?
+ *
+ * ‼️ THE GATE IS ON WIRING, NOT ON PUBLISHING, AND THE DIFFERENCE IS WHOSE PROBLEM IT IS.
+ * A subdomain we serve ourselves: if the crawlers cannot read it, that is our doing and our fix.
+ * A subfolder is proxied through THEIR server, so a closed door means every page we put there is
+ * invisible to the engines from the day it goes live, and nothing we do afterwards changes that.
+ * Wiring one into a closed door is selling somebody a page nobody can read.
+ *
+ * ‼️ AND IT IS FRAMED FOR THE SALE RATHER THAN AS A BLOCKER. Fixing a robots.txt is week
+ * one of the paid work, not a reason they cannot buy it. The refusal says that.
+ *
+ * A door that has never been READ does not refuse. Absent beats forbidden: an unmeasured door is
+ * not evidence of a closed one, and the same rule keeps site_signals and MxVerdict honest.
+ */
+export async function subfolderAllowed(
+  clientId: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { lastDoor } = await import("@/lib/clients/crawler-door");
+  const door = await lastDoor(clientId).catch(() => null);
+
+  if (!door) return { ok: true };
+  if (!door.closed) return { ok: true };
+
+  return {
+    ok: false,
+    error:
+      `The AI crawlers cannot read this client's site right now${
+        door.agents.length ? ` (${door.agents.join(", ")} are disallowed)` : ""
+      }. A subfolder is served through their own server, so every page put there would be ` +
+      `invisible to the engines from the day it went live. Opening that door is week one of the ` +
+      `work, not a reason they cannot buy it. Fix it, re-run the site intel step, and wire this ` +
+      `afterwards.`,
+  };
+}
+
 /** How a destination reads on a card or a picker. The URL its index would have. */
 export function destinationLabel(dest: Destination): string {
   const where = siteUrl(dest).replace(/^https:\/\//, "").replace(/\/$/, "");

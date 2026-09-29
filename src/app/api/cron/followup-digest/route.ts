@@ -66,6 +66,17 @@ ${text}`);
         .catch((e) => console.error("[cron/followup-digest] step digest failed:", (e as Error).message));
     }
 
+    // ‼️ A PASSENGER ON THIS CRON RATHER THAN A SEVENTEENTH ENTRY IN vercel.json, the same
+    // call report-reminders.ts made and for the same reason: this is a Hobby plan that documents
+    // two crons and carries seventeen. It speaks only when a door CLOSES, so most days it posts
+    // nothing at all.
+    const door = await (await import("@/lib/clients/crawler-watch"))
+      .runCrawlerWatch({ dry })
+      .catch((e) => {
+        console.error("[followup-digest] crawler watch failed:", (e as Error).message);
+        return { checked: 0, closed: [] as string[], reopened: [] as string[] };
+      });
+
     const reports = await runClientReportReminders({ dry }).catch((e) => {
       console.error("[followup-digest] client report reminders failed:", (e as Error).message);
       return { checked: 0, reminded: [] };
@@ -171,6 +182,7 @@ ${text}`);
       dry,
       ...result,
       clientReports: { checked: reports.checked, reminded: reports.reminded.length },
+      crawlerDoor: { checked: door.checked, closed: door.closed.length, reopened: door.reopened.length },
       contentDigest: { posted: content.posted.length, skipped: content.skipped },
       weeklyReports: weekly,
       weeklyHeadlines: headlines,
