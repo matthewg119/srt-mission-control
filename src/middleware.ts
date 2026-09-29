@@ -83,6 +83,22 @@ const HIT_ENDPOINT = "/api/internal/hub-hit";
 const CONCIERGE_FRAME = /^\/w\/[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$/;
 
 /**
+ * The subfolder door: /s/{siteKey}, then the hub path under it.
+ *
+ * ‼️ INTERNAL BRANCH ONLY, AND THAT IS NOT A DETAIL. A client proxies
+ * their-site.com/learn to us, so the request arrives on OUR hostname with their path on it.
+ * Allowing /s/* on the external branch would publish every client subfolder on every
+ * client hostname, which is the exact cross-serving the /hub/{host} path segment exists to
+ * prevent. HUB_SLUG forbids a slash, so this can never be reached from outside by accident:
+ * it is refused by the allowlist with no rule of its own.
+ *
+ * ‼️ AND IT IS GATED ON A SHARED SECRET. Internal hosts include *.vercel.app, where the
+ * inner Host header is caller-controlled. Without the header this is a way to read any
+ * client's pages off a deployment URL by guessing a site key.
+ */
+const SITE_PATH = /^\/s\/[a-z0-9][a-z0-9-]{0,62}(?:\/[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?|\/(?:robots\.txt|sitemap\.xml|llms\.txt))?$/;
+
+/**
  * Record one hub request, out of band.
  *
  * WHY HERE. The hub pages are ISR (revalidate = 300), so a server component runs on
@@ -232,6 +248,23 @@ export default function middleware(req: NextRequest, ev: NextFetchEvent) {
   // The hub is never double-served. The same page answering on a noindex host is a
   // canonical mess, and it keeps the two applications disjoint in both directions.
   if (path === "/hub" || path.startsWith("/hub/")) return notFound(false);
+
+  // ── The subfolder door ───────────────────────────────────────────────────
+  //
+  // A client's own server proxies a path to us and this answers it. The response carries
+  // x-robots-tag: noindex on OUR copy, because the canonical is on their origin and two
+  // indexable copies of one page is the duplicate content this whole model refuses.
+  if (path === "/s" || path.startsWith("/s/")) {
+    const secret = process.env.HUB_PROXY_SECRET;
+    // ‼️ UNSET IS CLOSED, NOT OPEN. A missing secret must not mean "no check": that is how
+    // a deployment without the variable set becomes a way to read every client's pages.
+    if (!secret || req.headers.get("x-hub-proxy") !== secret) return notFound(false);
+    if (!SITE_PATH.test(path)) return notFound(false);
+
+    const res = NextResponse.next();
+    res.headers.set("x-robots-tag", "noindex");
+    return res;
+  }
 
   // Unchanged from before the hub existed: NextAuth's own guard, on /dashboard only.
   // Everything else on this host keeps whatever protection it already had.

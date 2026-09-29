@@ -240,6 +240,64 @@ export async function resolveHost(rawHost: string): Promise<HostResolution> {
   return cached(host);
 }
 
+// ────────────────────────────────────────────────────────────────────
+// The subfolder door
+// ────────────────────────────────────────────────────────────────────
+//
+// ‼️ A SECOND KEY INTO THE SAME TABLE, NOT A SECOND TABLE. A subfolder destination is
+// reached at /s/{siteKey} because the client's own server proxies to us: the Host header that
+// arrives is OURS, so there is no hostname to resolve on. Everything else about it -- the
+// client, the theme, the pages -- is identical, which is why this shares toHubClient and the
+// same cache tag rather than growing a parallel resolver.
+
+async function lookupSite(siteKey: string): Promise<HostResolution> {
+  const { data, error } = await supabaseAdmin
+    .from("client_hosts")
+    .select(
+      `id, host, kind, delivery, base_path, public_origin, site_key, enabled, clients!inner(${SELECT})`
+    )
+    .eq("site_key", siteKey)
+    .eq("enabled", true)
+    .maybeSingle();
+
+  // Same split as lookup(): a miss is 404, a failure is 503. An indexed subfolder going 404
+  // during a database blip is the same quiet deindexing, one delivery over.
+  if (error) throw new Error(`[hub/resolve] site lookup failed for ${siteKey}: ${error.message}`);
+  if (!data) return { status: "unknown" };
+
+  const row = data as unknown as Record<string, unknown> & {
+    host: string;
+    kind: HubKind;
+    clients: Record<string, unknown>;
+  };
+  const c = row.clients;
+  if (!c) return { status: "unknown" };
+
+  return {
+    status: "ok",
+    host: row.host,
+    kind: row.kind,
+    client: toHubClient(c),
+    destination: destinationFromRow({ ...row, client_id: c.id }),
+  };
+}
+
+const cachedSite = unstable_cache(lookupSite, ["hub-site"], {
+  revalidate: 300,
+  tags: [HOSTS_TAG],
+});
+
+/**
+ * Resolve a site key to its client.
+ *
+ * Same contract as resolveHost: `unknown` on a miss, THROWS on a failure.
+ */
+export async function resolveSite(rawKey: string): Promise<HostResolution> {
+  const key = rawKey.trim().toLowerCase();
+  if (!key) return { status: "unknown" };
+  return cachedSite(key);
+}
+
 /**
  * Bust the host cache because the CLIENT RECORD changed, not because a host was attached.
  *
