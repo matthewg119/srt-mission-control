@@ -49,6 +49,10 @@ const SHAPE_DUTY: Record<PostFormatId, string> = {
   comparison: "a headline for it names both subjects, or the choice between them",
   decision_guide: "a headline for it names the decision being made, not the category it sits in",
   teardown: "a headline for it quotes the claim being taken apart, in the words it is usually said in",
+  roundup: "a headline for it carries how many, the category, and who the list is for",
+  review: "a headline for it names the one subject and promises a verdict on it",
+  tool: "a headline for it names what the reader will work out, not what the page contains",
+  data_study: "a headline for it leads with the number and what it was measured across",
 };
 
 /**

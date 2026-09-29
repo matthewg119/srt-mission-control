@@ -32,7 +32,12 @@ import { callClaudeJSON } from "@/lib/claude-calls";
 import { hasBannedDash } from "@/lib/copy-guard";
 import { supabaseAdmin } from "@/lib/db";
 import { isAwarenessStage, type AwarenessStage } from "@/lib/audit-engine/awareness";
-import { getPostFormat, isPostFormatId, type PostFormat, type PostFormatId } from "@/config/post-formats";
+import {
+  getPostFormat,
+  isPostFormatId,
+  type PostFormat,
+  type PostFormatId,
+} from "@/config/post-formats";
 import type { LadderRung } from "./offer-ladder";
 
 const MODEL = "claude-sonnet-4-6" as const;
@@ -409,8 +414,22 @@ const AUTO = /^\s*[`*_]*(angles?|magnets?|offers?)\s+auto[`*_]*\s*$/i;
  * "list the angles" would silently redraft all seven pages as list posts. Requiring `all` makes the
  * rewrite-everything verb impossible to type by accident.
  */
-const SHAPE =
-  /^\s*[`*_]*(angles?)\s+all\s+(answer[_ ]first|list|comparison|decision[_ ]guide|teardown)[`*_]*\s*$/i;
+// ‼️ THIS IS THE SECOND COPY OF THE FORMAT LIST AND IT FAILS SILENTLY, WHICH IS WHY A PROBE
+// GUARDS IT. client-headlines.ts holds the other copy as a Record<PostFormatId, string>, so
+// adding a format there is a compile error that names itself. Here it is an alternation inside
+// a regex: add a format to post-formats.ts and forget this line, and `angles all roundup`
+// matches nothing, falls through to the next pattern, and does something else without
+// complaining. A command that quietly does the wrong thing is worse than one that refuses.
+//
+// It stays a literal rather than being built from POST_FORMAT_IDS because a regex assembled by
+// string concatenation puts every backslash one escaping layer away from the thing it protects,
+// and getting that wrong also fails silently. _probe-post-formats.ts asserts that every id in
+// the registry parses through this pattern, which is the check that actually catches the drift.
+//
+// The underscore is relaxed to "underscore or space" so `angles all decision guide` still
+// parses, which is what people type.
+export const SHAPE =
+  /^\s*[`*_]*(angles?)\s+all\s+(answer[_ ]first|list|comparison|decision[_ ]guide|teardown|roundup|review|tool|data[_ ]study)[`*_]*\s*$/i;
 const PICK = /^\s*[`*_]*(angle|magnet|offer)\s+(\d+)\s+pick\s+(\d+)[`*_]*\s*$/i;
 const MORE = /^\s*[`*_]*(angle|magnet|offer)\s+(\d+)\s+more[`*_]*\s*$/i;
 

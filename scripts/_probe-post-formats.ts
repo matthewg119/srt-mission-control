@@ -28,6 +28,7 @@ import {
   spreadFor,
   type PostFormatId,
 } from "../src/config/post-formats";
+import { SHAPE } from "../src/lib/clients/page-angles";
 
 let pass = 0;
 let fail = 0;
@@ -219,6 +220,37 @@ ok("decision_guide maps to Guide", categoryFor({ postFormat: "decision_guide", t
 
 // ‼️ Nothing claims Neighbourhood: it is a property of the keyword, not of the shape.
 ok("no format claims Neighbourhood", !POST_FORMATS.some((f) => f.magnetCategory === "Neighbourhood"));
+
+// ── 8b. The SECOND copy of the id list, in page-angles.ts ───────────────────
+//
+// ‼️ THIS IS THE CHECK THAT CATCHES A SILENT FAILURE, AND IT IS WHY THE REGEX IS ALLOWED TO
+// STAY A LITERAL. `angles all <shape>` is matched by a hand-written alternation in
+// page-angles.ts. client-headlines.ts holds the other copy as a Record<PostFormatId, string>,
+// so forgetting it there is a compile error that names itself; forgetting it in a regex means
+// the command matches nothing, falls through to the next pattern, and quietly does something
+// else. Nothing about that failure looks like a failure, so it needs a test rather than a type.
+section("8b. `angles all <shape>` parses every shape in the registry");
+
+for (const id of POST_FORMAT_IDS) {
+  const typed = `angles all ${id}`;
+  const m = SHAPE.exec(typed);
+  ok(`\`${typed}\` parses`, m !== null && m[2].toLowerCase().replace(/ /g, "_") === id, m ? m[2] : "no match");
+
+  // The underscore is relaxed to a space on purpose, because that is what people type.
+  if (id.includes("_")) {
+    const spaced = `angles all ${id.replace(/_/g, " ")}`;
+    const ms = SHAPE.exec(spaced);
+    ok(
+      `\`${spaced}\` parses to the same shape`,
+      ms !== null && ms[2].toLowerCase().replace(/ /g, "_") === id,
+      ms ? ms[2] : "no match"
+    );
+  }
+}
+
+// The reverse gate. A pattern loose enough to match anything would pass every check above.
+ok("`angles all bogus` is refused", SHAPE.exec("angles all bogus") === null);
+ok("a bare `angles list` is not read as a shape", SHAPE.exec("angles list") === null);
 
 // ── 9. Live: is the magnet a format names actually reachable? ────────────────
 async function live() {
