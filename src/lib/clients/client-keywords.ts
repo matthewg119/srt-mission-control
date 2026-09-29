@@ -26,6 +26,9 @@ import {
   categoriesFor,
   PLAN_KEYWORDS_NEEDED,
   KEYWORD_FLOOR,
+  FAVOURITES,
+  OTHER_CATEGORY,
+  isRelevantKeyword,
   categoryLabel,
   classifyCategory,
   classifyUse,
@@ -50,6 +53,8 @@ import {
   type StoredKeyword,
 } from "./keyword-expansion";
 import { KeywordRunRecorder, recordKeywordDecisions, recordKeywordRun } from "./keyword-dataset";
+import { SELECTION_TARGET } from "./keyword-cards";
+import { stepNumber } from "@/config/delivery-steps";
 
 const MODEL = "claude-sonnet-4-6" as const;
 
@@ -1076,6 +1081,7 @@ export async function keywordCardLines(clientId: string): Promise<string[]> {
       audienceConfirmed: ctx.audienceConfirmed,
       city: ctx.city,
       vocab: vocabFor(ctx, loaded.rows),
+      picked: await selectedCountFor(clientId),
     },
     loaded.rows,
     ctx.categories
@@ -1167,21 +1173,45 @@ export async function verifyKeywordSet(clientId: string): Promise<KeywordCheck> 
     return {
       ok: false,
       broken: false,
-      found: `${kept} keyword${kept === 1 ? " has" : "s have"} been kept, and the plan needs ${PLAN_KEYWORDS_NEEDED}`,
+      found: `${kept} keyword${kept === 1 ? " has" : "s have"} been picked, and the plan needs ${PLAN_KEYWORDS_NEEDED}`,
       todo:
-        `Paste the Google screenshot for a few more of the shortlist in this thread, no caption needed, and :white_check_mark: the ones worth a page. ` +
-        "`keywords shortlist` reprints them.",
+        "`keywords pick:` a few more, one per line, or `keywords` to see the set and " +
+        "`keywords pick 3, 7, 12` to take them by number.",
     };
+  }
+
+  // ‼️ THE PLAN'S OWN VERDICT, ASKED HERE WHERE IT CAN STILL BE ACTED ON. A pick of fifteen good
+  // phrases can satisfy every count above and still leave step 21 with no pillar, because a pillar
+  // has to be a NAMING variant and supports are capped per category. Refusing there, four steps
+  // later, with the offer already locked, is a worse place to find out. Gated on kept > 0, so every
+  // client from before the picking existed is untouched.
+  if (kept > 0) {
+    const { offerPool } = await import("./pre-call-pages");
+    const { selectOfferPlan, PRE_CALL_SUPPORTS } = await import("./page-plan");
+    const pooled = await offerPool(clientId);
+    // An unreadable pool is not evidence that the picks are wrong. It says so at step 21, where the
+    // plan is actually built; refusing the tick over it would block the step on a different fault.
+    if (!("error" in pooled)) {
+      const plan = selectOfferPlan(pooled.pool, { city: pooled.city });
+      if (plan.fix) {
+        return {
+          ok: false,
+          broken: false,
+          found: `${kept} picked, but they cannot fill a pillar and ${PRE_CALL_SUPPORTS} supports yet`,
+          todo: plan.fix,
+        };
+      }
+    }
   }
 
   return {
     ok: true,
     evidence: [
       `${tally.queries} query rows in client_keywords, ${tally.approvedQueries} approved`,
-      `${tally.relevantApproved} approved queries are about ${c.ctx.treatment}; the plan needs 9`,
+      `${tally.relevantApproved} approved queries are about ${c.ctx.treatment}; the plan needs ${PLAN_KEYWORDS_NEEDED}`,
       kept > 0
-        ? `${kept} kept after looking at their results pages, which is what step 21 plans from`
-        : "none kept yet, so step 21 will plan from the approved set",
+        ? `${kept} picked, which is what step ${stepNumber("pre_call_pages")} plans from`
+        : `none picked yet, so step ${stepNumber("pre_call_pages")} would plan from all ${tally.approvedQueries} approved rows`,
     ],
   };
 }
@@ -1192,6 +1222,24 @@ export async function verifyKeywordSet(clientId: string): Promise<KeywordCheck> 
  * Tolerant: a database without docs/2026-09-27-keyword-decision-cards.sql has kept none, which is
  * true of every client on it, and must not fail the step's verifier.
  */
+/**
+ * Which rows are kept, by id.
+ *
+ * Tolerant in the same way selectedCountFor is: a database without the decision-cards migration has
+ * kept nothing, which is true of every client on it, and must not turn into an error upstream.
+ */
+async function selectedIdsFor(clientId: string): Promise<Set<string>> {
+  const { data, error } = await supabaseAdmin
+    .from("client_keywords")
+    .select("id")
+    .eq("client_id", clientId)
+    .not("selected_at", "is", null)
+    .is("dropped_at", null)
+    .range(0, 2999);
+  if (error) return new Set();
+  return new Set((data ?? []).map((r) => r.id as string));
+}
+
 async function selectedCountFor(clientId: string): Promise<number> {
   const { count, error } = await supabaseAdmin
     .from("client_keywords")
@@ -1306,7 +1354,23 @@ export async function planKeywords(
  * after the freeze makes it unfixable. They stay on planKeywords, deliberately.
  */
 export async function selectedKeywords(clientId: string): Promise<
-  | { ctx: KeywordContext; rows: StoredKeyword[]; vocab: string[]; curated: boolean; approvedTotal: number }
+  | {
+      ctx: KeywordContext;
+      rows: StoredKeyword[];
+      vocab: string[];
+      curated: boolean;
+      approvedTotal: number;
+      /**
+       * Every approved row, whether it was picked or not.
+       *
+       * ‼️ THE PAGE AIMED NARROW, THE SYNONYMS READ WIDE, AND THEY ARE NOT THE SAME LIST. `rows` is
+       * what a page may be AIMED at. This is what counts as another way of saying it: the placement
+       * check at the gate treats a page's secondary keywords as the phrase family it is allowed to
+       * satisfy the target with, so narrowing that family to the picks would make the gate demand
+       * the exact phrase and punish a page for saying the same thing in the market's own words.
+       */
+      all: StoredKeyword[];
+    }
   | { error: string }
 > {
   const broad = await planKeywords(clientId);
@@ -1328,16 +1392,16 @@ export async function selectedKeywords(clientId: string): Promise<
     if (!/does not exist|schema cache/i.test(error.message)) {
       console.error("[client-keywords] selected read failed:", error.message);
     }
-    return { ...broad, curated: false, approvedTotal: broad.rows.length };
+    return { ...broad, curated: false, approvedTotal: broad.rows.length, all: broad.rows };
   }
 
   const kept = new Set((data ?? []).map((r) => r.id as string));
   const rows = broad.rows.filter((r) => kept.has(r.id));
 
   // Nothing kept yet: the whole approved set, and the flag says so out loud.
-  if (!rows.length) return { ...broad, curated: false, approvedTotal: broad.rows.length };
+  if (!rows.length) return { ...broad, curated: false, approvedTotal: broad.rows.length, all: broad.rows };
 
-  return { ...broad, rows, curated: true, approvedTotal: broad.rows.length };
+  return { ...broad, rows, curated: true, approvedTotal: broad.rows.length, all: broad.rows };
 }
 
 /**
@@ -1353,7 +1417,7 @@ export function poolLine(pool: { curated: boolean; rows: readonly unknown[]; app
   // inserted, and a hard-coded 12 here would be wrong the next time somebody adds a step before it.
   // The command names itself, which is what the reader needs anyway.
   return pool.curated
-    ? `_Planned from the ${pool.rows.length} keyword${pool.rows.length === 1 ? "" : "s"} you kept after looking at their results pages._`
+    ? `_Planned from the ${pool.rows.length} keyword${pool.rows.length === 1 ? "" : "s"} you picked._`
     : `_Planned from all ${pool.approvedTotal} approved keywords, because none have been kept yet. Paste each Google screenshot in the keyword thread and :white_check_mark: the ones worth a page._`;
 }
 
@@ -1488,7 +1552,11 @@ export async function handleKeywordThreadReply(input: {
         ? addCommand(input.clientId, cmd.phrases[0], input.by)
         : addManyCommand(input.clientId, cmd.phrases, input.by);
     case "pick":
-      return pickCommand(input.clientId, cmd.phrases, input.by);
+      return pickCommand(input.clientId, cmd.phrases, input.by, cmd.via ?? "pick");
+    case "pick_ranks":
+      return pickRanksCommand(input.clientId, cmd.ranks, input.by);
+    case "list":
+      return listCommand(input.clientId);
     case "variations":
       return variationsCommand(input.clientId, input.by);
     case "delete_all":
@@ -1660,10 +1728,19 @@ async function approveCommand(clientId: string, by: string, scope: ApproveScope 
       ? " you picked"
       : " as shown";
 
+  // ‼️ WHAT APPROVING IS FOR, SAID EVERY TIME, BECAUSE THE NUMBER LOOKS LIKE A DECISION AND IS NOT.
+  // "Approved 355 queries" reads as 355 pages being planned, and that is exactly what used to
+  // happen. Approving is BREADTH: it is the pool step 13 freezes at Day 0 as the baseline this
+  // client is measured against for ninety days, which is why the bare form is still allowed to be
+  // blunt. Choosing is a different verb and the line says so.
+  const purpose = scope
+    ? ""
+    : `\n_That is the measurement pool step ${stepNumber("custom_question_set")} freezes at Day 0. It does not choose the pages: \`keywords pick:\` does._`;
+
   return {
     message:
       `:white_check_mark: *Approved ${n} quer${n === 1 ? "y" : "ies"}*${scoped}. Hooks are kept for ads and emails and are ` +
-      "not part of it.\nChecking the set now. The step ticks itself if it passes and says why if it does not.",
+      `not part of it.${purpose}\nChecking the set now. The step ticks itself if it passes and says why if it does not.`,
     after: async () => {
       const { setDeliveryStep } = await import("./delivery-checklist");
       const res = await setDeliveryStep({ clientId, stepKey: "keyword_set", transition: "complete", actor: by });
@@ -1708,12 +1785,7 @@ async function dropCommand(clientId: string, ranks: number[], by: string): Promi
   };
 }
 
-async function addCommand(
-  clientId: string,
-  phrase: string,
-  by: string,
-  opts?: { approve?: boolean }
-): Promise<KeywordReply> {
+async function addCommand(clientId: string, phrase: string, by: string): Promise<KeywordReply> {
   const c = await keywordContext(clientId);
   if (!c.ok) return { message: `:warning: Not added. Missing: ${c.missing.join("; ")}.` };
   const loaded = await loadKeywords(clientId);
@@ -1728,24 +1800,15 @@ async function addCommand(
   const normalized = normalizePhrase(phrase);
   const existing = loaded.rows.find((r) => r.normalized === normalized && r.use === use);
   if (existing && !existing.dropped) {
-    // ‼️ `pick:` SELECTS A ROW THAT IS ALREADY THERE, AND WITHOUT THIS IT DID NOTHING AT ALL.
-    // Measured on SRT Agency 2026-09-24: fifteen phrases had been added earlier, so every one hit
-    // this branch, returned "Already in the set", and the approve never ran. The reply said
-    // "0 of 15 added" and the shortlist stayed empty, which reads as the paste being ignored twice.
-    // Being in the set and being CHOSEN are different facts, and `pick` is about the second.
-    if (opts?.approve && use === "query" && !existing.approved) {
-      const now = new Date().toISOString();
-      const { error } = await supabaseAdmin
-        .from("client_keywords")
-        .update({ approved: true, approved_at: now, approved_by: by, updated_at: now })
-        .eq("id", existing.id);
-      if (error) return { message: `:warning: ${existing.phrase} could not be selected: ${error.message}` };
-      return { message: `:white_check_mark: Selected *${existing.phrase}*, already in the set.` };
-    }
-    if (opts?.approve && existing.approved) {
-      return { message: `:white_check_mark: Selected *${existing.phrase}*, already in the set.` };
-    }
-    return { message: `Already in the set as *${existing.rank}. ${existing.phrase}* (${existing.origin}).` };
+    // ‼️ `add:` STORES AND SAYS SO, AND CHOOSING IS A DIFFERENT VERB. Being in the set and being
+    // CHOSEN are different facts; `pick:` is about the second and does its own bulk write. This
+    // branch used to carry an `approve` flag for pick's sake, which is how one paste could report
+    // "0 of 15 added" on a run that had worked: the count was read off these reply strings.
+    return {
+      message:
+        `Already in the set as *${existing.rank}. ${existing.phrase}* (${existing.origin}). ` +
+        "`keywords pick:` the same line to choose it for the pages.",
+    };
   }
 
   const vocab = vocabFor(c.ctx, loaded.rows);
@@ -1766,16 +1829,15 @@ async function addCommand(
     score: 0,
   };
   const score = scoreKeyword(base, spec?.intent ?? 0);
-  // He said it, so it joins an approved set as approved. A hook never joins the approval.
+  // He said it, so it joins an approved set as approved. A hook never joins the approval: it is not
+  // a thing a page can be aimed at.
   //
-  // ‼️ AND `keywords pick:` APPROVES REGARDLESS, WHICH IS THE WHOLE DIFFERENCE BETWEEN THE TWO VERBS.
-  // The condition below asks whether an approval already EXISTS to join, which is right for `add:`
-  // and silently wrong for the first paste on a new client: at zero approved it stores every phrase
-  // and selects none, so the next `keywords shortlist` answers "no approved queries yet" about
-  // fifteen phrases somebody just chose. Measured on SRT Agency, 2026-09-24. A hook still never
-  // joins the approval, whichever verb was typed: it is not a thing a page can be aimed at.
-  const setApproved =
-    use === "query" && (opts?.approve === true || loaded.rows.some((r) => r.approved && !r.dropped));
+  // ‼️ IT ASKS WHETHER AN APPROVAL EXISTS TO JOIN, WHICH IS RIGHT FOR `add:` AND WAS NEVER RIGHT FOR
+  // A PICK. On a client at zero approved, which is every client the first time, this stores the
+  // phrase and approves nothing, so the next `keywords shortlist` answers "no approved queries yet"
+  // about phrases somebody just typed. That is why `pick` is its own path with its own bulk write
+  // rather than a flag threaded through here. Measured on SRT Agency, 2026-09-24.
+  const setApproved = use === "query" && loaded.rows.some((r) => r.approved && !r.dropped);
   const now = new Date().toISOString();
 
   let rank: number;
@@ -1843,19 +1905,14 @@ async function addCommand(
  * rules one phrase does (the filter, query or hook, approved with an approved set), and the reply
  * is one summary rather than thirty messages.
  */
-async function addManyCommand(
-  clientId: string,
-  phrases: readonly string[],
-  by: string,
-  opts?: { approve?: boolean }
-): Promise<KeywordReply> {
+async function addManyCommand(clientId: string, phrases: readonly string[], by: string): Promise<KeywordReply> {
   const added: string[] = [];
   const hooks: string[] = [];
   const already: string[] = [];
   const refused: string[] = [];
 
   for (const phrase of phrases) {
-    const res = await addCommand(clientId, phrase, by, opts);
+    const res = await addCommand(clientId, phrase, by);
     const m = res.message;
     if (m.startsWith(":white_check_mark:")) {
       const label = m.match(/\*([^*]+)\*/)?.[1] ?? phrase;
@@ -1871,12 +1928,12 @@ async function addManyCommand(
   const list = (items: string[]) => items.slice(0, 40).map((i) => `  • ${i}`).concat(items.length > 40 ? [`  • and ${items.length - 40} more`] : []);
   return {
     message: [
-      // ‼️ "added" IS THE WRONG WORD FOR A PICK AND IT SAID "0 of 15" ON A RUN THAT WORKED. Under
-      // `pick:` most rows are usually already in the set, so what happened to them is that they were
-      // SELECTED, not added, and a count of additions reads as nothing having happened.
-      opts?.approve
-        ? `*${added.length + hooks.length} of ${phrases.length} selected*, each ranked like evidence because you said it.`
-        : `*${added.length + hooks.length} of ${phrases.length} added*, each ranked like evidence because you said it.`,
+      // ‼️ THIS COUNT IS ADDITIONS AND NOTHING ELSE, WHICH IS WHY `pick` NO LONGER COMES THROUGH
+      // HERE. Under a pick most rows are already in the set, so a count of additions reads as
+      // nothing having happened, and it once said "0 of 15" on a run that had worked. `add:` is
+      // honestly described by this number; a pick is not.
+      `*${added.length + hooks.length} of ${phrases.length} added*, each ranked like evidence because you said it.`,
+      ...(already.length ? ["_`keywords pick:` the same list to choose them for the pages._"] : []),
       ...(added.length ? ["*Queries* (can become a page's keyword):", ...list(added)] : []),
       ...(hooks.length
         ? ["*Hooks* (marketing lines: kept for ads and emails, never a page's keyword):", ...list(hooks)]
@@ -1889,89 +1946,305 @@ async function addManyCommand(
 }
 
 /**
- * `keywords pick:` then the list. Add and SELECT in one move, then hand back the numbers.
+ * `keywords pick:` then the list, or `keywords pick 3, 7, 12`. Store, approve and KEEP in one move.
  *
- * ‼️ THE PASTE IS THE SELECTION, AND THAT IS THE WHOLE POINT. Pasting fifteen chosen phrases and
- * then being told there is nothing to shortlist is not a smaller problem than being told nothing at
- * all: it reads as the system losing them. addCommand only approved into an approval that already
- * existed, so on a client at zero approved, which is every client the first time, a paste selected
- * nothing. `pick` says what the paste already meant.
+ * ‼️ THE PASTE IS THE SELECTION, AND UNTIL 2026-09-28 IT WAS NOT. This printed "15 selected" and
+ * wrote `approved` only. `selected_at` had no typed door anywhere in the repo: the sole writer sat
+ * behind a ✅ on a per-keyword card, and a card only exists once somebody has pasted that keyword's
+ * Google screenshot. So step 21 went on planning seven pages from every approved row. Measured on
+ * SRT Agency: 355 approved, 149 of them a model's own proposals, 0 selected. `selectKeywordIds` is
+ * the door, and it lives in keyword-decisions.ts beside the reaction that takes the same decision.
  *
- * ‼️ IT PRINTS THE SHORTLIST NUMBERS, NOT THE RANKS. `keywords serp N` takes a position in
- * shortlistOf()'s output, which is deduped by subject and capped, and the ranks the add path prints
- * are something else entirely. Handing back the wrong number is how somebody screenshots the wrong
- * keyword and never finds out.
+ * ‼️ IT APPROVES THE WHOLE SET AS WELL, AND THE TWO POOLS ARE NOT THE SAME POOL. `approved` is the
+ * BREADTH the Day-0 tracked question set is frozen from, and step 13 runs inside the very transition
+ * that ticks this step, so narrowing it here would permanently shrink what this client can be
+ * measured on for ninety days, after the freeze makes it unfixable. `selected` is the handful the
+ * PAGES are planned from. One command sets both correctly, and the reply names both: a reply that
+ * mentioned only the wide number would read as exactly the bug this replaced.
+ *
+ * ‼️ ONE PASS, NOT addManyCommand. That helper classified its own results by sniffing the prefix of
+ * the reply string it had just built, which is how a run that worked reported "0 of 15 added", and
+ * it re-read all 363 rows once per phrase.
  */
-async function pickCommand(clientId: string, phrases: readonly string[], by: string): Promise<KeywordReply> {
-  const added = await addManyCommand(clientId, phrases, by, { approve: true });
-  // A refusal from the add path (no locked offer, unreadable table) is returned as it stands: it
-  // already names what is missing and there is nothing to be numbered.
-  if (added.message.startsWith(":warning:")) return added;
+async function pickCommand(
+  clientId: string,
+  phrases: readonly string[],
+  by: string,
+  via: "pick" | "approve" = "pick"
+): Promise<KeywordReply> {
+  const c = await keywordContext(clientId);
+  if (!c.ok) return { message: `:warning: Nothing picked. Missing: ${c.missing.join("; ")}.` };
+  const loaded = await loadKeywords(clientId);
+  if ("error" in loaded) return { message: `:warning: ${loaded.error}. ${TABLE_HINT}` };
 
-  const { finalistsFor } = await import("./keyword-strategy");
-  const res = await finalistsFor(clientId);
-  if (!res.ok) {
-    return {
-      message: [added.message, "", `_The shortlist could not be read back: ${res.error}_`].join("\n"),
-      after: added.after,
+  const vocab = vocabFor(c.ctx, loaded.rows);
+  const { isObjection } = await import("./harvest");
+  const now = new Date().toISOString();
+
+  const wanted: string[] = [];
+  const fresh: Record<string, unknown>[] = [];
+  const freshRows: Array<{ phrase: string; category: string; rank: number; score: number; use: KeywordUse }> = [];
+  const hooks: string[] = [];
+  const refused: string[] = [];
+  const seen = new Set<string>();
+  let nextRank = Math.max(0, ...loaded.rows.map((r) => r.rank ?? 0));
+
+  for (const raw of phrases) {
+    const phrase = cleanPhrase(raw);
+    const use = classifyUse("query", phrase);
+    const fault = keywordFault(phrase, use);
+    if (fault) {
+      refused.push(`${raw.slice(0, 80)} (reads as ${fault.replace(/_/g, " ")})`);
+      continue;
+    }
+
+    const normalized = normalizePhrase(phrase);
+    const key = `${normalized}|${use}`;
+    if (!normalized || seen.has(key)) continue;
+    seen.add(key);
+
+    // ‼️ A HOOK IS STORED AND NEVER KEPT, whichever verb was typed. It is a marketing line, so it
+    // can never be a page's keyword, and putting it in the selected set would aim a page at
+    // something nobody searches for.
+    if (use === "hook") hooks.push(phrase);
+    else wanted.push(normalized);
+
+    if (loaded.rows.some((r) => r.normalized === normalized && r.use === use)) continue;
+
+    nextRank += 1;
+    const category = classifyCategory(phrase, c.ctx.categories, vocab);
+    const spec = c.ctx.categories.find((s) => s.key === category);
+    const base: KeywordCandidate = {
+      phrase,
+      normalized,
+      category,
+      use,
+      origin: "manual",
+      frequency: 1,
+      intent: spec?.intent ?? 0,
+      objection: isObjection(phrase),
+      currentlyNamed: null,
+      sourceUrl: null,
+      score: 0,
     };
+    const score = scoreKeyword(base, spec?.intent ?? 0);
+    fresh.push({
+      client_id: clientId,
+      phrase,
+      normalized,
+      category,
+      use,
+      origin: "manual",
+      audience: c.ctx.audience,
+      offer_fingerprint: c.ctx.fingerprint,
+      score,
+      rank: nextRank,
+      awareness_stage: stageOf(phrase),
+      updated_at: now,
+    });
+    freshRows.push({ phrase, category, rank: nextRank, score, use });
   }
 
-  const picked = new Set(phrases.map((p) => normalizePhrase(p)));
-  const lines: string[] = [
-    added.message,
-    "",
-    `*Selected, and these are the numbers \`keywords serp N\` takes:*`,
-    "",
-  ];
+  if (fresh.length) {
+    const { error } = await supabaseAdmin.from("client_keywords").insert(fresh);
+    if (error) return { message: `:warning: Nothing picked: ${error.message}` };
+    await recordKeywordDecisions({
+      clientId,
+      action: "add",
+      actor: by,
+      rows: freshRows.map((r) => ({
+        id: "",
+        phrase: r.phrase,
+        category: r.category,
+        rank: r.rank,
+        score: r.score,
+        origin: "manual" as const,
+        use: r.use,
+      })),
+      context: { via, picked: true },
+    });
+  }
 
-  res.list.forEach((r, i) => {
-    const mine = picked.has(r.normalized) ? "" : "  _(already in the set)_";
-    lines.push(`\`${String(i + 1).padStart(2, " ")}\` ${r.phrase}${mine}`);
-  });
-
-  // ‼️ SAID OUT LOUD WHEN THE SHORTLIST IS SHORTER THAN THE PASTE, AND SAID ACCURATELY. Somebody who
-  // pastes fifteen and counts twelve assumes three were dropped on the floor. There are three
-  // different reasons a phrase is not its own row, only ONE of them needs anything doing about it,
-  // and a single sentence covering all three would be wrong about two of them.
-  const onShortlist = new Set(res.list.map((r) => r.normalized));
-  const missing = phrases.filter((p) => !onShortlist.has(normalizePhrase(p)));
-
-  if (missing.length) {
-    const { searchable, SHORTLIST_PER_CATEGORY } = await import("./keyword-strategy-rules");
-    const notSearches = missing.filter((p) => !searchable(p));
-    const rest = missing.filter((p) => searchable(p));
-
-    lines.push("", `_${missing.length} of what you pasted are not separate rows above._`);
-
-    // The one that needs acting on: it is stored and approved, and it will never get a screenshot,
-    // because googling a sentence tells nobody anything.
-    if (notSearches.length) {
-      lines.push(
-        `‼️ _${notSearches.length} of them ${notSearches.length === 1 ? "is not a search" : "are not searches"}: a statement ending in a full stop, or a question naming nothing ("how much does this cost"). ${notSearches.length === 1 ? "It is" : "They are"} still in the set and still useful to the concierge and the page angles, but ${notSearches.length === 1 ? "it" : "they"} will not get a screenshot:_`
-      );
-      for (const p of notSearches.slice(0, 6)) lines.push(`      ${p}`);
+  // ‼️ RE-READ RATHER THAN TRUST THE INSERT. A row that was already in the set has no id in `fresh`,
+  // and a phrase in the paste can match one somebody dropped months ago. Reading back by
+  // `normalized` is the move writeVariationsOf already makes, and it is the only complete list.
+  const ids: string[] = [];
+  const picked: Array<{ phrase: string; rank: number | null; category: string }> = [];
+  if (wanted.length) {
+    const { data, error } = await supabaseAdmin
+      .from("client_keywords")
+      .select("id, phrase, rank, category")
+      .eq("client_id", clientId)
+      .eq("use", "query")
+      .in("normalized", wanted);
+    if (error) {
+      return {
+        message: `:warning: Stored, but not kept: the rows could not be read back (${error.message}). ${TABLE_HINT}`,
+      };
     }
-
-    if (rest.length) {
-      // "The other N" is wrong when there was no first group, and it read as thirty phrases from a
-      // paste of fifteen.
-      const lead = notSearches.length ? `The other ${rest.length}` : `${rest.length} of them`;
-      lines.push(
-        `_${lead} folded into a row above, because two phrasings of one question are one subject and one screenshot answers both. At most ${SHORTLIST_PER_CATEGORY} subjects per category reach the shortlist, so a batch about one thing shows fewer rows than it has phrases. Nothing was lost: they count as the page's phrase family._`
-      );
+    for (const r of data ?? []) {
+      ids.push(r.id as string);
+      picked.push({
+        phrase: r.phrase as string,
+        rank: (r.rank as number | null) ?? null,
+        category: (r.category as string) ?? OTHER_CATEGORY,
+      });
     }
+  }
+
+  const { selectKeywordIds } = await import("./keyword-decisions");
+  const sel = await selectKeywordIds({ clientId, ids, by });
+  if (!sel.ok) {
+    return { message: `:warning: Stored, but not kept: ${sel.error}. Nothing is planned from them until that works.` };
+  }
+
+  // The breadth approve, the same statement `keywords approve` runs, for the reason in the header.
+  const { data: wide } = await supabaseAdmin
+    .from("client_keywords")
+    .update({ approved: true, approved_at: now, approved_by: by, updated_at: now })
+    .eq("client_id", clientId)
+    .eq("use", "query")
+    .is("dropped_at", null)
+    .select("id");
+
+  picked.sort((a, b) => (a.rank ?? 1e9) - (b.rank ?? 1e9));
+  const newCount = freshRows.filter((r) => r.use === "query").length;
+  const already = Math.max(0, picked.length - newCount);
+
+  const lines: string[] = [];
+  lines.push(`:white_check_mark: *${sel.selected} picked.* These are the keywords your pages get planned from.`);
+  if (via === "approve") lines.push(`_Read as a pick of these ${phrases.length}, not as approve-all._`);
+  lines.push(
+    `_${already} already in the set, ${newCount} new. Anything you type ranks like evidence, because you said it._`,
+    ""
+  );
+
+  for (const p of picked.slice(0, 40)) {
+    lines.push(
+      `\`${String(p.rank ?? 0).padStart(3, " ")}\` ${p.phrase}  _(${categoryLabel(c.ctx.categories, p.category)})_`
+    );
+  }
+  if (picked.length > 40) lines.push(`  _and ${picked.length - 40} more._`);
+
+  if (hooks.length) {
+    lines.push(
+      "",
+      `*Kept as hooks, never as a page's keyword* (${hooks.length}): ${hooks.slice(0, 6).join("; ")}.`,
+      "_They read as marketing lines rather than searches, so they stay for ads and emails._"
+    );
+  }
+  if (refused.length) {
+    lines.push("", "*Not stored:*", ...refused.slice(0, 6).map((r) => `  • ${r}`));
   }
 
   lines.push(
     "",
-    "*Next:*",
-    "  • Google one, then paste the screenshot here with `keywords serp 4` in the same message.",
-    "  • `keywords variations` writes more ways to say the ones you just picked.",
-    "  • `strategy` groups what is checked, `serp cards` puts the pictures and scores here to approve."
+    `*The wide set stays wide:* ${(wide ?? []).length} approved queries. That is the pool step ${stepNumber("custom_question_set")} freezes at Day 0 to measure this client against for ninety days, and it does not choose pages.`,
+    "",
+    "*Next:* press Done on the card.",
+    "_The numbers above are the ones `keywords drop 4, 9` and `keywords pick 4, 9` take._",
+    "_Optional: `keywords variations` writes more ways to say these, and `keywords shortlist` starts the screenshot pass._"
   );
 
-  return { message: lines.join("\n"), after: added.after };
+  return { message: lines.join("\n"), after: () => refreshKeywordCard(clientId) };
+}
+
+/**
+ * `keywords pick 3, 7, 12`: keep rows already in the set, by the numbers the card prints.
+ *
+ * ‼️ IT REFUSES THE WHOLE LINE WHEN ANY NUMBER IS NOT THERE, rather than keeping the ones it found.
+ * A rank that names nothing is almost always a stale card: `resetForNewOffer` nulls every rank when
+ * the offer changes, so yesterday's numbers name different rows or none at all. Keeping four of five
+ * and saying so quietly is how somebody plans pages around a keyword they never chose.
+ */
+async function pickRanksCommand(clientId: string, ranks: readonly number[], by: string): Promise<KeywordReply> {
+  const loaded = await loadKeywords(clientId);
+  if ("error" in loaded) return { message: `:warning: ${loaded.error}. ${TABLE_HINT}` };
+
+  const live = loaded.rows.filter((r) => !r.dropped && r.use === "query");
+  const found = ranks.map((n) => ({ n, row: live.find((r) => r.rank === n) ?? null }));
+  const missing = found.filter((f) => !f.row).map((f) => f.n);
+  if (missing.length) {
+    return {
+      message:
+        `:warning: No query row is numbered ${missing.join(", ")}. Nothing was kept.\n` +
+        "`keywords` reprints the set with its numbers. If the offer was locked again, the old numbers are gone.",
+    };
+  }
+
+  const rows = found.flatMap((f) => (f.row ? [f.row] : []));
+  const { selectKeywordIds } = await import("./keyword-decisions");
+  const sel = await selectKeywordIds({ clientId, ids: rows.map((r) => r.id), by });
+  if (!sel.ok) return { message: `:warning: Not kept: ${sel.error}` };
+
+  return {
+    message: [
+      `:white_check_mark: *${sel.selected} picked.* These are the keywords your pages get planned from.`,
+      "",
+      ...[...rows]
+        .sort((a, b) => (a.rank ?? 1e9) - (b.rank ?? 1e9))
+        .map((r) => `\`${String(r.rank ?? 0).padStart(3, " ")}\` ${r.phrase}`),
+      "",
+      "*Next:* press Done on the card. `keywords` reprints the set.",
+    ].join("\n"),
+    after: () => refreshKeywordCard(clientId),
+  };
+}
+
+/**
+ * Bare `keywords`: the best of the set, numbered, so the next line can pick from it.
+ *
+ * ‼️ do-this-now.ts HAS ADVERTISED THIS FOR AS LONG AS THE STEP HAS EXISTED AND NOTHING IMPLEMENTED
+ * IT: typing it parsed to null, fell past both handlers, and landed on "one of this thread's own
+ * commands and nothing took it".
+ *
+ * ‼️ THE NUMBERS ARE RANKS, not shortlist positions. This step has two numbering systems and they
+ * are not interchangeable: ranks are frozen at insert and are what `drop` and `pick` take, while
+ * `keywords serp N` takes a position in a deduped, capped list that moves when the set changes.
+ *
+ * Matthew, 2026-09-28: "if theres a lot of options i want it to select 50 of its favorite keywords
+ * so i can select the last 20." FAVOURITES is that 50, SELECTION_TARGET is that 20.
+ */
+async function listCommand(clientId: string): Promise<KeywordReply> {
+  const c = await keywordContext(clientId);
+  if (!c.ok) return { message: `:warning: No set yet. Missing: ${c.missing.join("; ")}.` };
+  const loaded = await loadKeywords(clientId);
+  if ("error" in loaded) return { message: `:warning: ${loaded.error}. ${TABLE_HINT}` };
+
+  const vocab = vocabFor(c.ctx, loaded.rows);
+  const live = loaded.rows.filter((r) => !r.dropped && r.use === "query");
+  if (!live.length) {
+    return {
+      message:
+        "There are no keywords yet. `keywords prompt` hands over the research prompt, and `keywords pick:` stores what comes back.",
+    };
+  }
+
+  // Best FIRST, which is what "its favorite keywords" has to mean: on the offer, then by score. The
+  // number stays the row's own frozen rank, so re-ordering the list never moves what `pick` takes.
+  const best = [...live]
+    .sort((a, b) => {
+      const ra = isRelevantKeyword(a, vocab) ? 0 : 1;
+      const rb = isRelevantKeyword(b, vocab) ? 0 : 1;
+      return ra !== rb ? ra - rb : b.score - a.score;
+    })
+    .slice(0, FAVOURITES);
+
+  const kept = await selectedCountFor(clientId);
+  const lines = [
+    `*The ${best.length} strongest of ${live.length}, best first.*`,
+    `Pick about ${SELECTION_TARGET}: \`keywords pick 3, 7, 12\`, or paste your own under \`keywords pick:\`.`,
+    "",
+    ...best.map(
+      (r) =>
+        `\`${String(r.rank ?? 0).padStart(3, " ")}\` ${r.phrase}  _(${categoryLabel(c.ctx.categories, r.category)}, ${r.origin})_`
+    ),
+    "",
+    kept > 0
+      ? `${kept} picked so far. Step ${stepNumber("pre_call_pages")} plans its pages from those.`
+      : `Nothing picked yet, so step ${stepNumber("pre_call_pages")} would plan from all ${live.length} approved rows. Pick the ones it should build around.`,
+  ];
+  return { message: lines.join("\n") };
 }
 
 /**
@@ -2071,14 +2344,23 @@ async function variationsCommand(clientId: string, by: string): Promise<KeywordR
   const loaded = await loadKeywords(clientId);
   if ("error" in loaded) return { message: `:warning: ${loaded.error}. ${TABLE_HINT}` };
 
-  // The picked set: approved queries somebody typed. Not the model's own proposals, which would make
+  // The picked set: what somebody actually chose. Not the model's own proposals, which would make
   // this a machine writing variations of a machine's guesses.
-  const picked = loaded.rows.filter((r) => r.approved && !r.dropped && r.use === "query" && r.origin === "manual");
+  //
+  // ‼️ PICKED MEANS SELECTED, NOT `origin = 'manual'`, AND THE DIFFERENCE IS MEASURABLE. Of the
+  // fifteen phrases Matthew pasted on 2026-09-28, thirteen were manual and two had already arrived
+  // as `expansion` (ranks 305 and 337) because a model had proposed them first. Filtering on origin
+  // silently dropped those two, and they were the two most on-offer of the lot. Where he typed it is
+  // not the question; whether he chose it is. Origin stays the fallback for every client from before
+  // picking existed, exactly as selectedKeywords falls back to the approved set.
+  const selectedIds = await selectedIdsFor(clientId);
+  const live = loaded.rows.filter((r) => r.approved && !r.dropped && r.use === "query");
+  const picked = selectedIds.size ? live.filter((r) => selectedIds.has(r.id)) : live.filter((r) => r.origin === "manual");
   if (!picked.length) {
     return {
       message: [
         ":warning: Nothing has been picked yet, so there is nothing to write variations of.",
-        "`keywords pick:` then the list, one per line. Or `keywords approve mine` if they are already in the set.",
+        "`keywords pick:` then the list, one per line. Or `keywords` to see the set and `keywords pick 3, 7, 12`.",
       ].join("\n"),
     };
   }

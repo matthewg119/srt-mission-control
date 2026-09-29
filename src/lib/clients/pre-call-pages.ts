@@ -117,11 +117,19 @@ async function frameContext(
   };
 }
 
-/** The approved, relevant queries as a pool, plus everything the framing call needs. */
-async function offerPool(clientId: string): Promise<
+/**
+ * The approved, relevant queries as a pool, plus everything the framing call needs.
+ *
+ * ‼️ EXPORTED FOR STEP 12'S VERIFIER, WHICH ASKS THIS PLAN'S OWN QUESTION BEFORE IT TICKS. A pick
+ * that cannot fill a pillar and six supports must be refused where it can still be fixed, not four
+ * steps later. One pool builder, so the two steps can never disagree about what the picks amount to.
+ */
+export async function offerPool(clientId: string): Promise<
   | {
       pool: OfferPoolItem[];
       keywords: string[];
+      /** Every approved phrase, wide, for the synonym family a page may satisfy its target with. */
+      synonyms: string[];
       city: string | null;
       namingKey: string | null;
       labels: (key: string) => string;
@@ -189,8 +197,14 @@ async function offerPool(clientId: string): Promise<
       tier: tierOf(r.origin),
       naming: r.category === naming,
       focus: pk.ctx.categories.find((c) => c.key === r.category)?.focus === true,
-      // A picked keyword is relevant by decision: a person chose it for this offer.
-      relevant: r.role || pillarSet.has(r.id) ? true : isRelevantKeyword(r, pk.vocab),
+      // ‼️ A PICKED KEYWORD IS RELEVANT BY DECISION, AND THE CODE HAS TO SAY SO TOO. This comment
+      // was here while the condition only honoured a role or a locked pillar, so `isRelevantKeyword`
+      // was still free to throw away a phrase somebody had deliberately chosen, on a vocabulary
+      // test. When `pk.curated` is true every row in this list IS a pick, and the whole reason the
+      // kept set exists is that a person's judgement outranks the score. Mattered nowhere until
+      // 2026-09-28, because until then nothing could set `selected_at` by typing and `curated` was
+      // false for every client on the board.
+      relevant: pk.curated || r.role || pillarSet.has(r.id) ? true : isRelevantKeyword(r, pk.vocab),
       keywordId: r.id,
       // ‼️ A ROLE ALREADY SET ON THE KEYWORD ROW WINS. `pillar:` at step 21 is a person pointing at
       // one phrase, and a strategy locked days earlier must not silently overrule it.
@@ -200,6 +214,8 @@ async function offerPool(clientId: string): Promise<
   return {
     pool,
     keywords: pk.rows.map((r) => r.phrase),
+    // The wide set, for secondary keywords only. See FrameContext.synonyms.
+    synonyms: pk.all.map((r) => r.phrase),
     city: pk.ctx.city,
     namingKey: naming,
     labels,
@@ -345,7 +361,11 @@ async function proposePreCallPlan(
   const pillarKeyword = needPillar && sel.pillar ? sel.pillar.keyword : null;
   let framed;
   try {
-    framed = await framePages(items, { ...ctx, keywords: [...(pillarKeyword ? [pillarKeyword] : []), ...pool.keywords] });
+    framed = await framePages(items, {
+      ...ctx,
+      keywords: [...(pillarKeyword ? [pillarKeyword] : []), ...pool.keywords],
+      synonyms: pool.synonyms,
+    });
   } catch (e) {
     return { ok: false, error: `the pages were chosen but could not be worded: ${(e as Error).message}` };
   }
@@ -1359,7 +1379,11 @@ export async function handlePreCallThreadReply(input: {
           .filter((p) => p.relevant && (target.role !== "pillar" || p.naming))
           .sort((a, b) => a.tier - b.tier || b.score - a.score)
           .map((p) => ({ question: p.question, score: p.score, theme: p.categoryLabel, origin: "keyword" as const, category: p.category }));
-        const res = await swapPlanRow(clientId, rank, fc.ctx, { pool: items, keywords: pool.keywords });
+        const res = await swapPlanRow(clientId, rank, fc.ctx, {
+          pool: items,
+          keywords: pool.keywords,
+          synonyms: pool.synonyms,
+        });
         await say(
           clientId,
           res.ok

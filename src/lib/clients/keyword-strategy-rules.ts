@@ -770,6 +770,20 @@ const POINTS_AT_NOTHING =
  * card's numbers be typed at: `keywords serp 12` has to mean the same row tomorrow.
  */
 export function shortlistOf(rows: readonly Finalist[]): Finalist[] {
+  // ‼️ ONCE SOMETHING HAS BEEN PICKED, THE PICKS ARE THE SHORTLIST, UNCAPPED AND UNDEDUPED. The
+  // dedupe and the two caps exist to ration screenshots across four hundred rows a model proposed,
+  // where five phrasings of one subject really are four wasted screenshots. Applied to fifteen
+  // phrases a person deliberately chose, the same rules are destructive: a batch that lands in two
+  // or three categories would show four and silently hide eleven, and `sameSubject` would fold two
+  // deliberate choices into one. A pick is a statement that this phrase is wanted on its own.
+  //
+  // `searchable` still applies, because a sentence cannot be googled whoever typed it, and
+  // keptOffList() is what tells him those still count.
+  const picked = rows.filter((r) => r.selectedAt !== null && searchable(r.phrase));
+  if (picked.length) {
+    return picked.sort((a, b) => a.rank - b.rank || a.id.localeCompare(b.id));
+  }
+
   // ‼️ UNSEARCHABLE ROWS ARE DROPPED BEFORE THE CAP, NOT AFTER. Filtering afterwards would spend
   // slots on sentences and hand back a list of eighteen when twenty-five were asked for.
   const ordered = [...rows]

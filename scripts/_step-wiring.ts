@@ -91,7 +91,11 @@ const COMMANDS: Record<string, string[]> = {
   offer_locked: ["`offer:`", "`terms:`", "`outcome:`", "`price:`", "[Call now]", "`review platform: <name>`, `review link: <url>`"],
   keyword_set: [
     "`keywords prompt`",
-    "`keywords add:`, `keywords pick:`",
+    "`keywords pick:` / `keywords select:` then a list (a newline works instead of the colon)",
+    "`keywords approve` + a pasted list, read as a pick of those",
+    "`keywords pick 3, 7, 12` by number",
+    "`keywords` on its own, the 50 strongest with their numbers",
+    "`keywords add:` (stores without choosing)",
     "`keywords approve`, `keywords approve 411-423`, `keywords approve mine`",
     "`keywords drop N`",
     "`keywords more <category>`",

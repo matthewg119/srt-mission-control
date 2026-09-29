@@ -21,6 +21,7 @@
 import { slack } from "@/lib/slack-bot";
 import { supabaseAdmin } from "@/lib/db";
 import { DROP_EMOJI, PICK_EMOJI, VARY_EMOJI } from "./keyword-cards";
+import type { KeywordOrigin } from "./keyword-expansion";
 import type { Finalist } from "./keyword-strategy-rules";
 
 /** The row behind a card, as little of it as the decision needs. */
@@ -105,33 +106,89 @@ export async function handleKeywordCardReaction(args: {
 }
 
 /**
- * Keep it.
+ * Keep these, by id. The TYPED door into the same decision the ✅ reaction takes.
  *
- * ‼️ IT APPROVES THE ROW TOO WHEN IT IS NOT APPROVED YET, and without that a variation could never
- * be selected at all. loadFinalists filters on `approved = true`, and variations arrive unapproved
- * on purpose: a model's proposal is not a pick. A person looking at its results page and keeping it
- * IS the approval, so the two happen together, here, and nowhere else.
+ * ‼️ UNTIL 2026-09-28 THERE WAS NO TYPED DOOR AT ALL, AND THAT WAS THE WHOLE COMPLAINT. `selected_at`
+ * could only be reached by reacting to a per-keyword card, and a card only exists once somebody has
+ * pasted that keyword's Google screenshot. So `keywords pick:` said "15 selected" and selected
+ * nothing, and step 21 went on planning seven pages from every approved row. Measured on SRT Agency
+ * 2026-09-28: 355 approved, 149 of them a model's own proposals, 0 selected.
+ *
+ * ‼️ IT APPROVES IN THE SAME STATEMENT, AND THAT IS NOT A CONVENIENCE. selectedKeywords() computes
+ * planKeywords() FIRST, which is approved-only, and then intersects it with the selected ids. A row
+ * that is selected but NOT approved is in neither list: the intersection comes back empty, `curated`
+ * goes false, and the fallback quietly hands step 21 the whole approved set again. That is the bug
+ * wearing the fix's clothes. Select and approve travel together or the selection is invisible.
+ *
+ * It is also what lets a variation be kept at all: loadFinalists filters on `approved = true` and
+ * variations arrive unapproved on purpose, because a model's proposal is not a pick. A person
+ * keeping it IS the approval.
+ *
+ * ‼️ THE ONLY UPDATE OF selected_at IN THE REPO, AND IT STAYS IN THIS FILE. step-needs.ts declares
+ * `writtenIn: "src/lib/clients/keyword-decisions.ts"` and _probe-dead-wires.ts §8 greps this file
+ * for the column name before it will believe the declaration. A second writer in client-keywords.ts
+ * would make that declaration a half-truth and the generated docs wrong.
  */
-async function selectKeyword(row: CardRow, by: string): Promise<void> {
+export async function selectKeywordIds(args: {
+  clientId: string;
+  ids: readonly string[];
+  by: string;
+}): Promise<{ ok: true; selected: number } | { ok: false; error: string }> {
+  // Nothing asked for is not a failure. `keywords pick:` on a list that was all hooks lands here.
+  if (!args.ids.length) return { ok: true, selected: 0 };
+
   const now = new Date().toISOString();
-  const { error } = await supabaseAdmin
+  const { data, error } = await supabaseAdmin
     .from("client_keywords")
     .update({
       selected_at: now,
-      selected_by: by,
+      selected_by: args.by,
       approved: true,
       approved_at: now,
-      approved_by: by,
+      approved_by: args.by,
       // Keeping a keyword un-drops it. Somebody who dropped it and changed their mind has said so.
       dropped_at: null,
       updated_at: now,
     })
-    .eq("id", row.id);
+    .eq("client_id", args.clientId)
+    .in("id", args.ids)
+    .select("id, phrase, category, rank, score, origin, use");
+
   if (error) {
-    console.error("[clients/keyword-decisions] select failed:", error.message);
-    return;
+    if (!missingColumn(error)) console.error("[clients/keyword-decisions] select failed:", error.message);
+    return { ok: false, error: error.message };
   }
-  await record(row, "select", by);
+
+  const rows = data ?? [];
+  const { recordKeywordDecisions } = await import("./keyword-dataset");
+  await recordKeywordDecisions({
+    clientId: args.clientId,
+    action: "select",
+    actor: args.by,
+    rows: rows.map((r) => ({
+      id: (r.id as string) ?? "",
+      phrase: (r.phrase as string) ?? "",
+      category: (r.category as string) ?? "general",
+      use: ((r.use as string) ?? "query") as "query" | "hook",
+      origin: ((r.origin as string) ?? "manual") as KeywordOrigin,
+      rank: (r.rank as number | null) ?? null,
+      score: (r.score as number) ?? 0,
+    })),
+    context: { via: "typed" },
+  }).catch(() => {});
+
+  return { ok: true, selected: rows.length };
+}
+
+/**
+ * Keep it: one card, one reaction.
+ *
+ * The bulk writer above does the work, so a reaction and a typed pick are the same decision written
+ * the same way. Only the redraw is particular to the card.
+ */
+async function selectKeyword(row: CardRow, by: string): Promise<void> {
+  const res = await selectKeywordIds({ clientId: row.clientId, ids: [row.id], by });
+  if (!res.ok) return;
   await redraw(row.clientId, row.id);
 }
 

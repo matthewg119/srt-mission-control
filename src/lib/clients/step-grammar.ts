@@ -438,11 +438,19 @@ const KEYWORDS_ADD: CommandSpec = {
   mustBeOnTheCard: true,
 };
 
-/** `keywords pick:` then the list. The paste IS the selection. */
+/**
+ * `keywords pick:` then the list, `keywords select:`, or `keywords pick 3, 7, 12`. The paste IS the
+ * selection.
+ *
+ * ‼️ A NEWLINE COUNTS AS THE COLON, because a list under the bare word is what people actually type
+ * and until 2026-09-28 it matched nothing at all: it fell past both handlers and came back as "a
+ * list on its own is dictation even here". Widening this cannot steal another command, since every
+ * regex in the keyword grammar is anchored with no `m` flag and so matched no multi-line message.
+ */
 const KEYWORDS_PICK: CommandSpec = {
   label: "keywords pick:",
-  test: /^\s*[`*_]*keywords\s+pick\s*:/i,
-  unmistakable: /^\s*[`*_]*keywords\s+pick\s*:/i,
+  test: /^\s*[`*_]*keywords\s+(pick|select)\s*[:\n\d]/i,
+  unmistakable: /^\s*[`*_]*keywords\s+(pick|select)\s*[:\n\d]/i,
   pointAt: "keyword_set",
   what: "Keyword commands",
   implementedIn: "src/lib/clients/client-keywords.ts",

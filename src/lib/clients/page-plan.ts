@@ -448,8 +448,19 @@ export interface FrameContext {
   positioning: string | null;
   avatarLabel: string;
   anchor: { title: string; promise: string; ctaLabel: string | null };
-  /** Every phrase a target keyword may be chosen from. */
+  /** Every phrase a target keyword may be chosen from. Narrow: on a curated client, the picks. */
   keywords: readonly string[];
+  /**
+   * Every phrase a SECONDARY keyword may be chosen from. Wide: the whole approved set.
+   *
+   * ‼️ A SEPARATE LIST BECAUSE THE TWO DO DIFFERENT JOBS, AND MERGING THEM BREAKS ONE OF THEM. A
+   * target is what the page is AIMED at and a person picks it. A secondary is another way of saying
+   * that target, and the placement check at the gate uses them as the phrase family the page may
+   * satisfy its target with: without a wide family, a page saying "asking patients for reviews" is
+   * reported as missing "get more reviews". Optional, and it falls back to `keywords`, so every
+   * caller that predates the picking behaves exactly as it did.
+   */
+  synonyms?: readonly string[];
 }
 
 const FRAME_SYSTEM = `You plan the pages on one business's website. The pages have already been chosen: each one
@@ -460,12 +471,14 @@ answers a question the business's buyers actually ask. You write, for each page,
 3. targetKeyword. The one phrase this page is aimed at, COPIED EXACTLY from the KEYWORDS list.
    Usually the page's own question if it is in the list; otherwise the closest phrase in the list.
    A phrase that is not in the list is rejected.
-4. secondaryKeywords. Three to five OTHER phrases from the KEYWORDS list that a search engine
+4. secondaryKeywords. Three to five OTHER phrases from the RELATED list that a search engine
    would treat as meaning the same thing as targetKeyword, COPIED EXACTLY from the list. "Get more
    reviews", "increase patient reviews" and "review generation" are one subject said three ways, so
    a page aimed at any of them is aimed at all of them. Return [] rather than reaching: a phrase
    about a DIFFERENT subject is worse than none, because the page will be judged as though it were
-   about that too. Never the targetKeyword itself, never a duplicate, never a phrase not in the list.
+   about that too. Never the targetKeyword itself, never a duplicate, never a phrase not in RELATED.
+   RELATED is wider than KEYWORDS on purpose: a page is AIMED at one of the KEYWORDS, and RELATED is
+   every other way the same market says things.
 
 5. frame. How the business's ANCHOR OFFER is presented on this page. Every page on this site offers
    the same one free thing, the anchor, and the frame is the door into it that fits what the reader
@@ -520,7 +533,10 @@ export function frameFaults(
   v: unknown,
   count: number,
   keywordSet: ReadonlySet<string>,
-  numberHaystack: string
+  numberHaystack: string,
+  /** What a SECONDARY keyword may be drawn from. Defaults to the target set, which is what every
+   *  caller did before the two lists were split. */
+  synonymSet: ReadonlySet<string> = keywordSet
 ): string[] {
   const out: string[] = [];
   const d = v as Partial<FramedBatch>;
@@ -565,8 +581,8 @@ export function frameFaults(
         continue;
       }
       const norm = normalizePhrase(phrase);
-      if (!keywordSet.has(norm)) {
-        out.push(`${where}'s secondaryKeyword "${phrase}" is not in the KEYWORDS list. Copy one exactly.`);
+      if (!synonymSet.has(norm)) {
+        out.push(`${where}'s secondaryKeyword "${phrase}" is not in the RELATED list. Copy one exactly.`);
       }
       if (keyword && norm === normalizePhrase(keyword)) {
         out.push(`${where}'s secondaryKeywords repeat the targetKeyword. They are the OTHER ways of saying it.`);
@@ -607,6 +623,14 @@ export async function framePages(pages: readonly PoolItem[], ctx: FrameContext):
   // is always available), then the ranked set.
   const shown = [...new Set([...pages.filter((p) => p.origin !== "derived").map((p) => p.question), ...ctx.keywords])];
 
+  // ‼️ RELATED IS A SUPERSET OF KEYWORDS AND IT HAS TO BE. Every target is also a legal secondary
+  // for a DIFFERENT page, so the wide set is built on top of the narrow one rather than beside it.
+  // With no synonyms supplied the two are the same list, which is exactly how this behaved before
+  // the pools were split.
+  const synonymSet = new Set(keywordSet);
+  for (const k of ctx.synonyms ?? []) synonymSet.add(normalizePhrase(k));
+  const related = [...new Set([...shown, ...(ctx.synonyms ?? [])])];
+
   const numberHaystack = [
     ...pages.map((p) => p.question),
     ...shown,
@@ -633,6 +657,14 @@ export async function framePages(pages: readonly PoolItem[], ctx: FrameContext):
     "",
     "KEYWORDS, the only phrases a targetKeyword may be:",
     ...shown.map((k) => `- ${k}`),
+    ...(related.length > shown.length
+      ? [
+          "",
+          "RELATED, the only phrases a secondaryKeyword may be. Wider than KEYWORDS: these are the",
+          "other ways this market says the same things, and a page is never AIMED at one of them.",
+          ...related.map((k) => `- ${k}`),
+        ]
+      : []),
   ]
     .filter((l) => l !== "")
     .join("\n");
@@ -644,9 +676,9 @@ export async function framePages(pages: readonly PoolItem[], ctx: FrameContext):
     maxTokens: 6000,
     temperature: 0.3,
     schemaHint: FRAME_SCHEMA,
-    validate: (v): v is FramedBatch => frameFaults(v, pages.length, keywordSet, numberHaystack).length === 0,
+    validate: (v): v is FramedBatch => frameFaults(v, pages.length, keywordSet, numberHaystack, synonymSet).length === 0,
     describeInvalid: (v) =>
-      `Fix these and return every row again:\n${frameFaults(v, pages.length, keywordSet, numberHaystack)
+      `Fix these and return every row again:\n${frameFaults(v, pages.length, keywordSet, numberHaystack, synonymSet)
         .map((f) => `  - ${f}`)
         .join("\n")}`,
   });
@@ -950,6 +982,8 @@ export function claimableRows(rows: readonly PlanRow[]): PlanRow[] {
 export interface PlanInputs {
   pool: PoolItem[];
   keywords: string[];
+  /** The wide approved set, for secondary keywords only. Absent means "same as keywords". */
+  synonyms?: string[];
 }
 
 /**
@@ -1070,7 +1104,7 @@ export async function proposePlan(
   let framed: FramedRow[] = [];
   if (chosen.length) {
     try {
-      framed = await framePages(chosen, { ...ctx, keywords: inputs.keywords });
+      framed = await framePages(chosen, { ...ctx, keywords: inputs.keywords, synonyms: inputs.synonyms });
     } catch (e) {
       return { ok: false, error: `the pages were chosen but could not be worded: ${(e as Error).message}` };
     }
@@ -1185,7 +1219,7 @@ export async function swapPlanRow(
    * still about the offer and a swapped pillar is still a naming variant. The studio passes nothing
    * and draws from the keyword set as before.
    */
-  opts: { pool?: PoolItem[]; keywords?: string[] } = {}
+  opts: { pool?: PoolItem[]; keywords?: string[]; synonyms?: string[] } = {}
 ): Promise<{ ok: true; row: PlanRow; replaced: string } | { ok: false; error: string }> {
   const row = await rowAtRank(clientId, rank);
   if ("error" in row) return { ok: false, error: row.error };
@@ -1196,7 +1230,7 @@ export async function swapPlanRow(
   const current = await loadPlan(clientId);
   if ("error" in current) return { ok: false, error: current.error };
   const inputs: PlanInputs | { error: string } = opts.pool
-    ? { pool: opts.pool, keywords: opts.keywords ?? opts.pool.map((p) => p.question) }
+    ? { pool: opts.pool, keywords: opts.keywords ?? opts.pool.map((p) => p.question), synonyms: opts.synonyms }
     : await planInputs(clientId);
   if ("error" in inputs) return { ok: false, error: inputs.error };
 
@@ -1209,7 +1243,7 @@ export async function swapPlanRow(
 
   let framed: FramedRow;
   try {
-    [framed] = await framePages([{ ...next, role: row.role ?? undefined }], { ...ctx, keywords: inputs.keywords });
+    [framed] = await framePages([{ ...next, role: row.role ?? undefined }], { ...ctx, keywords: inputs.keywords, synonyms: inputs.synonyms });
   } catch (e) {
     return { ok: false, error: `the replacement was chosen but could not be worded: ${(e as Error).message}` };
   }

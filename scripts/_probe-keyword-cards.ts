@@ -431,6 +431,30 @@ check("it reads the kept rows", /not\("selected_at", "is", null\)/.test(KW));
 check("it falls back to the approved set", /curated: false/.test(KW));
 check("and the fallback is announced rather than silent", /export function poolLine/.test(KW));
 
+// ‼️ THE TYPED DOOR, AND IT MUST STAY ONE WRITER. Until 2026-09-28 `selected_at` could only be
+// written by a reaction on a per-keyword card, and a card only exists once a Google screenshot has
+// been pasted for that keyword. So `keywords pick:` reported "15 selected" and selected nothing, and
+// step 21 planned seven pages off 355 approved rows, 149 of them a model's own proposals. Measured
+// on SRT Agency: 355 approved, 0 selected.
+check("selectKeywordIds is the typed door into the selection", /export async function selectKeywordIds/.test(DECISIONS));
+check("and the pick path uses it", /selectKeywordIds\(/.test(KW), "pickCommand is not selecting anything");
+
+// ‼️ SELECT AND APPROVE IN ONE STATEMENT. selectedKeywords() intersects the APPROVED rows with the
+// selected ids, so a row that is selected but not approved is in neither list: the intersection
+// comes back empty, `curated` goes false, and the fallback hands step 21 the whole approved set
+// again. The fix wearing the bug's clothes, and this grep is what stops it.
+const selectUpdate = /selected_at: now,[\s\S]{0,240}?approved: true/.test(DECISIONS);
+check("selecting a keyword approves it in the same update", selectUpdate);
+
+// ‼️ ONE WRITER, IN THE FILE step-needs.ts NAMES. STEP_PRODUCES declares
+// `writtenIn: "src/lib/clients/keyword-decisions.ts"` and _probe-dead-wires.ts greps that file for
+// the column before it believes the declaration. A second writer would make the generated docs lie.
+check(
+  "client_keywords.selected_at is written in exactly one file",
+  !/selected_at:\s*now/.test(KW),
+  "client-keywords.ts writes selected_at itself; keyword-decisions.ts owns that column"
+);
+
 for (const [name, src] of [["the seven pages", PRECALL], ["the headlines", HEADLINES], ["the ladder", LADDER]] as const) {
   check(`${name} plan from the kept set`, /selectedKeywords\(/.test(src), "still on planKeywords");
 }

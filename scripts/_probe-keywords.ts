@@ -243,7 +243,40 @@ check(
   '"keywords variations of the offer" is dictation, not the command',
   parseKeywordCommand("keywords variations of the offer", owner) === null
 );
-check('"keywords pick" with no colon is not a command', parseKeywordCommand("keywords pick", owner) === null);
+// ‼️ A NEWLINE IS THE COLON NOW (2026-09-28). `keywords pick` with the list on the following lines
+// matched NOTHING, because every regex here is anchored `^...$` with no `m` flag, and it came back
+// as "a list on its own is dictation even here" about a list with the command sitting on top of it.
+// Bare `keywords pick` with no list at all is still not a command: there is nothing to pick.
+check('"keywords pick" with no colon and no list is not a command', parseKeywordCommand("keywords pick", owner) === null);
+{
+  const list = "\nhow to get more google reviews for a med spa\nfront desk script for asking for reviews\nwhen to ask for a review after botox";
+  const nl = parseKeywordCommand("keywords pick" + list, owner);
+  check('"keywords pick" then a newline and the list parses as pick', nl?.kind === "pick" && nl.phrases.length === 3, JSON.stringify(nl));
+  check('"keywords select:" is the same verb', parseKeywordCommand("keywords select:" + list, owner)?.kind === "pick");
+  check('"keywords select" with a newline is the same verb', parseKeywordCommand("keywords select" + list, owner)?.kind === "pick");
+
+  // ‼️ A LIST UNDER `keywords approve` IS A PICK OF THOSE, NEVER APPROVE-ALL. Typing it used to get
+  // a strictly WORSE answer than pasting the list bare: pastedListPointer bails as soon as
+  // commandOwner recognises a prefix, so the one helpful message was suppressed and unclaimedReply
+  // said "the argument is wrong or this step is not ready".
+  const viaApprove = parseKeywordCommand("keywords approve" + list, owner);
+  check('"keywords approve" then a list is read as a pick of those', viaApprove?.kind === "pick" && viaApprove.via === "approve", JSON.stringify(viaApprove));
+  check("bare `keywords approve` still approves everything", parseKeywordCommand("keywords approve", owner)?.kind === "approve");
+
+  // ‼️ AND AN ASIDE UNDER IT IS STILL DICTATION. One line is far likelier to be a sentence than a
+  // keyword, and storing a sentence as a keyword is worse than not understanding it.
+  check('"keywords approve" then one line of prose is dictation', parseKeywordCommand("keywords approve\nplease do this now", owner) === null);
+
+  const byNumber = parseKeywordCommand("keywords pick 3, 7, 12", owner);
+  check('"keywords pick 3, 7, 12" picks by rank', byNumber?.kind === "pick_ranks" && byNumber.ranks.join(",") === "3,7,12", JSON.stringify(byNumber));
+
+  // ‼️ REVERSES A PIN (2026-09-28). This probe asserted bare `keywords` was dictation while
+  // do-this-now.ts advertised it as the way to see the set and step-grammar.ts carried a CommandSpec
+  // labelled `keywords`, so typing it fell past both handlers and came back as "one of this thread's
+  // own commands and nothing took it". Nobody types the bare word as prose. A SENTENCE beginning
+  // with it still falls through, which is what the dictation list above is actually protecting.
+  check('bare "keywords" prints the set', parseKeywordCommand("keywords", owner)?.kind === "list");
+}
 {
   // ‼️ THE PASTED LIST, WHICH IS WHAT ACTUALLY HAPPENED TWICE. A list with no `keywords add:` in
   // front of it matches no command grammar, so it used to fall through to the general assistant,
@@ -299,7 +332,6 @@ for (const d of [
   "keywords drop everything",
   "keywords matter less than people think",
   "keywords more than ever",
-  "keywords",
   "keywords approve please",
   "keywords add lip filler",
 ]) {

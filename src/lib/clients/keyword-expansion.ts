@@ -832,8 +832,37 @@ export const KEYWORDS_APPROVE = /^keywords\s+approve$/i;
 export const KEYWORDS_APPROVE_SOME =
   /^keywords\s+approve\s+(\d{1,4}(?:\s*-\s*\d{1,4})?(?:\s*,\s*\d{1,4}(?:\s*-\s*\d{1,4})?)*)$/i;
 export const KEYWORDS_APPROVE_MINE = /^keywords\s+approve\s+(mine|manual|ours)$/i;
+
+/**
+ * `keywords approve` with a list pasted under it. READ AS A PICK OF THOSE, never as approve-all.
+ *
+ * ‼️ IT EXISTS BECAUSE THE OLD ANSWER WAS THE WORST ONE AVAILABLE. Every regex here is `^…$` with no
+ * `m` flag, so a newline made all of them fail; and pastedListPointer bails the moment
+ * commandOwner() recognises a prefix, which `keywords approve` is. So pasting a list under
+ * `keywords approve` got "the argument is wrong or this step is not ready", while pasting the SAME
+ * list under nothing at all got the helpful "put `keywords pick:` above it". Measured 2026-09-28.
+ *
+ * Approve-all is still one bare word away, and approving is still what fills the broad measurement
+ * pool step 13 freezes. This only says that a list under it names the ones he meant.
+ */
+export const KEYWORDS_APPROVE_LIST = /^keywords\s+approve\s*\n([\s\S]+)$/i;
+
 export const KEYWORDS_DROP = /^keywords\s+drop\s+(\d{1,4}(?:\s*,\s*\d{1,4})*)$/i;
 export const KEYWORDS_ADD = /^keywords\s+add\s*:\s*([\s\S]+)$/i;
+
+/**
+ * Bare `keywords`: the best of the set, numbered, so the next line can be `keywords pick 3, 7, 12`.
+ *
+ * ‼️ do-this-now.ts HAS ADVERTISED THIS SINCE THE STEP SHIPPED AND NOTHING IMPLEMENTED IT. Typing it
+ * parsed to null, fell past both handlers, and landed on "one of this thread's own commands and
+ * nothing took it". The CommandSpec for it exists in step-grammar.ts too. This is the list half of
+ * Matthew's ask: "if theres a lot of options i want it to select 50 of its favorite keywords so i
+ * can select the last 20."
+ */
+export const KEYWORDS_LIST = /^keywords$/i;
+
+/** How many the bare list offers to choose from. The picking target is SELECTION_TARGET, which is 20. */
+export const FAVOURITES = 50;
 
 /**
  * `keywords pick:` then the list. Add and SELECT in one move.
@@ -848,7 +877,17 @@ export const KEYWORDS_ADD = /^keywords\s+add\s*:\s*([\s\S]+)$/i;
  * `pick` states the intent the paste already had: these are the ones I chose. It approves what it
  * adds, unconditionally, and hands back the numbers `keywords serp N` takes.
  */
-export const KEYWORDS_PICK = /^keywords\s+pick\s*:\s*([\s\S]+)$/i;
+export const KEYWORDS_PICK = /^keywords\s+(?:pick|select)\s*(?::|\n)\s*([\s\S]+)$/i;
+
+/**
+ * `keywords pick 3, 7, 12`: keep the ones already on the list, by their numbers.
+ *
+ * ‼️ THE NUMBERS ARE RANKS, the same ones `keywords drop 12` takes and the same ones the card and
+ * the bare `keywords` list print. One number means one thing everywhere in this thread. The OTHER
+ * numbering in this step, the shortlist position `keywords serp N` takes, is deliberately not
+ * reachable from here: it is a position in a deduped, capped list and it moves.
+ */
+export const KEYWORDS_PICK_RANKS = /^keywords\s+(?:pick|select)\s+(\d{1,4}(?:\s*-\s*\d{1,4})?(?:\s*,\s*\d{1,4}(?:\s*-\s*\d{1,4})?)*)$/i;
 
 /**
  * `keywords delete all`: throw the whole set away and start again.
@@ -927,10 +966,18 @@ export type KeywordCommand =
   /** Only the rows a person typed, which is `origin = 'manual'`. */
   | { kind: "approve_mine" }
   | { kind: "drop"; ranks: number[] }
-  /** One phrase, or a pasted list: one per line, numbered or not. */
+  /** One phrase, or a pasted list: one per line, numbered or not. Stores, never selects. */
   | { kind: "add"; phrases: string[] }
-  /** The same paste, but SELECTED: added and approved in one move, then numbered back. */
-  | { kind: "pick"; phrases: string[] }
+  /**
+   * The same paste, but SELECTED: stored, approved and kept in one move, then numbered back.
+   * `via` is "approve" when the list arrived under `keywords approve`, so the reply can say it was
+   * read as a pick rather than leaving him to wonder whether 355 rows just moved.
+   */
+  | { kind: "pick"; phrases: string[]; via?: "pick" | "approve" }
+  /** Keep the ones already in the set, by the rank numbers the card prints. */
+  | { kind: "pick_ranks"; ranks: number[] }
+  /** Bare `keywords`: the best of the set, numbered, to pick from. */
+  | { kind: "list" }
   /** More ways to say what has already been picked. Proposals, never auto-approved. */
   | { kind: "variations" }
   /** Empty the set and start again. Draws a confirm button; deletes nothing by itself. */
@@ -997,6 +1044,26 @@ export const ADD_MAX = 100;
  * rather than added as keywords. A single line is one phrase, commas and all, because a comma is
  * something a real search phrase contains.
  */
+/**
+ * The phrases in a pasted body, or nothing at all when it is not a list of searches.
+ *
+ * ‼️ THE GUARD IS A COUNT, NOT A SHAPE TEST, AND THAT IS DELIBERATE. `keywordFault` cannot tell
+ * "please do it now" from "how to get more reviews": four lowercase words, no punctuation, no URL.
+ * Nothing local can, and `searchable()` lives in keyword-strategy-rules.ts, which imports FROM this
+ * file, so reaching for it would make the cycle. What genuinely separates the two cases is that a
+ * paste-back is a LIST and an aside is one line, so `keywords approve` asks for two before it will
+ * read a body as a pick. An explicit `keywords pick:` asks for one, because saying `pick` is already
+ * the statement of intent that `approve` is not.
+ *
+ * At least one line must also survive `keywordFault`, so a body of pure debris is refused rather
+ * than stored one refusal at a time.
+ */
+export function pastedPhrases(body: string, minimum = 1): string[] {
+  const phrases = addList(body);
+  if (phrases.length < minimum) return [];
+  return phrases.some((p) => keywordFault(cleanPhrase(p), "query") === null) ? phrases : [];
+}
+
 export function addList(body: string): string[] {
   const lines = body.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const numbered = lines.filter((l) => /^\d+[.)]\s+/.test(l));
@@ -1027,8 +1094,21 @@ export function parseKeywordCommand(raw: string, categories: readonly CategorySp
     return ranks.length ? { kind: "approve_some", ranks } : null;
   }
 
+  // ‼️ THE LIST FORM IS TESTED BEFORE THE BARE ONE, AND THAT ORDER IS THE SAFETY. Both begin with
+  // the same two words; the bare form is anchored so it cannot reach a list today, but if it is ever
+  // widened, a list must not fall through to approve-all. The one command that approves 355 rows
+  // stays the one that says nothing else.
+  const approveList = KEYWORDS_APPROVE_LIST.exec(text);
+  if (approveList) {
+    // Two, because one line under `keywords approve` is far more likely to be an aside than a
+    // keyword, and storing an aside as a keyword is worse than not understanding it.
+    const phrases = pastedPhrases(approveList[1], 2);
+    return phrases.length ? { kind: "pick", phrases, via: "approve" } : null;
+  }
+
   if (KEYWORDS_APPROVE.test(text)) return { kind: "approve" };
   if (KEYWORDS_PROMPT.test(text)) return { kind: "prompt" };
+  if (KEYWORDS_LIST.test(text)) return { kind: "list" };
 
   const drop = KEYWORDS_DROP.exec(text);
   if (drop) {
@@ -1038,9 +1118,19 @@ export function parseKeywordCommand(raw: string, categories: readonly CategorySp
 
   // ‼️ `pick:` IS TESTED BEFORE `add:` AND BOTH ARE ANCHORED, so neither can swallow the other. They
   // differ only in whether what they store is SELECTED, which is the whole point of having two.
+  //
+  // ‼️ RANKS BEFORE PHRASES. "keywords pick 3, 7" has no colon and no newline, so KEYWORDS_PICK
+  // cannot claim it, but testing it first means a future widening of the phrase form cannot turn
+  // three numbers into three keywords named "3", "7" and "12".
+  const pickRanks = KEYWORDS_PICK_RANKS.exec(text);
+  if (pickRanks) {
+    const ranks = expandRanks(pickRanks[1]);
+    return ranks.length ? { kind: "pick_ranks", ranks } : null;
+  }
+
   const pick = KEYWORDS_PICK.exec(text);
   if (pick) {
-    const phrases = addList(pick[1]);
+    const phrases = pastedPhrases(pick[1]);
     return phrases.length ? { kind: "pick", phrases } : null;
   }
 
@@ -1195,6 +1285,14 @@ export interface KeywordCardContext {
   audienceConfirmed: boolean;
   city: string | null;
   vocab: readonly string[];
+  /**
+   * How many rows have been PICKED, which is what step 21 plans from.
+   *
+   * ‼️ PASSED IN, BECAUSE THIS FILE IS THE PURE HALF AND selected_at IS NOT IN KW_COLUMNS. The
+   * card's single most important number cannot be derived from `rows`, and inventing it from
+   * `origin === "manual"` would repeat the bug that lost two of Matthew's fifteen picks.
+   */
+  picked: number;
 }
 
 /**
@@ -1269,8 +1367,14 @@ export function formatKeywordCard(
         : "*Not approved yet.*"),
     `*By category:* ${byCategory.join(" · ")}`,
     `*By origin:* ${byOrigin.join(" · ")}`,
+    // ‼️ THE NUMBER THAT DECIDES WHAT GETS BUILT, ON THE CARD RATHER THAN IN A REPLY SOMEBODY HAS TO
+    // SCROLL BACK FOR. Approved is breadth and picked is the choice; a card that showed only the
+    // first read as though 355 rows were about to become pages, which is what used to happen.
+    ctx.picked > 0
+      ? `*Picked:* ${ctx.picked}, and those are what the pages are planned from.`
+      : `*Picked:* none yet, so the pages would be planned from all ${tally.approvedQueries} approved rows. \`keywords pick:\` your list, or \`keywords\` to choose by number.`,
     "",
-    `*The top ${Math.min(CARD_TOP, queries.length)} queries.* The number is the one \`keywords drop\` takes; the CSV has every row.`,
+    `*The top ${Math.min(CARD_TOP, queries.length)} queries.* The number is the one \`keywords drop\` and \`keywords pick\` take; the CSV has every row.`,
   ];
 
   const top = [...queries].sort((a, b) => (a.rank ?? 1e9) - (b.rank ?? 1e9)).slice(0, CARD_TOP);
@@ -1288,16 +1392,16 @@ export function formatKeywordCard(
     // Most of it is `expansion`, which is a model's proposal and is ranked below evidence on
     // purpose. Putting `keywords approve` first taught everybody to accept that, which is the
     // opposite of what the origin ranking exists to achieve.
-    "  • `keywords prompt` hands over a research prompt that already carries this offer, the avatar and everything on file. Run it in claude.com and bring the numbered list back with `keywords add:`.",
-    "  • `keywords approve` approves the query set as shown.",
-    "  • `keywords drop 12` or `keywords drop 12, 15, 40` removes rows by number.",
-    "  • `keywords add: <phrase>` adds your own. It ranks like evidence, because you said it.",
-    "  • `keywords pick: <list>` stores AND selects a pasted list, then hands back the numbers.",
-    "  • `keywords more <category>` writes more for one category, e.g. `keywords more price`.",
-    "  • `keywords shortlist` picks the 25 worth googling. Then paste each Google screenshot here *with no caption*: it reads the search box, finds the keyword itself, and posts that one's card. `keywords serp 4` in the message overrides the match if it guesses wrong.",
-    "  • On a card: :white_check_mark: keep it, :x: step back one, :arrows_counterclockwise: more ways to say it.",
-    "  • `strategy`, `serp cards` and `strategy approve` group and lock what survived.",
-    "  • `keywords delete all` empties the set and asks once first. The history is kept.",
+    "  • `keywords prompt` hands over a research prompt that already carries this offer, the avatar and everything on file. Run it in claude.com.",
+    "  • `keywords pick: <list>` stores a pasted list AND chooses it. What you choose is what the pages are planned from.",
+    "  • `keywords` prints the 50 strongest with their numbers; `keywords pick 3, 7, 12` takes them by number.",
+    "  • `keywords drop 12, 15` removes rows by number. `keywords add: <phrase>` stores one without choosing it.",
+    "  • `keywords more <category>` writes more for one category, e.g. `keywords more price`. `keywords variations` writes more ways to say what you chose.",
+    "  • `keywords approve` approves the query set as shown. That is the BREADTH the tracked question set is frozen from, not the choice of pages.",
+    // ‼️ THE WHOLE SERP AND STRATEGY LANE, IN ONE LINE AND MARKED OPTIONAL. It was seven of the
+    // eleven bullets here and it is not on the path to a ticked step: a person who pastes their
+    // list is done. Nothing is deleted, and every command still works.
+    "  • _Optional:_ paste a Google screenshot to score a keyword (`keywords shortlist` for the numbers), then `strategy`, `serp cards` and `strategy approve` group and lock what survived. `keywords delete all` empties the set and asks once first.",
     `  • Measuring is not a command here. The approved queries JOIN the tracked question set, and the visibility audit asks them: at Day 0 for the archived run, then again at day 30, 60 and 90. Roughly $0.03 a question, and the Day 0 card states the count before anything is spent.`,
     "",
     "_Every `expansion` row was proposed by a model. That is not evidence anybody searched it, which is why those rows rank below anything the market or you said. Hooks are kept for ads and emails and never become a page's keyword._"

@@ -174,8 +174,13 @@ export async function pastedListPointer(input: {
     return [
       `:point_right: *Nothing was saved.* That looks like ${count} phrases, and a list on its own is ` +
         `dictation even here.`,
-      "Put `keywords add:` on the line above it and every one of them is stored, ranked against " +
-        "this client's offer, and waiting for `keywords approve`.",
+      // ‼️ IT POINTS AT `pick:`, NOT `add:`, AND THAT WAS THE WHOLE COMPLAINT. `add:` stores a list
+      // and chooses nothing, so somebody who followed this line pasted fifteen phrases, was told
+      // "0 of 15 added", and still had no keywords chosen. Somebody pasting a list they went and
+      // fetched has already decided; the command that says so is `pick:`.
+      "Put `keywords pick:` on the line above it and every one of them is stored, ranked against " +
+        "this client's offer, and chosen as what the pages get planned from.",
+      "_`keywords add:` instead if you only want them in the set without choosing them._",
     ].join("\n");
   }
 

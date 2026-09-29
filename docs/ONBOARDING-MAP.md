@@ -552,10 +552,10 @@ Keywords: 200+ ways the offer is said, approved by me
 
 **Feeds, and what carries it:**
 
-- **`client_keywords.selected_at`** — the keywords that survived their screenshot, kept by a reaction on the keyword's own card.
+- **`client_keywords.selected_at`** — the keywords a person CHOSE: pasted under `keywords pick:`, taken by number with `keywords pick 3, 7`, or kept with a reaction on the keyword's own card. One writer, selectKeywordIds, and it approves in the same statement because a selected row that is not approved is invisible to selectedKeywords and falls back to the whole approved set.
   - carried by `selectedKeywords()` in `src/lib/clients/keyword-decisions.ts`
   - read by step 21 `pre_call_pages`
-  - the seven pages, the headlines and the anchor ladder. ‼️ THIS IS THE CURATED-20 BUG ITSELF: the column was written and read back by the card that wrote it, while step 21 went on drawing from the approved set, so twenty deliberate decisions reached nothing.
+  - the seven pages, the headlines and the anchor ladder. ‼️ THIS WAS THE CURATED-20 BUG AND THE SHAPE IS WORTH REMEMBERING: the column was written and read back only by the card that wrote it, while step 21 went on drawing from the approved set, so deliberate decisions reached nothing. Until 2026-09-28 it was worse than that, because the only way to write the column at all was to paste a Google screenshot for one keyword at a time, so on a real client it was never written and the fallback was the whole story.
 - **`keyword_serp_reads.keyword_id`** — which keywords have a screenshot on file, filed against the keyword the picture was of.
   - carried by `picturedIds()` in `src/lib/clients/keyword-strategy.ts`
   - read by step 21 `pre_call_pages`
