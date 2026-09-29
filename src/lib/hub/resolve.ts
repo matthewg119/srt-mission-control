@@ -16,6 +16,7 @@ import { unstable_cache, revalidateTag } from "next/cache";
 import { supabaseAdmin } from "@/lib/db";
 import { readTheme, activeTheme, type HubTheme } from "@/lib/hub/theme";
 import { readSkin, activeSkin, type StoredSkin } from "@/lib/hub/skin";
+import { destinationFromRow, type Destination } from "@/lib/hub/destinations";
 
 export type HubKind = "hub" | "reviews";
 
@@ -72,7 +73,23 @@ export interface HubClient {
 }
 
 export type HostResolution =
-  | { status: "ok"; host: string; kind: HubKind; client: HubClient }
+  | {
+      status: "ok";
+      host: string;
+      kind: HubKind;
+      client: HubClient;
+      /**
+       * Where this hostname's pages live, for siteUrl().
+       *
+       * ‼️ CARRIED HERE BECAUSE THE LOOKUP ALREADY READ THE ROW. Every public URL the hub
+       * emits -- canonical, OG, the sitemap, llms.txt, the JSON-LD on the page -- used to
+       * be composed from `host` alone, which answers "what hostname served this request"
+       * rather than "where does this page live". Those are the same string on a subdomain
+       * and different on a subfolder, so a second lookup downstream would be a second
+       * chance to answer it the old way.
+       */
+      destination: Destination;
+    }
   | { status: "unknown" };
 
 const SELECT =
@@ -82,7 +99,9 @@ const SELECT =
 async function lookup(host: string): Promise<HostResolution> {
   const { data, error } = await supabaseAdmin
     .from("client_hosts")
-    .select(`host, kind, enabled, clients!inner(${SELECT})`)
+    .select(
+      `id, host, kind, delivery, base_path, public_origin, site_key, enabled, clients!inner(${SELECT})`
+    )
     .eq("host", host)
     .eq("enabled", true)
     .maybeSingle();
@@ -95,7 +114,7 @@ async function lookup(host: string): Promise<HostResolution> {
 
   if (!data) return { status: "unknown" };
 
-  const row = data as unknown as {
+  const row = data as unknown as Record<string, unknown> & {
     host: string;
     kind: HubKind;
     clients: Record<string, unknown>;
@@ -103,7 +122,15 @@ async function lookup(host: string): Promise<HostResolution> {
   const c = row.clients;
   if (!c) return { status: "unknown" };
 
-  return { status: "ok", host: row.host, kind: row.kind, client: toHubClient(c) };
+  return {
+    status: "ok",
+    host: row.host,
+    kind: row.kind,
+    client: toHubClient(c),
+    // client_id is not selected: the join means it is the client we just read, and asking
+    // PostgREST for it as well would be a second name for the same fact.
+    destination: destinationFromRow({ ...row, client_id: c.id }),
+  };
 }
 
 /**

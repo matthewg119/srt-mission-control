@@ -10,8 +10,10 @@
 // So the live page and the preview both render THESE components. The only things a caller
 // varies are the two that genuinely differ:
 //   - `pages`, because the preview shows drafts and the live route shows published only
-//   - `host`, because JSON-LD and canonicals need the client's hostname, which the preview
-//     composes rather than resolves
+//   - `destination`, because JSON-LD and canonicals need to state where the page LIVES, and
+//     a preview is previewing a destination nobody has published to yet. It was `host` until
+//     destinations existed, which made every URL here describe the hostname that served the
+//     request -- the same string on a subdomain and the wrong one on a subfolder.
 //
 // Nothing here reads a request, a header or a session. Given the same props it produces
 // the same HTML, which is the only thing that makes a preview worth showing to a client.
@@ -19,6 +21,7 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { HubClient } from "@/lib/hub/resolve";
+import { siteUrl, type Destination } from "@/lib/hub/destinations";
 import { localBusinessJsonLd, questionAnswerJsonLd, breadcrumbJsonLd, jsonLdScript } from "@/lib/hub/jsonld";
 import { NO_PLAN_LINKS, type PlanLinks } from "@/lib/hub/plan-links";
 import { HubCta } from "./hub-cta";
@@ -103,12 +106,17 @@ const LIVE_LINK_BASE = "/";
 /** The index: who they are, what has been answered, and the canonical NAP. */
 export function HubIndexBody({
   client,
-  host,
+  destination,
   pages,
   linkBase = LIVE_LINK_BASE,
 }: {
   client: HubClient;
-  host: string;
+  /**
+   * Where these pages live. Replaced a bare `host: string`, which was used in this file for
+   * URL building and nothing else -- so every URL it emitted described the hostname that
+   * served the request rather than the one the pages are on.
+   */
+  destination: Destination;
   pages: HubBodyPage[];
   linkBase?: string;
 }) {
@@ -118,7 +126,9 @@ export function HubIndexBody({
     <>
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: jsonLdScript(localBusinessJsonLd(client, host)) }}
+        dangerouslySetInnerHTML={{
+          __html: jsonLdScript(localBusinessJsonLd(client, siteUrl(destination))),
+        }}
       />
 
       {/*
@@ -200,14 +210,15 @@ export function HubIndexBody({
  */
 export function HubAnswerBody({
   client,
-  host,
+  destination,
   page,
   links = NO_PLAN_LINKS,
   linkBase = LIVE_LINK_BASE,
   homeHref = LIVE_LINK_BASE,
 }: {
   client: HubClient;
-  host: string;
+  /** Where these pages live. See HubIndexBody. */
+  destination: Destination;
   page: HubAnswerPage;
   links?: PlanLinks;
   linkBase?: string;
@@ -225,7 +236,7 @@ export function HubAnswerBody({
             questionAnswerJsonLd({
               question: page.question,
               answerText: plainText(page.answerMd),
-              url: `https://${host}/${page.slug}`,
+              url: siteUrl(destination, page.slug),
               authorName: client.displayName,
               datePublished: page.publishedAt,
             })
@@ -240,9 +251,9 @@ export function HubAnswerBody({
           dangerouslySetInnerHTML={{
             __html: jsonLdScript(
               breadcrumbJsonLd([
-                { name: client.displayName, url: `https://${host}/` },
-                { name: pillar.title, url: `https://${host}/${pillar.slug}` },
-                { name: page.title, url: `https://${host}/${page.slug}` },
+                { name: client.displayName, url: siteUrl(destination) },
+                { name: pillar.title, url: siteUrl(destination, pillar.slug) },
+                { name: page.title, url: siteUrl(destination, page.slug) },
               ])
             ),
           }}

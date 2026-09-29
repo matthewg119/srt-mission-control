@@ -10,6 +10,7 @@
 // a tick on the board that means nothing, which is worse than no tick.
 
 import { supabaseAdmin } from "@/lib/db";
+import { siteUrl, hubDestination, subdomainDestination } from "@/lib/hub/destinations";
 import { fetchPage } from "@/lib/medspa-owner-scrape";
 import { subdomainLabel } from "@/lib/clients/normalize";
 
@@ -140,7 +141,12 @@ export async function mainSiteLinksPillar(clientId: string): Promise<MainSiteLin
     return notChecked("No hub host is attached and there is no domain to derive one from.");
   }
 
-  const pillarUrls = pillarSlugs.map((slug) => `https://${hubHost}/${slug}`);
+  // The hub destination, so a subfolder client's pillar URLs are the ones their site
+  // actually serves. Falls back to the derived subdomain, which is what this read did
+  // before destinations existed and is still right for every client on one.
+  const hubDest =
+    (await hubDestination(clientId)) ?? subdomainDestination(clientId, hubHost);
+  const pillarUrls = pillarSlugs.map((slug) => siteUrl(hubDest, slug));
 
   // ── Their homepage ─────────────────────────────────────────────────────────
   const site = ((client.website as string | null) || domain || "").trim();

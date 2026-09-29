@@ -22,6 +22,7 @@
 // between "we believe the chips are deterministic" and "the chips cannot be anything else".
 
 import { supabaseAdmin } from "@/lib/db";
+import { siteUrl, hubDestination } from "@/lib/hub/destinations";
 import { listPublished } from "@/lib/hub/pages";
 import { allowedMagnet, bookingGate } from "./engine";
 import { deliveryUrlFor, pillLabel } from "./magnets";
@@ -63,26 +64,28 @@ export interface ChipInput {
 }
 
 /**
- * The client's own hub host, as ATTACHED rather than as derived.
+ * Where the client's pages live, as WIRED rather than as derived.
  *
  * Same rule review-card.ts states over the same table: client_hosts holds what was actually
  * attached, and constructing `learn.{domain}` from a domain column would produce a confident link
  * to a hostname that may never have been set up. No row means no page chips, which is a widget
  * with one fewer button rather than a widget offering a dead one.
+ *
+ * ‼️ THIS WAS A PRIVATE FOURTH READER OF client_hosts AND IS NOW hubDestination(). It read the
+ * host column and composed `https://${host}/${slug}` per chip, which is right on a subdomain
+ * and wrong on a subfolder. The read it replaced returned any hub row; this one is the
+ * SUBDOMAIN hub specifically, so a subfolder-only client gets no page chips rather than chips
+ * pointing at a hostname their visitors never see. That is the same "no row, no chips" trade
+ * this helper has always made, and it stops being a limitation when a page carries its own
+ * destination.
  */
-async function hubHost(clientId: string): Promise<string | null> {
-  const { data, error } = await supabaseAdmin
-    .from("client_hosts")
-    .select("host")
-    .eq("client_id", clientId)
-    .eq("kind", "hub")
-    .maybeSingle();
-  if (error) {
-    console.error(`[concierge/chips] host read failed: ${error.message}`);
+async function hubDest(clientId: string) {
+  try {
+    return await hubDestination(clientId);
+  } catch (e) {
+    console.error(`[concierge/chips] host read failed: ${(e as Error).message}`);
     return null;
   }
-  const host = (data as { host?: unknown } | null)?.host;
-  return typeof host === "string" && host.trim() ? host.trim() : null;
 }
 
 /**
@@ -111,15 +114,15 @@ export async function chipsFor(input: ChipInput): Promise<TurnChip[]> {
 
     // 2. The client's own published pages. "Other posts", in Matthew's words: the reason the
     //    widget is worth putting on every page of a site rather than only on the review page.
-    const host = await hubHost(input.config.clientId);
-    if (host) {
+    const destination = await hubDest(input.config.clientId);
+    if (destination) {
       const pages = await listPublished(input.config.clientId);
       for (const page of pages.slice(0, MAX_PAGE_CHIPS)) {
         chips.push({
           kind: "page",
           key: page.id,
           label: page.question || page.title,
-          url: `https://${host}/${page.slug}`,
+          url: siteUrl(destination, page.slug),
         });
       }
     }

@@ -18,6 +18,7 @@ import { HubIndexBody } from "../src/components/hub/hub-bodies";
 import { loadClientForPreview } from "../src/lib/hub/resolve";
 import { readSkin, skinClass, skinStyle } from "../src/lib/hub/skin";
 import { readTheme } from "../src/lib/hub/theme";
+import { subdomainDestination } from "../src/lib/hub/destinations";
 import {
   loadSkin,
   writeSkin,
@@ -147,7 +148,7 @@ async function main(): Promise<void> {
       const skin = readSkin({ template });
       const c = { ...(seenPending as NonNullable<typeof seenPending>), skin };
       const body = renderToStaticMarkup(
-        React.createElement(HubIndexBody, { client: c, host: "learn.example.com", pages })
+        React.createElement(HubIndexBody, { client: c, destination: subdomainDestination(c.id, "learn.example.com"), pages })
       );
       const style = Object.entries(skinStyle(skin) as Record<string, string>)
         .map(([k, v]) => `${k}: ${v}`)

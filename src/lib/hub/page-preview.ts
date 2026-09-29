@@ -24,6 +24,7 @@ import { HubAnswerBody } from "@/components/hub/hub-bodies";
 import { activeTheme, readTheme, themeStyle } from "@/lib/hub/theme";
 import { activeSkin, readSkin, skinStyle, hubRootClass } from "@/lib/hub/skin";
 import { hostsFor } from "@/lib/hub/vercel-domains";
+import { subdomainDestination } from "@/lib/hub/destinations";
 import type { HubClient } from "@/lib/hub/resolve";
 
 export interface PreviewPage {
@@ -199,7 +200,9 @@ export async function renderPageBody(
   const body = renderToStaticMarkup(
     React.createElement(HubAnswerBody, {
       client: loaded.client,
-      host: loaded.host,
+      // A preview is previewing the subdomain the pages would go to; there is no
+      // destination row yet because nothing has been published. See subdomainDestination.
+      destination: subdomainDestination(loaded.client.id, loaded.host),
       page,
     })
   );

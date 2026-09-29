@@ -1,6 +1,7 @@
 // The hub's sitemap, per host. Published pages only.
 
 import { resolveHost } from "@/lib/hub/resolve";
+import { siteUrl } from "@/lib/hub/destinations";
 import { listPublished } from "@/lib/hub/pages";
 
 // NOT `export const revalidate`. That is a FULL-ROUTE cache, and revalidateTag() does not
@@ -33,13 +34,19 @@ export async function GET(
 
   const pages = await listPublished(resolved.client.id);
 
+  // ‼️ EVERY <loc> IS WHERE THE PAGE LIVES, NOT THE HOST THAT SERVED THIS FILE. A sitemap
+  // is the one document whose entire job is to state URLs, so a subfolder client's sitemap
+  // built from the request host would list a hostname their pages are not on -- and Search
+  // Console rejects a sitemap whose URLs are outside the property it was submitted for, so
+  // this fails loudly rather than quietly. That is the better half of the trade, and it is
+  // still worth not getting wrong.
   const urls = [
-    `  <url>\n    <loc>https://${escapeXml(host)}/</loc>\n  </url>`,
+    `  <url>\n    <loc>${escapeXml(siteUrl(resolved.destination))}</loc>\n  </url>`,
     ...pages.map((page) => {
       const lastmod = page.updatedAt || page.publishedAt;
       return [
         "  <url>",
-        `    <loc>https://${escapeXml(host)}/${escapeXml(page.slug)}</loc>`,
+        `    <loc>${escapeXml(siteUrl(resolved.destination, page.slug))}</loc>`,
         lastmod ? `    <lastmod>${new Date(lastmod).toISOString().slice(0, 10)}</lastmod>` : null,
         "  </url>",
       ]

@@ -43,7 +43,22 @@ export interface Destination {
   enabled: boolean;
 }
 
-const COLUMNS = "id, client_id, host, kind, delivery, base_path, public_origin, site_key, enabled";
+export const DESTINATION_COLUMNS =
+  "id, client_id, host, kind, delivery, base_path, public_origin, site_key, enabled";
+
+const COLUMNS = DESTINATION_COLUMNS;
+
+/**
+ * One client_hosts row to one Destination, in one place.
+ *
+ * Exported for the same reason toHubClient is: resolveHost() reads client_hosts by
+ * hostname with the client joined on, so it holds these columns already and building the
+ * Destination a second way there is how the live page and the board start disagreeing
+ * about where a page lives.
+ */
+export function destinationFromRow(r: Record<string, unknown>): Destination {
+  return toDestination(r);
+}
 
 function toDestination(r: Record<string, unknown>): Destination {
   return {
@@ -204,6 +219,33 @@ export async function resolveDestination(
     error: `This client has ${wired.length} destinations wired. Choose which one this page goes to: ${wired
       .map((d) => destinationLabel(d))
       .join(", ")}.`,
+  };
+}
+
+/**
+ * An in-memory subdomain destination for a surface that is not serving a real one.
+ *
+ * ‼️ THIS IS FOR PREVIEWS, AND IT EXISTS SO THERE IS STILL ONLY ONE COMPOSITION. The three
+ * preview surfaces (the tokenised client link, the dashboard preview, and the HTML file
+ * posted to Slack) render the production components against a hostname rather than a
+ * client_hosts row -- a draft page has no destination yet, which is the whole point of a
+ * preview. Without this they would each need a `https://${host}/${slug}` fallback, which is
+ * three more places answering "where does this page live", and the previews are exactly
+ * where a wrong answer is least likely to be noticed.
+ *
+ * It is not written anywhere and has no id, because it is not a destination anybody chose.
+ */
+export function subdomainDestination(clientId: string, host: string): Destination {
+  return {
+    id: "",
+    clientId,
+    host,
+    kind: "hub",
+    delivery: "subdomain",
+    basePath: null,
+    publicOrigin: null,
+    siteKey: null,
+    enabled: true,
   };
 }
 

@@ -8,6 +8,7 @@
 // it is not counted as one anywhere.
 
 import { resolveHost } from "@/lib/hub/resolve";
+import { siteUrl } from "@/lib/hub/destinations";
 import { listPublished } from "@/lib/hub/pages";
 
 // NOT `export const revalidate`. That is a FULL-ROUTE cache, and revalidateTag() does not
@@ -46,7 +47,7 @@ export async function GET(
     "## Answers",
     "",
     ...(pages.length
-      ? pages.map((page) => `- [${page.title}](https://${host}/${page.slug}): ${page.question}`)
+      ? pages.map((page) => `- [${page.title}](${siteUrl(resolved.destination, page.slug)}): ${page.question}`)
       : ["- (none published yet)"]),
     "",
     ...(client.website ? ["## Elsewhere", "", `- [Main website](${client.website})`, ""] : []),

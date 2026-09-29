@@ -7,6 +7,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { resolveHost } from "@/lib/hub/resolve";
+import { siteUrl } from "@/lib/hub/destinations";
 import { listPublished, planLinkRows } from "@/lib/hub/pages";
 import { orderIndexPages } from "@/lib/hub/plan-links";
 import { HubIndexBody } from "@/components/hub/hub-bodies";
@@ -41,7 +42,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
         : `${client.displayName} · Questions and answers`,
     },
     description: `Straight answers to the questions people actually ask about ${client.displayName}${where ? ` in ${where}` : ""}.`,
-    alternates: { canonical: `https://${host}/` },
+    alternates: { canonical: siteUrl(resolved.destination) },
     robots: { index: true, follow: true },
   };
 }
@@ -51,7 +52,7 @@ export default async function HubIndex({ params }: Props) {
   const resolved = await resolveHost(host);
   if (resolved.status !== "ok") notFound();
 
-  const { client, kind } = resolved;
+  const { client, kind, destination } = resolved;
 
   // ‼️ NO CONCIERGE ON THE AI REFERRAL ENGINE, AND THAT IS WHY THIS RETURNS EARLY RATHER THAN SETTING A
   // FLAG. The tool is regulated separately (NOT_GATED in hub/page-gate.ts) and no model may go
@@ -66,7 +67,7 @@ export default async function HubIndex({ params }: Props) {
 
   return (
     <>
-      <HubIndexBody client={client} host={host} pages={pages} />
+      <HubIndexBody client={client} destination={destination} pages={pages} />
       {/* The index is not one answer, so it names no magnet and the ladder decides. */}
       <ConciergeEmbed clientId={client.id} />
     </>

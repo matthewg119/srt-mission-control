@@ -3,6 +3,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { resolveHost } from "@/lib/hub/resolve";
+import { siteUrl } from "@/lib/hub/destinations";
 import { getPublished, listPublished, planLinkRows } from "@/lib/hub/pages";
 import { NO_PLAN_LINKS, planLinksFor, type PlanLinks } from "@/lib/hub/plan-links";
 import { HubAnswerBody, plainText, truncate } from "@/components/hub/hub-bodies";
@@ -26,17 +27,22 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const page = await getPublished(resolved.client.id, params.slug);
   if (!page) return { robots: { index: false, follow: false } };
 
+  // One URL, used twice. Composing it in both slots is how a canonical and an og:url start
+  // disagreeing about the same page, which reads to a crawler as two pages.
+  const url = siteUrl(resolved.destination, page.slug);
+
   return {
     title: page.title,
     description: page.metaDescription || truncate(plainText(page.answerMd), 155),
-    // The canonical is on the CLIENT's host. Never mission.srtagency.com, which is
-    // noindex, and never their main site, which does not have this page.
-    alternates: { canonical: `https://${host}/${page.slug}` },
+    // The canonical is where the page LIVES. Never mission.srtagency.com, which is noindex,
+    // never their main site, which does not have this page, and never the request host,
+    // which on a subfolder is ours rather than theirs.
+    alternates: { canonical: url },
     robots: { index: true, follow: true },
     openGraph: {
       type: "article",
       title: page.title,
-      url: `https://${host}/${page.slug}`,
+      url,
       siteName: resolved.client.displayName,
     },
   };
@@ -66,7 +72,7 @@ export default async function HubPage({ params }: Props) {
 
   return (
     <>
-      <HubAnswerBody client={client} host={host} page={page} links={links} />
+      <HubAnswerBody client={client} destination={resolved.destination} page={page} links={links} />
       {/*
         The concierge, carrying the offer THIS page was written toward. Renders null unless the
         client's concierge_configs.enabled is true, which only the concierge_live step sets.

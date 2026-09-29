@@ -54,6 +54,7 @@ import { universeFontClass } from "@/components/hub/universe-fonts";
 import { UniverseBand, UniverseTop } from "@/components/hub/universe-chrome";
 import "@/app/hub/[host]/hub.css";
 import "@/app/hub/[host]/universes.css";
+import { subdomainDestination, type Destination } from "@/lib/hub/destinations";
 
 // A preview must never be a cached render: you preview to see what you just saved.
 export const dynamic = "force-dynamic";
@@ -145,9 +146,9 @@ export default async function TokenPreview({ params, searchParams }: Props) {
         <UniverseTop universe={client.skin?.universe} name={client.displayName} where={[client.city, client.state].filter(Boolean).join(", ") || null} pages={-1} />
         <div className="hub-wrap">
           {ghost ? (
-            <HubAnswerBody client={client} host={host} page={ghost} linkBase={base} homeHref={`/preview/${params.token}?kind=concierge`} />
+            <HubAnswerBody client={client} destination={subdomainDestination(client.id, host)} page={ghost} linkBase={base} homeHref={`/preview/${params.token}?kind=concierge`} />
           ) : (
-            <HubIndexBody client={client} host={host} pages={useGhost ? GHOST_PAGES : real} linkBase={base} />
+            <HubIndexBody client={client} destination={subdomainDestination(client.id, host)} pages={useGhost ? GHOST_PAGES : real} linkBase={base} />
           )}
         </div>
         <UniverseBand universe={client.skin?.universe} name={client.displayName} where={null} pages={-1} />
@@ -226,9 +227,9 @@ export default async function TokenPreview({ params, searchParams }: Props) {
         {kind === "reviews" ? (
           <ReferralEngine client={client} engine={engine} look={readLook(searchParams.look)} />
         ) : slug ? (
-          <PreviewAnswer clientId={verified.clientId} host={host} slug={slug} client={client} />
+          <PreviewAnswer clientId={verified.clientId} destination={subdomainDestination(client.id, host)} slug={slug} client={client} />
         ) : (
-          <PreviewIndex clientId={verified.clientId} host={host} client={client} />
+          <PreviewIndex clientId={verified.clientId} destination={subdomainDestination(client.id, host)} client={client} />
         )}
       </div>
     </div>
@@ -245,27 +246,27 @@ export default async function TokenPreview({ params, searchParams }: Props) {
  */
 async function PreviewIndex({
   clientId,
-  host,
+  destination,
   client,
 }: {
   clientId: string;
-  host: string;
+  destination: Destination;
   client: Awaited<ReturnType<typeof loadClientForPreview>> & object;
 }) {
   const all = await listAllForBoard(clientId);
   const pages = all.filter((p) => p.status === "published");
 
-  return <HubIndexBody client={client} host={host} pages={pages} />;
+  return <HubIndexBody client={client} destination={destination} pages={pages} />;
 }
 
 async function PreviewAnswer({
   clientId,
-  host,
+  destination,
   slug,
   client,
 }: {
   clientId: string;
-  host: string;
+  destination: Destination;
   slug: string;
   client: Awaited<ReturnType<typeof loadClientForPreview>> & object;
 }) {
@@ -273,7 +274,7 @@ async function PreviewAnswer({
   const page = all.find((p) => p.slug === slug && p.status === "published");
   if (!page) notFound();
 
-  return <HubAnswerBody client={client} host={host} page={page} />;
+  return <HubAnswerBody client={client} destination={destination} page={page} />;
 }
 
 /**
