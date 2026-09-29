@@ -95,6 +95,18 @@ export const CLIENT_WORKFLOWS: Record<string, ClientWorkflow> = {
       return runOffsiteTargets(ctx);
     },
   },
+  quote_request: {
+    key: "quote_request",
+    label: "Ask for a source",
+    description:
+      "When the quality gate refuses a page for a claim nothing on file supports, draft an email asking a named expert for one quotable sentence that settles it. Use it instead of softening the claim.",
+    needs: "a page currently refused by the quality gate",
+    needsAudience: false,
+    run: async (ctx) => {
+      const { runQuoteRequest } = await import("./quote-request");
+      return runQuoteRequest(ctx);
+    },
+  },
   post_call_email: {
     key: "post_call_email",
     label: "Post-call email",
