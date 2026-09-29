@@ -1,4 +1,10 @@
-// The pasted marketing site: what is stored, and what is taken out on the way in.
+// The pasted marketing site: what is stored, what is taken out on the way in, and what is served.
+//
+// ‼️ IT LIVES IN lib/hub/ AND NOT IN lib/launch/, AND THE SPLIT IS THE POINT.
+// lib/launch/ is the Launch Lane's PROCESS: its board, its steps, what confirms them. This is
+// the public SERVING surface, read on every request to a client's own domain by the same route
+// tree that renders the answer pages. Filing it under the lane would have put a hot public read
+// path inside a folder whose whole contract is "nothing outside the lane depends on this".
 //
 // ‼️ SANITISING HAPPENS ON WRITE. THERE IS ONE DOOR AND THIS IS IT.
 // Not at render time, for the reason page-evidence.ts gives about isFirstParty(): a second copy

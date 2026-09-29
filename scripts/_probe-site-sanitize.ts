@@ -11,7 +11,7 @@
  * that strips everything passes every security check and ships unstyled text.
  */
 
-import { sanitizeSiteHtml, normalizeSitePath } from "../src/lib/launch/site-pages";
+import { sanitizeSiteHtml, normalizeSitePath } from "../src/lib/hub/site-pages";
 
 let failures = 0;
 

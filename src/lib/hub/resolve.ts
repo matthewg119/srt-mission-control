@@ -17,7 +17,22 @@ import { supabaseAdmin } from "@/lib/db";
 import { readTheme, activeTheme, type HubTheme } from "@/lib/hub/theme";
 import { readSkin, activeSkin, type StoredSkin } from "@/lib/hub/skin";
 
-export type HubKind = "hub" | "reviews";
+/**
+ * What a resolved hostname IS.
+ *
+ * `hub` is learn.{theirdomain}: an answer index plus one level of answer slugs, on a hostname a
+ * client's own registrar points at us. `reviews` is the referral engine. `site` is a Launch Lane
+ * client's whole website, on a domain SRT bought and holds, where the apex serves pasted
+ * marketing pages and /answers/* serves the same answer pages `hub` has always served.
+ *
+ * ‼️ ADDING A KIND CHANGES WHAT MIDDLEWARE LETS THROUGH, AND THE ORDER MATTERS.
+ * Middleware cannot tell these apart: it has no database, by design. Every external hostname
+ * gets the SAME path allowlist and the branch on kind happens here, after the row is resolved.
+ * So a path allowed for a `site` host is a path allowed on every client-controlled hostname,
+ * `hub` ones included. That is why the allowlist gained exactly one narrow pattern and not a
+ * prefix.
+ */
+export type HubKind = "hub" | "reviews" | "site";
 
 /** The cache tag every host row shares. Re-attaching a domain busts all of them. */
 export const HOSTS_TAG = "client-hosts";

@@ -23,6 +23,7 @@
 import { NextResponse, type NextRequest, type NextFetchEvent } from "next/server";
 import { auth } from "@/lib/auth";
 import { classifyHost, normalizeHost } from "@/lib/hub/host-classify";
+import { externalPathDecision, hubRewritePath, isConciergePath } from "@/lib/hub/hub-paths";
 
 /**
  * A bare 404. Never 401 or 403, which confirm the route exists, and never a redirect to
@@ -43,25 +44,12 @@ function notFound(json: boolean): NextResponse {
       });
 }
 
-/** The per-host generated files. Rewritten, because public/robots.txt is the app's own. */
-const HUB_FILES = new Set(["/robots.txt", "/sitemap.xml", "/llms.txt"]);
-
-/**
- * One page segment. No slash, no dot, no encoded traversal — so nothing under /api or
- * /dashboard can match, and neither can /foo.php. The hub's whole public surface is the
- * index plus one level of slugs.
- */
-const HUB_SLUG = /^\/[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$/;
-
-/**
- * The only API route reachable on a client-controlled hostname.
- *
- * ‼️ A NAME, NOT A PREFIX, AND IT STAYS THAT WAY. Turning this into a startsWith on
- * "/api/hub/" would publish every present and future route under that folder on every
- * hostname a client's registrar points at us. The hit log deliberately lives outside that
- * folder for the same reason -- see HIT_ENDPOINT below.
- */
-const HUB_API = "/api/hub/reviews/submit";
+// ‼️ THE PATH ALLOWLIST MOVED TO src/lib/hub/hub-paths.ts AND DID NOT CHANGE MEANING.
+// HUB_FILES, HUB_SLUG, HUB_ANSWER, HUB_API and CONCIERGE_FRAME live there now, next to the
+// predicates that read them, because inlined here nothing could reach them: the one thing
+// standing between a client's DNS zone and the CRM had no test. It does now
+// (scripts/_probe-hub-allowlist.ts). That file is pure and imports nothing, exactly as
+// host-classify.ts is and for the same stated reason.
 
 /**
  * Where the hit log is posted.
@@ -72,15 +60,6 @@ const HUB_API = "/api/hub/reviews/submit";
  * forbids slashes, so a two-segment path can never match.
  */
 const HIT_ENDPOINT = "/api/internal/hub-hit";
-
-/**
- * The concierge frame document: /w/{client-slug}, one segment, same shape rule as HUB_SLUG.
- *
- * No dot, no slash, no encoded traversal, so /w/../api/anything cannot match and neither can
- * /w/foo.php. The slug is `clients.slug`, which is already unique-constrained, so the embed
- * snippet a clinic pastes into their site carries a name they recognise rather than a uuid.
- */
-const CONCIERGE_FRAME = /^\/w\/[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$/;
 
 /**
  * Record one hub request, out of band.
@@ -186,39 +165,32 @@ export default function middleware(req: NextRequest, ev: NextFetchEvent) {
   // there the hostname belongs to a client's registrar. Do not read this as permission to
   // loosen that one.
   if (hostClass === "concierge") {
-    const ok =
-      path === "/embed.js" ||
-      CONCIERGE_FRAME.test(path) ||
-      path === "/api/concierge" ||
-      path.startsWith("/api/concierge/");
-    if (!ok) return notFound(path.startsWith("/api/"));
+    if (!isConciergePath(path)) return notFound(path.startsWith("/api/"));
     return NextResponse.next();
   }
 
   // ── EXTERNAL: a hostname somebody else's registrar points at us ─────────────
   if (hostClass === "external") {
-    // The hub's internal path is not a public route. It is reachable only by the rewrite
-    // below, so asking for it directly is a miss like any other.
-    if (path === "/hub" || path.startsWith("/hub/")) return notFound(false);
+    // ‼️ THE WHOLE DECISION, IN ORDER, IN ONE PURE FUNCTION. It used to be three checks
+    // sequenced here, where a test could reach the pieces but not the sequence, and reading one
+    // piece alone is actively misleading: the shape check says yes to /dashboard, and what makes
+    // that harmless is the rewrite two lines below, not the check. See hub-paths.ts.
+    const decision = externalPathDecision(path);
 
-    // The AI Referral Engine's submit endpoint. The host travels as a request header rather than
-    // in the path: an API route has no full-route cache to key, so there is nothing here
-    // for a header to leak across.
-    if (path === HUB_API) {
+    if (decision === "refuse") return notFound(path.startsWith("/api/"));
+
+    if (decision === "forward_api") {
       const headers = new Headers(req.headers);
       headers.set("x-hub-host", host);
       return NextResponse.next({ request: { headers } });
     }
-
-    const isHubPath = path === "/" || HUB_FILES.has(path) || HUB_SLUG.test(path);
-    if (!isHubPath) return notFound(path.startsWith("/api/"));
 
     // REWRITE, never redirect. The host goes in the PATH and not in a header, because
     // Next's full-route cache keys on the pathname: two clients sharing the path /pricing
     // behind an ISR cache keyed only by path would serve one clinic's page on the other
     // clinic's hostname. The host segment is what keeps those cache entries disjoint.
     const url = req.nextUrl.clone();
-    url.pathname = `/hub/${host}${path === "/" ? "" : path}`;
+    url.pathname = hubRewritePath(host, path);
 
     // AFTER the allowlist, so nothing refused above is ever counted, and out of band so the
     // rewrite below is returned at the same speed it always was.

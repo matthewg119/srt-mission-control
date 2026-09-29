@@ -148,6 +148,24 @@ alter table public.client_hosts add constraint client_hosts_kind_check
   check (kind in ('hub', 'reviews', 'site'));
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- 4b. hub_hits.kind gains 'site' TOO, and forgetting this would have been invisible
+-- ─────────────────────────────────────────────────────────────────────────────
+--
+-- ‼️ THIS IS THE ONE IN THIS FILE THAT WOULD HAVE FAILED SILENTLY AND STAYED THAT WAY.
+-- hub_hits is where crawler evidence lands, and crawler evidence is what this product is sold
+-- on. The insert happens in recordHit(), called from /api/internal/hub-hit, which is called from
+-- a middleware waitUntil on a response that has ALREADY GONE OUT, and whose catch deliberately
+-- swallows everything so a database blip cannot break a page. Correct, and it means a CHECK
+-- violation here produces no error anybody sees.
+--
+-- So a Launch Lane client would have served perfectly, been crawled perfectly, and reported
+-- zero hits forever, while every other client's numbers looked healthy. Nobody goes looking for
+-- a number that is absent rather than wrong.
+alter table public.hub_hits drop constraint if exists hub_hits_kind_check;
+alter table public.hub_hits add constraint hub_hits_kind_check
+  check (kind in ('hub', 'reviews', 'site'));
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- 5. client_site_pages -- the pasted marketing site
 -- ─────────────────────────────────────────────────────────────────────────────
 --

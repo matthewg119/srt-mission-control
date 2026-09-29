@@ -14,13 +14,20 @@
 
 import { createHash } from "node:crypto";
 import { supabaseAdmin } from "@/lib/db";
+import type { HubKind } from "@/lib/hub/resolve";
 import type { BotClass } from "@/lib/hub/bot-classify";
 import { classifyUserAgent } from "@/lib/hub/bot-classify";
 
 export interface HitInput {
   clientId: string;
   host: string;
-  kind: "hub" | "reviews";
+  /**
+   * ‼️ HubKind, NOT A LOCAL COPY. hub_hits.kind carries a CHECK constraint, so a kind this type
+   * allows but the constraint does not is an insert that fails and is SWALLOWED by the caller
+   * (recording a hit must never break a page). That combination is a silent zero on the one
+   * table the product is sold on. docs/2026-09-30-launch-lane.sql widens the constraint to match.
+   */
+  kind: HubKind;
   path: string;
   userAgent: string | null;
   /** RAW. Hashed here and never stored. */
