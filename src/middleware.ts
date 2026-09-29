@@ -258,7 +258,19 @@ export default function middleware(req: NextRequest, ev: NextFetchEvent) {
     const secret = process.env.HUB_PROXY_SECRET;
     // ‼️ UNSET IS CLOSED, NOT OPEN. A missing secret must not mean "no check": that is how
     // a deployment without the variable set becomes a way to read every client's pages.
-    if (!secret || req.headers.get("x-hub-proxy") !== secret) return notFound(false);
+    //
+    // ‼️ A QUERY PARAMETER IS ACCEPTED AS WELL AS A HEADER, AND THAT IS NOT A WEAKENING.
+    // A Vercel rewrite CANNOT set a request header: `rewrites` has no header field, and
+    // `headers` sets RESPONSE headers. A client whose whole integration is two lines in their
+    // vercel.json therefore has no way to send one, so a header-only door would be a door
+    // nobody can open by the means we are telling them to use.
+    //
+    // The two are equivalent in what they protect against. The request is server to server --
+    // their edge to our origin -- so the parameter never reaches a browser, never lands in a
+    // referrer and is not in any URL a visitor sees. What it defends is the same thing: a
+    // deployment URL plus a guessed site key.
+    const presented = req.headers.get("x-hub-proxy") ?? req.nextUrl.searchParams.get("k");
+    if (!secret || presented !== secret) return notFound(false);
     if (!SITE_PATH.test(path)) return notFound(false);
 
     const res = NextResponse.next();

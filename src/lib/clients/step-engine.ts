@@ -158,7 +158,7 @@ function isoDay(d: Date): string {
  * padding it with boilerplate teaches people to stop reading these posts.
  *
  * ‼️ SIX MANUAL STEPS USED TO RETURN NULL AND SHOULD NEVER HAVE (2026-08-25): call_booked,
- * call_held, gbp_buildout, citation_cleanup, review_request_configured and day_30_date. For
+ * call_held, gbp_buildout, offsite_executed, review_handover and day_30_date. For
  * those, `blocks()` adds no body section at all, so the card was a label and three buttons —
  * and the label is a summary of the work, not an instruction for doing it. Runner v3 §3 is the
  * standard the rest of this switch is written to: "Never 'check the listing.' Always 'Search
@@ -342,7 +342,7 @@ async function instructionsFor(
         // OBVIOUS. Three steps have "review" in the label and they own three different things.
         "*This is the competitor review-COUNT grid.* It is internal and no customer ever sees it.",
         "It feeds findings section 3. The tool a customer uses is the AI Referral Engine preview; handing",
-        `it over is step ${stepNumber("referral_engine_handed")}.`,
+        `it over is step ${stepNumber("review_handover")}.`,
         "",
         ...formatReviewAuditCard({
           clientName: c.name,
@@ -367,7 +367,7 @@ async function instructionsFor(
 
       return [
         "*This step owns whether the tool RENDERS and is themed.* It is not the review audit",
-        `(the review audit, an internal competitor grid) and not the handover (step ${stepNumber("referral_engine_handed")}).`,
+        `(the review audit, an internal competitor grid) and not the handover (step ${stepNumber("review_handover")}).`,
         "",
         `Internal preview: ${reviewPreviewUrl(c.id)}`,
         ":lock: *That URL cannot be sent to a client.* It is a `/dashboard/` path and the page",
@@ -798,9 +798,9 @@ async function instructionsFor(
     // The card now says the plain sentence first and points at the step that fills the gap. The
     // nineteen-platform breakdown is ONE LINE PER STATE here; the per-listing detail is in the
     // PDF, which is the whole reason the PDF exists.
-    case "citation_cleanup_list": {
+    case "offsite_target_list": {
       const refs = await outputRefsFor(c.id);
-      const list = docLink(c.id, refs.get("citation_cleanup_list"), "the cleanup list");
+      const list = docLink(c.id, refs.get("offsite_target_list"), "the cleanup list");
 
       const { loadSweep, countByStatus } = await import("./presence-sweep");
       const rows = await loadSweep(c.id);
@@ -835,14 +835,14 @@ async function instructionsFor(
         `  • Screenshots go in step ${stepNumber("presence_sweep_manual")}'s thread, and I read ` +
           "them back with a *Confirm all as read* button, which is one tap for the batch.",
         `  • Row by row instead on the Presence sweep panel: ${boardUrl(c)}`,
-        `  • Step ${stepNumber("citation_cleanup")} is where the corrections actually get made, ` +
+        `  • Step ${stepNumber("offsite_executed")} is where the corrections actually get made, ` +
           "and it refuses while anything is unchecked.",
       ];
     }
 
-    case "citation_cleanup": {
+    case "offsite_executed": {
       const refs = await outputRefsFor(c.id);
-      const list = docLink(c.id, refs.get("citation_cleanup_list"), `step ${stepNumber("citation_cleanup_list")}'s ranked cleanup list`);
+      const list = docLink(c.id, refs.get("offsite_target_list"), `step ${stepNumber("offsite_target_list")}'s ranked cleanup list`);
 
       const { loadSweep, countByStatus, effectiveStatus, worstFirst } = await import("./presence-sweep");
       const rows = await loadSweep(c.id);
@@ -853,7 +853,7 @@ async function instructionsFor(
       );
 
       return [
-        list ? `*The list:* ${list}` : `*Step ${stepNumber("citation_cleanup_list")}'s cleanup list has not been generated yet.*`,
+        list ? `*The list:* ${list}` : `*Step ${stepNumber("offsite_target_list")}'s cleanup list has not been generated yet.*`,
         "",
         // The verifier refuses on not_checked FIRST, so the card says it first. A card that
         // buried this under the mismatch count would have him fixing listings and still
@@ -861,7 +861,7 @@ async function instructionsFor(
         counts.not_checked > 0
           ? `:warning: *${counts.not_checked} of ${rows.length} listings carry no confirmed status.* ` +
             "[Done] refuses on that before it looks at anything else: a row nobody has read is " +
-            `not a row that was cleaned. Step ${stepNumber("citation_cleanup_list")} reads the sweep screenshots and posts what it ` +
+            `not a row that was cleaned. Step ${stepNumber("offsite_target_list")} reads the sweep screenshots and posts what it ` +
             "proposes with a *Confirm all as read* button on it, which is one tap for the batch. " +
             "Row by row instead on the Presence sweep panel."
           : `All ${rows.length} listings carry a confirmed status.`,
@@ -910,7 +910,7 @@ async function instructionsFor(
       ];
     }
 
-    case "review_request_configured": {
+    case "review_handover": {
       const { data: client } = await supabaseAdmin
         .from("clients")
         .select("booking_software, review_workflow, review_request_mode, review_owner_name, review_destination_primary")
@@ -950,7 +950,7 @@ async function instructionsFor(
           : ":warning: *Nothing is recorded yet, so neither branch has been chosen* and [Done] will refuse.",
         client?.review_owner_name
           ? `The named person on the record is *${client.review_owner_name as string}*.`
-          : `No named person is on the record yet. Step ${stepNumber("referral_engine_handed")} wants one.`,
+          : `No named person is on the record yet. Step ${stepNumber("review_handover")} wants one.`,
         "",
         ...(destinations.length
           ? [`They told us at intake they collect on: ${destinations.join(", ")}.`]
@@ -966,11 +966,11 @@ async function instructionsFor(
         "*Next:*",
         `  • Record the mode and paste the links: ${boardUrl(c, "review-destination")}`,
         `  • See what she will see: ${appUrl()}/dashboard/clients/${c.id}/preview?kind=reviews`,
-        `  • Then step ${stepNumber("referral_engine_handed")} hands the tool to the named person.`,
+        `  • Then step ${stepNumber("review_handover")} hands the tool to the named person.`,
       ];
     }
 
-    case "referral_engine_handed": {
+    case "review_handover": {
       const { data: client } = await supabaseAdmin
         .from("clients")
         .select("review_owner_name")
@@ -2118,7 +2118,7 @@ export async function postStep(clientId: string, stepKey: string): Promise<void>
   // Doing it at the one place every body passes through means a step added tomorrow gets it for
   // free, and a step with no arm gets it too, which is exactly the set that needed it most.
   //
-  // ‼️ AND IT DEFERS TO AN ARM THAT ALREADY SAYS IT. hub_preview, review_request_configured and
+  // ‼️ AND IT DEFERS TO AN ARM THAT ALREADY SAYS IT. hub_preview, review_handover and
   // offer_locked write their own, tuned to what that step actually accepts in its thread. Two
   // "Next" blocks on one card is worse than either alone, so the arm wins.
   //

@@ -1,11 +1,16 @@
-// The 41 delivery steps. One constant, one file — Runner v3 section 1.
+// The 37 delivery steps. One constant, one file — Runner v3 section 1.
 //
 // Was 33 until the AI Skin Concierge added `concierge_preview` and `concierge_live`, and 35
 // until the attribution stack added `tracking_installed` and `self_report_field`, and 38 with
 // the review workflow. `site_replica` is the 39th, the offer pair made 41, and `keyword_set` and
 // `pre_call_pages` made 43 on 2026-09-11. It came back DOWN to 41 on 2026-09-12, when the call
-// pack merged `presence_pdf` and `findings_doc` into `call_sheet`. The count is written down in
-// prose here and in step-verify.ts; if you add another step, both say so.
+// pack merged `presence_pdf` and `findings_doc` into `call_sheet`. It came down again to 37 on
+// 2026-09-29: the two review steps merged into `review_handover`, and `time_log_entries`,
+// `weekly_report` and `day_30_date` came off entirely. The first two were predicates about
+// ongoing behaviour rather than work, and the third asked somebody to write down Day 0 plus
+// thirty, which report-reminders.ts already derives. All three already had a nudge or a
+// derivation elsewhere, so nothing was lost. The count is written down in prose here and in
+// step-verify.ts; if you add another step, both say so.
 //
 // ‼️ THE PROSE HAD DRIFTED AND THE TYPE HAD NOT, WHICH IS THE DESIGN WORKING. This said 37 and
 // step-verify.ts said 33 while the array held 38. Nothing broke, because the count is
@@ -236,7 +241,7 @@ const STEP_LIST = [
   // blockedBy the manual sweep since the call pack merge: it used to name `presence_pdf`, which
   // was itself only waiting on the sweep. The cleanup list is built from the sweep rows, not from
   // the PDF, so this is the dependency it always had.
-  { key: "citation_cleanup_list", phase: PHASE_BEFORE, label: "Citation cleanup list built and ranked", auto: true, mode: "auto", blockedBy: ["presence_sweep_manual"] },
+  { key: "offsite_target_list", phase: PHASE_BEFORE, label: "Off-site targets: listings to fix, listings to claim, cited sources to pitch", auto: true, mode: "auto", blockedBy: ["presence_sweep_manual"] },
   // `auto: true` as of the hub runner: the system really does attach both hostnames to Vercel
   // and seed the three DNS rows. The half that stays manual is the THEME, which is why this is
   // auto_then_manual and why [Done] refuses until somebody has confirmed it.
@@ -295,7 +300,7 @@ const STEP_LIST = [
   // (approveMagnetCandidate) and resolving it for the drafter both need a concierge_configs row,
   // and provisionConcierge at concierge_preview is the only thing that creates one. Placed next to
   // the keyword step, every magnet mint would refuse.
-  { key: "pre_call_pages", phase: PHASE_BEFORE, label: "Seven pages drafted before the call: one pillar for the offer, six supports", auto: true, mode: "auto_then_manual", blockedBy: ["offer_locked", "keyword_set", "page_candidates", "concierge_preview"] },
+  { key: "pre_call_pages", phase: PHASE_BEFORE, label: "Seven pages drafted before the call, one pillar and six supports, plus the tool page in its own slot", auto: true, mode: "auto_then_manual", blockedBy: ["offer_locked", "keyword_set", "page_candidates", "concierge_preview"] },
   // ‼️ THE CALL PACK (2026-09-12): four documents, one step, one thread. The call sheet, the
   // findings, the presence and consistency PDF and the closing questions are generated together
   // by one runner and all four are filed against this step. See artifacts/call-pack.ts.
@@ -343,7 +348,7 @@ const STEP_LIST = [
 
   // ── AFTER THE CALL: build. Unblocked by Day 0, not before ─────────────────
   { key: "gbp_buildout", phase: PHASE_AFTER, label: "Google Business Profile buildout: categories, services, photos, Q&A seeded", mode: "manual", blockedBy: [DAY_ZERO_STEP_KEY, "access_granted"] },
-  { key: "citation_cleanup", phase: PHASE_AFTER, label: "Citation cleanup executed from the list", mode: "manual", blockedBy: [DAY_ZERO_STEP_KEY, "citation_cleanup_list"] },
+  { key: "offsite_executed", phase: PHASE_AFTER, label: "Off-site executed: the listings fixed and claimed, the sources approached", mode: "manual", blockedBy: [DAY_ZERO_STEP_KEY, "offsite_target_list"] },
   { key: "subdomain_live", phase: PHASE_AFTER, label: "Subdomain live and verified in Search Console", auto: true, mode: "auto_then_manual", blockedBy: ["dns_records"] },
   // ‼️ `mode: "manual"`, AND IT WAS `"auto_then_manual"` WITH NOTHING BEHIND IT (fixed 2026-08-25).
   // Exactly the shape day_zero_archive was in, one line down from where that was fixed.
@@ -360,8 +365,14 @@ const STEP_LIST = [
   // one is caught at build rather than on a live client.
   { key: "first_page", phase: PHASE_AFTER, label: "First pages published, measured track first", mode: "manual", blockedBy: [DAY_ZERO_STEP_KEY, "subdomain_live"] },
   { key: "cards_printed", phase: PHASE_AFTER, label: "Cards printed and handed to the clinic", mode: "manual", blockedBy: ["review_card_pdf"] },
-  { key: "review_request_configured", phase: PHASE_AFTER, label: "Automated request configured in their booking system, or card_only recorded", mode: "manual", blockedBy: ["call_held"] },
-  { key: "referral_engine_handed", phase: PHASE_AFTER, label: "AI Referral Engine handed to the named person", mode: "manual", blockedBy: ["subdomain_live"] },
+  // ‼️ ONE STEP, TWO RETIRED KEYS. These were "configure the automated request" and "hand the
+  // Referral Engine over", and they were always one conversation with one person: the named
+  // human at the clinic who will actually ask patients for reviews. Splitting them meant the
+  // handover could be ticked while nobody had been told how the requests go out, which is the
+  // half that decides whether any of it happens.
+  //
+  // blockedBy keeps BOTH old blockers, or the merge would quietly relax one of them.
+  { key: "review_handover", phase: PHASE_AFTER, label: "Review handover: the named person has the Referral Engine and knows how requests go out", mode: "manual", blockedBy: ["call_held", "subdomain_live"] },
   // ‼️ MANUAL, AND IT MUST NOT BECOME AUTO. This is the step that puts a camera in front of a
   // clinic's patients and starts storing photographs of their faces for 24 hours. Nothing about
   // that should happen because a sweep decided the prerequisites looked satisfied. blockedBy
@@ -386,9 +397,18 @@ const STEP_LIST = [
   // ─────────────────────────────────────────────────────────────────────────
   { key: "tracking_installed", phase: PHASE_AFTER, label: "SRT pixel live on the client site, first real session seen", auto: true, mode: "auto_then_manual", blockedBy: ["call_held"] },
   { key: "self_report_field", phase: PHASE_AFTER, label: "How did you hear about us: six options live on their own booking form", mode: "manual", blockedBy: ["call_held"] },
-  { key: "time_log_entries", phase: PHASE_AFTER, label: "Time log has entries from day 0", auto: true, mode: "auto", blockedBy: [DAY_ZERO_STEP_KEY] },
-  { key: "weekly_report", phase: PHASE_AFTER, label: "Weekly report firing", auto: true, mode: "auto", blockedBy: ["first_page"] },
-  { key: "day_30_date", phase: PHASE_AFTER, label: "Day-30 report date set", mode: "manual", blockedBy: [DAY_ZERO_STEP_KEY] },
+  // ‼️ THREE STEPS CAME OFF THE BOARD HERE ON 2026-09-29 AND NONE OF THEM LOST A CAPABILITY.
+  //
+  // `time_log_entries` and `weekly_report` were PREDICATES ABOUT ONGOING BEHAVIOUR rather than
+  // work anybody does: one counted whether the log had rows, the other whether reports were
+  // firing. A board is a list of things to do, and a permanent row that is true this week and
+  // false next week is not one. Both already have a live nudge in the daily digest
+  // (runTimeLogNudges, runWeeklyReports), which is where an ongoing fact belongs.
+  //
+  // `day_30_date` asked somebody to write down a date that is arithmetic: Day 0 plus thirty.
+  // report-reminders.ts already derives it from the day_zero_archive stamp and nudges on the
+  // exact day. A person typing it in was a second source of truth for a number nobody needs to
+  // choose.
 ] as const satisfies readonly DeliveryStep[];
 
 export const DELIVERY_STEPS: readonly DeliveryStep[] = STEP_LIST;
@@ -422,7 +442,27 @@ export type StepKey = (typeof STEP_LIST)[number]["key"];
  */
 const LEGACY_STEP_KEYS: Readonly<Record<string, StepKey>> = {
   review_tool_preview: "referral_engine_preview",
-  review_tool_handed: "referral_engine_handed",
+
+  // ‼️ REPOINTED, NOT ADDED BESIDE. `review_tool_handed` already pointed at
+  // `referral_engine_handed`, which has now itself been retired into `review_handover`.
+  // currentStepKey() does ONE hop and not a chain, so leaving this aimed at the old key would
+  // resolve a pre-2026-09-19 Slack button to a step that no longer exists. Two hops in a map
+  // that resolves one is a dead button that looks alive.
+  review_tool_handed: "review_handover",
+  referral_engine_handed: "review_handover",
+  review_request_configured: "review_handover",
+
+  // The two renames. The KEYS changed because a rename is a new key plus an entry here, never
+  // an edit in place: client_delivery_steps.step_key is plain text and editing a key orphans
+  // every row already carrying it.
+  citation_cleanup_list: "offsite_target_list",
+  citation_cleanup: "offsite_executed",
+
+  // ‼️ THREE RETIRED KEYS WITH NOWHERE TO GO, AND THAT IS WHY THEY ARE NOT HERE.
+  // time_log_entries, weekly_report and day_30_date were deleted rather than renamed. A legacy
+  // entry maps an old key to a CURRENT one, and there is no current step these mean. An old
+  // Slack button for one of them falls through to stepByKey returning undefined, which the
+  // card path already handles as "that step is gone" rather than crashing.
 };
 
 /**

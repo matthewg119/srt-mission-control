@@ -110,9 +110,14 @@ ok("the branch reads HUB_PROXY_SECRET", /process\.env\.HUB_PROXY_SECRET/.test(MW
 ok("it compares an x-hub-proxy header", /x-hub-proxy/.test(MW));
 ok(
   "an unset secret refuses rather than allows",
-  /if \(!secret \|\| req\.headers\.get\("x-hub-proxy"\) !== secret\) return notFound/.test(MW),
+  /if \(!secret \|\| presented !== secret\) return notFound/.test(MW),
   "the guard is not a falsy-secret-means-skip"
 );
+// ‼️ A QUERY PARAMETER IS ACCEPTED TOO, BECAUSE A VERCEL REWRITE CANNOT SET A REQUEST HEADER.
+// `rewrites` has no header field and `headers` sets RESPONSE headers, so a header-only door is
+// one no client could open by the means we tell them to use. Equivalent in what it protects:
+// the request is edge-to-origin, so the parameter never reaches a browser.
+ok("the query parameter is accepted as well", /searchParams\.get\("k"\)/.test(MW));
 
 // ── 6. Our copy is never the indexable one ──────────────────────────────────
 section("6. our copy is noindex");

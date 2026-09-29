@@ -3,7 +3,7 @@
 // ‼️ THIS ROUTE EXISTS BECAUSE NOTHING WROTE nap_discrepancies.confirmed_status.
 // effectiveStatus() is `confirmed_status ?? "not_checked"` and citation-cleanup.ts, findings.ts,
 // call-sheet.ts and presence-pdf.ts have all read it since they shipped. Nothing ever wrote it,
-// so every consumer saw eighteen rows of "not checked" forever, and citation_cleanup's verifier
+// so every consumer saw eighteen rows of "not checked" forever, and offsite_executed's verifier
 // dodged that by counting the SEED column instead and returning a green tick reading "no
 // listings remain at mismatch" for a client where nothing had been looked at.
 //

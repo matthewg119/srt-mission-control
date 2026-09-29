@@ -1,4 +1,4 @@
-// Reading a directory listing off the screenshot of it — the citation_cleanup_list step.
+// Reading a directory listing off the screenshot of it — the offsite_target_list step.
 //
 // ‼️ NAMED BY KEY, NOT BY NUMBER. This said "delivery step 14" until 2026-09-08, when
 // offer_proposed was inserted at position 10 and moved it to 15 without moving the sentence.
@@ -341,7 +341,7 @@ const PROPOSAL_SEVERITY: Record<string, number> = {
 };
 
 /**
- * The proposals as the citation_cleanup_list card prints them.
+ * The proposals as the offsite_target_list card prints them.
  *
  * ‼️ EVERY LINE SAYS "PROPOSED" AND THE HEADER SAYS NOTHING IS RECORDED. A card that listed
  * eight findings without that word would read as eight findings, which is a green tick over

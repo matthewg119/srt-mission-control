@@ -178,7 +178,7 @@ export default async function ClientDetailPage({
   // The three grids a person fills in: the presence sweep (steps 4, 5 and 25), the competitor
   // pick (step 7) and the review audit. Every one of them writes a column that had a
   // reader and no writer until 2026-08-24, which is why three delivery steps could never be
-  // confirmed and citation_cleanup returned a green tick over work nobody had done.
+  // confirmed and offsite_executed returned a green tick over work nobody had done.
   const [sweepRows, candidates, reviewRows, avatarCandidates, avatarConfirmed] = await Promise.all([
     loadSweep(id),
     loadCandidates(id),
@@ -701,8 +701,8 @@ export default async function ClientDetailPage({
         <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="text-sm font-medium text-white">Review handover</h2>
           <span className="text-xs text-[rgba(255,255,255,0.4)]">
-            steps {stepNumber("review_request_configured")} and{" "}
-            {stepNumber("referral_engine_handed")}
+            steps {stepNumber("review_handover")} and{" "}
+            {stepNumber("review_handover")}
           </span>
         </div>
         <ReviewWorkflowForm clientId={id} view={reviewWorkflowView} />

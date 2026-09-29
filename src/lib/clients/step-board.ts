@@ -89,7 +89,7 @@ export function forgetChannel(clientId: string): void {
  * ‼️ ops_channel_id IS WRITE-ONCE AND MUST STAY THAT WAY. slack_anchor_ts and slack_message_ts
  * are stored bare, with no channel beside them, and chat.update against a ts in the wrong
  * channel fails with message_not_found, which slackFetch reports as {ok:false} rather than
- * throwing. Moving a client's channel after their board exists orphans all 41 anchors at once,
+ * throwing. Moving a client's channel after their board exists orphans all 37 anchors at once,
  * silently. See the migration header.
  */
 export async function channelFor(clientId: string): Promise<string | null> {
