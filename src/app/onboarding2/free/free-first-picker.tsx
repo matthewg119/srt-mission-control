@@ -26,6 +26,7 @@
 import { useCallback, useState } from "react";
 import {
   DEFAULT_BILLING,
+  PAID_BILLING,
   PRICE_YEAR,
   PRICE_YEAR_EQUIV,
   UPSELL,
@@ -59,6 +60,24 @@ export type UpsellOutcome = "accepted_year" | "accepted_month" | "declined" | "f
 type Phase = "card" | "one" | "two";
 
 /**
+ * What step two opens on.
+ *
+ * ‼️ MONTHLY, WHICH IS THE OPPOSITE OF THE /onboarding2 PICKER, AND THE DIFFERENCE IS DELIBERATE
+ * (Matthew, 2026-09-29). `DEFAULT_BILLING` in pitch.ts is the YEARLY state, because that card opens
+ * cold and the guaranteed year is what it argues for. Step two is not cold: the reader has just
+ * been shown the year at PRICE_YEAR and said no to it. Opening on the same number they already
+ * declined asks the same question twice, which is the one thing a second screen must not do.
+ * Landing on PRICE_MONTH makes step two an actual alternative, and the toggle is right there for
+ * anybody who wants to reconsider the guarantee.
+ *
+ * ‼️ IT IS DERIVED FROM PAID_BILLING RATHER THAN CHANGING DEFAULT_BILLING, because that constant
+ * is what the live two-card picker opens on and this route must not reach across and move it.
+ * Falls back to DEFAULT_BILLING if the monthly state is ever removed, so this cannot render an
+ * empty toggle.
+ */
+const FALLBACK_BILLING = PAID_BILLING.find((b) => b.plan === "monthly") ?? DEFAULT_BILLING;
+
+/**
  * ‼️ MIRRORS OfferCards' SIGNATURE ON PURPOSE. Same `onPick` and `busy`, so this drops into the
  * existing `stage === "offer"` branch of onboarding2-client.tsx as a straight swap and `start()`
  * does not learn a new shape.
@@ -77,7 +96,7 @@ export function FreeFirstPicker({
 }) {
   const [phase, setPhase] = useState<Phase>("card");
   const [picked, setPicked] = useState(false);
-  const [billing, setBilling] = useState<BillingState>(DEFAULT_BILLING);
+  const [billing, setBilling] = useState<BillingState>(FALLBACK_BILLING);
 
   const free = offerFor("review_free");
   const year = offerFor("year_3300");

@@ -859,8 +859,25 @@ export const UPSELL = {
     /**
      * ‼️ THE SAME CONSTRUCTION AS year_3300.funnelHeadline, NOT A COPY OF ITS STRING. Both are
      * built from GUARANTEE_COUNT and GUARANTEE_WINDOW, so the day either moves, both move.
+     *
+     * ‼️ IT SAYS "OR GET YOUR MONEY BACK" AND THAT REVERSES THE VAGUE CALL MADE HIGHER UP THIS
+     * BLOCK (Matthew, 2026-09-29, second pass, overriding his own "keep it vague" from the same
+     * day). It used to end "guaranteed".
+     *
+     * The reversal is defensible and the reason is worth keeping: `year_3300.funnelIncludes`
+     * ALREADY ships the line "5 booked appointments in 90 days, or your money back" on the live
+     * /onboarding2 card, so the vague headline was the odd one out rather than the safe one. This
+     * makes the two agree.
+     *
+     * ‼️ WHAT IT DOES NOT DO IS MAKE THE CLAIM TRUE. REFUND_LINE is the remedy in the agreement:
+     * the first three months back, REFUND_AMOUNT, and we keep working the rest of the year. "Get
+     * your money back" reads as a full refund and is a larger promise than the document. That gap
+     * is inherited from the existing card, not created here, and closing it is a decision about
+     * the OFFER rather than about this screen. Until it is closed, `UPSELL.one.terms` carrying
+     * "we go through the full terms on the call" is the only thing standing between the card and
+     * the contract, so do not delete that line to save space.
      */
-    headline: `${GUARANTEE_COUNT} booked appointments in ${GUARANTEE_WINDOW}, guaranteed`,
+    headline: `${GUARANTEE_COUNT} booked appointments in ${GUARANTEE_WINDOW}, or get your money back`,
     /** Matthew's framing, verbatim in shape: free is good, here is what it does not do. */
     framing:
       "The AI Referral Engine gets you found and quoted. What it does not do on its own is fill next month's calendar.",
