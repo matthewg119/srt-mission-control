@@ -1422,6 +1422,17 @@ export async function POST(request: NextRequest) {
           const { handleReviewLinkThreadReply } = await import("@/lib/clients/review-link");
           const said =
             (await handleKeywordThreadReply({ clientId: client.id, stepKey: client.stepKey, text: userText, by })) ??
+            // ‼️ ABOVE THE STRATEGY VERBS, BECAUSE `tool` AND `tools` COLLIDE WITH NOTHING AND
+            // THE DECISION BELONGS WITH THE KEYWORDS. It is step twelve's thread on purpose: the
+            // evidence for which tool to build is the results pages somebody is looking at right
+            // there. By step twenty-one the pages are being drafted and a tool is a thing to
+            // squeeze in. Returns null outside keyword_set, so the chain is unaffected elsewhere.
+            (await (await import("@/lib/clients/tool-lane")).handleToolThreadReply({
+              clientId: client.id,
+              stepKey: client.stepKey,
+              text: userText,
+              by,
+            })) ??
             // ‼️ ABOVE THE LADDER, AND THAT ORDER MATTERS. Step 21 owns `pillar:` and `supports`;
             // the strategy verbs are namespaced under `strategy ...` precisely so the two cannot be
             // confused, and sitting above the ladder means a mistyped `strategy pillar 4` in step

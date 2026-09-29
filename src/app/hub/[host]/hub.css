@@ -1319,3 +1319,63 @@ body:has(.hub-tpl-editorial) { background: #fffdf9; }
 .hub-root.hub-ht-wide h1,
 .hub-root.hub-ht-wide h2,
 .hub-root.hub-ht-wide h3 { letter-spacing: 0.02em; }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   The tool page's interactive asset.
+
+   Themed through the same custom properties everything else here uses, so a
+   reused asset is RESTYLED per client rather than served as another client's
+   live page. No colour is hardcoded.
+   ───────────────────────────────────────────────────────────────────────── */
+.hub-tool-frame {
+  margin: 1.75rem 0;
+  padding: 1.25rem;
+  border: 1px solid var(--hub-rule, rgba(0, 0, 0, 0.12));
+  border-radius: var(--hub-radius, 8px);
+  background: var(--hub-panel, rgba(0, 0, 0, 0.02));
+}
+
+.hub-tool-inputs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.hub-tool-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  flex: 1 1 12rem;
+  font-size: 0.9rem;
+}
+
+.hub-tool-field > span {
+  color: var(--hub-muted, rgba(0, 0, 0, 0.6));
+}
+
+.hub-tool-field input {
+  font: inherit;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--hub-rule, rgba(0, 0, 0, 0.18));
+  border-radius: var(--hub-radius, 6px);
+  background: var(--hub-bg, #fff);
+  color: inherit;
+  /* 16px stops iOS zooming the page when a field is focused. */
+  font-size: max(1rem, 16px);
+}
+
+.hub-tool-result {
+  margin: 1rem 0 0;
+  font-size: 1.15rem;
+}
+
+.hub-tool-muted {
+  color: var(--hub-muted, rgba(0, 0, 0, 0.55));
+  font-size: 0.95rem;
+}
+
+.hub-tool-limits {
+  margin: 0.9rem 0 0;
+  font-size: 0.85rem;
+  color: var(--hub-muted, rgba(0, 0, 0, 0.55));
+}

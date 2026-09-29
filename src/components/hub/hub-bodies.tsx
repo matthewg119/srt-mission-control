@@ -25,6 +25,7 @@ import { siteUrl, type Destination } from "@/lib/hub/destinations";
 import { localBusinessJsonLd, questionAnswerJsonLd, breadcrumbJsonLd, jsonLdScript } from "@/lib/hub/jsonld";
 import { NO_PLAN_LINKS, type PlanLinks } from "@/lib/hub/plan-links";
 import { HubCta } from "./hub-cta";
+import { HubTool } from "./hub-tool";
 
 export interface HubBodyPage {
   id: string;
@@ -46,6 +47,13 @@ export interface HubAnswerPage {
    * sentence simply draws no block. It is never part of `answerMd`: see HubCta for why.
    */
   ctaLine?: string | null;
+  /**
+   * The reviewed component this page renders, from `client_pages.component_key`.
+   *
+   * ‼️ NULL ON EVERY ORDINARY PAGE, WHICH IS ALL OF THEM. Only a tool page names one, and
+   * an unknown key renders nothing rather than something: see HubTool.
+   */
+  componentKey?: string | null;
 }
 
 /**
@@ -281,6 +289,15 @@ export function HubAnswerBody({
           Part of <a href={`${linkBase}${pillar.slug}`}>{pillar.title}</a>
         </p>
       )}
+
+      {/*
+        ‼️ THE TOOL SITS ABOVE THE WORDS, AND THAT IS THE `tool` FORMAT'S OPENING RULE MADE
+        STRUCTURAL. "The asset sits at the top of the page and the first section is what it
+        answers and how to read the result." A calculator under eleven sections of prose is a
+        page with a calculator at the bottom that nobody reaches, so the ordering is here rather
+        than left to whoever writes the body.
+      */}
+      {page.componentKey ? <HubTool componentKey={page.componentKey} /> : null}
 
       <div className="hub-answer">
         {/*

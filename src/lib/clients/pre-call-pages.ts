@@ -1029,11 +1029,32 @@ export async function verifyPreCallPages(clientId: string): Promise<PreCallCheck
   }
 
   const magnets = withBody.filter((r) => pages.get(r.pageId as string)?.leadMagnetKey).length;
+
+  // ‼️ THE TOOL IS THE EIGHTH SLOT AND IT IS CHECKED SEPARATELY, WHICH IS WHAT "its own slot"
+  // MEANS IN A VERIFIER. The prompt said to widen a count of seven; this function never counted
+  // one, so there was nothing to widen. What it could not say before is whether the tool a client
+  // picked at step twelve had actually been built, and a tool nobody built is the one page Matthew
+  // demos on the call.
+  //
+  // Only when a tool was PICKED. A client with no tool is not an incomplete client: the tool is an
+  // eighth page beside the seven, not a required one.
+  const { clientTool } = await import("./tool-lane");
+  const tool = await clientTool(clientId).catch(() => null);
+  if (tool && tool.status !== "live" && !tool.pageId) {
+    return {
+      ok: false,
+      broken: false,
+      found: `the \`${tool.componentKey}\` tool is picked but has no page yet`,
+      todo: "Draft its page in the page studio and set its component key, or \`tool pick\` a different one at step twelve.",
+    };
+  }
+
   return {
     ok: true,
     evidence: [
       `${withBody.length} drafts in client_pages linked to approved plan rows (1 pillar, ${withBody.length - 1} supports)`,
       `${magnets} of them carry a magnet framing the anchor offer`,
+      ...(tool ? [`plus the ${tool.componentKey} tool page, the eighth slot`] : []),
     ],
   };
 }
