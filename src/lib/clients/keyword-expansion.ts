@@ -901,6 +901,19 @@ export const KEYWORDS_DELETE_ALL = /^keywords\s+delete\s+all$/i;
 
 /** `keywords variations`: more ways to say what has already been picked. */
 export const KEYWORDS_VARIATIONS = /^keywords\s+variations$/i;
+
+/**
+ * `keywords map`: group the picks into nine pillars with six supports each.
+ *
+ * ‼️ NOT `strategy`. That verb groups keywords by their SERP verdict and cannot run until screenshots
+ * are on file; this groups what a person picked and needs nothing. The two live side by side on
+ * purpose: the map is the strategy anybody can have in a minute, and `strategy` is the richer one
+ * that knows what Google actually shows.
+ */
+export const KEYWORDS_MAP = /^keywords\s+map$/i;
+
+/** `keywords pillars`: propose naming phrases that could be a pillar, when the map is short of them. */
+export const KEYWORDS_PILLARS = /^keywords\s+pillars$/i;
 export const KEYWORDS_MORE = /^keywords\s+more\s+(.+)$/i;
 
 // ‼️ `keywords prompt`, NOT a bare `prompt`. Step 11's framework thread already owns `prompt` and
@@ -978,6 +991,10 @@ export type KeywordCommand =
   | { kind: "pick_ranks"; ranks: number[] }
   /** Bare `keywords`: the best of the set, numbered, to pick from. */
   | { kind: "list" }
+  /** Group the picks into nine pillars with six supports each. */
+  | { kind: "map" }
+  /** Propose naming phrases that could be a pillar. Proposals, never auto-picked. */
+  | { kind: "pillars" }
   /** More ways to say what has already been picked. Proposals, never auto-approved. */
   | { kind: "variations" }
   /** Empty the set and start again. Draws a confirm button; deletes nothing by itself. */
@@ -1135,6 +1152,9 @@ export function parseKeywordCommand(raw: string, categories: readonly CategorySp
   }
 
   if (KEYWORDS_VARIATIONS.test(text)) return { kind: "variations" };
+  // Both anchored and both two words, so neither can reach the other and neither is a sentence.
+  if (KEYWORDS_MAP.test(text)) return { kind: "map" };
+  if (KEYWORDS_PILLARS.test(text)) return { kind: "pillars" };
   // Above `add:` and below `drop`, where it reads in the order somebody would say these things.
   // Anchored and three words long, so nothing else can reach it by accident.
   if (KEYWORDS_DELETE_ALL.test(text)) return { kind: "delete_all" };
@@ -1395,6 +1415,7 @@ export function formatKeywordCard(
     "  • `keywords prompt` hands over a research prompt that already carries this offer, the avatar and everything on file. Run it in claude.com.",
     "  • `keywords pick: <list>` stores a pasted list AND chooses it. What you choose is what the pages are planned from.",
     "  • `keywords` prints the 50 strongest with their numbers; `keywords pick 3, 7, 12` takes them by number.",
+    "  • `keywords map` groups the picks into 9 pillars with 6 supports each, which is the strategy. `keywords pillars` proposes phrases that could be a pillar.",
     "  • `keywords drop 12, 15` removes rows by number. `keywords add: <phrase>` stores one without choosing it.",
     "  • `keywords more <category>` writes more for one category, e.g. `keywords more price`. `keywords variations` writes more ways to say what you chose.",
     "  • `keywords approve` approves the query set as shown. That is the BREADTH the tracked question set is frozen from, not the choice of pages.",

@@ -481,6 +481,33 @@ const KEYWORDS_VARIATIONS: CommandSpec = {
   implementedIn: "src/lib/clients/keyword-variations.ts",
 };
 
+/**
+ * `keywords map` and `keywords pillars`: the nine-pillar strategy over the picks.
+ *
+ * ‼️ NOT `strategy`. That verb groups by SERP verdict and cannot run before screenshots exist; these
+ * group what a person picked and need nothing. Both anchored on a word boundary, so "keywords mapping
+ * is overrated" is still a sentence.
+ */
+const KEYWORDS_MAP: CommandSpec = {
+  label: "keywords map",
+  test: /^\s*[`*_]*keywords\s+map\b/i,
+  unmistakable: /^\s*[`*_]*keywords\s+map\b/i,
+  pointAt: "keyword_set",
+  what: "Keyword commands",
+  implementedIn: "src/lib/clients/keyword-map.ts",
+  mustBeOnTheCard: true,
+};
+
+const KEYWORDS_PILLARS: CommandSpec = {
+  label: "keywords pillars",
+  test: /^\s*[`*_]*keywords\s+pillars\b/i,
+  unmistakable: /^\s*[`*_]*keywords\s+pillars\b/i,
+  pointAt: "keyword_set",
+  what: "Keyword commands",
+  implementedIn: "src/lib/clients/client-keywords.ts",
+  mustBeOnTheCard: true,
+};
+
 const KEYWORDS_APPROVE: CommandSpec = {
   label: "keywords approve",
   test: /^\s*[`*_]*keywords\s+approve\b/i,
@@ -817,6 +844,8 @@ export const STEP_COMMANDS: Record<StepKey, readonly CommandSpec[]> = {
     KEYWORDS_PROMPT,
     KEYWORDS_ADD,
     KEYWORDS_PICK,
+    KEYWORDS_MAP,
+    KEYWORDS_PILLARS,
     KEYWORDS_VARIATIONS,
     KEYWORDS_APPROVE,
     KEYWORDS_APPROVE_SOME,

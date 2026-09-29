@@ -128,6 +128,39 @@ export async function picturedIds(
 
   const out = new Set<string>();
   for (const [id, reads] of byKeyword) if (pictured(reads)) out.add(id);
+
+  // ‼️ A KEYWORD A PERSON PICKED COUNTS AS LOOKED AT, AND THAT IS A DELIBERATE WIDENING (2026-09-29).
+  // The gate exists so a MODEL's proposal cannot become a page unread: on a real client most of the
+  // set is `expansion`, and a screenshot is how somebody proves they went and looked. A row carrying
+  // `selected_at` was chosen by a person out of the set, by name, which is the stronger version of
+  // the same evidence, not a way around it. Without this, `strategyView` withholds every pillar of a
+  // typed strategy map from page selection and step 21 silently plans from the approved set instead:
+  // the exact failure this gate was built to prevent, caused by the gate.
+  //
+  // The screenshot still buys what only it can buy: the VERDICT (post, merge, service page), the
+  // asset judgement and the magnet space. Those come from reading the results page, and nothing here
+  // invents them.
+  const missing = [...keywordIds].filter((id) => !out.has(id));
+  if (missing.length) {
+    const picked = await supabaseAdmin
+      .from("client_keywords")
+      .select("id")
+      .eq("client_id", clientId)
+      .in("id", missing)
+      .not("selected_at", "is", null)
+      .is("dropped_at", null);
+    // ‼️ A FAILED READ MUST NOT OPEN THE GATE, and it must not close it either: the screenshots above
+    // were read successfully, so those ids stand. Only the widening is lost, which degrades to
+    // yesterday's behaviour rather than to "pass them all".
+    if (picked.error) {
+      if (!/does not exist|schema cache/i.test(picked.error.message)) {
+        console.error("[clients/serp-gate] picked rows could not be read:", picked.error.message);
+      }
+    } else {
+      for (const r of picked.data ?? []) out.add(r.id as string);
+    }
+  }
+
   return { ok: true, pictured: out };
 }
 

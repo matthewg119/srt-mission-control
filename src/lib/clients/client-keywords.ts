@@ -53,6 +53,13 @@ import {
   type StoredKeyword,
 } from "./keyword-expansion";
 import { KeywordRunRecorder, recordKeywordDecisions, recordKeywordRun } from "./keyword-dataset";
+import {
+  STRATEGY_PILLARS,
+  SUPPORTS_PER_PILLAR,
+  mapGap,
+  mapStrategy,
+  type StrategyMap,
+} from "./keyword-map";
 import { SELECTION_TARGET } from "./keyword-cards";
 import { stepNumber } from "@/config/delivery-steps";
 
@@ -1185,20 +1192,26 @@ export async function verifyKeywordSet(clientId: string): Promise<KeywordCheck> 
   // has to be a NAMING variant and supports are capped per category. Refusing there, four steps
   // later, with the offer already locked, is a worse place to find out. Gated on kept > 0, so every
   // client from before the picking existed is untouched.
+  // ‼️ THE MAP, ASKED HERE WHERE IT CAN STILL BE BUILT. Matthew, 2026-09-29: nine pillars, six
+  // supports each, "before we move on". A pick of fifteen good phrases can satisfy every count above
+  // and still leave step 21 with no pillar, because a pillar has to NAME what is sold and supports
+  // are capped per category. Refusing four steps later, with the offer locked, is a worse place to
+  // find out. Gated on kept > 0, so every client from before the picking existed is untouched.
   if (kept > 0) {
-    const { offerPool } = await import("./pre-call-pages");
-    const { selectOfferPlan, PRE_CALL_SUPPORTS } = await import("./page-plan");
-    const pooled = await offerPool(clientId);
-    // An unreadable pool is not evidence that the picks are wrong. It says so at step 21, where the
-    // plan is actually built; refusing the tick over it would block the step on a different fault.
-    if (!("error" in pooled)) {
-      const plan = selectOfferPlan(pooled.pool, { city: pooled.city });
-      if (plan.fix) {
+    const built = await buildMap(clientId);
+    // An unreadable map is not evidence that the picks are wrong, and this is a verifier: it must
+    // not refuse a step because a different thing is broken. buildMap's own error says what.
+    if (!("error" in built)) {
+      const gap = mapGap(built.map);
+      if (gap) {
         return {
           ok: false,
           broken: false,
-          found: `${kept} picked, but they cannot fill a pillar and ${PRE_CALL_SUPPORTS} supports yet`,
-          todo: plan.fix,
+          found: `${built.map.clusters.length} of ${STRATEGY_PILLARS} pillars mapped from ${kept} picked keyword${kept === 1 ? "" : "s"}, and the map wants ${gap}`,
+          todo:
+            "`keywords map` shows the map as it stands. " +
+            (built.map.pillarsShort > 0 ? "`keywords pillars` proposes phrases that could be one. " : "") +
+            "`keywords pick:` more phrases, or `keywords more <category>` to write some.",
         };
       }
     }
@@ -1557,6 +1570,10 @@ export async function handleKeywordThreadReply(input: {
       return pickRanksCommand(input.clientId, cmd.ranks, input.by);
     case "list":
       return listCommand(input.clientId);
+    case "map":
+      return mapCommand(input.clientId, input.by);
+    case "pillars":
+      return pillarsCommand(input.clientId);
     case "variations":
       return variationsCommand(input.clientId, input.by);
     case "delete_all":
@@ -2245,6 +2262,241 @@ async function listCommand(clientId: string): Promise<KeywordReply> {
       : `Nothing picked yet, so step ${stepNumber("pre_call_pages")} would plan from all ${live.length} approved rows. Pick the ones it should build around.`,
   ];
   return { message: lines.join("\n") };
+}
+
+/**
+ * `keywords map`: the picks grouped into nine pillars with six supports each.
+ *
+ * ‼️ IT WRITES keyword_clusters AND NOTHING ELSE, which is what makes it safe next to step 21. The
+ * `role` column is step 21's: `pillar:` and the anchor ladder clear every role and set one, so a map
+ * that wrote nine pillar roles would be wiped by the next ladder pick. `keyword_clusters` already
+ * carries exactly this shape (`pillar_keyword_id`, a label, a rank, a status) and `strategyView`
+ * already hands approved clusters to page selection, so the map reaches step 21 through a door that
+ * was built for it.
+ *
+ * ‼️ PROPOSED, NOT APPROVED. The map is a proposal until the step ticks, and the verifier is what
+ * approves it. `strategy approve` remains the richer lock for a client who did the screenshot pass.
+ */
+async function mapCommand(clientId: string, by: string): Promise<KeywordReply> {
+  const built = await buildMap(clientId);
+  if ("error" in built) return { message: `:warning: No map: ${built.error}` };
+  const { map, ctx, picks } = built;
+
+  if (!picks.length) {
+    return {
+      message: [
+        ":warning: Nothing is picked yet, so there is no map.",
+        "`keywords prompt` for the research prompt, then paste the list back under `keywords pick:`.",
+      ].join("\n"),
+    };
+  }
+
+  const wrote = await persistMap(clientId, map, by);
+  const lines = mapLines(map, ctx);
+  if (wrote) lines.push("", `_${wrote}_`);
+
+  const gap = mapGap(map);
+  if (gap) {
+    lines.push("", `:hourglass: *Still needed:* ${gap}.`);
+    if (map.pillarsShort > 0) lines.push("`keywords pillars` proposes phrases that could be one.");
+    if (map.supportsShort > 0) lines.push("`keywords pick:` more phrases, or `keywords more <category>` to write some.");
+  } else {
+    lines.push("", ":white_check_mark: *The map is complete.* Press Done on the card.");
+  }
+
+  return { message: lines.join("\n"), after: () => refreshKeywordCard(clientId) };
+}
+
+/** The picks, the context and the map over them. One read, shared by the command and the verifier. */
+async function buildMap(
+  clientId: string
+): Promise<{ map: StrategyMap; ctx: KeywordContext; picks: StoredKeyword[] } | { error: string }> {
+  const c = await keywordContext(clientId);
+  if (!c.ok) return { error: `missing ${c.missing.join("; ")}` };
+  const loaded = await loadKeywords(clientId);
+  if ("error" in loaded) return { error: loaded.error };
+
+  const selected = await selectedIdsFor(clientId);
+  const picks = loaded.rows.filter((r) => selected.has(r.id) && !r.dropped && r.use === "query");
+  const namingKey = c.ctx.categories.find((s) => s.naming)?.key ?? null;
+  return { map: mapStrategy(picks, { namingKey }), ctx: c.ctx, picks };
+}
+
+/**
+ * The map on screen: one block per pillar, its supports under it, numbered by rank.
+ *
+ * The numbers are the row's own frozen rank, the same ones `keywords drop` and `keywords pick` take,
+ * so nothing here introduces a third numbering into a thread that already has two.
+ */
+function mapLines(map: StrategyMap, ctx: KeywordContext): string[] {
+  const out: string[] = [
+    `*The strategy map for ${ctx.treatment}.*`,
+    `${map.clusters.length} of ${STRATEGY_PILLARS} pillars, each wanting ${SUPPORTS_PER_PILLAR} supports.`,
+    "",
+  ];
+
+  map.clusters.forEach((c, i) => {
+    out.push(`*${i + 1}. ${c.pillar.phrase}*  \`${c.pillar.rank ?? "?"}\``);
+    for (const s of c.supports) out.push(`      \`${String(s.rank ?? 0).padStart(3, " ")}\` ${s.phrase}`);
+    if (c.short > 0) out.push(`      _${c.short} support${c.short === 1 ? "" : "s"} still needed._`);
+  });
+
+  if (!map.clusters.length) {
+    out.push("_No pillar yet. A pillar has to NAME what they sell, not ask a question about it._");
+  }
+
+  if (map.spare.length) {
+    out.push(
+      "",
+      `_${map.spare.length} more phrase${map.spare.length === 1 ? "" : "s"} could be a pillar and wait past the ninth: ${map.spare.slice(0, 5).map((r) => r.phrase).join("; ")}._`
+    );
+  }
+
+  if (map.unplaced.length) {
+    out.push(
+      "",
+      `*Not under a pillar yet* (${map.unplaced.length}). Still picked, still approved, and they count as the phrase family:`,
+      ...map.unplaced.slice(0, 10).map((r) => `      \`${String(r.rank ?? 0).padStart(3, " ")}\` ${r.phrase}`)
+    );
+    if (map.unplaced.length > 10) out.push(`      _and ${map.unplaced.length - 10} more._`);
+  }
+
+  return out;
+}
+
+/**
+ * Write the map into keyword_clusters, replacing the derived ones.
+ *
+ * ‼️ IT ONLY EVER DELETES `origin = 'derived'` CLUSTERS THAT ARE NOT APPROVED. A cluster somebody
+ * approved through the screenshot lane is a decision, and a re-map is a proposal: the proposal must
+ * not overwrite the decision. Returns a sentence for the card, or null when the table is not there.
+ */
+async function persistMap(clientId: string, map: StrategyMap, by: string): Promise<string | null> {
+  if (!map.clusters.length) return null;
+  const now = new Date().toISOString();
+
+  const del = await supabaseAdmin
+    .from("keyword_clusters")
+    .delete()
+    .eq("client_id", clientId)
+    .eq("origin", "derived")
+    .neq("status", "approved");
+  if (del.error) {
+    // A database without docs/2026-09-26-keyword-strategy.sql has no clusters, which is true of it.
+    if (/does not exist|schema cache/i.test(del.error.message)) return null;
+    console.error("[client-keywords] map: old clusters not cleared:", del.error.message);
+    return null;
+  }
+
+  const rows = map.clusters.map((c, i) => ({
+    client_id: clientId,
+    label: c.pillar.phrase,
+    pillar_keyword_id: c.pillar.id,
+    rank: i + 1,
+    origin: "derived",
+    // ‼️ A COMPLETE MAP IS THE DECISION, AN INCOMPLETE ONE IS A DRAFT. `strategyView` hands only
+    // APPROVED clusters to page selection, so a map that stayed "proposed" would be a strategy step
+    // 21 could not see, which is the curated-20 shape again in a different column. The verifier
+    // refuses the step until the map is complete, so "complete" and "approved" are the same fact.
+    status: map.complete ? "approved" : "proposed",
+    approved_at: map.complete ? now : null,
+    approved_by: map.complete ? by : null,
+    awareness_entry: c.pillar.awarenessStage ?? null,
+    rationale: `picked by ${by}; ${c.supports.length} of ${SUPPORTS_PER_PILLAR} supports`,
+    updated_at: now,
+  }));
+
+  const ins = await supabaseAdmin.from("keyword_clusters").insert(rows).select("id, pillar_keyword_id");
+  if (ins.error) {
+    console.error("[client-keywords] map: clusters not written:", ins.error.message);
+    return null;
+  }
+
+  // Membership, so a support knows which subject it belongs to. The pillar points at its own cluster.
+  const idByPillar = new Map((ins.data ?? []).map((r) => [r.pillar_keyword_id as string, r.id as string]));
+  let placed = 0;
+  for (const c of map.clusters) {
+    const clusterId = idByPillar.get(c.pillar.id);
+    if (!clusterId) continue;
+    const ids = [c.pillar.id, ...c.supports.map((s) => s.id)];
+    const upd = await supabaseAdmin
+      .from("client_keywords")
+      .update({ cluster_id: clusterId, updated_at: now })
+      .eq("client_id", clientId)
+      .in("id", ids);
+    if (upd.error) {
+      console.error("[client-keywords] map: membership not written:", upd.error.message);
+      continue;
+    }
+    placed += ids.length;
+  }
+
+  await recordKeywordDecisions({
+    clientId,
+    action: "pick_pillar",
+    actor: by,
+    rows: map.clusters.map((c) => ({
+      id: c.pillar.id,
+      phrase: c.pillar.phrase,
+      category: c.pillar.category,
+      rank: c.pillar.rank,
+      score: c.pillar.score,
+      origin: c.pillar.origin,
+      use: c.pillar.use,
+    })),
+    context: { via: "keywords map", supports: map.clusters.map((c) => c.supports.length) },
+  });
+
+  return `${map.clusters.length} cluster${map.clusters.length === 1 ? "" : "s"} and ${placed} keyword${placed === 1 ? "" : "s"} written to the map.`;
+}
+
+/**
+ * `keywords pillars`: phrases that could be a pillar, when the map is short of them.
+ *
+ * ‼️ PROPOSALS, NUMBERED, NEVER PICKED FOR HIM. Matthew, 2026-09-29: "if the keyword I suggested is
+ * not fit for it, please refuse and generate 6 variations where we can actually use it as a pillar
+ * and leave the rest as supports before we move on." So the phrase he picked keeps its place as a
+ * support and these arrive beside it as candidates. They join as `expansion`, which precedence ranks
+ * below anything a person typed, and they wait for `keywords pick 412`.
+ */
+async function pillarsCommand(clientId: string): Promise<KeywordReply> {
+  const built = await buildMap(clientId);
+  if ("error" in built) return { message: `:warning: No pillars: ${built.error}` };
+  const { map, ctx, picks } = built;
+
+  if (!picks.length) {
+    return { message: ":warning: Nothing is picked yet. `keywords pick:` your list first." };
+  }
+  if (map.pillarsShort === 0) {
+    return {
+      message: `All ${STRATEGY_PILLARS} pillars are on the map already. \`keywords map\` shows them.`,
+    };
+  }
+
+  const naming = ctx.categories.find((s) => s.naming);
+  if (!naming) {
+    return { message: ":warning: This audience has no naming category, so a pillar cannot be resolved here." };
+  }
+
+  return {
+    message: [
+      `:mag: Writing ${SUPPORTS_PER_PILLAR} ways to NAME *${ctx.treatment}*, for the ${map.pillarsShort} pillar${map.pillarsShort === 1 ? "" : "s"} the map is missing.`,
+      "_About a minute. They arrive as proposals: nothing is picked until you say so._",
+    ].join("\n"),
+    after: async () => {
+      const res = await moreCommand(clientId, naming);
+      const follow = res.after ? await res.after().catch(() => undefined) : undefined;
+      void follow;
+      await say(
+        clientId,
+        [
+          res.message,
+          "",
+          `_Pick the ones that name what they sell: \`keywords pick 412, 413\`. The phrases already in the map stay as supports._`,
+        ].join("\n")
+      );
+    },
+  };
 }
 
 /**

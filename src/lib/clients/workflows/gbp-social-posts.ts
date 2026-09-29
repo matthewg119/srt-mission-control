@@ -109,11 +109,17 @@ export async function runGbpSocialPosts(ctx: WorkflowContext): Promise<WorkflowR
   }
 
   const [keywords, plan] = await Promise.all([
-    reads.clientKeywords({ clientId: ctx.clientId, use: "query", approvedOnly: true, limit: 60 }),
+    // ‼️ THE PICKS WHEN THERE ARE ANY (2026-09-29). This was the only generator outside step 21 that
+    // writes the CLIENT's own customer-facing copy and drew from the whole approved set, where most
+    // rows are `expansion`: a model's proposals. Every post targets one keyword verbatim, so that
+    // meant posts aimed at phrases nobody chose, saying something other than what the pages say.
+    // Falls back to approved on a client who has picked nothing.
+    reads.clientKeywords({ clientId: ctx.clientId, use: "query", approvedOnly: true, pickedOnly: true, limit: 60 }),
     reads.clientPlan(ctx.clientId),
   ]);
 
   const approved = "error" in keywords ? [] : keywords.rows;
+  const curatedPool = "error" in keywords ? false : keywords.curated;
   if (approved.length === 0) {
     return {
       ok: false,
@@ -136,7 +142,9 @@ export async function runGbpSocialPosts(ctx: WorkflowContext): Promise<WorkflowR
     `Who the posts speak to: ${audience.label}. Call them ${v.buyerPlural} (one ${v.buyerSingular}). ` +
       `What the business sells are ${v.offerPlural}, it is ${withArticle(v.business)}, and booking is ${withArticle(v.visit)}.`,
     "",
-    "APPROVED KEYWORDS (a person chose these; use them verbatim as the target phrase):",
+    curatedPool
+      ? "THE PICKED KEYWORDS (a person chose exactly these for this client's pages; use them verbatim as the target phrase, so a post and a page say the same thing):"
+      : "APPROVED KEYWORDS (a person chose these; use them verbatim as the target phrase):",
     ...approved.slice(0, 40).map((k) => `  - ${k.phrase}  [${k.category}]`),
     "",
     planRows.length

@@ -539,12 +539,12 @@ Keywords: 200+ ways the offer is said, approved by me
 | Phase, mode | Before the call, auto_then_manual |
 | Waits on | `offer_locked`, `avatar_harvest` |
 | Runner | `runKeywordStep()` in `src/lib/clients/client-keywords.ts` |
-| Writes | `client_keywords` |
-| Reads | `audit_reports`, `audit_runs`, `client_keyword_strategy`, `clients`, `keyword_clusters` |
+| Writes | `client_keywords`, `keyword_clusters` |
+| Reads | `audit_reports`, `audit_runs`, `client_keyword_strategy`, `clients` |
 | [Done] reads | no table |
 | Dataset fields | 1 needed, 3 wanted |
 | Feeds | `client_keywords.selected_at` → 21 `pre_call_pages`; `keyword_serp_reads.keyword_id` → 21 `pre_call_pages` |
-| Downstream | steps 13 `custom_question_set`, 14 `page_candidates`, 21 `pre_call_pages` declare they wait on this; `client_keywords` is selected in 5 other file(s), e.g. `src/lib/clients/anchor-ladder.ts`, `src/lib/clients/archive.ts`, `src/lib/clients/keyword-cards.ts` |
+| Downstream | steps 13 `custom_question_set`, 14 `page_candidates`, 21 `pre_call_pages` declare they wait on this; `client_keywords` is selected in 6 other file(s), e.g. `src/lib/clients/anchor-ladder.ts`, `src/lib/clients/archive.ts`, `src/lib/clients/keyword-cards.ts`; `keyword_clusters` is selected in 2 other file(s), e.g. `src/lib/clients/keyword-strategy.ts`, `src/lib/clients/serp-cards.ts` |
 
 **[Done] refuses on:**
 

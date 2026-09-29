@@ -157,9 +157,9 @@ export const STEP_ACTIONS: Record<StepKey, StepAction> = {
       // the answers arrive as `manual` rows, which PRECEDENCE puts above every one of them.
       "`keywords prompt` first: it hands over a research prompt that already knows the offer. Run it in claude.com.",
       "‼️ Paste the list back under `keywords pick:`, one phrase per line. That stores them, approves them and CHOOSES them, and what you choose is what the pages are planned from.",
-      "Already have a set? `keywords` prints the 50 strongest with their numbers, and `keywords pick 3, 7, 12` takes about 20 of them.",
-      "`keywords drop 4, 9` for anything off-offer. `keywords variations` writes more ways to say the ones you chose. `keywords add:` stores without choosing.",
-      "`keywords approve` approves every query as the measurement pool the Day-0 question set is frozen from; it does not choose pages. `keywords approve 411-423` or `keywords approve mine` narrows it. Then press Done: it ticks if your picks fill one pillar and six supports.",
+      "Already have a set? `keywords` prints the 50 strongest with their numbers and `keywords pick 3, 7, 12` takes them. `keywords map` then groups the picks into 9 pillars with 6 supports each: that is the strategy, and step 21 drafts its 7 pages off the top of it. `keywords pillars` writes candidates when a pillar is missing.",
+      "`keywords drop 4, 9` for anything off-offer, `keywords variations` for more ways to say what you chose, `keywords add:` to store without choosing. `keywords approve` approves every query as the Day-0 measurement pool, which does not choose pages; `keywords approve 411-423` and `keywords approve mine` narrow it.",
+      "Then press Done. It ticks once the map is complete, and says exactly what is missing if it is not.",
       "_Optional, never required:_ paste a Google screenshot to score a keyword, `keywords shortlist` for the numbers, then `strategy`, `serp cards` and `strategy approve` group and lock what survived. `keywords delete all` starts over.",
     ],
   },

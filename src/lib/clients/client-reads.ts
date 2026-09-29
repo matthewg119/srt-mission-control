@@ -315,10 +315,22 @@ export async function clientKeywords(args: {
   approvedOnly?: boolean;
   category?: string | null;
   limit?: number;
+  /**
+   * Narrow to the keywords a person PICKED, when any have been.
+   *
+   * ‼️ FOR GENERATORS THAT WRITE THE CLIENT'S OWN COPY, NOT FOR MEASUREMENT. The approved set is
+   * breadth on purpose and on a real client most of it is `expansion`, a model's proposals: a GBP
+   * post aimed at one of those is a post about something nobody chose. Falls back to approved and
+   * says so through `curated`, the same contract selectedKeywords keeps, so a client who has picked
+   * nothing behaves exactly as before.
+   */
+  pickedOnly?: boolean;
 }): Promise<
   | {
       total: number;
       approved: number;
+      /** True when the rows are the picks rather than the whole approved set. */
+      curated: boolean;
       byCategory: Record<string, number>;
       rows: Array<{
         rank: number | null;
@@ -343,12 +355,29 @@ export async function clientKeywords(args: {
   if (args.approvedOnly !== false) rows = rows.filter((r) => r.approved);
   if (args.category) rows = rows.filter((r) => r.category === args.category);
 
+  let curated = false;
+  if (args.pickedOnly) {
+    const { selectedKeywords } = await import("./client-keywords");
+    const picked = await selectedKeywords(args.clientId);
+    if (!("error" in picked) && picked.curated) {
+      const keep = new Set(picked.rows.map((r) => r.id));
+      const narrowed = rows.filter((r) => keep.has(r.id));
+      // Only narrow when something survives: a pick of hooks only, or of rows this call already
+      // filtered out by category, must not turn into an empty set the caller reads as "no keywords".
+      if (narrowed.length) {
+        rows = narrowed;
+        curated = true;
+      }
+    }
+  }
+
   const byCategory: Record<string, number> = {};
   for (const r of rows) byCategory[r.category] = (byCategory[r.category] ?? 0) + 1;
 
   return {
     total: live.filter((r) => r.use === use).length,
     approved: live.filter((r) => r.use === use && r.approved).length,
+    curated,
     byCategory,
     rows: rows
       .sort((a, b) => (a.rank ?? 1e9) - (b.rank ?? 1e9))

@@ -95,6 +95,8 @@ const COMMANDS: Record<string, string[]> = {
     "`keywords approve` + a pasted list, read as a pick of those",
     "`keywords pick 3, 7, 12` by number",
     "`keywords` on its own, the 50 strongest with their numbers",
+    "`keywords map`, 9 pillars with 6 supports each",
+    "`keywords pillars`, candidates when a pillar is missing",
     "`keywords add:` (stores without choosing)",
     "`keywords approve`, `keywords approve 411-423`, `keywords approve mine`",
     "`keywords drop N`",

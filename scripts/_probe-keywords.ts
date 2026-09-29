@@ -38,6 +38,8 @@ import {
 } from "@/lib/clients/keyword-expansion";
 import { isAboutOffer, offerVocabulary } from "@/lib/clients/phrase-quality";
 import { parseTerms } from "@/lib/clients/offers";
+import { STRATEGY_PILLARS, SUPPORTS_PER_PILLAR, STRATEGY_KEYWORDS, mapGap, mapStrategy } from "@/lib/clients/keyword-map";
+import type { StoredKeyword } from "@/lib/clients/keyword-expansion";
 import { commandOwner, looksLikePastedList } from "@/lib/clients/step-commands";
 
 let failures = 0;
@@ -336,6 +338,103 @@ for (const d of [
   "keywords add lip filler",
 ]) {
   check(`"${d}" is dictation`, parseKeywordCommand(d, patient) === null);
+}
+
+// ── 5b. The strategy map: nine pillars, six supports each ────────────────────
+console.log("\n5b. the strategy map");
+{
+  // ‼️ PURE, SO THE SHAPE IS ASSERTABLE WITH NO DATABASE. mapStrategy knows nothing about SERP
+  // readings on purpose: clusterFinalists needs a verdict and therefore a screenshot, which made the
+  // whole pillar model unreachable by typing. This is the typed half.
+  const kw = (over: Partial<StoredKeyword>): StoredKeyword => ({
+    id: over.id ?? Math.random().toString(36).slice(2),
+    phrase: "a phrase",
+    normalized: "a phrase",
+    category: "other",
+    use: "query",
+    origin: "manual",
+    frequency: 1,
+    intent: 0,
+    objection: false,
+    currentlyNamed: null,
+    sourceUrl: null,
+    score: 10,
+    rank: 1,
+    approved: true,
+    dropped: false,
+    ...over,
+  });
+
+  const naming = (n: number, phrase: string) => kw({ id: `p${n}`, phrase, normalized: phrase, category: "direct_naming", rank: n });
+  const support = (n: number, phrase: string, category = "other") =>
+    kw({ id: `s${n}`, phrase, normalized: phrase, category, rank: 100 + n });
+
+  const empty = mapStrategy([], { namingKey: "direct_naming" });
+  check("no picks is an empty map that is not complete", empty.clusters.length === 0 && !empty.complete);
+  check("and it is short of every pillar", empty.pillarsShort === STRATEGY_PILLARS);
+
+  // ‼️ ONLY A NAMING PHRASE MAY BE A PILLAR, the same test selectOfferPlan uses. A map step 12
+  // accepted on a looser rule would be a map step 21 then refused, which is the whole class of bug
+  // the verifier door exists to stop.
+  const onlyQuestions = mapStrategy(
+    [support(1, "how to get more google reviews"), support(2, "do reviews matter")],
+    { namingKey: "direct_naming" }
+  );
+  check("a question is never a pillar", onlyQuestions.clusters.length === 0);
+  check("and it is not lost either", onlyQuestions.unplaced.length === 2);
+
+  // One pillar, its supports attached by shared subject words.
+  const one = mapStrategy(
+    [
+      naming(1, "ai referral engine for med spas"),
+      support(1, "what does an ai referral engine cost", "price"),
+      support(2, "ai referral engine vs seo agency", "comparisons"),
+      support(3, "how long does laser hair removal take"),
+    ],
+    { namingKey: "direct_naming", pillars: 1, perPillar: 6 }
+  );
+  check("a naming phrase becomes the pillar", one.clusters.length === 1 && one.clusters[0].pillar.id === "p1");
+  const under = one.clusters[0].supports.map((r) => r.id);
+  check("supports that share its subject go under it", under.includes("s1") && under.includes("s2"), under.join(","));
+  check("one that shares nothing is unplaced, not forced under it", one.unplaced.some((r) => r.id === "s3"), one.unplaced.map((r) => r.id).join(","));
+  check("and it is short until six supports are there", one.clusters[0].short === 4 && !one.complete);
+
+  // ‼️ A PILLAR IS NEVER ALSO A SUPPORT. Two naming phrases, one pillar slot: the second waits as
+  // spare rather than being filed under the first.
+  const spare = mapStrategy([naming(1, "aeo agency for med spas"), naming(2, "ai referral engine for med spas")], {
+    namingKey: "direct_naming",
+    pillars: 1,
+  });
+  check("a second naming phrase waits as spare", spare.spare.length === 1 && spare.clusters.length === 1);
+  check("and it is not a support of the first", spare.clusters[0].supports.length === 0);
+
+  // The complete shape, and the arithmetic Matthew asked for.
+  check("the target is nine pillars and six supports each", STRATEGY_PILLARS === 9 && SUPPORTS_PER_PILLAR === 6);
+  check("which is sixty-three keywords", STRATEGY_KEYWORDS === 63);
+
+  const full = mapStrategy(
+    [
+      naming(1, "ai referral engine for med spas"),
+      ...Array.from({ length: 6 }, (_, i) => support(i + 1, `ai referral engine question ${i + 1}`)),
+    ],
+    { namingKey: "direct_naming", pillars: 1, perPillar: 6 }
+  );
+  check("a filled cluster is complete", full.complete && full.clusters[0].supports.length === 6, JSON.stringify({ c: full.complete, n: full.clusters[0]?.supports.length }));
+  check("and mapGap says nothing about a complete map", mapGap(full) === null);
+  check("while an incomplete one is described", typeof mapGap(one) === "string" && (mapGap(one) ?? "").includes("support"));
+
+  // ‼️ DETERMINISTIC. The card's numbers are typed at, so the same picks must map the same way twice.
+  const a = mapStrategy([naming(1, "aeo agency for med spas"), support(1, "aeo agency cost", "price")], { namingKey: "direct_naming" });
+  const b = mapStrategy([naming(1, "aeo agency for med spas"), support(1, "aeo agency cost", "price")], { namingKey: "direct_naming" });
+  check(
+    "the same picks map the same way twice",
+    JSON.stringify(a.clusters.map((c) => [c.pillar.id, c.supports.map((s) => s.id)])) ===
+      JSON.stringify(b.clusters.map((c) => [c.pillar.id, c.supports.map((s) => s.id)]))
+  );
+
+  // No naming category at all (an audience without one) must not throw or invent a pillar.
+  const noNaming = mapStrategy([naming(1, "aeo agency for med spas")], { namingKey: null });
+  check("no naming category means no pillar, and no crash", noNaming.clusters.length === 0 && noNaming.unplaced.length === 1);
 }
 
 // ── 6. Terms and the filter ──────────────────────────────────────────────────
