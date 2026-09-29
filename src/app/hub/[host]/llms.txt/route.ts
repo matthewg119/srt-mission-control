@@ -25,9 +25,15 @@ export async function GET(
   const host = decodeURIComponent(params.host);
   const resolved = await resolveHost(host);
 
-  if (resolved.status !== "ok" || resolved.kind !== "hub") {
+  // The AI Referral Engine is one tool on one URL and has nothing to describe.
+  if (resolved.status !== "ok" || resolved.kind === "reviews") {
     return new Response("Not found", { status: 404, headers: { "content-type": "text/plain" } });
   }
+
+  // ‼️ ON A SITE HOST THE ANSWERS LIVE UNDER /answers. This file exists to hand a model a list of
+  // URLs it can fetch and quote, so every link in it being one level wrong makes the file
+  // actively misleading rather than merely absent.
+  const answerBase = resolved.kind === "site" ? "/answers" : "";
 
   const { client } = resolved;
   const pages = await listPublished(client.id);
@@ -46,7 +52,7 @@ export async function GET(
     "## Answers",
     "",
     ...(pages.length
-      ? pages.map((page) => `- [${page.title}](https://${host}/${page.slug}): ${page.question}`)
+      ? pages.map((page) => `- [${page.title}](https://${host}${answerBase}/${page.slug}): ${page.question}`)
       : ["- (none published yet)"]),
     "",
     ...(client.website ? ["## Elsewhere", "", `- [Main website](${client.website})`, ""] : []),

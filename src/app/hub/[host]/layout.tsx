@@ -14,10 +14,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { resolveHost } from "@/lib/hub/resolve";
-import { themeStyle } from "@/lib/hub/theme";
-import { skinStyle, hubRootClass } from "@/lib/hub/skin";
-import { universeFontClass } from "@/components/hub/universe-fonts";
-import { UniverseBand, UniverseTop } from "@/components/hub/universe-chrome";
+import { HubShell, SiteShell } from "@/components/hub/hub-shell";
 import "./hub.css";
 import "./universes.css";
 
@@ -68,29 +65,24 @@ export default async function HubLayout({ children, params }: Props) {
   const resolved = await resolveHost(host);
   if (resolved.status !== "ok") notFound();
 
+  // ‼️ A `site` HOST OPTS OUT OF THE SHELL FOR ITS MARKETING PAGES, AND KEEPS IT FOR /answers.
+  //
+  // A pasted page arrives with its own header, footer, grid and <style> block. Wrapping it in
+  // .hub-root and .hub-wrap would put our measure, our padding and our ground colour underneath
+  // a design that already has all three, and the theme on top of that is OUR inference about
+  // their brand sitting over their own decision, on their own domain.
+  //
+  // The layout cannot tell WHICH child is rendering -- params for a child dynamic segment never
+  // reach it, the same limitation that moved the concierge out of here -- so it does the half it
+  // can see: a site host gets the bare wrapper, and the /answers routes put the shell back on
+  // themselves with the same <HubShell> this renders. hub and reviews hosts are untouched.
+  if (resolved.kind === "site") {
+    return <SiteShell lang={resolved.client.language}>{children}</SiteShell>;
+  }
+
   return (
-    // The theme is four CSS custom properties overriding what hub.css already declares
-    // on .hub-root, so a themed hub and an unthemed one are the same markup. themeStyle
-    // returns {} when there is no confirmed theme.
-    // ‼️ SKIN FIRST, THEME SECOND, IN THE SPREAD AND IN EVERY OTHER RENDERER.
-    // They write disjoint variables today, so the order is invisible — and the day one of them
-    // grows an accent, the CLIENT's brand has to beat a colour read off a reference image.
-    // skinClass() always returns a class, including for the default template, so the live page
-    // and both previews carry the same attribute.
-    <div
-      className={`${hubRootClass(resolved.client.skin)} ${universeFontClass(resolved.client.skin?.universe)}`.trim()}
-      lang={resolved.client.language}
-      style={{ ...skinStyle(resolved.client.skin), ...themeStyle(resolved.client.theme) }}
-    >
-      {/* A universe's decoration, aria-hidden and outside .hub-wrap. Nothing when the skin has no universe. */}
-      <UniverseTop
-        universe={resolved.client.skin?.universe}
-        name={resolved.client.displayName}
-        where={[resolved.client.city, resolved.client.state].filter(Boolean).join(", ") || null}
-        pages={-1}
-      />
-      <div className="hub-wrap">{children}</div>
-      <UniverseBand universe={resolved.client.skin?.universe} name={resolved.client.displayName} where={null} pages={-1} />
+    <HubShell client={resolved.client}>
+      {children}
       {/*
         ‼️ THE CONCIERGE USED TO BE MOUNTED HERE AND IT MOVED, ON PURPOSE. Do not put it back.
 
@@ -108,6 +100,6 @@ export default async function HubLayout({ children, params }: Props) {
         This layout wraps both kinds of host and the AI Referral Engine is regulated separately, with
         NOT_GATED in hub/page-gate.ts saying no model may go near it.
       */}
-    </div>
+    </HubShell>
   );
 }

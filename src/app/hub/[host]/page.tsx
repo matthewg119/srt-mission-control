@@ -1,8 +1,12 @@
-// The hub index, and the branch between the two kinds of host.
+// The root of a client hostname, and the branch between the three kinds of host.
 //
-// Middleware cannot tell a hub host from a reviews host: it has no database, by design. So
-// learn.{domain} and reviews.{domain} both arrive here and the split happens once the row
-// is resolved.
+// Middleware cannot tell them apart: it has no database, by design. So learn.{domain},
+// reviews.{domain} and a Launch Lane client's own apex all arrive here and the split happens
+// once the row is resolved.
+//
+//   hub      the answer index
+//   reviews  the AI Referral Engine, one tool on one URL
+//   site     the client's own pasted home page. Its answer index moved to /answers.
 
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
@@ -12,6 +16,8 @@ import { orderIndexPages } from "@/lib/hub/plan-links";
 import { HubIndexBody } from "@/components/hub/hub-bodies";
 import { ConciergeEmbed } from "@/lib/concierge/embed";
 import { ReferralEngine } from "./reviews/referral-engine";
+import { publishedSitePage, listSitePages } from "@/lib/hub/site-pages";
+import { SitePageBody } from "@/components/hub/site-body";
 
 export const revalidate = 300;
 
@@ -30,6 +36,19 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     return {
       title: `Share your experience · ${client.displayName}`,
       robots: { index: false, follow: false },
+    };
+  }
+
+  // A site host's root is the client's own home page, not an answer index.
+  if (kind === "site") {
+    const home = await publishedSitePage(client.id, "/");
+    if (!home) return { robots: { index: false, follow: false } };
+    return {
+      title: { absolute: home.title },
+      description: home.metaDescription ?? undefined,
+      alternates: { canonical: `https://${host}/` },
+      robots: { index: true, follow: true },
+      openGraph: { type: "website", title: home.title, url: `https://${host}/`, siteName: client.displayName },
     };
   }
 
@@ -58,6 +77,25 @@ export default async function HubIndex({ params }: Props) {
   // near it. Mounting the widget in the shared layout used to put one on this page.
   if (kind === "reviews") {
     return <ReferralEngine client={client} />;
+  }
+
+  // ‼️ A SITE HOST'S ROOT IS THEIR HOME PAGE. Its answer index moved to /answers, and
+  // client_site_pages refuses a page at that path in a CHECK so the two can never collide.
+  //
+  // A missing home page is a 404 rather than a fallback to the answer index: the apex of a
+  // domain we sold them silently serving our list of questions, under their name, is a worse
+  // outcome than an honest miss, and the site_live verifier catches it before anybody is looking.
+  if (kind === "site") {
+    const home = await publishedSitePage(client.id, "/");
+    if (!home) notFound();
+    const nav = await listSitePages(client.id);
+    return (
+      <>
+        <SitePageBody page={home} nav={nav} />
+        {/* The home page is not one answer, so it names no magnet and the ladder decides. */}
+        <ConciergeEmbed clientId={client.id} />
+      </>
+    );
   }
 
   // Pillar first. planLinkRows returns [] until the plan has roles, which leaves the order alone.

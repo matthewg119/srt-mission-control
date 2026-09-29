@@ -1,13 +1,19 @@
-// One answer page. The unit the whole hub exists to publish.
+// One segment under a client hostname. What it MEANS depends on the kind of host.
+//
+//   hub host   an answer page at /{slug}. Unchanged, and still the unit the hub exists to publish.
+//   site host  a pasted marketing page at /{slug}. Its answer pages live under /answers instead.
+//
+// ‼️ THE BRANCH IS HERE AND NOT IN MIDDLEWARE, BECAUSE MIDDLEWARE HAS NO DATABASE.
+// Both kinds of host are allowed the same one-segment shape by the allowlist; only a resolved
+// row knows which application this hostname is. See the header of hub-paths.ts.
 
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { resolveHost } from "@/lib/hub/resolve";
-import { getPublished, listPublished, planLinkRows } from "@/lib/hub/pages";
-import { NO_PLAN_LINKS, planLinksFor, type PlanLinks } from "@/lib/hub/plan-links";
-import { HubAnswerBody, plainText, truncate } from "@/components/hub/hub-bodies";
+import { answerPageMetadata, AnswerPageBody } from "@/components/hub/answer-page";
+import { publishedSitePage, listSitePages } from "@/lib/hub/site-pages";
+import { SitePageBody } from "@/components/hub/site-body";
 import { ConciergeEmbed } from "@/lib/concierge/embed";
-import { pageCategoryFor } from "@/lib/hub/page-category";
 
 export const revalidate = 300;
 
@@ -19,67 +25,55 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const host = decodeURIComponent(params.host);
   const resolved = await resolveHost(host);
   // A reviews host has no slug pages at all: it is one tool on one URL.
-  if (resolved.status !== "ok" || resolved.kind !== "hub") {
+  if (resolved.status !== "ok" || resolved.kind === "reviews") {
     return { robots: { index: false, follow: false } };
   }
 
-  const page = await getPublished(resolved.client.id, params.slug);
-  if (!page) return { robots: { index: false, follow: false } };
-
-  return {
-    title: page.title,
-    description: page.metaDescription || truncate(plainText(page.answerMd), 155),
-    // The canonical is on the CLIENT's host. Never mission.srtagency.com, which is
-    // noindex, and never their main site, which does not have this page.
-    alternates: { canonical: `https://${host}/${page.slug}` },
-    robots: { index: true, follow: true },
-    openGraph: {
-      type: "article",
+  if (resolved.kind === "site") {
+    const page = await publishedSitePage(resolved.client.id, `/${params.slug}`);
+    if (!page) return { robots: { index: false, follow: false } };
+    return {
       title: page.title,
-      url: `https://${host}/${page.slug}`,
-      siteName: resolved.client.displayName,
-    },
-  };
-}
-
-export default async function HubPage({ params }: Props) {
-  const host = decodeURIComponent(params.host);
-  const resolved = await resolveHost(host);
-  if (resolved.status !== "ok" || resolved.kind !== "hub") notFound();
-
-  const { client } = resolved;
-  const page = await getPublished(client.id, params.slug);
-  if (!page) notFound();
-
-  // ‼️ THE LINKS NEVER COST THE PAGE. planLinkRows already returns [] on failure; a failed list
-  // read is caught here too, because a 5xx on a page that loaded fine, over decoration, is how an
-  // indexed page gets a crawler's error recorded against it. No plan means no second read at all.
-  const planRows = await planLinkRows(client.id);
-  let links: PlanLinks = NO_PLAN_LINKS;
-  if (planRows.length > 0) {
-    try {
-      links = planLinksFor(page.id, planRows, await listPublished(client.id));
-    } catch (e) {
-      console.error(`[hub/slug] plan links skipped for ${host}/${page.slug}:`, (e as Error).message);
-    }
+      description: page.metaDescription ?? undefined,
+      alternates: { canonical: `https://${host}/${params.slug}` },
+      robots: { index: true, follow: true },
+      openGraph: {
+        type: "website",
+        title: page.title,
+        url: `https://${host}/${params.slug}`,
+        siteName: resolved.client.displayName,
+      },
+    };
   }
 
   return (
-    <>
-      <HubAnswerBody client={client} host={host} page={page} links={links} />
-      {/*
-        The concierge, carrying the offer THIS page was written toward. Renders null unless the
-        client's concierge_configs.enabled is true, which only the concierge_live step sets.
-        A page with no key falls back to the ladder, which is every page written before the
-        column existed.
-      */}
-      <ConciergeEmbed
-        clientId={client.id}
-        magnetKey={page.leadMagnetKey}
-        ctaLine={page.ctaLine}
-        category={await pageCategoryFor(client.id, page.id)}
-      />
-    </>
+    (await answerPageMetadata({ host, client: resolved.client, slug: params.slug, base: "" })) ?? {
+      robots: { index: false, follow: false },
+    }
   );
 }
 
+export default async function HubSlugPage({ params }: Props) {
+  const host = decodeURIComponent(params.host);
+  const resolved = await resolveHost(host);
+  if (resolved.status !== "ok" || resolved.kind === "reviews") notFound();
+
+  const { client } = resolved;
+
+  if (resolved.kind === "site") {
+    const page = await publishedSitePage(client.id, `/${params.slug}`);
+    if (!page) notFound();
+    const nav = await listSitePages(client.id);
+    return (
+      <>
+        <SitePageBody page={page} nav={nav} />
+        {/* The marketing pages are not one answer, so they name no magnet and the ladder decides. */}
+        <ConciergeEmbed clientId={client.id} />
+      </>
+    );
+  }
+
+  const body = await AnswerPageBody({ host, client, slug: params.slug, base: "" });
+  if (!body) notFound();
+  return body;
+}
