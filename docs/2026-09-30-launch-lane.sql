@@ -109,8 +109,8 @@ comment on column public.clients.onboarding_lane is
 -- 3. client_audiences.vocabulary_source gains 'documents'
 -- ─────────────────────────────────────────────────────────────────────────────
 --
--- ‼️ A FOURTH VALUE RATHER THAN REUSING 'typed', BECAUSE THIS COLUMN IS A PROVENANCE COLUMN.
--- The existing three say: 'preset' a code preset seeded it, 'legacy_default' it records the
+-- ‼️ A NEW VALUE RATHER THAN REUSING 'typed', BECAUSE THIS COLUMN IS A PROVENANCE COLUMN.
+-- The existing values say: 'preset' a code preset seeded it, 'legacy_default' it records the
 -- status quo rather than a decision, 'typed' a person wrote it. A Launch Lane audience is none
 -- of those: a model read the client's four foundation documents and PROPOSED the words, and a
 -- person confirmed them. Filing that as 'typed' would put a model's wording behind a value that
