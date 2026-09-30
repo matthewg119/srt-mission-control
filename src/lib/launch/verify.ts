@@ -31,6 +31,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import { LAUNCH_STEPS, launchStepNumber, type LaunchStepKey } from "@/config/launch-steps";
 import { readDay0 } from "@/lib/clients/day-zero";
+import { faultsInStoredIntake } from "@/lib/validate/intake-fields";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The verdict
@@ -192,6 +193,22 @@ export const LAUNCH_VERIFIERS: Record<LaunchStepKey, LaunchVerifier> = {
         `missing: ${missing.join(", ")}`,
         "Fill these in on the intake panel. The niche is not optional in this lane: there is no " +
           "website for a scan to classify, so nothing downstream can work it out later."
+      );
+    }
+
+    // ‼️ PRESENT IS NOT THE SAME AS VALID, AND THIS STEP ONCE WENT GREEN OVER `777777777`.
+    // Checking only for a non-empty string confirmed an intake whose city and state were key
+    // mashing, and that row is the NAP every directory is later made to match and the JSON-LD on
+    // every published page. The same module the form and the route use is re-run here, against
+    // what is actually STORED, so a row written before that module existed cannot be ticked
+    // either.
+    const faults = faultsInStoredIntake(c);
+    if (faults.length) {
+      return notYet(
+        "the shape of what is stored on the client record",
+        faults.join("; "),
+        "Correct these before ticking. They become the NAP every directory is matched to and the " +
+          "structured data on every page, so a wrong value here is wrong in a lot of places later."
       );
     }
     return verified(
