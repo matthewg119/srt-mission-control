@@ -13,6 +13,7 @@ import { supabaseAdmin } from "@/lib/db";
 import { startPilot } from "@/lib/clients/provision";
 import { seedLaunchSteps, autoCompleteLaunchStep } from "./steps";
 import { ensureProvisionalAudience } from "./vocabulary";
+import { ensureProvisionalOffer } from "./offer";
 
 export interface StartLaunchInput {
   legalName?: string | null;
@@ -133,6 +134,19 @@ export async function startLaunchClient(input: StartLaunchInput): Promise<StartL
     businessName: input.dbaName ?? input.legalName ?? null,
   });
   if (!seeded.ok) warnings.push(`provisional audience not created: ${seeded.error}`);
+
+  // ‼️ AND A PROVISIONAL OFFER, ONE LEVEL DOWN, FOR EXACTLY THE SAME REASON.
+  // Two of the four foundation documents (`short_offer`, `necessary_beliefs`) hang off an OFFER
+  // rather than the audience, enforced by a CHECK and by kindBelongsToOffer(). Without a row they
+  // cannot be uploaded at all, and the offer is read out of one of them. Left unlocked, which is
+  // what loadOffer() and the offer_confirmed verifier both read as undecided.
+  if (seeded.ok) {
+    const offer = await ensureProvisionalOffer({
+      clientId: started.clientId,
+      audienceId: seeded.audienceId,
+    });
+    if (!offer.ok) warnings.push(`provisional offer not created: ${offer.error}`);
+  }
 
   await seedLaunchSteps(started.clientId);
 

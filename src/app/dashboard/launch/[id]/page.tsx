@@ -9,6 +9,7 @@ import { notFound } from "next/navigation";
 import { supabaseAdmin } from "@/lib/db";
 import { launchBoard } from "@/lib/launch/steps";
 import { foundationStatus } from "@/lib/launch/documents";
+import { currentOffer } from "@/lib/launch/offer";
 import { LaunchBoard, type BoardStep } from "./board";
 import { LaunchPanels } from "./panels";
 
@@ -59,9 +60,10 @@ export default async function LaunchClientPage({ params }: Props) {
     );
   }
 
-  const [board, docs, hostRow, audienceRow] = await Promise.all([
+  const [board, docs, offer, hostRow, audienceRow] = await Promise.all([
     launchBoard(client.id as string),
     foundationStatus(client.id as string),
+    currentOffer(client.id as string),
     supabaseAdmin
       .from("client_hosts")
       .select("host, enabled, vercel_attached_at")
@@ -164,6 +166,7 @@ export default async function LaunchClientPage({ params }: Props) {
         <LaunchPanels
           clientId={client.id as string}
           documents={docs ?? []}
+          offer={offer}
           host={host}
           audience={
             audienceRow.data

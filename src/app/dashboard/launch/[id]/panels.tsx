@@ -64,21 +64,30 @@ function money(cents: number | null): string {
   return cents === null ? "price unknown" : `$${(cents / 100).toFixed(2)}`;
 }
 
+export interface OfferView {
+  treatment: string | null;
+  outcomePromise: string | null;
+  lockedAt: string | null;
+}
+
 export function LaunchPanels({
   clientId,
   documents,
   host,
   audience,
+  offer,
 }: {
   clientId: string;
   documents: DocStatus[];
   host: string | null;
   audience: AudienceView | null;
+  offer: OfferView | null;
 }) {
   return (
     <div className="space-y-4">
       <DocumentsPanel clientId={clientId} documents={documents} />
       <VocabularyPanel clientId={clientId} audience={audience} />
+      <OfferPanel clientId={clientId} offer={offer} />
       <DomainPanel clientId={clientId} host={host} />
       <SitePanel clientId={clientId} />
     </div>
@@ -486,6 +495,117 @@ function SitePanel({ clientId }: { clientId: string }) {
               </ul>
             </>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+function OfferPanel({ clientId, offer }: { clientId: string; offer: OfferView | null }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [draft, setDraft] = useState<{ treatment: string; outcomePromise: string; rationale: string } | null>(
+    null
+  );
+
+  async function propose() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/launch/${clientId}/offer`);
+      const json = (await res.json()) as {
+        ok: boolean;
+        error?: string;
+        proposal?: { treatment: string; outcomePromise: string; rationale: string };
+      };
+      if (!json.ok || !json.proposal) setError(json.error ?? "That did not work.");
+      else setDraft(json.proposal);
+    } catch {
+      setError("That did not work. Check your connection.");
+    }
+    setBusy(false);
+  }
+
+  async function confirm() {
+    if (!draft) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/launch/${clientId}/offer`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ treatment: draft.treatment, outcomePromise: draft.outcomePromise }),
+      });
+      const json = (await res.json()) as { ok: boolean; error?: string };
+      if (!json.ok) setError(json.error ?? "That did not work.");
+      else {
+        setDraft(null);
+        router.refresh();
+      }
+    } catch {
+      setError("That did not work. Check your connection.");
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className={card}>
+      <p className={heading}>The offer</p>
+
+      {offer?.lockedAt ? (
+        <div className="mt-2 space-y-1 text-[11px] text-[rgba(255,255,255,0.5)]">
+          <p className="text-xs text-white">{offer.treatment}</p>
+          {offer.outcomePromise && <p>{offer.outcomePromise}</p>}
+          <p className="text-[rgba(255,255,255,0.3)]">locked</p>
+        </div>
+      ) : (
+        <p className="mt-1 text-[11px] text-[rgba(255,255,255,0.35)]">
+          Not locked. Read out of the short offer document, not typed from memory: the keywords and
+          every page are built around it.
+        </p>
+      )}
+
+      {!draft && (
+        <button onClick={() => void propose()} disabled={busy} className={`${btn} mt-3`}>
+          {busy ? "Reading the document..." : offer?.lockedAt ? "Read it again" : "Read the short offer"}
+        </button>
+      )}
+
+      {error && <p className="mt-2 text-[11px] text-[#FF6B6B]">{error}</p>}
+
+      {draft && (
+        <div className="mt-3 space-y-2">
+          <p className="text-[11px] text-[rgba(255,255,255,0.4)]">{draft.rationale}</p>
+          <label className="block">
+            <span className="text-[11px] text-[rgba(255,255,255,0.35)]">what is sold</span>
+            <input
+              value={draft.treatment}
+              onChange={(e) => setDraft({ ...draft, treatment: e.target.value })}
+              className={input}
+            />
+          </label>
+          <label className="block">
+            <span className="text-[11px] text-[rgba(255,255,255,0.35)]">the promise</span>
+            <input
+              value={draft.outcomePromise}
+              onChange={(e) => setDraft({ ...draft, outcomePromise: e.target.value })}
+              className={input}
+            />
+          </label>
+          <div className="flex gap-2 pt-1">
+            <button onClick={() => void confirm()} disabled={busy || !draft.treatment.trim()} className={btn}>
+              {busy ? "Locking..." : "Lock the offer"}
+            </button>
+            <button
+              onClick={() => setDraft(null)}
+              className="text-[11px] text-[rgba(255,255,255,0.4)] hover:text-white"
+            >
+              Discard
+            </button>
+          </div>
         </div>
       )}
     </div>
