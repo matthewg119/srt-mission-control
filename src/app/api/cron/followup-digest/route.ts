@@ -77,6 +77,16 @@ ${text}`);
         return { checked: 0, closed: [] as string[], reopened: [] as string[] };
       });
 
+    // The weekly listing verifier, day-gated inside itself. Another passenger on this cron, for
+    // the same reason the crawler watch is one: seventeen entries on a Hobby plan that documents
+    // two. It returns `skipped` on six days in seven and does nothing.
+    const listings = await (await import("@/lib/clients/foundation-listings"))
+      .runFoundationListingVerify({ dry })
+      .catch((e) => {
+        console.error("[followup-digest] listing verify failed:", (e as Error).message);
+        return { checked: 0, stillLive: 0, vanished: [] as unknown[], skipped: "errored" as string | null };
+      });
+
     const reports = await runClientReportReminders({ dry }).catch((e) => {
       console.error("[followup-digest] client report reminders failed:", (e as Error).message);
       return { checked: 0, reminded: [] };
@@ -183,6 +193,7 @@ ${text}`);
       ...result,
       clientReports: { checked: reports.checked, reminded: reports.reminded.length },
       crawlerDoor: { checked: door.checked, closed: door.closed.length, reopened: door.reopened.length },
+      listings: { checked: listings.checked, stillLive: listings.stillLive, vanished: listings.vanished.length, skipped: listings.skipped },
       contentDigest: { posted: content.posted.length, skipped: content.skipped },
       weeklyReports: weekly,
       weeklyHeadlines: headlines,
