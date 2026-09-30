@@ -126,6 +126,39 @@ export default async function LaunchClientPage({ params }: Props) {
         </p>
       )}
 
+      {/* ‼️ PAGE DRAFTING IS NOT DUPLICATED HERE. The hub panels on the shared client page already
+          draft, gate and publish through publishPage(), which is lane-aware. A second drafting UI
+          would be a second place to get the two rails wrong, which is the objection publish-page.ts
+          opens with. This is a link, deliberately. */}
+      <div className="mt-6 flex flex-wrap gap-3">
+        <Link
+          href={`/dashboard/clients/${client.id as string}`}
+          className="rounded-lg border border-[rgba(255,255,255,0.12)] px-3 py-1.5 text-xs text-[rgba(255,255,255,0.7)] hover:text-white"
+        >
+          Pages, drafts and theme
+        </Link>
+        {host && (
+          <>
+            <a
+              href={`https://${host}/`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-lg border border-[rgba(255,255,255,0.12)] px-3 py-1.5 text-xs text-[rgba(255,255,255,0.7)] hover:text-white"
+            >
+              The site
+            </a>
+            <a
+              href={`https://${host}/answers`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-lg border border-[rgba(255,255,255,0.12)] px-3 py-1.5 text-xs text-[rgba(255,255,255,0.7)] hover:text-white"
+            >
+              The answers
+            </a>
+          </>
+        )}
+      </div>
+
       <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
         <LaunchBoard clientId={client.id as string} steps={steps} />
         <LaunchPanels

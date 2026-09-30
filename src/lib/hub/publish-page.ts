@@ -74,7 +74,7 @@ export async function publishPage(args: {
 }): Promise<PublishResult> {
   const { data: client } = await supabaseAdmin
     .from("clients")
-    .select("id, legal_name, dba_name, domain, subdomain")
+    .select("id, legal_name, dba_name, domain, subdomain, onboarding_lane")
     .eq("id", args.clientId)
     .maybeSingle();
 
@@ -139,17 +139,52 @@ export async function publishPage(args: {
     });
   }
 
+  // ‼️ THE URL AND THE TICK BOTH DEPEND ON WHICH LANE THIS CLIENT IS ON, AND BOTH WERE WRONG FOR
+  // THE LAUNCH LANE BEFORE THIS BRANCH EXISTED.
+  //
+  // A Slack-lane client publishes to learn.{domain}/{slug}. A Launch Lane client has a `site`
+  // host, where the root is their own pasted home page and the answer pages live one level down
+  // at {domain}/answers/{slug}. Returning the learn. shape for one of those would hand back a URL
+  // that 404s, in the string the board prints and the client is told to go and look at.
+  //
+  // And `first_page` is a step in the OTHER board. A Launch Lane client has no
+  // client_delivery_steps rows at all, so the tick silently matched nothing and logged; harmless,
+  // but it is the Slack lane reaching into a lane that is supposed to have nothing to do with it.
   let pageUrl: string | null = null;
-  if (args.publish && client.domain) {
-    const label = subdomainLabel(client.subdomain as string | null, client.domain as string);
-    pageUrl = `https://${label}.${client.domain}/${result.slug}`;
 
-    // Ticking first_page is what posts the notify_first_page draft, and it now has a real URL
-    // behind it. autoCompleteStep is reused rather than reimplemented: it owns the tick, the
-    // checklist refresh and the draft in one place.
-    await autoCompleteStep(args.clientId, "first_page", `Published ${pageUrl} by ${args.by}`).catch((e) => {
-      console.error("[publish-page] first_page tick failed:", (e as Error).message);
-    });
+  if (args.publish) {
+    const isLaunch = client.onboarding_lane === "launch";
+
+    if (isLaunch) {
+      // Read the attached host rather than deriving it: client_hosts records what was ATTACHED,
+      // and clients.domain on a Launch client is whatever was typed at intake, if anything.
+      const { data: host } = await supabaseAdmin
+        .from("client_hosts")
+        .select("host")
+        .eq("client_id", args.clientId)
+        .eq("kind", "site")
+        .eq("enabled", true)
+        .maybeSingle();
+
+      if (host?.host) pageUrl = `https://${host.host as string}/answers/${result.slug}`;
+
+      // The Launch Lane's own step, through its own engine. Its verifier counts published pages,
+      // so this is a real confirmation rather than an assertion.
+      const { autoCompleteLaunchStep } = await import("@/lib/launch/steps");
+      await autoCompleteLaunchStep(args.clientId, "pages_published", args.by).catch((e) => {
+        console.error("[publish-page] pages_published tick failed:", (e as Error).message);
+      });
+    } else if (client.domain) {
+      const label = subdomainLabel(client.subdomain as string | null, client.domain as string);
+      pageUrl = `https://${label}.${client.domain}/${result.slug}`;
+
+      // Ticking first_page is what posts the notify_first_page draft, and it now has a real URL
+      // behind it. autoCompleteStep is reused rather than reimplemented: it owns the tick, the
+      // checklist refresh and the draft in one place.
+      await autoCompleteStep(args.clientId, "first_page", `Published ${pageUrl} by ${args.by}`).catch((e) => {
+        console.error("[publish-page] first_page tick failed:", (e as Error).message);
+      });
+    }
   }
 
   return { ok: true, slug: result.slug, pageUrl };
