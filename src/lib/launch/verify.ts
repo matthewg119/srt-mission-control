@@ -757,6 +757,30 @@ export const LAUNCH_VERIFIERS: Record<LaunchStepKey, LaunchVerifier> = {
     }
     return filedOk(`a date is recorded against this step: ${new Date(parsed).toISOString().slice(0, 10)}`);
   },
+
+  hear_about_us: async (ctx) => {
+    const artifacts = await filedArtifacts(ctx.clientId, ctx.stepKey);
+    if (artifacts === null) return dbUnreachable("client_docs");
+    if (artifacts.length === 0) {
+      return artifactRefusal(
+        ctx.stepKey,
+        "nothing filed against this step yet",
+        'File a screenshot of the "How did you hear about us?" field live on THEIR OWN site or ' +
+          "booking form. Not our pages and not a subdomain we serve: we can add a field to a " +
+          "surface we control in an afternoon, so a screenshot of one proves only the easy half. " +
+          "Until this is real, the Day-30 report can say traffic moved and can never say where a " +
+          "customer came from."
+      );
+    }
+    // ‼️ FILED TIER, SO IT DESCRIBES THE ARTIFACT AND NEVER THE FACT.
+    // Nothing here can see their site, so this must not say "the field is live". It says a file
+    // was filed and what it was called, exactly as gbp_access does, and a person reading the
+    // board knows the difference because the square is blue rather than green.
+    return filedOk(
+      `${artifacts.length} artifact(s) filed against this step`,
+      `most recent: ${artifacts[0].filename}`
+    );
+  },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -249,6 +249,26 @@ const STEP_LIST = [
     mode: "manual",
     blockedBy: [LAUNCH_DAY_ZERO_STEP_KEY],
   },
+  // ‼️ THE LAST STEP, AND IT IS THE ONLY ONE THAT ASKS THE CLIENT TO CHANGE SOMETHING WE DO NOT OWN.
+  //
+  // Everything else in this lane is work done TO a surface SRT controls: the site we serve, the
+  // profile we build out, the pages we publish. This one is a field on THEIR intake, wherever they
+  // actually collect leads, and it is what makes every later attribution claim checkable. Without
+  // it the Day-30 report can say traffic moved and can never say where a customer came from.
+  //
+  // Filed tier, and the evidence bar is deliberately narrow: a screenshot of the field live on
+  // THEIR OWN site. Not our pages, not a subdomain we serve, not a mockup. We can add a field to
+  // anything we host in an afternoon, so a screenshot of our own surface would prove only that we
+  // did the easy half.
+  {
+    key: "hear_about_us",
+    phase: PHASE_LIVE,
+    label: '"How did you hear about us?" live on their own intake',
+    detail:
+      "A screenshot of the field live on their own website or booking form, not on our pages and not on a subdomain we serve. It is what makes the Day-30 report able to say where a customer came from rather than only that traffic moved.",
+    mode: "manual",
+    blockedBy: ["launch_intake"],
+  },
 ] as const satisfies readonly LaunchStep[];
 
 export const LAUNCH_STEPS: readonly LaunchStep[] = STEP_LIST;

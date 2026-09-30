@@ -1,6 +1,6 @@
 "use client";
 
-// The sixteen steps, and what you do to them.
+// The seventeen steps, and what you do to them.
 //
 // ‼️ A REFUSAL IS RENDERED IN FULL, INCLUDING WHAT WAS CHECKED. The verifier answers "here is
 // what I looked at, here is what I found, here is what to do" and a surface that reduced that to

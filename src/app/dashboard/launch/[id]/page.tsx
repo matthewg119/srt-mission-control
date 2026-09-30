@@ -1,4 +1,4 @@
-// One Launch Lane client: the sixteen steps, and the panels that do the work.
+// One Launch Lane client: the seventeen steps, and the panels that do the work.
 //
 // ‼️ IT REFUSES TO RENDER A SLACK-LANE CLIENT. Showing this board for a client whose work lives
 // on the 41-step board would show an empty lane next to real progress, and the obvious response
@@ -159,6 +159,14 @@ export default async function LaunchClientPage({ params }: Props) {
           would be a second place to get the two rails wrong, which is the objection publish-page.ts
           opens with. This is a link, deliberately. */}
       <div className="mt-6 flex flex-wrap gap-3">
+        {/* The conversation is the thing to WORK in; this board is the thing to glance at. It
+            leads, because on most visits it is the only control that gets pressed. */}
+        <Link
+          href={`/dashboard/launch/${client.id as string}/chat`}
+          className="rounded-lg bg-[#00C9A7] px-3 py-1.5 text-xs font-medium text-[#0B0B0C] hover:opacity-90"
+        >
+          Run the onboarding
+        </Link>
         <Link
           href={`/dashboard/clients/${client.id as string}`}
           className="rounded-lg border border-[rgba(255,255,255,0.12)] px-3 py-1.5 text-xs text-[rgba(255,255,255,0.7)] hover:text-white"

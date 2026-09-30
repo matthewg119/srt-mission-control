@@ -4579,7 +4579,7 @@ Probes: `npm run launch:probe`.
 The 41-step board assumes a website. It crawls one at `site_dns_intel`, replicates it at
 `site_replica`, asks the client to point three DNS records at us at `dns_records`, and puts the
 pixel on it at `tracking_installed`. A business that has none cannot start. This is the other door:
-**16 steps, on the dashboard, with no Slack anywhere in it.**
+**17 steps, on the dashboard, with no Slack anywhere in it.**
 
 ### It is a SECOND board, not a `track` flag on the first
 Two reasons, both already written into the Slack lane's own files:

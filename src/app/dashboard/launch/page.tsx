@@ -1,4 +1,4 @@
-// The Launch Lane: clients with no website, in any niche, worked on sixteen steps.
+// The Launch Lane: clients with no website, in any niche, worked on seventeen steps.
 //
 // A SEPARATE PAGE FROM /dashboard/clients, NOT A FILTER ON IT. The two lanes are worked
 // differently and the Slack board's page is built around a board this lane does not have. One
