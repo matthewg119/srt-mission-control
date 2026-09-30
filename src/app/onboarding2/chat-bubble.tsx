@@ -122,6 +122,8 @@ export function ChatPanel({
   fullscreen = false,
   demo,
   knownIdentity = false,
+  layout = "panel",
+  title,
 }: {
   sessionToken: string;
   /**
@@ -153,6 +155,23 @@ export function ChatPanel({
    * two-chip question, so it needs the same seeding the daypart used to get when it opened cold.
    */
   knownIdentity?: boolean;
+  /**
+   * Where the panel sits above 640px. See the note over `shell` below.
+   *
+   * "panel" is the floating bottom-right card the review tool uses and is the default everywhere.
+   * "centre" is a centred, phone-proportioned card, for a route where this panel IS the page.
+   */
+  layout?: "panel" | "centre";
+  /**
+   * The header line.
+   *
+   * ‼️ CHAT_UI.title IS "Questions about the agreement" AND IT IS WRONG ON A BOOKING THREAD. It
+   * was written when this panel sat beside a contract somebody was reading, and it survived the
+   * removal of that screen: a visitor answering "mornings or afternoons" is currently told they are
+   * asking questions about an agreement that is not on screen and will not be signed here. Passed
+   * in rather than changed at source, because the constant is still exactly right on /sign/[token].
+   */
+  title?: string;
 }) {
   // ‼️ IT STARTS OPEN, AND SEEDING THIS FROM `fullscreen` WAS A BUG I SHIPPED (2026-09-25). This
   // component is only rendered at stage === "chat", which is the moment the conversation IS the page, so
@@ -411,17 +430,52 @@ export function ChatPanel({
   // and the composer are out of it. That is a cramped 640px calendar. Booking is the step this page
   // exists for, so it gets more room for as long as it is on screen and gives it back afterwards.
   const calendarUp = Boolean(bookingUrl) && !booking;
+
+  // ── WHERE THE PANEL SITS ABOVE 640px ──
+  //
+  // ‼️ "centre" IS NOT A SKIN, IT IS WHAT KEEPS THE HANDOVER FROM LOOKING LIKE TWO PRODUCTS
+  // (2026-09-30). /onboarding2/start runs its own conversation as a centred, phone-proportioned
+  // card and then hands over to this component mid-thread. Left on the corner default, the panel
+  // jumped from the middle of the screen to the bottom right at the exact moment somebody chose an
+  // offer, which reads as the page having reloaded into something else.
+  //
+  // ‼️ THE CORNER IS STILL THE DEFAULT, AND DELIBERATELY SO. Matthew asked on 2026-09-25 for this
+  // to be the same floating panel the review tool opens in, so that the three places a person meets
+  // the assistant are recognisably one product. That call stands everywhere it was made about. What
+  // it did not anticipate is a route where the panel IS the page and nothing sits behind it, which
+  // is the one case this prop exists for.
+  //
+  // Below 640px there is no difference at all: full bleed either way, which is what makes the
+  // Calendly embed usable on a phone.
   const shell = fullscreen
     ? "fixed inset-0 z-50 flex flex-col"
-    : [
-        "fixed inset-0 z-50 flex flex-col",
-        "sm:inset-auto sm:bottom-6 sm:right-6 sm:overflow-hidden sm:rounded-[14px] sm:border sm:shadow-2xl",
-        calendarUp
-          ? "sm:h-[min(44rem,calc(100vh-3rem))] sm:w-[min(34rem,calc(100vw-3rem))]"
-          : "sm:h-[min(38rem,calc(100vh-3rem))] sm:w-[min(28rem,calc(100vw-3rem))]",
-      ].join(" ");
+    : layout === "centre"
+      ? [
+          "fixed inset-0 z-50 flex flex-col",
+          // sm:relative, never sm:static: the "Other" prompt is an absolute child and anchors here.
+          "sm:relative sm:z-auto sm:mx-auto sm:overflow-hidden sm:rounded-[22px] sm:border sm:shadow-2xl",
+          calendarUp
+            ? "sm:h-[min(46rem,calc(100vh-4rem))] sm:w-[min(34rem,calc(100vw-2rem))]"
+            : "sm:h-[min(44rem,calc(100vh-4rem))] sm:w-[min(26rem,calc(100vw-2rem))]",
+        ].join(" ")
+      : [
+          "fixed inset-0 z-50 flex flex-col",
+          "sm:inset-auto sm:bottom-6 sm:right-6 sm:overflow-hidden sm:rounded-[14px] sm:border sm:shadow-2xl",
+          calendarUp
+            ? "sm:h-[min(44rem,calc(100vh-3rem))] sm:w-[min(34rem,calc(100vw-3rem))]"
+            : "sm:h-[min(38rem,calc(100vh-3rem))] sm:w-[min(28rem,calc(100vw-3rem))]",
+        ].join(" ");
+
+  // The centred layout needs a parent to centre it in, and this component is mounted directly
+  // under a min-h-screen <main>. Wrapping here rather than at the call site keeps "where the panel
+  // sits" a single decision in a single file.
+  const wrap =
+    layout === "centre" && !fullscreen
+      ? "sm:flex sm:min-h-screen sm:flex-col sm:items-center sm:justify-center sm:px-4 sm:py-10"
+      : "";
 
   return (
+    <div className={wrap}>
     <div className={shell} style={{ backgroundColor: PANEL.bg, color: PANEL.ink, borderColor: PANEL.line }}>
       {fullscreen && demo && (
         <div className="bg-amber-400 px-4 py-2 text-center text-xs font-bold text-[#0a0a0a]">
@@ -431,7 +485,7 @@ export function ChatPanel({
 
       <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: PANEL.line }}>
         <span className="text-sm font-semibold">
-          {bookingUrl || !scheduled ? CHAT_UI.title : "A few quick questions"}
+          {bookingUrl || !scheduled ? (title ?? CHAT_UI.title) : "A few quick questions"}
         </span>
         {/* No close button in full screen. There is nothing behind it to go back to. */}
         {!fullscreen && (
@@ -614,6 +668,7 @@ export function ChatPanel({
           </div>
         </div>
       )}
+    </div>
     </div>
   );
 }

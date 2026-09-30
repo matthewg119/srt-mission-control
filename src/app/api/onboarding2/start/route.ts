@@ -111,29 +111,70 @@ export async function POST(req: NextRequest) {
   const isDemo = isDemoRequest(req);
   const attribution = body.attribution as Attribution | undefined;
 
-  const { data, error } = await supabaseAdmin
+  // ‼️ EVERYTHING THE ROW CANNOT OPEN WITHOUT. If a key in here is wrong, refusing is correct.
+  const core = {
+    session_token: sessionToken,
+    status: "open",
+    agreement_snapshot: snapshot,
+    template_version: snapshot.version,
+    agreement_sha256: snapshot.documentSha256,
+    offer_key: offer,
+    concierge_interest: body.conciergeInterest === true,
+    started_ip_hash: ipHash,
+    is_demo: isDemo,
+    ...attributionForSigning(attribution),
+  };
+
+  // ‼️ THE TWO REPORTING COLUMNS, AND THEY ARE OMITTED ENTIRELY WHEN THERE IS NOTHING TO SAY.
+  //
+  // ‼️ THIS IS A LIVE OUTAGE FIX, NOT A TIDY-UP (2026-09-30). The comment that used to sit here
+  // said the cards picker "passes neither, so its insert is byte-identical to what it was, and a
+  // database without the two columns still takes every signing". The intent was right and the code
+  // did not do it: both keys were in the object unconditionally, holding null, and PostgREST
+  // rejects an insert that NAMES a column that does not exist whatever the value is. Neither
+  // column has been created. So every call to this route, from /onboarding2 and /onboarding2/free
+  // alike, has been failing with
+  //
+  //     Could not find the 'funnel_variant' column of 'onboarding2_signings' in the schema cache
+  //
+  // and returning a 500 the browser renders as "Could not start your session." Every audit report
+  // points at that funnel. Run the migration and this block starts recording again on its own; the
+  // point of the shape below is that the funnel does not WAIT for the migration.
+  const optional: Record<string, unknown> = {};
+  const variant = variantOrNull(body.funnelVariant);
+  const outcome = outcomeOrNull(body.upsellOutcome);
+  // Validated against closed lists and dropped on anything else, the way `offer` is. These two are
+  // not authorisation, so an unknown value is not a 400: the worst a junk `?v=` can do is mislabel
+  // a row in a presentation test. But an unvalidated string from a query param going straight into
+  // a column is how a column stops being a closed list, and then the report that groups by it
+  // grows a long tail of one-row buckets nobody can read.
+  if (variant) optional.funnel_variant = variant;
+  if (outcome) optional.upsell_outcome = outcome;
+
+  let { data, error } = await supabaseAdmin
     .from("onboarding2_signings")
-    .insert({
-      session_token: sessionToken,
-      status: "open",
-      agreement_snapshot: snapshot,
-      template_version: snapshot.version,
-      agreement_sha256: snapshot.documentSha256,
-      offer_key: offer,
-      concierge_interest: body.conciergeInterest === true,
-      // ‼️ VALIDATED AGAINST CLOSED LISTS AND NULL ON ANYTHING ELSE, THE WAY `offer` IS. These two
-      // are not authorisation, so an unknown value is not a 400 the way a bad offer is: the worst a
-      // junk `?v=` can do is mislabel a row in a presentation test. But an unvalidated string from
-      // a query param going straight into a column is how a column stops being a closed list, and
-      // then the report that groups by it grows a long tail of one-row buckets nobody can read.
-      funnel_variant: variantOrNull(body.funnelVariant),
-      upsell_outcome: outcomeOrNull(body.upsellOutcome),
-      started_ip_hash: ipHash,
-      is_demo: isDemo,
-      ...attributionForSigning(attribution),
-    })
+    .insert({ ...core, ...optional })
     .select("id")
     .maybeSingle();
+
+  // ‼️ ONE RETRY, AND ONLY FOR A MISSING COLUMN. 42703 is Postgres' undefined_column; PGRST204 is
+  // PostgREST's own "not in the schema cache", which is the same fault seen through its cache. Any
+  // other error is a real failure and must not be retried into a second signing row.
+  //
+  // Losing the reporting columns is a real cost and it is the smaller one: a session that opens
+  // without knowing which variant produced it is worth more than a visitor who cannot open one at
+  // all. It logs at error level so this is loud in the Vercel log rather than a silent downgrade.
+  if (error && Object.keys(optional).length && isMissingColumn(error)) {
+    console.error(
+      "[onboarding2/start] missing reporting column, retrying without it. RUN THE MIGRATION:",
+      error.message
+    );
+    ({ data, error } = await supabaseAdmin
+      .from("onboarding2_signings")
+      .insert(core)
+      .select("id")
+      .maybeSingle());
+  }
 
   if (error || !data) {
     console.error("[onboarding2/start] insert failed:", error?.message);
@@ -168,6 +209,21 @@ export async function POST(req: NextRequest) {
     // The browser renders THIS and hashes THIS. It never hashes the DOM.
     agreement: publicAgreement(snapshot),
   });
+}
+
+/**
+ * Is this failure "that column is not there", as opposed to a real one?
+ *
+ * ‼️ THE CODE IS CHECKED BEFORE THE MESSAGE, AND THE MESSAGE CHECK IS THE FALLBACK RATHER THAN THE
+ * TEST. 42703 is Postgres' undefined_column and PGRST204 is PostgREST's own schema-cache miss,
+ * which is the same fault seen through its cache; both are stable identifiers. The text match
+ * exists because PostgREST has worded this differently across versions and the consequence of
+ * missing it is the funnel refusing to open at all.
+ */
+function isMissingColumn(err: { code?: string; message?: string }): boolean {
+  if (err.code === "42703" || err.code === "PGRST204") return true;
+  const m = (err.message ?? "").toLowerCase();
+  return m.includes("does not exist") || m.includes("schema cache");
 }
 
 /** The four answers the conversation-first funnel takes before the offer. */

@@ -32,19 +32,19 @@ import {
   ASK_NAME_FIRST,
   ASK_PHONE_CONVO,
   ASK_WEBSITE_AFTER_NAME,
-  CHAT_UI,
   CONVO_INTRO,
   FREE_WEBSITE,
   NO_WEBSITE_OPTION,
+  SETUP_TITLE,
 } from "@/config/onboarding2";
 import { parseIntake, type IntakeKey } from "@/lib/onboarding2/intake-steps";
 import { formatPhoneUS } from "@/lib/clients/normalize";
 import { readAttribution, track } from "@/lib/medspa/pixel";
 import { ChatPanel } from "../chat-bubble";
 import { Starting } from "../onboarding2-client";
-import { OfferSheet } from "./offer-sheet";
+import { OfferSheet, OPENING_BILLING, type OfferPhase } from "./offer-sheet";
 import type { UpsellOutcome } from "../free/free-first-picker";
-import type { OfferKey } from "@/config/pitch";
+import type { BillingState, OfferKey } from "@/config/pitch";
 
 const REEF = "#00C9A7";
 const PANEL = {
@@ -91,6 +91,12 @@ export function ConvoFirstFunnel({
   const [input, setInput] = useState("");
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [sheetOpen, setSheetOpen] = useState(false);
+  // ‼️ THE SHEET'S OWN STATE LIVES HERE, NOT IN THE SHEET. A pick flips `starting`, whose render
+  // returns <Starting /> and unmounts the sheet; a failed /start then remounts it. Held down
+  // there, the phase and the billing choice came back reset, so somebody who hit an error on
+  // "Start monthly" was silently returned to the free card. See the note over OfferPhase.
+  const [phase, setPhase] = useState<OfferPhase>("card");
+  const [billing, setBilling] = useState<BillingState>(OPENING_BILLING);
   const [addonOpen, setAddonOpen] = useState(false);
   const [wantsFreeSite, setWantsFreeSite] = useState(true);
   const [starting, setStarting] = useState(false);
@@ -219,7 +225,7 @@ export function ConvoFirstFunnel({
           return;
         }
         if (data?.ok !== true || !data.sessionToken) {
-          setError("Could not start your session. Tap an option again.");
+          setError("Something went wrong on our end. Tap the button again.");
           setStarting(false);
           return;
         }
@@ -228,7 +234,10 @@ export function ConvoFirstFunnel({
         setSessionToken(data.sessionToken as string);
         setStep("handoff");
       } catch {
-        setError("Could not start your session. Tap an option again.");
+        // ‼️ THE NETWORK PATH CLEARS `starting` TOO. It is the only thing locking the sheet's
+        // buttons now, so leaving it set on a dropped connection is what made every later tap a
+        // no-op with nothing on screen to explain it.
+        setError("That did not go through. Check your connection and tap the button again.");
         setStarting(false);
       }
     },
@@ -325,14 +334,71 @@ export function ConvoFirstFunnel({
   if (starting && !sessionToken) return <Starting />;
 
   if (step === "handoff" && sessionToken) {
-    return <ChatPanel sessionToken={sessionToken} demo={demo} knownIdentity />;
+    return (
+      <ChatPanel
+        sessionToken={sessionToken}
+        demo={demo}
+        knownIdentity
+        /* Same centred card the conversation above ran in. Without this the panel jumps to the
+           bottom-right corner at the exact moment somebody picks an offer. */
+        layout="centre"
+        title={SETUP_TITLE}
+      />
+    );
   }
 
   const websiteStep = step === "website";
 
   return (
+    /*
+      ── THE DESKTOP LAYOUT (Matthew, 2026-09-30: "for mobile version is cool but in pc looks weird") ──
+
+      ‼️ IT IS A CENTRED, PHONE-PROPORTIONED CARD ON DESKTOP, NOT A CORNER PANEL, AND THE SHEET IS
+      WHY. This started as a copy of chat-bubble.tsx's shell, which floats bottom-right above 640px.
+      That is exactly right for the review widget it was borrowed from, because there a real page
+      sits behind it and the panel is an accessory to it. Here there is nothing behind it at all, so
+      a 448px box pinned to the corner of an empty black screen reads as a widget that failed to
+      load its host page.
+
+      It also broke the offer. A sheet that rises from the bottom edge and stops at 88% means
+      something on a phone: the bottom edge is where the thumb is, and the 12% left showing is the
+      thread it came from. Inside a short corner panel it was neither of those things, just a dark
+      rectangle covering a smaller dark rectangle, with the whole conversation hidden behind it.
+
+      A centred card at roughly phone proportions makes both true again at every width, and it is
+      one layout rather than two: the sheet, the scrim and the add-on all keep the same geometry
+      they were designed against instead of growing a desktop special case each.
+
+      ‼️ sm:relative, NEVER sm:static. The sheet, the scrim and the add-on are all `absolute` and
+      anchor to this element. Going static would take it out of the positioned chain and they would
+      anchor to the viewport instead, which puts a full-height sheet over the entire browser window.
+      `inset-0` is harmless under relative: the offsets are all zero.
+    */
+    <div className="sm:flex sm:min-h-screen sm:flex-col sm:items-center sm:justify-center sm:px-4 sm:py-10">
+      {/* Grounds the card so it is a composition rather than an object floating on black. Desktop
+          only, and behind everything: purely decorative, so it is hidden from assistive tech. */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none fixed inset-0 hidden sm:block"
+        style={{
+          background:
+            "radial-gradient(60rem 40rem at 50% 42%, rgba(0,201,167,0.10), transparent 70%)",
+        }}
+      />
+
+      <div className="relative mb-5 hidden items-center gap-2 sm:flex">
+        <span
+          aria-hidden="true"
+          className="grid h-6 w-6 place-items-center rounded-md text-[9px] font-extrabold"
+          style={{ backgroundColor: REEF, color: PANEL.onAccent }}
+        >
+          SRT
+        </span>
+        <span className="text-[13px] font-semibold tracking-tight text-white/70">SRT Agency</span>
+      </div>
+
     <div
-      className="fixed inset-0 z-50 flex flex-col sm:inset-auto sm:bottom-6 sm:right-6 sm:h-[min(38rem,calc(100vh-3rem))] sm:w-[min(28rem,calc(100vw-3rem))] sm:overflow-hidden sm:rounded-[14px] sm:border sm:shadow-2xl"
+      className="fixed inset-0 z-50 flex flex-col sm:relative sm:z-auto sm:h-[min(44rem,calc(100vh-10rem))] sm:w-[min(26rem,100%)] sm:overflow-hidden sm:rounded-[22px] sm:border sm:shadow-2xl"
       style={{ backgroundColor: PANEL.bg, color: PANEL.ink, borderColor: PANEL.line }}
     >
       <div
@@ -347,7 +413,7 @@ export function ConvoFirstFunnel({
           SRT
         </span>
         <span>
-          <b className="block text-sm font-semibold">{CHAT_UI.title}</b>
+          <b className="block text-sm font-semibold">{SETUP_TITLE}</b>
           <small className="block text-[11px]" style={{ color: PANEL.mut }}>
             Setting up your AI Referral Engine
           </small>
@@ -411,9 +477,6 @@ export function ConvoFirstFunnel({
           </div>
         )}
 
-        {error && (
-          <p className="rounded-lg bg-red-50 px-3.5 py-2.5 text-sm text-red-700">{error}</p>
-        )}
       </div>
 
       <div
@@ -466,7 +529,16 @@ export function ConvoFirstFunnel({
         className="absolute left-[-9999px] h-0 w-0 opacity-0"
       />
 
-      <OfferSheet open={sheetOpen} busy={starting} onPick={(offer, outcome) => void start(offer, outcome)} />
+      <OfferSheet
+        open={sheetOpen}
+        busy={starting}
+        error={error}
+        phase={phase}
+        onPhase={setPhase}
+        billing={billing}
+        onBilling={setBilling}
+        onPick={(offer, outcome) => void start(offer, outcome)}
+      />
 
       {/* ── The free website add-on ── */}
       {addonOpen && (
@@ -508,6 +580,7 @@ export function ConvoFirstFunnel({
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

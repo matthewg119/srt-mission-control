@@ -22,7 +22,7 @@
 // `Line` alone carries the bug where an absolutely positioned strike covered 109px of a 241px
 // sentence at 375px and stopped mid-air. Rebuilding it here would rebuild that.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import {
   PAID_BILLING,
   PRICE_YEAR,
@@ -37,8 +37,18 @@ import type { UpsellOutcome } from "../free/free-first-picker";
 
 const REEF = "#00C9A7";
 
-/** Free card, the appointments add-on, the plan choice. In that order, never skipped. */
-type Phase = "card" | "one" | "two";
+/**
+ * Free card, the appointments add-on, the plan choice. In that order, never skipped.
+ *
+ * ‼️ OWNED BY THE PARENT, NOT BY THIS COMPONENT, AND THAT IS A BUG FIX RATHER THAN A PREFERENCE
+ * (2026-09-30). Tapping a terminal button flips `starting` in ConvoFirstFunnel, whose next render
+ * returns <Starting /> and UNMOUNTS this whole subtree. On the happy path that is fine, the chat
+ * replaces it. On a FAILED /start it comes back, and anything held in local state here came back
+ * reset: somebody who tapped "Start monthly" and hit an error was returned to the free card, three
+ * screens behind where they were, with no error anywhere on screen because the only place it
+ * rendered was the thread underneath this sheet. That reads exactly like the button doing nothing.
+ */
+export type OfferPhase = "card" | "one" | "two";
 
 /**
  * ‼️ MONTHLY, WHICH IS THE OPPOSITE OF THE COLD PICKER, AND THE DIFFERENCE IS DELIBERATE. By the
@@ -47,7 +57,7 @@ type Phase = "card" | "one" | "two";
  * do. Derived from PAID_BILLING rather than moving DEFAULT_BILLING, which the live two-card picker
  * opens on and this route must not reach across and change.
  */
-const OPENING_BILLING = PAID_BILLING.find((b) => b.plan === "monthly") ?? PAID_BILLING[0];
+export const OPENING_BILLING = PAID_BILLING.find((b) => b.plan === "monthly") ?? PAID_BILLING[0];
 
 const CTA =
   "w-full rounded-xl px-5 py-3.5 text-sm font-bold text-[#04252b] transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50";
@@ -57,16 +67,24 @@ const GHOST =
 export function OfferSheet({
   open,
   busy,
+  error,
+  phase,
+  onPhase,
+  billing,
+  onBilling,
   onPick,
 }: {
   /** Drives the transform. The sheet is MOUNTED while closed, which is what lets it animate. */
   open: boolean;
   busy: boolean;
+  /** A failed /start. Rendered HERE, above the buttons, because the thread is behind this sheet. */
+  error: string | null;
+  phase: OfferPhase;
+  onPhase: (next: OfferPhase) => void;
+  billing: BillingState;
+  onBilling: (next: BillingState) => void;
   onPick: (offer: OfferKey, outcome: UpsellOutcome) => void;
 }) {
-  const [phase, setPhase] = useState<Phase>("card");
-  const [billing, setBilling] = useState<BillingState>(OPENING_BILLING);
-  const [picked, setPicked] = useState(false);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -87,16 +105,20 @@ export function OfferSheet({
     return () => window.clearTimeout(id);
   }, [open]);
 
+  // ‼️ `busy` IS THE ONLY LOCK, AND DROPPING THE LOCAL "picked" FLAG IS THE OTHER HALF OF THE BUG
+  // FIX. It was set on the first tap and never cleared, so once a /start failed every button on
+  // this sheet was permanently dead for the rest of the session. The parent already owns the one
+  // piece of state that answers "is a pick in flight", and it clears it on failure, so a second
+  // attempt is possible the moment the first one is known to have failed.
   const choose = useCallback(
     (offer: OfferKey, outcome: UpsellOutcome) => {
-      if (busy || picked) return;
-      setPicked(true);
+      if (busy) return;
       onPick(offer, outcome);
     },
-    [busy, picked, onPick]
+    [busy, onPick]
   );
 
-  const locked = busy || picked;
+  const locked = busy;
 
   return (
     <>
@@ -123,7 +145,7 @@ export function OfferSheet({
         className={[
           "absolute inset-x-0 bottom-0 z-30 flex h-[88%] flex-col rounded-t-3xl bg-[#0a0a0a] text-white outline-none",
           "shadow-[0_-20px_40px_rgba(0,0,0,0.45)] ring-1 ring-white/10",
-          "transition-transform duration-[340ms] ease-out motion-reduce:transition-none",
+          "transition-transform [transition-duration:340ms] ease-out motion-reduce:transition-none",
           open ? "translate-y-0" : "pointer-events-none translate-y-full",
         ].join(" ")}
       >
@@ -157,11 +179,11 @@ export function OfferSheet({
                 <button
                   type="button"
                   disabled={locked}
-                  onClick={() => setPhase("one")}
+                  onClick={() => onPhase("one")}
                   className={`mt-5 ${CTA}`}
                   style={{ backgroundColor: REEF }}
                 >
-                  {picked ? "One moment" : free.funnelCta}
+                  {free.funnelCta}
                 </button>
 
                 <ul className="mt-6 space-y-3">
@@ -227,7 +249,7 @@ export function OfferSheet({
                 >
                   Add the 5 appointments
                 </button>
-                <button type="button" disabled={locked} onClick={() => setPhase("two")} className={GHOST}>
+                <button type="button" disabled={locked} onClick={() => onPhase("two")} className={GHOST}>
                   No thanks, just the free tool
                 </button>
               </div>
@@ -251,7 +273,7 @@ export function OfferSheet({
 
               <p className="mt-5 text-center text-[13px] text-white/70">{UPSELL.two.togglePrompt}</p>
               <div className="mt-3 text-center">
-                <BillingToggle current={billing} onBilling={setBilling} disabled={locked} />
+                <BillingToggle current={billing} onBilling={onBilling} disabled={locked} />
                 <Price billing={billing} />
               </div>
 
@@ -303,6 +325,25 @@ export function OfferSheet({
               </p>
             </section>
           )}
+
+          {/*
+            ‼️ THE FAILURE HAS TO SURFACE **INSIDE** THE SHEET. ConvoFirstFunnel renders its error
+            into the message thread, and the thread is behind this panel and behind a scrim: an
+            error painted there is an error nobody can see. A terminal button that fails silently
+            is indistinguishable from a terminal button that does nothing, which is exactly how
+            this was reported.
+
+            role="alert" so it is announced rather than merely drawn, and it sits under the buttons
+            so the thing to do about it is the thing directly above it.
+          */}
+          {error ? (
+            <p
+              role="alert"
+              className="mt-4 rounded-xl bg-red-500/12 px-4 py-3 text-center text-[13px] leading-relaxed text-red-300 ring-1 ring-red-500/25"
+            >
+              {error}
+            </p>
+          ) : null}
         </div>
       </div>
     </>

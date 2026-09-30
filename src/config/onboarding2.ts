@@ -453,6 +453,18 @@ export const FREE_WEBSITE = {
  * identity columns onto the signing row, so nextIntakeStep() finds them filled and returns
  * `daypart` on the very first turn.
  */
+/**
+ * The header line on the setup conversation.
+ *
+ * ‼️ CHAT_UI.title SAYS "Questions about the agreement" AND IT IS WRONG ON THIS THREAD. That
+ * constant was written when the panel sat beside a contract somebody was reading, and it outlived
+ * the screen: a visitor answering "mornings or afternoons" is currently told, in the only piece of
+ * chrome on the page, that they are asking questions about an agreement that is not on screen and
+ * will not be signed here. It is still exactly right on /sign/[token], which is why this is a
+ * second constant rather than an edit to that one.
+ */
+export const SETUP_TITLE = guard("setup title", "SRT Agency");
+
 export const SCHEDULING_INTRO_KNOWN: string[] = [
   guard("sched known 1", "You are all set. Let us get your onboarding call booked."),
   DAYPART_PROMPT,
