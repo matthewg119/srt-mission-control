@@ -301,3 +301,25 @@ create index if not exists client_domain_orders_client_idx
   on public.client_domain_orders (client_id);
 
 alter table public.client_domain_orders enable row level security;
+
+-- ──────────────────────────────────────────────────────────────────────────
+-- 7. client_docs.source gains 'board'
+-- ──────────────────────────────────────────────────────────────────────────
+--
+-- ‼️ A THIRD VALUE, BECAUSE THE FIRST TWO ARE BOTH LIES ABOUT THIS ONE.
+-- The CHECK allowed ('slack','generated'). Four Launch Lane steps are confirmed by a person
+-- filing an artifact (the Day-0 archive, GBP access, GBP buildout, the review cards), and this
+-- lane has no Slack, so those files arrive from the dashboard. Filing them as 'slack' would say
+-- they came from a channel that does not exist for this client; filing them as 'generated'
+-- would say WE produced them, which is exactly backwards for a screenshot somebody took.
+--
+-- It also matters downstream and not only cosmetically: doc-text.ts excludes source='generated'
+-- from the buyer evidence corpus, on the measured grounds that handing our own output back as
+-- buyer evidence is worse than noise. A human-filed screenshot must not inherit that exclusion
+-- by being mislabelled.
+alter table public.client_docs drop constraint if exists client_docs_source_check;
+alter table public.client_docs add constraint client_docs_source_check
+  check (source in ('slack', 'generated', 'board'));
+
+comment on column public.client_docs.source is
+  '''slack'' arrived as a file in a Slack thread; ''generated'' we produced it; ''board'' a person filed it from the dashboard, which is how the Launch Lane files evidence since it has no Slack.';

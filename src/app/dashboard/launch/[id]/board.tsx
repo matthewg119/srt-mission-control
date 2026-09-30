@@ -37,6 +37,15 @@ interface Verdict {
   evidence?: string[];
 }
 
+/**
+ * The steps whose evidence is an artifact a person produces, not state the app can observe.
+ *
+ * ‼️ IT MUST STAY IN STEP WITH THE VERIFIERS THAT CALL filedArtifacts() IN lib/launch/verify.ts.
+ * A step listed here with no such verifier offers an upload that confirms nothing; a step with
+ * one and not listed here can never be ticked from this page at all, which is the worse half.
+ */
+const FILES_EVIDENCE = new Set(["day_zero_archive", "gbp_access", "gbp_buildout", "reviews_live"]);
+
 const MARK: Record<string, { glyph: string; className: string; title: string }> = {
   observed: { glyph: "✓", className: "text-[#00C9A7]", title: "The app observed real state" },
   filed: { glyph: "▣", className: "text-[#7FB3FF]", title: "A person filed an artifact and the app read it back" },
@@ -57,6 +66,31 @@ export function LaunchBoard({ clientId, steps }: { clientId: string; steps: Boar
   const [busy, setBusy] = useState<string | null>(null);
   const [refusal, setRefusal] = useState<Record<string, { message: string; verdict: Verdict | null }>>({});
   const [open, setOpen] = useState<string | null>(null);
+  const [filing, setFiling] = useState<string | null>(null);
+
+  async function file(stepKey: string, f: File) {
+    setFiling(stepKey);
+    setRefusal((r) => {
+      const next = { ...r };
+      delete next[stepKey];
+      return next;
+    });
+    const form = new FormData();
+    form.set("stepKey", stepKey);
+    form.set("file", f);
+    try {
+      const res = await fetch(`/api/launch/${clientId}/artifact`, { method: "POST", body: form });
+      const json = (await res.json()) as { ok: boolean; error?: string };
+      if (!json.ok) {
+        setRefusal((r) => ({ ...r, [stepKey]: { message: json.error ?? "That did not work.", verdict: null } }));
+      } else {
+        router.refresh();
+      }
+    } catch {
+      setRefusal((r) => ({ ...r, [stepKey]: { message: "That did not work. Check your connection.", verdict: null } }));
+    }
+    setFiling(null);
+  }
 
   async function act(stepKey: string, transition: "complete" | "skipped" | "reopened", skippedReason?: string) {
     setBusy(stepKey);
@@ -194,6 +228,21 @@ export function LaunchBoard({ clientId, steps }: { clientId: string; steps: Boar
                         >
                           Not applicable
                         </button>
+                      )}
+                      {FILES_EVIDENCE.has(s.key) && !settled && (
+                        <label className="cursor-pointer rounded-lg border border-[rgba(127,179,255,0.4)] px-3 py-1.5 text-xs text-[#7FB3FF]">
+                          <input
+                            type="file"
+                            className="hidden"
+                            disabled={filing === s.key}
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) void file(s.key, f);
+                              e.target.value = "";
+                            }}
+                          />
+                          {filing === s.key ? "Filing..." : "File evidence"}
+                        </label>
                       )}
                       {settled && (
                         <button

@@ -372,20 +372,53 @@ export const LAUNCH_VERIFIERS: Record<LaunchStepKey, LaunchVerifier> = {
   // ── BUILD ──────────────────────────────────────────────────────────────────
 
   day_zero_archive: async (ctx) => {
-    const state = await readDay0(ctx.clientId);
-    if (!state) return dbUnreachable("clients");
-    if (!state.archivedAt) {
-      return notYet(
-        "the Day-0 stamp on the client record",
-        "the wall is shut: nothing has been archived",
-        "Archive where this business stands in AI answers today, before anything is published. " +
-          "publishPage() refuses while this is missing, in both lanes."
+    // ‼️ THIS MUST NOT CHECK clients.day_0_archived_at ON THE WAY IN, AND AN EARLIER VERSION DID.
+    //
+    // That column is written by stampDay0(), which setLaunchStep calls AFTER the verifier passes.
+    // A verifier that required the stamp therefore required the consequence of its own success:
+    // it refused, so the stamp never happened, so it refused again. The step could never be
+    // ticked by anybody, and the Day-0 wall would have held publishing shut forever with no way
+    // through that was not a manual database write.
+    //
+    // The Slack lane's verifier for this same key gets it right and this mirrors it: look for
+    // EVIDENCE the archive was taken, and let the stamp follow. An existing stamp is accepted
+    // too, so a re-tick after a waiver or a Slack-lane stamp does not refuse.
+    const { day0PhotographFor } = await import("@/lib/clients/photograph");
+    const taken = await day0PhotographFor(ctx.clientId).catch(() => null);
+
+    if (taken && taken.answered > 0) {
+      return verified(
+        `Day-0 is archived: ${taken.questions} tracked questions, ${taken.answered} answered, taken ${taken.takenAt.slice(0, 10)}`,
+        "The day 30, 60 and 90 re-tests re-ask exactly those questions, off the archived run"
       );
     }
-    return verified(
-      `archived ${state.archivedAt}`,
-      `source: ${state.source ?? "unrecorded"}`,
-      ...(state.waivedReason ? [`waived: ${state.waivedReason}`] : [])
+
+    const state = await readDay0(ctx.clientId);
+    if (state?.archivedAt) {
+      return verified(
+        `the wall is already open, stamped ${state.archivedAt.slice(0, 10)}`,
+        `source: ${state.source ?? "unrecorded"}`,
+        ...(state.waivedReason ? [`waived: ${state.waivedReason}`] : [])
+      );
+    }
+
+    const artifacts = await filedArtifacts(ctx.clientId, ctx.stepKey);
+    if (artifacts === null) return dbUnreachable("client_docs");
+    if (artifacts.length === 0) {
+      return artifactRefusal(
+        ctx.stepKey,
+        "no archive run exists and nothing is filed against this step",
+        "File the archived Day-0 scan against this step before ticking. This is the baseline every " +
+          "later number is measured against, and once a page is live it cannot be recovered by " +
+          "being careful afterwards. Ticking here stamps day_0_source as manual_step, which is an " +
+          "assertion that the archive happened and is never a photograph."
+      );
+    }
+
+    // Filed tier: it describes the ARTIFACT, never the fact the artifact stands for.
+    return filedOk(
+      `${artifacts.length} artifact(s) filed against this step`,
+      `most recent: ${artifacts[0].filename}`
     );
   },
 
