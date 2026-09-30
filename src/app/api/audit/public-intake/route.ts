@@ -31,7 +31,11 @@ import { waitUntil } from "@vercel/functions";
 import { runAuditPipeline } from "@/lib/audit-engine/run-audit-pipeline";
 import { ingestLead, enrichLead, pageFromRequest } from "@/lib/lead-intake";
 import { slack } from "@/lib/slack-bot";
-import { normalizeLeadPhone } from "@/lib/phone";
+// ‼️ strictE164, NOT normalizeLeadPhone. The latter FALLS BACK to the bare digits when parsing
+// fails, by design, so an unusable number was stored and then dialled by Speed-to-Lead. Email is
+// already gated by isEmail() on all three paths below; the phone was the half with no gate.
+// A failing number becomes empty rather than junk: the lead is still captured on its email.
+import { normalizePhone as strictE164 } from "@/lib/medspa/validate";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -161,7 +165,7 @@ export async function POST(req: NextRequest) {
         : `https://${partialRaw}`
       : "";
     const partialName = clean(body.name, 80).split(" ").filter(Boolean);
-    const partialPhone = normalizeLeadPhone(clean(body.phone, 20));
+    const partialPhone = strictE164(clean(body.phone, 20)) ?? "";
     const qStagePartial = clean(body.qStage, 40);
     const qInvestPartial = clean(body.qInvest, 40);
 
@@ -198,7 +202,7 @@ export async function POST(req: NextRequest) {
 
   // ── The lead itself. ──
   const name = clean(body.name, 80);
-  const phone = normalizeLeadPhone(clean(body.phone, 20));
+  const phone = strictE164(clean(body.phone, 20)) ?? "";
   const rawWebsite = clean(body.website, 200);
   const website = isUrl(rawWebsite)
     ? rawWebsite.startsWith("http")

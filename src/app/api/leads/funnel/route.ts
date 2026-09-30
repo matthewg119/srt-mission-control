@@ -12,6 +12,7 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { ingestLead, pageFromRequest } from "@/lib/lead-intake";
 import { normalizeLeadPhone } from "@/lib/phone";
+import { normalizePhone as strictE164, validEmail } from "@/lib/medspa/validate";
 import { sendEvent } from "@/lib/meta-capi";
 import { hasMetaAttributionServer } from "@/lib/metaAttribution";
 import { supabaseAdmin } from "@/lib/db";
@@ -61,8 +62,31 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const name = clean(body.name, 80);
     const clinic = clean(body.clinic, 120);
-    const email = clean(body.email, 120).toLowerCase();
-    const phone = normalizeLeadPhone(clean(body.phone, 20));
+    // ‼️ A JUNK CONTACT IS DROPPED, A LEAD IS NEVER DROPPED, AND THOSE ARE DIFFERENT DECISIONS.
+    //
+    // This used to store whatever arrived. normalizeLeadPhone FALLS BACK to the bare digits when
+    // strict parsing fails, by design, so `77777777777777777` was stored as a phone number and
+    // an unvalidated string was stored as an email. Both then travel: the phone into the RingOut
+    // speed-to-lead dial and the SMS lane, the email into sendScanRunningEmail and every sequence
+    // after it. A bad number in the dialer costs a call to a stranger; a bad address costs sender
+    // reputation on the domain every other client's mail goes out from.
+    //
+    // So each contact method is validated SEPARATELY and a failing one is dropped to empty rather
+    // than stored. What is NOT done is refusing the lead: somebody who typed their phone wrong
+    // and their email right is still a lead, and the existing "email or phone required" check
+    // below now fires only when NEITHER survives. The raw value is carried into the Slack
+    // headline so nothing disappears silently and a typo can be read back and fixed by hand.
+    const rawEmail = clean(body.email, 120).toLowerCase();
+    const rawPhone = clean(body.phone, 20);
+
+    const contactFaults: string[] = [];
+
+    const email = rawEmail && validEmail(rawEmail) ? rawEmail : "";
+    if (rawEmail && !email) contactFaults.push(`unusable email as typed: "${rawEmail}"`);
+
+    // strictE164, not normalizeLeadPhone: the difference between them IS this bug.
+    const phone = rawPhone ? (strictE164(rawPhone) ?? "") : "";
+    if (rawPhone && !phone) contactFaults.push(`unusable phone as typed: "${rawPhone}"`);
     const website = clean(body.website, 120);
     const city = clean(body.city, 60);
     const services = Array.isArray(body.services)
@@ -114,7 +138,16 @@ export async function POST(req: NextRequest) {
     const sourceUrl = clean(body.sourceUrl, 300);
 
     if (!email && !phone) {
-      return NextResponse.json({ error: "email or phone required" }, { status: 400 });
+      // Distinguish "sent us nothing" from "sent us something unusable", because only the second
+      // one is a form bug worth chasing on the page that produced it.
+      return NextResponse.json(
+        {
+          error: contactFaults.length
+            ? `no usable contact method: ${contactFaults.join("; ")}`
+            : "email or phone required",
+        },
+        { status: 400 }
+      );
     }
 
     const nameParts = name.split(" ").filter(Boolean);
@@ -142,7 +175,10 @@ export async function POST(req: NextRequest) {
         (stageLabel === "booked" ? "BOOKED A CALL: " : stageLabel === "disqualified" ? "DQ: " : "New Index lead: ") +
         `${leadName} · ${clinic || "?"} · ${city || "?"} · ${website || "?"}` +
         ` · budget ${budget || "?"} · fit ${fit || "?"} · phone ${phone || "?"}` +
-        (tier ? ` · tier ${tier}` : ""),
+        (tier ? ` · tier ${tier}` : "") +
+        // Loud, in the headline rather than a detail line, because a dropped contact method is
+        // the one thing on this card somebody may need to act on by hand.
+        (contactFaults.length ? ` · ⚠️ ${contactFaults.join("; ")}` : ""),
       detailLines: [
         tier ? `Tier clicked: ${tier}` : "",
         website ? `Website: ${website}` : "",
