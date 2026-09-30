@@ -45,6 +45,9 @@ import {
   type HubReplicaPage,
 } from "@/components/hub/hub-bodies";
 import { listReplica } from "@/lib/hub/replica-pages";
+import { publishedSitePage, listSitePages } from "@/lib/hub/site-pages";
+import { SitePageBody } from "@/components/hub/site-body";
+import { HubShell } from "@/components/hub/hub-shell";
 import { ConciergeEmbed } from "@/lib/concierge/embed";
 import { themeStyle } from "@/lib/hub/theme";
 import { skinStyle, hubRootClass } from "@/lib/hub/skin";
@@ -109,11 +112,18 @@ export default async function TokenPreview({ params, searchParams }: Props) {
   const kind =
     searchParams.kind === "reviews"
       ? "reviews"
-      : searchParams.kind === "site"
-        ? "site"
-        : searchParams.kind === "concierge" || (params.slug?.[0] ?? "").startsWith("lorem-ipsum-")
-          ? "concierge"
-          : "hub";
+      : // ‼️ "launch" IS THE LAUNCH LANE SITE AND "site" IS THE REPLICA OF THEIR EXISTING ONE.
+        // Two different tables, two different products, and the names are one letter apart in
+        // intent: `site` reads client_site_replica for a client who HAS a website, `launch` reads
+        // client_site_pages for one who does not. Renaming either would break a link already
+        // pasted into a Slack thread, so they coexist and this comment is the disambiguation.
+        searchParams.kind === "launch"
+        ? "launch"
+        : searchParams.kind === "site"
+          ? "site"
+          : searchParams.kind === "concierge" || (params.slug?.[0] ?? "").startsWith("lorem-ipsum-")
+            ? "concierge"
+            : "hub";
   const host =
     wanted.find((w) => w.kind === kind)?.host ??
     `${kind === "reviews" ? "reviews" : "learn"}.{no domain set}`;
@@ -152,6 +162,113 @@ export default async function TokenPreview({ params, searchParams }: Props) {
         </div>
         <UniverseBand universe={client.skin?.universe} name={client.displayName} where={null} pages={-1} />
         <ConciergeEmbed clientId={verified.clientId} magnetKey={null} preview={params.token} mascot={searchParams.mascot ?? null} />
+      </div>
+    );
+  }
+
+  // ── The Launch Lane site: the whole website, before a domain exists ──────
+  //
+  // ‼️ THIS IS THE ONLY SURFACE THAT CAN SHOW A LAUNCH LANE SITE BEFORE STEP 5 SPENDS MONEY.
+  // The live renderer is /hub/{host}/..., and middleware reaches that tree ONLY on an external
+  // hostname. Preview deployments, localhost and mission.srtagency.com all classify as INTERNAL
+  // and 404 the entire /hub tree on purpose (host-classify.ts, middleware.ts), so there is no URL
+  // on this deployment that serves it. A Launch Lane client has no hostname at all until a domain
+  // is bought and attached, which is the one code path in this repository that spends money.
+  // Without this branch, the only way to look at the site you just pasted is to buy a domain
+  // first, and a preview that costs twelve dollars is not a preview.
+  //
+  // ‼️ NOT A THIRD RENDERER, AND THE CHROME MATCHES THE LIVE ROUTE BRANCH FOR BRANCH.
+  // The marketing pages get the bare wrapper SiteShell gives them, because a pasted design brings
+  // its own header, grid and <style> and our measure underneath it is a lie about what will ship.
+  // /answers puts HubShell back on, exactly as hub/[host]/answers/page.tsx does. Same components,
+  // same tables: client_site_pages for the site, client_pages for the answers.
+  if (kind === "launch") {
+    const base = `/preview/${params.token}`;
+    const q = "?kind=launch";
+    const segments = params.slug ?? [];
+
+    // Read rather than derived. clients.domain on a Launch client is whatever was typed at
+    // intake, if anything; client_hosts records what was actually ATTACHED. The ribbon uses this
+    // to say whether the thing on screen is already reachable by the public, and saying that
+    // wrongly in either direction is the only way this page can mislead.
+    const { data: siteHost } = await supabaseAdmin
+      .from("client_hosts")
+      .select("host")
+      .eq("client_id", verified.clientId)
+      .eq("kind", "site")
+      .eq("enabled", true)
+      .maybeSingle();
+    const liveHost = (siteHost?.host as string | undefined) ?? null;
+
+    // The host string handed to JSON-LD and canonicals. A placeholder when nothing is attached:
+    // this page is noindex, so the canonical is never read, and an invented hostname printed as
+    // though it were real is worse than one that says it is not.
+    const shownHost = liveHost ?? "{no domain attached yet}";
+
+    if (segments[0] === "answers") {
+      const answerSlug = segments[1];
+      const published = (await listAllForBoard(verified.clientId)).filter(
+        (p) => p.status === "published"
+      );
+      const answer = answerSlug ? published.find((p) => p.slug === answerSlug) : null;
+      if (answerSlug && !answer) notFound();
+
+      return (
+        <HubShell client={client}>
+          <LaunchRibbon liveHost={liveHost} where="answers" />
+          {answer ? (
+            <HubAnswerBody
+              client={client}
+              host={shownHost}
+              page={answer}
+              linkBase={`${base}/answers/`}
+              linkSuffix={q}
+              homeHref={`${base}${q}`}
+            />
+          ) : (
+            <HubIndexBody
+              client={client}
+              host={shownHost}
+              pages={published}
+              linkBase={`${base}/answers/`}
+              linkSuffix={q}
+            />
+          )}
+          <ConciergeEmbed
+            clientId={verified.clientId}
+            magnetKey={null}
+            preview={params.token}
+            mascot={searchParams.mascot ?? null}
+          />
+        </HubShell>
+      );
+    }
+
+    // normalizeSitePath stores one lowercase segment, or "/" for the home page, so the catch-all
+    // maps straight onto it. A miss is a 404 rather than a fallback to the home page: silently
+    // serving something else is how you conclude a page published that never did.
+    const sitePath = segments.length ? `/${segments.join("/")}` : "/";
+    const [current, nav] = await Promise.all([
+      publishedSitePage(verified.clientId, sitePath),
+      listSitePages(verified.clientId),
+    ]);
+    if (!current) notFound();
+
+    return (
+      <div lang={client.language}>
+        <LaunchRibbon liveHost={liveHost} where="site" />
+        <SitePageBody
+          page={current}
+          nav={nav}
+          href={(path) => (path === "/" ? `${base}${q}` : `${base}${path}${q}`)}
+          answersHref={`${base}/answers${q}`}
+        />
+        <ConciergeEmbed
+          clientId={verified.clientId}
+          magnetKey={null}
+          preview={params.token}
+          mascot={searchParams.mascot ?? null}
+        />
       </div>
     );
   }
@@ -274,6 +391,46 @@ async function PreviewAnswer({
   if (!page) notFound();
 
   return <HubAnswerBody client={client} host={host} page={page} />;
+}
+
+/**
+ * The Launch Lane ribbon. It answers the one question this preview genuinely has to answer:
+ * is the public able to see this yet.
+ *
+ * ‼️ IT NAMES THE DOMAIN STATE RATHER THAN A HOSTNAME IT MADE UP. PreviewRibbon prints
+ * `learn.{no domain set}` when nothing is attached, which is fine for a hub client whose
+ * registrar will eventually point that name at us. A Launch Lane client has no such name and
+ * never will: SRT buys the domain. Printing a placeholder host to somebody deciding whether to
+ * spend twelve dollars is the wrong thing to show them.
+ */
+function LaunchRibbon({ liveHost, where }: { liveHost: string | null; where: "site" | "answers" }) {
+  return (
+    <div
+      style={{
+        background: "#1d1d1f",
+        color: "rgba(255,255,255,0.75)",
+        borderBottom: "1px solid rgba(255,255,255,0.12)",
+        padding: "10px 16px",
+        font: "13px/1.5 ui-sans-serif, system-ui, sans-serif",
+        display: "flex",
+        flexWrap: "wrap",
+        gap: "12px",
+        alignItems: "baseline",
+      }}
+    >
+      <strong style={{ color: "#F5A623" }}>PREVIEW</strong>
+      <span>
+        {where === "site" ? "Their website" : "Their answer pages"}, as they will ship.{" "}
+        {liveHost ? (
+          <>
+            Live at <code style={{ color: "#fff" }}>{liveHost}</code>.
+          </>
+        ) : (
+          "No domain is attached yet, so nothing here is reachable by the public and nothing is indexed."
+        )}
+      </span>
+    </div>
+  );
 }
 
 /**

@@ -10,8 +10,33 @@ import { supabaseAdmin } from "@/lib/db";
 import { launchBoard } from "@/lib/launch/steps";
 import { foundationStatus } from "@/lib/launch/documents";
 import { currentOffer } from "@/lib/launch/offer";
+import { signOnboardingToken } from "@/lib/clients/token";
+import { PREVIEW_TOKEN_TTL_DAYS } from "@/lib/clients/referral-engine-preview";
 import { LaunchBoard, type BoardStep } from "./board";
 import { LaunchPanels } from "./panels";
+
+/**
+ * A RELATIVE preview link, and the relativeness is load-bearing.
+ *
+ * ‼️ clientPreviewUrl() BUILDS AN ABSOLUTE URL FROM NEXT_PUBLIC_APP_URL, WHICH IS WRONG HERE.
+ * That variable names mission.srtagency.com on every environment including the preview
+ * deployments, and production is on main, where src/lib/launch/ does not exist at all. So the
+ * absolute link would send you from a board that works to a deployment that 404s it, which is
+ * the same env trap that has already published localhost links out of a local rebuild.
+ *
+ * A relative href opens on whatever origin the board is being read on. It needs CLIENT_LINK_SECRET
+ * to sign, and returns null rather than a broken link when that is unset, exactly as
+ * clientPreviewUrl does and for the reason it gives.
+ */
+function launchPreviewHref(clientId: string): string | null {
+  try {
+    const { token } = signOnboardingToken(clientId, PREVIEW_TOKEN_TTL_DAYS, "preview");
+    return `/preview/${token}?kind=launch`;
+  } catch (e) {
+    console.error("[dashboard/launch] preview link not minted:", (e as Error).message);
+    return null;
+  }
+}
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -98,6 +123,7 @@ export default async function LaunchClientPage({ params }: Props) {
   const name = (client.dba_name as string) || (client.legal_name as string) || (client.slug as string);
   const settled = steps.filter((s) => s.status === "complete" || s.status === "skipped").length;
   const host = (hostRow.data?.host as string | null) ?? null;
+  const previewHref = launchPreviewHref(client.id as string);
 
   return (
     <div className="mx-auto max-w-5xl px-6 py-10">
@@ -159,7 +185,27 @@ export default async function LaunchClientPage({ params }: Props) {
             </a>
           </>
         )}
+        {/* ‼️ ALWAYS RENDERED, WITH OR WITHOUT A DOMAIN, AND THAT IS THE POINT OF IT.
+            The two links above need an attached host, which needs a bought domain, which is the
+            only thing in this repository that spends money. Until then there was no URL anywhere
+            that showed the site you just pasted: /hub/{host} 404s on every internal host by
+            design. This one serves the same pages off a signed token instead of a hostname. */}
+        {previewHref && (
+          <a
+            href={previewHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="rounded-lg border border-[rgba(245,166,35,0.35)] bg-[rgba(245,166,35,0.06)] px-3 py-1.5 text-xs text-[#F5A623] hover:text-white"
+          >
+            {host ? "Preview (no domain needed)" : "Preview the site"}
+          </a>
+        )}
       </div>
+      {!previewHref && (
+        <p className="mt-2 text-xs text-[rgba(255,255,255,0.4)]">
+          No preview link could be signed: CLIENT_LINK_SECRET is not set on this environment.
+        </p>
+      )}
 
       <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
         <LaunchBoard clientId={client.id as string} steps={steps} />

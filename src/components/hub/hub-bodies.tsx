@@ -100,17 +100,31 @@ export function HubLogo({ client }: { client: HubClient }) {
  */
 const LIVE_LINK_BASE = "/";
 
+/**
+ * Appended AFTER the slug on every page link. Empty on a live hub and on every preview that
+ * needs no query string.
+ *
+ * ‼️ IT EXISTS BECAUSE `linkBase` IS A PREFIX AND A QUERY STRING IS A SUFFIX. The token preview
+ * distinguishes its surfaces with ?kind=, and a prefix cannot carry one, so a Launch Lane answer
+ * link built from linkBase alone would drop the kind and be read back as a hub preview — which
+ * then looks for an answer page slugged "answers" and 404s. Guessing the kind from a path segment
+ * instead would collide with any client who legitimately published a page on that slug.
+ */
+const LIVE_LINK_SUFFIX = "";
+
 /** The index: who they are, what has been answered, and the canonical NAP. */
 export function HubIndexBody({
   client,
   host,
   pages,
   linkBase = LIVE_LINK_BASE,
+  linkSuffix = LIVE_LINK_SUFFIX,
 }: {
   client: HubClient;
   host: string;
   pages: HubBodyPage[];
   linkBase?: string;
+  linkSuffix?: string;
 }) {
   const where = [client.city, client.state].filter(Boolean).join(", ");
 
@@ -144,7 +158,7 @@ export function HubIndexBody({
           <ul className="hub-list">
             {pages.map((page) => (
               <li key={page.id}>
-                <a href={`${linkBase}${page.slug}`}>
+                <a href={`${linkBase}${page.slug}${linkSuffix}`}>
                   {page.title}
                   <span className="hub-q">{page.question}</span>
                 </a>
@@ -204,6 +218,7 @@ export function HubAnswerBody({
   page,
   links = NO_PLAN_LINKS,
   linkBase = LIVE_LINK_BASE,
+  linkSuffix = LIVE_LINK_SUFFIX,
   homeHref = LIVE_LINK_BASE,
 }: {
   client: HubClient;
@@ -211,6 +226,7 @@ export function HubAnswerBody({
   page: HubAnswerPage;
   links?: PlanLinks;
   linkBase?: string;
+  linkSuffix?: string;
   homeHref?: string;
 }) {
   const pillar = links.isPillar ? null : links.pillar;
@@ -267,7 +283,7 @@ export function HubAnswerBody({
       */}
       {pillar && (
         <p className="hub-part">
-          Part of <a href={`${linkBase}${pillar.slug}`}>{pillar.title}</a>
+          Part of <a href={`${linkBase}${pillar.slug}${linkSuffix}`}>{pillar.title}</a>
         </p>
       )}
 
@@ -297,7 +313,7 @@ export function HubAnswerBody({
           <ul className="hub-list">
             {onward.map((link) => (
               <li key={link.slug}>
-                <a href={`${linkBase}${link.slug}`}>{link.title}</a>
+                <a href={`${linkBase}${link.slug}${linkSuffix}`}>{link.title}</a>
               </li>
             ))}
           </ul>

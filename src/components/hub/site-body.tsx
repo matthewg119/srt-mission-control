@@ -17,7 +17,27 @@
 
 import type { SitePage } from "@/lib/hub/site-pages";
 
-export function SitePageBody({ page, nav }: { page: SitePage; nav: SitePage[] }) {
+export function SitePageBody({
+  page,
+  nav,
+  href = (path) => path,
+  answersHref = "/answers",
+}: {
+  page: SitePage;
+  nav: SitePage[];
+  /**
+   * Where a nav entry points. Defaults to the stored path, which is what a real host serves.
+   *
+   * ‼️ IT EXISTS FOR THE TOKEN PREVIEW AND FOR NOTHING ELSE, AND THE DEFAULT IS THE LIVE
+   * BEHAVIOUR ON PURPOSE. A Launch Lane client has no hostname until a domain is bought and
+   * attached, so the only way to look at their site before that is /preview/{token}, where every
+   * page hangs off one path segment. Absolute hrefs like /about would leave that preview and land
+   * on Mission Control's own 404. Same shape as HubIndexBody's `linkBase`, for the same reason.
+   */
+  href?: (path: string) => string;
+  /** Where "Questions and answers" points. Defaults to /answers, which is the live URL. */
+  answersHref?: string;
+}) {
   return (
     <>
       <div dangerouslySetInnerHTML={{ __html: page.html }} />
@@ -35,11 +55,11 @@ export function SitePageBody({ page, nav }: { page: SitePage; nav: SitePage[] })
             .filter((p) => p.path !== page.path)
             .map((p) => (
               <li key={p.path}>
-                <a href={p.path}>{p.navLabel || p.title}</a>
+                <a href={href(p.path)}>{p.navLabel || p.title}</a>
               </li>
             ))}
           <li>
-            <a href="/answers">Questions and answers</a>
+            <a href={answersHref}>Questions and answers</a>
           </li>
         </ul>
       </nav>

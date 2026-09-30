@@ -84,7 +84,7 @@ export function clientPreviewUrl(
   // "site" is the replica of their OWN website (src/lib/clients/site-replica.ts). It rides the
   // same signed preview token as the other two rather than minting a scheme of its own: one
   // token type, one TTL, one revocation story.
-  kind: "hub" | "reviews" | "site" = "hub"
+  kind: "hub" | "reviews" | "site" | "launch" = "hub"
 ): string | null {
   try {
     const { token } = signOnboardingToken(clientId, PREVIEW_TOKEN_TTL_DAYS, "preview");
