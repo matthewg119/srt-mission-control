@@ -39,7 +39,13 @@ function refuses(label: string, verdict: { ok: boolean; error?: string }): void 
   }
 }
 
-function accepts(label: string, verdict: { ok: boolean; value: string | null }, want?: string): void {
+function accepts(
+  label: string,
+  verdict: { ok: boolean; value: string | null },
+  // `null` is a real expectation here: an empty optional website normalises to null, and typing
+  // that as `string | undefined` made "expected nothing" indistinguishable from "did not say".
+  want?: string | null
+): void {
   const good = verdict.ok && (want === undefined || verdict.value === want);
   if (good) console.log(`  ok    accepts  ${label.padEnd(42)} -> ${verdict.value}`);
   else {
