@@ -92,19 +92,31 @@ export function ConvoFirstFunnel({
   const [typing, setTyping] = useState(false);
   const [input, setInput] = useState("");
   const [answers, setAnswers] = useState<Record<string, string>>({});
-  const [sheetOpen, setSheetOpen] = useState(false);
+  // ‼️ ONE SURFACE AT A TIME, ENFORCED BY THE TYPE RATHER THAN BY REMEMBERING.
+  //
+  // These were three independent booleans, and nothing stopped two being true at once. When that
+  // happened the offer sheet (88% tall) and the reactivation sheet (sized to its content) were
+  // both anchored to the bottom of the same container, so the taller one showed above the shorter
+  // one and you could read the next card through the gap while answering the current one. Matthew,
+  // 2026-10-01: "I want each card to be individual and have its own animation."
+  //
+  // A single nullable surface makes the overlap unrepresentable. Each sheet still mounts while
+  // closed and still runs its OWN transform, so they keep their own animations: what they stop
+  // sharing is the screen.
+  const [surface, setSurface] = useState<"offer" | "reactivation" | "freesite" | null>(null);
+  const sheetOpen = surface === "offer";
   // ‼️ THE SHEET'S OWN STATE LIVES HERE, NOT IN THE SHEET. A pick flips `starting`, whose render
   // returns <Starting /> and unmounts the sheet; a failed /start then remounts it. Held down
   // there, the phase and the billing choice came back reset, so somebody who hit an error on
   // "Start monthly" was silently returned to the free card. See the note over OfferPhase.
   const [phase, setPhase] = useState<OfferPhase>("card");
   const [billing, setBilling] = useState<BillingState>(OPENING_BILLING);
-  const [addonOpen, setAddonOpen] = useState(false);
+  const addonOpen = surface === "freesite";
   const [wantsFreeSite, setWantsFreeSite] = useState(true);
   // ‼️ `null` IS "NOT ASKED", WHICH IS NOT THE SAME AS `false`. The lead record has to be able to
   // tell somebody who declined the reactivation campaign from somebody who never saw it, or the
   // take rate is computed against a denominator that includes people who were never offered it.
-  const [reactivationOpen, setReactivationOpen] = useState(false);
+  const reactivationOpen = surface === "reactivation";
   const [wantsReactivation, setWantsReactivation] = useState<boolean | null>(null);
   const [starting, setStarting] = useState(false);
   const [sessionToken, setSessionToken] = useState<string | null>(null);
@@ -145,7 +157,9 @@ export function ConvoFirstFunnel({
   // because the composer sits below the message column and a default focus() would drag the thread
   // away from the bubble that just arrived.
   useEffect(() => {
-    if (typing || sheetOpen || addonOpen || starting) return;
+    // `surface` rather than the three flags: a surface added later is covered without an edit here,
+    // which is the bug the reactivation sheet walked into when it was a fourth boolean.
+    if (typing || surface !== null || starting) return;
     if (step === "offer" || step === "handoff") return;
     if (typeof window !== "undefined" && window.matchMedia("(hover: none)").matches) return;
     const id = window.setTimeout(() => {
@@ -156,7 +170,7 @@ export function ConvoFirstFunnel({
       }
     }, 40);
     return () => window.clearTimeout(id);
-  }, [typing, sheetOpen, addonOpen, starting, step, messages.length]);
+  }, [typing, surface, starting, step, messages.length]);
 
   /** Paint assistant bubbles one at a time, with the dots up between them. */
   const paint = useCallback(async (lines: string[]) => {
@@ -264,7 +278,7 @@ export function ConvoFirstFunnel({
       setMessages((m) => [...m, { role: "user", content: said }]);
       setAnswers((a) => ({ ...a, website: NO_WEBSITE_OPTION }));
       setInput("");
-      setAddonOpen(true);
+      setSurface("freesite");
       return;
     }
 
@@ -294,7 +308,7 @@ export function ConvoFirstFunnel({
     if (step === "website") {
       // The reactivation add-on goes here, between the website and the phone. See the note over
       // REACTIVATION_ADDON for why this slot and not after the price.
-      setReactivationOpen(true);
+      setSurface("reactivation");
       return;
     }
     if (step === "phone") {
@@ -307,14 +321,14 @@ export function ConvoFirstFunnel({
       // what just happened is that a stranger became somebody we can contact.
       track("Lead");
       setStep("offer");
-      void paint(["Perfect. One thing before we book the call."]).then(() => setSheetOpen(true));
+      void paint(["Perfect. One thing before we book the call."]).then(() => setSurface("offer"));
     }
   }
 
   /** The gold reactivation add-on, answered. Never blocks the conversation either way. */
   function closeReactivation(yes: boolean) {
     setWantsReactivation(yes);
-    setReactivationOpen(false);
+    setSurface(null);
     // The choice is echoed into the thread so the transcript shows what they agreed to, exactly
     // as the free-website add-on does. A decision taken in a sheet that leaves no trace in the
     // conversation is one nobody can point at later.
@@ -326,7 +340,7 @@ export function ConvoFirstFunnel({
   /** The free-website add-on, answered. Never blocks the conversation either way. */
   function closeAddon(yes: boolean) {
     setWantsFreeSite(yes);
-    setAddonOpen(false);
+    setSurface(null);
     if (yes) setMessages((m) => [...m, { role: "user", content: FREE_WEBSITE.optIn }]);
     setStep("phone");
     void paint([yes ? FREE_WEBSITE.ackYes : FREE_WEBSITE.ackNo, ASK_PHONE_CONVO]);
