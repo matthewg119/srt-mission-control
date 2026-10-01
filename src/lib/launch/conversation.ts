@@ -425,6 +425,9 @@ async function buildHandoffPrompt(
       "[PASTE YOUR SALES PAGE OR THE CLOSEST THING YOU HAVE. If there is none yet, describe what " +
       "this business sells and to whom, in a paragraph.]",
     headingContract: [],
+    // There is no Slack anywhere in this lane. The default wording sends somebody looking for a
+    // thread nobody opened.
+    returnTo: "this conversation",
   });
 
   return { ok: true, label: "The avatar chain, seven messages, one conversation.", text };
