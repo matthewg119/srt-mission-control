@@ -66,7 +66,10 @@ check(`all ${DELIVERY_STEPS.length} steps are mapped`, DELIVERY_STEPS.every((s) 
 check("the map has no extra keys", Object.keys(STEP_ROLE).length === DELIVERY_STEPS.length, `${Object.keys(STEP_ROLE).length} vs ${DELIVERY_STEPS.length}`);
 check("keyword_set is writing work", roleForStep("keyword_set") === "writer");
 check("offer_locked is onboarding, not outreach", roleForStep("offer_locked") === "onboarder");
-check("weekly_report is delivery, because the client is already a client", roleForStep("weekly_report") === "delivery");
+// weekly_report came off the board on 2026-09-29: it was a predicate about ongoing behaviour
+// rather than work, and it already had a nudge in the daily digest. cards_printed is the
+// equivalent delivery-role step that is still there.
+check("cards_printed is delivery, because the client is already a client", roleForStep("cards_printed") === "delivery");
 
 // ‼️ THE SAME TWO STATES stepDigest CHOSE. If these drift, the morning Slack post and the Today page
 // start telling somebody different things about the same board.
@@ -83,7 +86,9 @@ check("a step that only waits costs nothing", EFFORT_BY_VERB.wait === 0);
 console.log("\n2. unblocks comes from config, not from a board");
 
 const early = unblockCount("offer_locked");
-const late = unblockCount("day_30_date");
+// day_30_date was the old last step and was deleted: it asked somebody to write down Day 0
+// plus thirty, which report-reminders.ts already derives. self_report_field is the last one now.
+const late = unblockCount("self_report_field");
 check("an early step unblocks many", early > 5, String(early));
 check("the last step unblocks nothing", late === 0, String(late));
 check(

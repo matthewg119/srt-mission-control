@@ -364,11 +364,22 @@ export async function registerClientHosts(clientId: string): Promise<RegisterRes
     states.push(state);
     if (state.error) warnings.push(state.error);
 
+    // ‼️ delivery IS WRITTEN AND NAMED IN THE ARBITER, AND BOTH HALVES ARE REQUIRED.
+    // client_hosts_client_kind_delivery_key is three columns as of
+    // docs/2026-09-29-destinations.sql, and ON CONFLICT infers its arbiter by matching key
+    // expressions -- a two-column target against a three-column index is 42P10 at PLAN
+    // time, so this statement would stop running at all rather than collide on data. The
+    // same failure the nap_discrepancies seed had, one table over.
+    //
+    // This function attaches hostnames to Vercel, which is only ever how a SUBDOMAIN is
+    // served. A subfolder destination is wired by the client's own proxy and is written
+    // elsewhere; writing the literal here keeps this function unable to touch one.
     await supabaseAdmin.from("client_hosts").upsert(
       {
         client_id: clientId,
         host,
         kind,
+        delivery: "subdomain",
         enabled: true,
         vercel_attached_at: state.attached ? now : null,
         vercel_verified: state.attached ? state.verified : null,
@@ -377,7 +388,7 @@ export async function registerClientHosts(clientId: string): Promise<RegisterRes
         vercel_error: state.error,
         updated_at: now,
       },
-      { onConflict: "client_id,kind" }
+      { onConflict: "client_id,kind,delivery" }
     );
 
     if (state.target) await writeCnameTarget(clientId, recordKey, state.target);
@@ -398,8 +409,20 @@ export async function registerClientHosts(clientId: string): Promise<RegisterRes
 }
 
 export interface ClientHostRow {
+  /**
+   * ‼️ SELECTED BECAUSE A DESTINATION NEEDS AN IDENTITY THE BOARD CAN NAME.
+   * client_pages.destination_id points at this, so a picker that could not read it would
+   * have to identify a destination by hostname -- which is exactly the derivation the
+   * client_hosts table exists to avoid, and it has no answer at all for two destinations
+   * that differ only in delivery.
+   */
+  id: string;
   host: string;
   kind: "hub" | "reviews";
+  delivery: "subdomain" | "subfolder" | "cms";
+  base_path: string | null;
+  public_origin: string | null;
+  site_key: string | null;
   enabled: boolean;
   vercel_attached_at: string | null;
   vercel_verified: boolean | null;
@@ -413,9 +436,10 @@ export async function loadClientHosts(clientId: string): Promise<ClientHostRow[]
   const { data } = await supabaseAdmin
     .from("client_hosts")
     .select(
-      "host, kind, enabled, vercel_attached_at, vercel_verified, vercel_misconfigured, vercel_checked_at, vercel_error"
+      "id, host, kind, delivery, base_path, public_origin, site_key, enabled, vercel_attached_at, vercel_verified, vercel_misconfigured, vercel_checked_at, vercel_error"
     )
     .eq("client_id", clientId)
-    .order("kind");
+    .order("kind")
+    .order("delivery");
   return (data ?? []) as unknown as ClientHostRow[];
 }

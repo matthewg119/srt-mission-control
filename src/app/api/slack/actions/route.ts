@@ -489,15 +489,16 @@ async function handleBlockAction(payload: SlackInteractivePayload): Promise<Next
         triggerId: payload.trigger_id ?? "",
         clientId: action.value ?? "",
       });
-    // ── The offer this client's assistant hands over, approved before the call ──
-    case "client_magnet_approve":
-      return clientMagnetApproveAction({
-        channel,
-        slackTs,
-        userName: payload.user?.username ?? null,
-        userId,
-        value: action.value ?? "",
-      });
+    // ‼️ `client_magnet_approve` WAS HERE AND IS GONE (2026-09-29). It was the one route into
+    // lead_magnets: a card in the site_replica thread offering five model-written offers with an
+    // Approve button each. Offers are not invented per client or per page any more, so the button
+    // has nothing to approve and the table is seeded by migration instead.
+    //
+    // An old card can still be tapped -- Slack keeps blocks forever -- and an unknown action_id
+    // falls through to the default below, which acks and does nothing. That is the right
+    // behaviour for a button whose lane was removed: silent, rather than an error nobody can act
+    // on about a decision that no longer exists.
+
     // ── LANE 2: the avatar, and the research it decides ──
     case "avatar_pick":
       return avatarPickAction({
@@ -660,13 +661,21 @@ async function pageApproveAction(args: {
 
       if (!res.ok) {
         const r = res.refusal;
+        // ‼️ THE DESTINATION REFUSAL SENDS THEM TO THE BOARD, AND IT DOES NOT GROW A SLACK
+        // GRAMMAR FOR CHOOSING. Approve is one press meaning "yes, this page is ready"; a
+        // second question answered by typing a number into the same thread is a different
+        // decision wearing the same clothes, and the bare digits already mean something in
+        // the drafting channel. The picker exists on the board, where the destinations are
+        // visible with their URLs.
         const extra =
-          r.blockedBy === "quality_gate" && r.waivable
-            ? "\n\nIf this is a refusal you mean to overrule, type `waive: <the reason>` in this thread. " +
-              "The reason is recorded on the verdict and posted to the infra channel."
-            : r.blockedBy === "quality_gate" && r.gateReason !== "blocked"
-              ? "\n\nRun `check` again in this thread: the verdict no longer describes what is on the page."
-              : "";
+          r.blockedBy === "destination"
+            ? "\n\nChoose where it goes on the client board and publish it there. Approve cannot pick a domain."
+            : r.blockedBy === "quality_gate" && r.waivable
+              ? "\n\nIf this is a refusal you mean to overrule, type `waive: <the reason>` in this thread. " +
+                "The reason is recorded on the verdict and posted to the infra channel."
+              : r.blockedBy === "quality_gate" && r.gateReason !== "blocked"
+                ? "\n\nRun `check` again in this thread: the verdict no longer describes what is on the page."
+                : "";
         await slack.postThreadReply(args.channel, args.slackTs, `:no_entry: Not published. ${r.error}${extra}`);
         return;
       }
@@ -2838,68 +2847,6 @@ async function conciergeAudienceAction(args: {
       const { postStep } = await import("@/lib/clients/step-engine");
       await postStep(clientId, "concierge_preview");
     })().catch((e) => console.error("[slack/actions] concierge_audience failed:", e))
-  );
-
-  return NextResponse.json({ ok: true });
-}
-
-/**
- * Approve one of the offers drafted for this client, before any page of theirs exists.
- *
- * ‼️ THE HUMAN HALF OF "THE TOOL PROPOSES, A PERSON CONFIRMS", AND IT IS THE ONLY ROUTE INTO
- * lead_magnets. approveMagnetCandidate does the mint and every copy re-check; this handler does
- * nothing but read who pressed and hand it over. A model wrote five offers into a table nothing
- * downstream reads, and one tap moves exactly one of them into the catalogue every visitor sees.
- *
- * pageId is null on purpose. These were written for the business rather than for a page, so there
- * is nothing to point at the minted key: the ladder reaches it at the client rung instead.
- */
-async function clientMagnetApproveAction(args: {
-  channel: string;
-  slackTs: string;
-  userName: string | null;
-  userId: string;
-  value: string;
-}): Promise<NextResponse> {
-  // `${clientId}:${candidateId}`. Both halves are uuids, so a plain split is safe here, unlike
-  // avatar_pick where the label can carry a colon.
-  const [clientId, candidateId] = args.value.split(":");
-  if (!clientId || !candidateId) return NextResponse.json({ ok: true });
-
-  const actor = args.userName ? `@${args.userName}` : args.userId;
-
-  waitUntil(
-    (async () => {
-      const { approveMagnetCandidate } = await import("@/lib/concierge/magnet-drafts");
-      const result = await approveMagnetCandidate({
-        clientId,
-        pageId: null,
-        candidateId,
-        by: actor,
-      });
-
-      if (!result.ok) {
-        await slack.postThreadReply(
-          args.channel,
-          args.slackTs,
-          `:warning: Not approved: ${result.error}`
-        );
-        return;
-      }
-
-      await slack.postThreadReply(
-        args.channel,
-        args.slackTs,
-        `:white_check_mark: *${result.title}* is now this client's offer, approved by ${actor}. ` +
-          `The pill reads "${result.ctaLabel}". It resolves on every page of the replica and on ` +
-          `every hub page written later that does not name something more specific. The other ` +
-          `drafts are set aside.`
-      );
-
-      // Rebuild the step card so its counts and its magnet line describe what is true now.
-      const { postStep } = await import("@/lib/clients/step-engine");
-      await postStep(clientId, "site_replica");
-    })().catch((e) => console.error("[slack/actions] client_magnet_approve failed:", e))
   );
 
   return NextResponse.json({ ok: true });

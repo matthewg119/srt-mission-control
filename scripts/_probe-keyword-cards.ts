@@ -392,24 +392,14 @@ for (const action of ["select", "unselect", "variation", "delete_all"]) {
 // ─────────────────────────────────────────────────────────────────────────────
 console.log("\n10. the step 12 decision reaches the drafting prompt");
 //
-// ‼️ THE WHOLE POINT OF DECIDING AT STEP 12 IS THAT STEP 21 USES IT. The ideas are written while
-// somebody is looking at the actual results page, nine steps before the page exists; if the offer
-// drafter does not read them, that judgement is thrown away and a model guesses again from less.
-// This is the wire, grepped, because a wire nothing checks is a wire that gets removed.
-
-const MAGNETS = readFileSync("src/lib/concierge/magnet-drafts.ts", "utf8");
-
-check("the offer drafter resolves the keyword's SERP reading", /serpAssetsFor\(/.test(MAGNETS));
-check("it reads the ideas that were proposed", /asset_ideas/.test(MAGNETS));
-check("and the shape and the fit beside them", /answer_shape/.test(MAGNETS) && /asset_fit/.test(MAGNETS));
-check("the brief reaches the prompt", /serpAssetLines\(g\.serpAssets\)/.test(MAGNETS));
-// ‼️ PREFER, NOT OBEY. An idea written against a SERP in September must not override the angle
-// somebody approved for the page last week, and the prompt has to say so in words.
-check("and it is offered as a preference the drafter may refuse", /Prefer these where they still fit/.test(MAGNETS));
-check("a `fact` SERP is named rather than left to be guessed at", /The results page is an explanation/.test(MAGNETS));
-// ‼️ RESOLVED ON normalized WHEN THE ID HAS GONE. `keywords delete all` and resetForNewOffer both
-// null keyword_id while the reading stays true, and the phrase is what re-attaches it.
-check("it falls back to the phrase when the keyword row has gone", /normalizePhrase\(phrase\)/.test(MAGNETS));
+// ‼️ THE OFFER DRAFTER THIS SECTION CHECKED WAS DELETED ON 2026-09-29, AND WITH IT THE WIRE.
+// It asserted that magnet-drafts.ts read keyword_serp_reads.asset_ideas, so the judgement made at
+// step 12 while somebody was looking at a real results page reached the offer written at step 21.
+// Offers are not written per page any more, so there is no drafter to read them.
+//
+// The ideas themselves are NOT orphaned: asset_ideas is what the tool lane picks from, and
+// `tool pick <n>` is the wire that replaced this one. When that lane has its own probe, the
+// equivalent check belongs there.
 
 // ─────────────────────────────────────────────────────────────────────────────
 console.log("\n11. the kept 20 is what step 21 plans from");

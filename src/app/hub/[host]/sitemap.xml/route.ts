@@ -7,6 +7,7 @@
 // spent on nothing, in the one file whose whole job is to be believed.
 
 import { resolveHost } from "@/lib/hub/resolve";
+import { siteUrl, siteRoot } from "@/lib/hub/destinations";
 import { listPublished } from "@/lib/hub/pages";
 import { listSitePages } from "@/lib/hub/site-pages";
 
@@ -42,10 +43,14 @@ export async function GET(
   const isSite = resolved.kind === "site";
   const answerBase = isSite ? "/answers" : "";
 
+  // ‼️ TAKES AN ABSOLUTE URL, BUILT BY THE DESTINATION MODULE, NOT A PATH ON THE REQUEST HOST.
+  // That is the whole point of the comment below: this file used to compose
+  // `https://${host}${loc}` and a subfolder client's sitemap would then list the hostname that
+  // served the file rather than the one their pages are on.
   const entry = (loc: string, lastmod?: string | null): string =>
     [
       "  <url>",
-      `    <loc>https://${escapeXml(host)}${loc}</loc>`,
+      `    <loc>${escapeXml(loc)}</loc>`,
       lastmod ? `    <lastmod>${new Date(lastmod).toISOString().slice(0, 10)}</lastmod>` : null,
       "  </url>",
     ]
@@ -55,14 +60,23 @@ export async function GET(
   const pages = await listPublished(resolved.client.id);
   const sitePages = isSite ? await listSitePages(resolved.client.id) : [];
 
+  // ‼️ EVERY <loc> IS WHERE THE PAGE LIVES, NOT THE HOST THAT SERVED THIS FILE. A sitemap
+  // is the one document whose entire job is to state URLs, so a subfolder client's sitemap
+  // built from the request host would list a hostname their pages are not on -- and Search
+  // Console rejects a sitemap whose URLs are outside the property it was submitted for, so
+  // this fails loudly rather than quietly. That is the better half of the trade, and it is
+  // still worth not getting wrong.
   const urls = [
-    entry("/"),
-    // The marketing pages, minus the home page, which is already listed as "/".
-    ...sitePages.filter((p) => p.path !== "/").map((p) => entry(escapeXml(p.path), p.publishedAt)),
-    // The answer index is its own page on a site host; on a hub host it IS the root.
-    ...(isSite ? [entry("/answers")] : []),
+    entry(siteRoot(resolved.destination) + "/"),
+    // The marketing pages, minus the home page, which is already listed as the root. They are NOT
+    // answers, so they hang off the origin rather than going through siteUrl's /answers base.
+    ...sitePages
+      .filter((p) => p.path !== "/")
+      .map((p) => entry(siteRoot(resolved.destination) + p.path, p.publishedAt)),
+    // The answer index is its own page on a site host; on a hub host it IS the root, already listed.
+    ...(isSite ? [entry(siteUrl(resolved.destination))] : []),
     ...pages.map((page) =>
-      entry(`${answerBase}/${escapeXml(page.slug)}`, page.updatedAt || page.publishedAt)
+      entry(siteUrl(resolved.destination, page.slug), page.updatedAt || page.publishedAt)
     ),
   ];
 

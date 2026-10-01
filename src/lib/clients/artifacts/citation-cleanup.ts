@@ -1,4 +1,4 @@
-// The citation cleanup list — the citation_cleanup_list step, Runner v3 section 12 (5e).
+// The citation cleanup list — the offsite_target_list step, Runner v3 section 12 (5e).
 //
 // ‼️ NAMED BY KEY, NOT BY NUMBER. This said "delivery step 14" and the step is now 15.
 //
@@ -239,7 +239,7 @@ async function proposeFromScreenshots(clientId: string, clientName: string): Pro
 
   const text = lines.join("\n");
 
-  await notifyStep(clientId, "citation_cleanup_list", text, [
+  await notifyStep(clientId, "offsite_target_list", text, [
     { type: "section", text: { type: "mrkdwn", text: text.slice(0, 2900) } },
     {
       type: "actions",
@@ -402,7 +402,7 @@ export async function generateCitationCleanupList(clientId: string): Promise<Aut
 
   const delivered = await deliverArtifact({
     clientId,
-    stepKey: "citation_cleanup_list",
+    stepKey: "offsite_target_list",
     filename: `${name.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-citation-cleanup.pdf`,
     buffer,
     message:

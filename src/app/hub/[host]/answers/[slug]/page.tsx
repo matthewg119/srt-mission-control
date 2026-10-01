@@ -34,7 +34,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
       host,
       client: resolved.client,
       slug: params.slug,
-      base: "/answers",
+      destination: resolved.destination,
     })) ?? { robots: { index: false, follow: false } }
   );
 }
@@ -49,6 +49,7 @@ export default async function SiteAnswerPage({ params }: Props) {
     client: resolved.client,
     slug: params.slug,
     base: "/answers",
+    destination: resolved.destination,
   });
   if (!body) notFound();
 

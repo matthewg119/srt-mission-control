@@ -10,8 +10,10 @@
 // So the live page and the preview both render THESE components. The only things a caller
 // varies are the two that genuinely differ:
 //   - `pages`, because the preview shows drafts and the live route shows published only
-//   - `host`, because JSON-LD and canonicals need the client's hostname, which the preview
-//     composes rather than resolves
+//   - `destination`, because JSON-LD and canonicals need to state where the page LIVES, and
+//     a preview is previewing a destination nobody has published to yet. It was `host` until
+//     destinations existed, which made every URL here describe the hostname that served the
+//     request -- the same string on a subdomain and the wrong one on a subfolder.
 //
 // Nothing here reads a request, a header or a session. Given the same props it produces
 // the same HTML, which is the only thing that makes a preview worth showing to a client.
@@ -19,9 +21,11 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { HubClient } from "@/lib/hub/resolve";
+import { siteUrl, type Destination } from "@/lib/hub/destinations";
 import { localBusinessJsonLd, questionAnswerJsonLd, breadcrumbJsonLd, jsonLdScript } from "@/lib/hub/jsonld";
 import { NO_PLAN_LINKS, type PlanLinks } from "@/lib/hub/plan-links";
 import { HubCta } from "./hub-cta";
+import { HubTool } from "./hub-tool";
 
 export interface HubBodyPage {
   id: string;
@@ -43,6 +47,13 @@ export interface HubAnswerPage {
    * sentence simply draws no block. It is never part of `answerMd`: see HubCta for why.
    */
   ctaLine?: string | null;
+  /**
+   * The reviewed component this page renders, from `client_pages.component_key`.
+   *
+   * ‼️ NULL ON EVERY ORDINARY PAGE, WHICH IS ALL OF THEM. Only a tool page names one, and
+   * an unknown key renders nothing rather than something: see HubTool.
+   */
+  componentKey?: string | null;
 }
 
 /**
@@ -115,13 +126,18 @@ const LIVE_LINK_SUFFIX = "";
 /** The index: who they are, what has been answered, and the canonical NAP. */
 export function HubIndexBody({
   client,
-  host,
+  destination,
   pages,
   linkBase = LIVE_LINK_BASE,
   linkSuffix = LIVE_LINK_SUFFIX,
 }: {
   client: HubClient;
-  host: string;
+  /**
+   * Where these pages live. Replaced a bare `host: string`, which was used in this file for
+   * URL building and nothing else -- so every URL it emitted described the hostname that
+   * served the request rather than the one the pages are on.
+   */
+  destination: Destination;
   pages: HubBodyPage[];
   linkBase?: string;
   linkSuffix?: string;
@@ -132,7 +148,9 @@ export function HubIndexBody({
     <>
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: jsonLdScript(localBusinessJsonLd(client, host)) }}
+        dangerouslySetInnerHTML={{
+          __html: jsonLdScript(localBusinessJsonLd(client, siteUrl(destination))),
+        }}
       />
 
       {/*
@@ -214,7 +232,7 @@ export function HubIndexBody({
  */
 export function HubAnswerBody({
   client,
-  host,
+  destination,
   page,
   links = NO_PLAN_LINKS,
   linkBase = LIVE_LINK_BASE,
@@ -222,7 +240,8 @@ export function HubAnswerBody({
   homeHref = LIVE_LINK_BASE,
 }: {
   client: HubClient;
-  host: string;
+  /** Where these pages live. See HubIndexBody. */
+  destination: Destination;
   page: HubAnswerPage;
   links?: PlanLinks;
   linkBase?: string;
@@ -241,7 +260,7 @@ export function HubAnswerBody({
             questionAnswerJsonLd({
               question: page.question,
               answerText: plainText(page.answerMd),
-              url: `https://${host}/${page.slug}`,
+              url: siteUrl(destination, page.slug),
               authorName: client.displayName,
               datePublished: page.publishedAt,
             })
@@ -256,9 +275,9 @@ export function HubAnswerBody({
           dangerouslySetInnerHTML={{
             __html: jsonLdScript(
               breadcrumbJsonLd([
-                { name: client.displayName, url: `https://${host}/` },
-                { name: pillar.title, url: `https://${host}/${pillar.slug}` },
-                { name: page.title, url: `https://${host}/${page.slug}` },
+                { name: client.displayName, url: siteUrl(destination) },
+                { name: pillar.title, url: siteUrl(destination, pillar.slug) },
+                { name: page.title, url: siteUrl(destination, page.slug) },
               ])
             ),
           }}
@@ -286,6 +305,15 @@ export function HubAnswerBody({
           Part of <a href={`${linkBase}${pillar.slug}${linkSuffix}`}>{pillar.title}</a>
         </p>
       )}
+
+      {/*
+        ‼️ THE TOOL SITS ABOVE THE WORDS, AND THAT IS THE `tool` FORMAT'S OPENING RULE MADE
+        STRUCTURAL. "The asset sits at the top of the page and the first section is what it
+        answers and how to read the result." A calculator under eleven sections of prose is a
+        page with a calculator at the bottom that nobody reaches, so the ordering is here rather
+        than left to whoever writes the body.
+      */}
+      {page.componentKey ? <HubTool componentKey={page.componentKey} /> : null}
 
       <div className="hub-answer">
         {/*

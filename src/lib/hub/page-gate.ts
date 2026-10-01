@@ -78,6 +78,16 @@ export const NOT_GATED = [
   // client host. A gate exists to stop something publishable from publishing badly; there is
   // nothing publishable here. See src/lib/clients/site-replica.ts.
   "the site replica",
+  // Export (src/lib/hub/page-export.ts, GET /api/clients/[id]/hub/export). A file, handed to
+  // the person who commissioned the page. It writes nothing -- not status, not published_at,
+  // not destination_id -- so there is no publication for a gate to stand in front of and no
+  // baseline for the Day 0 wall to protect.
+  //
+  // ‼️ AND IT MUST NOT BECOME GATED, because gating it is how the gate gets waived out of
+  // habit. A client on Wix cannot publish through us at all; refusing to let them read what
+  // they paid for until a quality verdict passes would make the waiver the normal way to
+  // hand somebody their own pages, and a rail everybody steps over is worse than none.
+  "export",
 ] as const;
 
 export type CheckTier = "block" | "warn";
@@ -1170,10 +1180,36 @@ export async function assertGatePassed(clientId: string, pageId: string): Promis
 
   if (run.verdict === "block") {
     const failed = run.checks.filter((c) => c.tier === "block" && c.status === "fail");
+
+    // ‼️ THE REFUSAL NAMES BOTH WAYS FORWARD, AND UNTIL 2026-09-29 IT NAMED NEITHER.
+    //
+    // It said "The quality gate refuses this page:" and listed the failed checks, full stop.
+    // The waiver was reachable the whole time -- waiveGate has existed since 2026-08-26, the
+    // board renders a textarea for it, and Slack takes `waive: <reason>` -- and none of that
+    // was discoverable unless you already knew. A rail nobody can see the door in reads as a
+    // wall, and a wall is what people route around.
+    //
+    // The note beside `verdictBlocks` already says the refusal is what should mention the
+    // waiver, precisely because no Waive button is ever drawn next to Approve. This is that
+    // sentence, finally written.
+    //
+    // ‼️ THE ASK COMES FIRST AND THE WAIVER SECOND, WHICH IS NOT THE ORDER THEY WERE BUILT IN.
+    // Every one of these checks is about a claim with nothing behind it, and the cheap fix for
+    // that is to go and get something behind it. A waiver is the answer when the evidence
+    // exists somewhere a column cannot see; it is not the answer to "this is unsupported".
+    // Listing it second is the whole difference between a door and a shortcut.
     throw new GateBlockedError(
       "blocked",
       `The quality gate refuses this page:\n` +
-        failed.map((c) => `  - ${c.detail}`).join("\n"),
+        failed.map((c) => `  - ${c.detail}`).join("\n") +
+        `\n\nTwo ways forward.\n` +
+        `  1. Get a source. \`ask\` in the page thread walks the questions, or run the ` +
+        `\`quote_request\` workflow to draft an email asking a named person for one quotable ` +
+        `sentence. Their reply files as evidence and the page unblocks itself.\n` +
+        `  2. Publish anyway, with a reason. On the board there is a box under this refusal; ` +
+        `in a page thread, type \`waive: <the reason>\`. It is recorded against your name on ` +
+        `the verdict and posted to the infra channel, and it goes stale the moment the page is ` +
+        `edited.`,
       run.checks
     );
   }

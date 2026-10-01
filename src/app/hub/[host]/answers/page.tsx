@@ -42,7 +42,12 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   // A hub host: this is an ordinary page that happens to be slugged "answers".
   if (resolved.kind === "hub") {
     return (
-      (await answerPageMetadata({ host, client: resolved.client, slug: SLUG, base: "" })) ?? {
+      (await answerPageMetadata({
+        host,
+        client: resolved.client,
+        slug: SLUG,
+        destination: resolved.destination,
+      })) ?? {
         robots: { index: false, follow: false },
       }
     );
@@ -72,7 +77,13 @@ export default async function AnswersIndex({ params }: Props) {
   // The rescue. On a hub host nothing about /answers is special, so behave exactly as [slug]
   // would have: the layout has already applied the shell for this kind of host.
   if (resolved.kind === "hub") {
-    const body = await AnswerPageBody({ host, client, slug: SLUG, base: "" });
+    const body = await AnswerPageBody({
+      host,
+      client,
+      slug: SLUG,
+      base: "",
+      destination: resolved.destination,
+    });
     if (!body) notFound();
     return body;
   }
@@ -84,7 +95,12 @@ export default async function AnswersIndex({ params }: Props) {
   return (
     <HubShell client={client}>
       {/* linkBase, because these pages live under /answers on this host and not at the root. */}
-      <HubIndexBody client={client} host={host} pages={pages} linkBase="/answers/" />
+      <HubIndexBody
+        client={client}
+        destination={resolved.destination}
+        pages={pages}
+        linkBase="/answers/"
+      />
       {/* The index is not one answer, so it names no magnet and the ladder decides. */}
       <ConciergeEmbed clientId={client.id} />
     </HubShell>

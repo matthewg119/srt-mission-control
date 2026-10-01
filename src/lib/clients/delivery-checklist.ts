@@ -19,6 +19,7 @@
 // Phases 2 to 5, both in docs/specs/.
 
 import { supabaseAdmin } from "@/lib/db";
+import { siteUrl, destinationForPage } from "@/lib/hub/destinations";
 import { slack } from "@/lib/slack-bot";
 import {
   askForStep,
@@ -26,7 +27,6 @@ import {
   postDraft,
   postDnsCallChecklist,
 } from "@/lib/clients/client-drafts";
-import { subdomainLabel } from "@/lib/clients/normalize";
 import { DAY_ZERO_STEP_KEY, stampDay0, clearDay0IfManual } from "@/lib/clients/day-zero";
 import { refreshStages } from "@/lib/clients/stage-rollup";
 import {
@@ -181,7 +181,7 @@ async function notifyVars(clientId: string, draftKey: string): Promise<Record<st
 
   const { data: page } = await supabaseAdmin
     .from("client_pages")
-    .select("slug")
+    .select("slug, destination_id")
     .eq("client_id", clientId)
     .eq("status", "published")
     .order("published_at", { ascending: false })
@@ -194,8 +194,17 @@ async function notifyVars(clientId: string, draftKey: string): Promise<Record<st
   // gap, and a message with a missing line is better than one pointing somewhere wrong.
   if (!slug) return {};
 
-  const label = subdomainLabel((client?.subdomain as string | null) ?? null, domain);
-  return { pageUrl: `https://${label}.${domain}/${slug}` };
+  // ‼️ THE SECOND COPY OF THIS COMPOSITION, AND IT IS WHY siteUrl() EXISTS. publish-page.ts
+  // built the same string from subdomainLabel() plus clients.domain, and this rebuilt it
+  // independently for the client-facing WhatsApp draft. Two answers to "where did this page
+  // go" that agree on a subdomain and disagree the moment a client publishes to a subfolder
+  // -- and this is the copy the CLIENT reads.
+  const dest = await destinationForPage(
+    clientId,
+    (page?.destination_id as string | null) ?? null
+  );
+  if (!dest) return {};
+  return { pageUrl: siteUrl(dest, slug) };
 }
 
 function displayName(client: Record<string, unknown>): string {

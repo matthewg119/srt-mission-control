@@ -961,7 +961,7 @@ const stillUnimplemented = unimplementedAutoSteps();
 // Every auto step with no runner is now completed by a ROUTE instead. Nothing is merely missing.
 //
 // The five that used to be on this list — review_audit, custom_question_set, page_candidates,
-// citation_cleanup_list, referral_engine_preview — have real runners as of 2026-08-22, which is what
+// offsite_target_list, referral_engine_preview — have real runners as of 2026-08-22, which is what
 // took unreachableAutoSteps() to empty. The four that remain are here because a runner would be
 // the WRONG shape for them, not because nobody got to them:
 const expectedUnimplemented = [

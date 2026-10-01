@@ -54,23 +54,6 @@ export interface MagnetChoiceView {
   deliverable: boolean;
 }
 
-/**
- * One of the five offers drafted FOR a page, before anybody has picked it.
- *
- * ‼️ IT HAS NO magnetKey AND THAT IS THE DIFFERENCE THAT MATTERS. A MagnetChoiceView is a row in
- * the catalogue that any page can name. This is a proposal that exists only for this page and has
- * never been in the catalogue: it gets a key at the moment somebody approves it, which is what
- * mints it. So the dropdown carries `cand:<id>` for these, and the server resolves that into a
- * real key before anything is stored. See resolveMagnetChoice in the hub route.
- */
-export interface MagnetCandidateView {
-  id: string;
-  title: string;
-  promise: string;
-  ctaLabel: string;
-  rationale: string | null;
-}
-
 export interface AuditPromptView {
   text: string;
   block: string | null;
@@ -183,7 +166,6 @@ export function HubForm({
   pages,
   prompts,
   magnets,
-  magnetCandidates,
   day0ArchivedAt,
   day0Source,
   vercelConfigured,
@@ -199,13 +181,6 @@ export function HubForm({
   prompts: AuditPromptView[];
   /** Empty when this client has no concierge_configs row, which the panel says out loud. */
   magnets: MagnetChoiceView[];
-  /**
-   * The offers written for each page, keyed by page id.
-   *
-   * Empty for a page nobody has drafted offers for yet, which the picker answers with a button
-   * rather than with silence. The page studio fills this in automatically when a page is claimed.
-   */
-  magnetCandidates: Record<string, MagnetCandidateView[]>;
   /** NULL means the Day 0 wall is shut and Publish will be refused. */
   day0ArchivedAt: string | null;
   day0Source: string | null;
@@ -240,14 +215,8 @@ export function HubForm({
    * prop would be initialised once and then never update, so [Write five offers] would appear to
    * do nothing until a full page load.
    */
-  const pageCandidates = draft.id ? (magnetCandidates[draft.id] ?? []) : [];
-
   /** The row behind the chosen key, so the panel can say what the pill will read. */
   const chosenMagnet = magnets.find((m) => m.magnetKey === draft.leadMagnetKey) ?? null;
-  /** Or the candidate behind it, when the choice is one of this page's own five. */
-  const chosenCandidate = draft.leadMagnetKey.startsWith("cand:")
-    ? pageCandidates.find((c) => `cand:${c.id}` === draft.leadMagnetKey) ?? null
-    : null;
   const bodyRef = useRef<HTMLTextAreaElement | null>(null);
 
   // ‼️ THE GATE STATE IS FETCHED, NOT PASSED AS A PROP, for the same reason the page body is.
@@ -259,6 +228,21 @@ export function HubForm({
   const [gateWaiving, setGateWaiving] = useState<string | null>(null);
   const [gateWaiveReason, setGateWaiveReason] = useState("");
   const [openVerdict, setOpenVerdict] = useState<string | null>(null);
+  /**
+   * Which page is waiting for somebody to say where it goes, and what the options are.
+   *
+   * ‼️ THE OPTIONS COME BACK WITH THE REFUSAL AND ARE NOT DERIVED HERE. The server has
+   * already filtered them to this client's enabled hub destinations, and re-deriving the
+   * list on the board would be a second answer to "where may this page go" -- one built
+   * from a prop that was fetched before the destination was wired.
+   *
+   * ‼️ NOTHING IS PRE-SELECTED. A picker that starts on the first option is a default, and
+   * a default that publishes onto a client's own indexed domain without anybody choosing is
+   * not an edit, it is a retraction.
+   */
+  const [destPending, setDestPending] = useState<string | null>(null);
+  const [destChoices, setDestChoices] = useState<Array<{ id: string; label: string }>>([]);
+  const [destPick, setDestPick] = useState("");
   /**
    * What the last draft said each claim rests on.
    *
@@ -395,10 +379,19 @@ export function HubForm({
         blockedBy?: string;
         waivable?: boolean;
         gateReason?: string;
+        choices?: Array<{ id: string; label: string }>;
       };
       if (!json.ok) {
         setError(json.error ?? json.warnings?.join(" ") ?? "That did not work.");
         if (json.blockedBy === "day_zero_archive" && json.waivable) setWaiving(true);
+        // ‼️ NOT A WAIVER, AND IT MUST NOT RENDER LIKE ONE. Nothing is wrong with this page:
+        // it has more than one place it could go and nobody has said which. The control is a
+        // question with an answer, not a refusal with an override.
+        if (json.blockedBy === "destination") {
+          setDestPending(String(body.pageId ?? ""));
+          setDestChoices(json.choices ?? []);
+          setDestPick("");
+        }
         // ‼️ ONLY A REAL REFUSAL OPENS THE WAIVER. `never_run` and `stale` both mean press
         // Check, and offering a waiver for those would teach people to skip a free fix, which
         // is exactly how a gate turns into a button beside Publish.
@@ -725,6 +718,15 @@ export function HubForm({
           >
             Preview the AI Referral Engine →
           </a>
+          {pages.length > 0 && (
+            <a
+              href={`/api/clients/${clientId}/hub/export`}
+              title="Every page this client has, drafts included and labelled, with the paste-here sheets. Publishes nothing."
+              className="rounded border border-white/15 px-2 py-1 text-xs hover:border-white/40"
+            >
+              Export every page (.zip)
+            </a>
+          )}
         </div>
 
         {pages.length === 0 && (
@@ -810,6 +812,98 @@ export function HubForm({
                   : "Publish"}
             </button>
             </div>
+
+            {/*
+              ‼️ EXPORT SITS BESIDE PUBLISH AND IS NEVER DISABLED. It is not behind the Day-0
+              wall, not behind the quality gate and not behind a destination being wired: the
+              client commissioned these words and may have them at any point. A client on Wix
+              cannot publish through us at all, so gating this would make the waiver the normal
+              way to hand somebody their own pages.
+
+              Plain links rather than buttons, because they ARE downloads and a browser
+              already knows how to do that. The route sends Content-Disposition: attachment.
+            */}
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-white/40">
+              <span>Export:</span>
+              {(
+                [
+                  ["html", "body HTML", "The markup, no document around it. For a CMS code view."],
+                  ["md", "markdown", "The words, for an editor that takes markdown."],
+                  ["jsonld", "JSON-LD", "The structured data on its own, for a head-code box."],
+                  ["standalone", "standalone page", "One file that opens in a browser, styled."],
+                  ["sheet", "paste-here sheet", "Which piece goes in which field, in plain words."],
+                ] as const
+              ).map(([format, label, title]) => (
+                <a
+                  key={format}
+                  href={`/api/clients/${clientId}/hub/export?pageId=${page.id}&format=${format}`}
+                  title={title}
+                  className="underline decoration-white/20 underline-offset-2 hover:text-white/70"
+                >
+                  {label}
+                </a>
+              ))}
+            </div>
+
+            {/*
+              Where it goes. Rendered only after the server has refused for want of an answer,
+              so a client with one destination never sees a question with one possible answer.
+            */}
+            {destPending === page.id && destChoices.length > 0 && (
+              <div className="mt-2 rounded border border-sky-400/30 bg-sky-400/5 p-2 text-xs">
+                <p className="text-white/70">
+                  This client has more than one destination wired. Where does this page go?
+                </p>
+                <p className="mt-1 text-[11px] text-white/40">
+                  One page gets one home. Publishing the same page to two hosts we control is
+                  duplicate content, and both copies lose.
+                </p>
+                <div className="mt-2 flex flex-col gap-1">
+                  {destChoices.map((c) => (
+                    <label key={c.id} className="flex items-center gap-2 text-white/80">
+                      <input
+                        type="radio"
+                        name={`dest-${page.id}`}
+                        checked={destPick === c.id}
+                        onChange={() => setDestPick(c.id)}
+                      />
+                      <span>{c.label}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="mt-2 flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={!destPick || busy !== null}
+                    onClick={async () => {
+                      const ok = await post(
+                        { action: "page_publish", pageId: page.id, destinationId: destPick },
+                        page.id
+                      );
+                      if (ok) {
+                        setDestPending(null);
+                        setDestChoices([]);
+                        setDestPick("");
+                      }
+                    }}
+                    className="rounded border border-sky-400/40 px-2 py-1 text-xs text-sky-200 hover:border-sky-300 disabled:opacity-40"
+                  >
+                    Publish here
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDestPending(null);
+                      setDestChoices([]);
+                      setDestPick("");
+                    }}
+                    className="text-white/40 hover:text-white/70"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/*
               ‼️ THE VERDICT IS SHOWN, THE PUBLISH BUTTON IS NOT DISABLED BY IT, and that is
@@ -1011,20 +1105,13 @@ export function HubForm({
                 >
                   <option value="">Let the ladder decide (generic, same on every page)</option>
                   {/*
-                    Written for THIS page and listed first, because that is the whole point: until
-                    now every client saw the same shared catalogue and none of it was about them.
-                    These carry `cand:` and are minted server-side on Save or Draft it.
+                    ‼️ THE `cand:` OPTGROUP AND THE [Write five offers] BUTTON WERE HERE, AND
+                    THEY WENT WITH THE PER-PAGE MAGNET LANE ON 2026-09-29. A page does not get its
+                    own invented offer; it hands over to one of the house offers, or it IS a tool.
+                    The pointer itself, client_pages.lead_magnet_key, was always the right
+                    mechanism and is untouched. Only what can fill it changed.
                   */}
-                  {pageCandidates.length > 0 && (
-                    <optgroup label="Written for this page">
-                      {pageCandidates.map((c) => (
-                        <option key={c.id} value={`cand:${c.id}`}>
-                          {c.title}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                  <optgroup label={pageCandidates.length > 0 ? "Already in the catalogue" : "The catalogue"}>
+                  <optgroup label="The house offers">
                     {magnets.map((m) => (
                       <option key={m.magnetKey} value={m.magnetKey}>
                         {m.title} · {m.scope}
@@ -1034,36 +1121,6 @@ export function HubForm({
                   </optgroup>
                 </select>
 
-                <div className="mt-1 flex items-center gap-2">
-                  <button
-                    type="button"
-                    className="rounded border border-white/15 px-2 py-1 text-xs text-[rgba(255,255,255,0.7)] disabled:opacity-40"
-                    disabled={!draft.id || busy === "page_magnets_draft"}
-                    onClick={() => {
-                      void post({ action: "page_magnets_draft", pageId: draft.id }, "page_magnets_draft");
-                    }}
-                  >
-                    {busy === "page_magnets_draft"
-                      ? "Writing five offers..."
-                      : pageCandidates.length > 0
-                        ? "Write five different ones"
-                        : "Write five offers for this page"}
-                  </button>
-                  {!draft.id && (
-                    <span className="text-xs text-[rgba(255,255,255,0.35)]">
-                      Save the page first. Offers are written for a page, not for a form.
-                    </span>
-                  )}
-                </div>
-
-                {chosenCandidate && (
-                  <p className="mt-1 text-xs text-[rgba(255,255,255,0.45)]">
-                    Pill reads &ldquo;{chosenCandidate.ctaLabel}&rdquo;. {chosenCandidate.promise}{" "}
-                    <span className="text-[rgba(255,255,255,0.35)]">
-                      It joins this client&rsquo;s catalogue when you Save or Draft it.
-                    </span>
-                  </p>
-                )}
                 {chosenMagnet && (
                   <p className="mt-1 text-xs text-[rgba(255,255,255,0.45)]">
                     Pill reads &ldquo;{chosenMagnet.ctaLabel || chosenMagnet.title}&rdquo;.{" "}
@@ -1098,8 +1155,8 @@ export function HubForm({
               value={draft.ctaLine}
               maxLength={90}
               placeholder={
-                chosenCandidate?.ctaLabel
-                  ? `Free: ${chosenCandidate.ctaLabel}`
+                chosenMagnet?.ctaLabel
+                  ? `Free: ${chosenMagnet.ctaLabel}`
                   : "Free: the five questions to ask before you book."
               }
               onChange={(e) => setDraft((d) => ({ ...d, ctaLine: e.target.value }))}
@@ -1235,9 +1292,7 @@ export function HubForm({
               <span className="text-xs text-[rgba(255,255,255,0.4)]">
                 {draft.question.trim()
                   ? `Written from ${visibleSources.length} source${visibleSources.length === 1 ? "" : "s"}` +
-                    (chosenMagnet || chosenCandidate
-                      ? `, toward "${(chosenMagnet ?? chosenCandidate)!.title}"`
-                      : ", toward no particular offer") +
+                    (chosenMagnet ? `, toward "${chosenMagnet.title}"` : ", toward no particular offer") +
                     ". Read every line before you save it."
                   : "Pick a question first."}
               </span>

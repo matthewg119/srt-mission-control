@@ -15,6 +15,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { resolveHost } from "@/lib/hub/resolve";
 import { HubShell, SiteShell } from "@/components/hub/hub-shell";
+import { siteUrl } from "@/lib/hub/destinations";
 import "./hub.css";
 import "./universes.css";
 
@@ -34,12 +35,18 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     return { robots: { index: false, follow: false } };
   }
 
-  const { client, host, kind } = resolved;
+  const { client, destination, kind } = resolved;
 
   return {
-    // metadataBase is the CLIENT's host, never mission.srtagency.com, so every canonical
-    // and every og:url resolves onto their domain.
-    metadataBase: new URL(`https://${host}`),
+    // metadataBase is where the pages LIVE, never mission.srtagency.com, so every canonical
+    // and every og:url resolves onto the client's own domain.
+    //
+    // ‼️ siteUrl(), NOT the request host. On a subdomain they are the same string. On a
+    // subfolder the request arrives at a hostname we answer for and the pages live at a
+    // path on the client's origin, so a metadataBase built from the request host would
+    // make every relative canonical under it point at the wrong domain -- silently, and on
+    // pages whose whole job is to be cited.
+    metadataBase: new URL(siteUrl(destination)),
     title: {
       default: client.displayName,
       template: `%s · ${client.displayName}`,

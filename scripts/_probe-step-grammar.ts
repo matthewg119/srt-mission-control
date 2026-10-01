@@ -298,7 +298,7 @@ async function main() {
   const cid = "00000000-0000-0000-0000-000000000000";
   for (const [step, want] of [
     ["review_card_pdf", false],
-    ["referral_engine_handed", false],
+    ["review_handover", false],
     ["referral_engine_preview", false],
     ["offer_locked", false],
     ["nap_sweep", true],

@@ -334,7 +334,7 @@ export const AUTO_RUNNERS: Record<string, AutoRunner> = {
     return generatePageCandidates(clientId);
   },
 
-  citation_cleanup_list: async (clientId) => {
+  offsite_target_list: async (clientId) => {
     const { generateCitationCleanupList } = await import("./citation-cleanup");
     return generateCitationCleanupList(clientId);
   },
@@ -503,7 +503,7 @@ export function unreachableAutoSteps(): Set<string> {
  * documents. day_zero_archive is a gate rather than a generator and carries no `auto`.
  *
  * The list this used to name — review_audit, custom_question_set, page_candidates,
- * citation_cleanup_list, referral_engine_preview — are all implemented now, which is what took
+ * offsite_target_list, referral_engine_preview — are all implemented now, which is what took
  * unreachableAutoSteps() to empty and released the findings/call-sheet deadlock.
  *
  * ‼️ A NON-EMPTY DIFFERENCE BETWEEN THIS AND ROUTE_COMPLETED IS THE REGRESSION TO CATCH.

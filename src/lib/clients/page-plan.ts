@@ -36,7 +36,7 @@ import {
 } from "@/lib/audit-engine/awareness";
 import { blockFor } from "@/lib/audit-engine/supplied-run";
 import { hasBannedDash } from "@/lib/copy-guard";
-import { CTA_MAX, readFrame, type PlannedFrame } from "@/lib/concierge/magnet-drafts";
+import { CTA_MAX, readFrame, type PlannedFrame } from "@/lib/concierge/magnet-anchor";
 import { isPostFormatId, type PostFormatId } from "@/config/post-formats";
 import { normalizePhrase, phraseFaults, type PhraseFault } from "./phrase-quality";
 import { themeOf } from "./artifacts/page-candidates";

@@ -25,50 +25,24 @@ import {
   type SourceType,
 } from "@/lib/clients/page-evidence";
 import { magnetsForClient } from "@/lib/concierge/for-client";
-import {
-  approveMagnetCandidate,
-  draftsByPageFor,
-  draftMagnetsForPage,
-} from "@/lib/concierge/magnet-drafts";
 
 /**
- * Turn whatever the picker sent into a key the database can hold.
+ * Whatever the picker sent, as a key the database can hold.
  *
- * ‼️ THE `cand:` PREFIX IS A TRANSPORT FORM AND MUST NEVER REACH client_pages.lead_magnet_key.
- * The five offers drafted for a page have no magnet_key until somebody approves one, so the
- * dropdown carries their row ids instead. Storing that raw would give the page a key magnetByKey
- * cannot resolve, and offerForPage would then report a chosen offer that hands over nothing,
- * which is exactly the state the publish gate's block tier exists to catch.
+ * ‼️ IT USED TO MINT, AND THAT WHOLE LANE IS GONE (2026-09-29). A `cand:<uuid>` value meant
+ * one of five offers written for this page, with no magnet_key until somebody chose it, so
+ * saving the page approved the candidate and minted it into lead_magnets. Offers are not
+ * invented per page any more; the picker offers the house offers, which already have keys.
  *
- * Choosing the option and pressing Save or Draft it IS the human act, so minting here is not a
- * silent write: it is the same decision the page studio's `magnet 3` makes, on the other surface.
+ * A stored `cand:` value can still arrive from a stale tab. It resolves to null rather than
+ * being written, because a key magnetByKey cannot resolve is a page reporting an offer that
+ * hands over nothing, which is exactly what the publish gate block tier exists to catch.
  */
-async function resolveMagnetChoice(
-  clientId: string,
-  pageId: string | null,
-  raw: string,
-  actor: string
-): Promise<string | null> {
+function resolveMagnetChoice(raw: string): string | null {
   const value = raw.trim();
   if (!value) return null;
-  if (!value.startsWith("cand:")) return value;
-
-  // A candidate is meaningless without the page it was written for. Refusing by returning null is
-  // right: the save carries on and the page keeps no offer, rather than keeping a broken one.
-  if (!pageId) return null;
-
-  const approved = await approveMagnetCandidate({
-    clientId,
-    pageId,
-    candidateId: value.slice("cand:".length),
-    by: actor,
-  });
-
-  if (!approved.ok) {
-    console.error(`[hub] magnet candidate not approved: ${approved.error}`);
-    return null;
-  }
-  return approved.magnetKey;
+  if (value.startsWith("cand:")) return null;
+  return value;
 }
 
 export const dynamic = "force-dynamic";
@@ -142,13 +116,8 @@ export async function POST(
         // The offer chosen before the page is written. It never lands in the body; it tells the
         // drafter where to stop. See draftPage's header.
         //
-        // A `cand:` value is one of the five drafted FOR this page, which has no magnet_key yet.
-        // resolveMagnetChoice mints it first, so what reaches the drafter is always a real key.
-        magnetKey: await resolveMagnetChoice(
-          clientId,
-          typeof body.pageId === "string" ? body.pageId : null,
-          typeof body.leadMagnetKey === "string" ? body.leadMagnetKey : "",
-          actor
+        magnetKey: resolveMagnetChoice(
+          typeof body.leadMagnetKey === "string" ? body.leadMagnetKey : ""
         ),
       });
       if (!result.ok) return NextResponse.json({ ok: false, error: result.error });
@@ -171,28 +140,6 @@ export async function POST(
       ).catch(() => {});
 
       return NextResponse.json({ ok: true, draft: result.page });
-    }
-
-    // ── Write five offers for one page, so the picker is never a list of six library rows ──
-    //
-    // ‼️ AN ACTION AND NOT PART OF THE GET, BECAUSE A PAGE LOAD MUST NEVER CALL A MODEL. The page
-    // studio drafts these automatically when a page is claimed, which is where "ready before
-    // anybody looks" actually happens. This is the board's way to ask for them, and its retry.
-    case "page_magnets_draft": {
-      const pageId = typeof body.pageId === "string" ? body.pageId.trim() : "";
-      if (!pageId) {
-        return NextResponse.json({
-          ok: false,
-          error: "Save the page first. Offers are written for a page, not for a form.",
-        });
-      }
-
-      const result = await draftMagnetsForPage(clientId, pageId, { replace: true });
-      return NextResponse.json(
-        result.ok
-          ? { ok: true, candidates: result.candidates }
-          : { ok: false, error: result.error }
-      );
     }
 
     case "page_save": {
@@ -227,19 +174,10 @@ export async function POST(
         // Same undefined/null discipline as evidenceMap directly above: a form that says nothing
         // about the magnet leaves the stored key alone, and an empty string clears it.
         //
-        // ‼️ RESOLVED, NOT STORED RAW. The picker's own five carry a `cand:<uuid>` value, which is
-        // a transport form and must never reach client_pages.lead_magnet_key: magnetByKey would
-        // find nothing and offerForPage would report the page as pointing at a dead offer. This
-        // mints the candidate and hands back a real key. Undefined stays undefined.
+        // ‼️ A STALE `cand:` VALUE RESOLVES TO NULL RATHER THAN BEING STORED. See
+        // resolveMagnetChoice. Undefined stays undefined.
         leadMagnetKey:
-          typeof body.leadMagnetKey === "string"
-            ? await resolveMagnetChoice(
-                clientId,
-                typeof body.id === "string" ? body.id : null,
-                body.leadMagnetKey,
-                actor
-              )
-            : undefined,
+          typeof body.leadMagnetKey === "string" ? resolveMagnetChoice(body.leadMagnetKey) : undefined,
         // Checked for a banned dash at the top of this case. Undefined leaves the stored sentence
         // alone; an empty string clears it back to the magnet-templated lines.
         ctaLine: typeof body.ctaLine === "string" ? body.ctaLine : undefined,
@@ -293,11 +231,25 @@ export async function POST(
         pageId,
         publish: action === "page_publish",
         by: actor,
+        // Absent until the picker has been touched, which is the normal case for a client
+        // with one destination. publishPage refuses rather than guessing when there are
+        // several, and hands back the list to render.
+        destinationId: typeof body.destinationId === "string" ? body.destinationId : null,
       });
 
       if (!res.ok) {
         const r = res.refusal;
         if (r.blockedBy === "not_found") return NextResponse.json({ ok: false, error: r.error });
+        // ‼️ NOT A 409, AND NOT waivable. The other two refusals are rails: something is
+        // wrong and the page must not go live. This one is a question, so it is a 400 with
+        // the options attached and no waive control anywhere near it -- a "publish anyway"
+        // here would have to pick a domain on somebody's behalf.
+        if (r.blockedBy === "destination") {
+          return NextResponse.json(
+            { ok: false, error: r.error, blockedBy: "destination", choices: r.choices },
+            { status: 400 }
+          );
+        }
         // The board turns blockedBy into the waive control rather than hard-coding the step key.
         return NextResponse.json(
           r.blockedBy === "day_0"
@@ -476,6 +428,5 @@ export async function GET(
     magnets: await magnetsForClient(params.id),
     // The five written for each page, so the picker offers this client's own offers above the
     // shared catalogue. Keyed by page id because the board renders every page at once.
-    magnetCandidates: await draftsByPageFor(params.id),
   });
 }

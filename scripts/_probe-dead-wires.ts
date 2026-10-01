@@ -733,7 +733,7 @@ const ONBOARDING = new Set([
   "audience_documents", "avatar_briefs", "competitor_candidates", "dataset_suggestions",
   "harvest_runs", "keyword_clusters", "keyword_decisions", "keyword_runs", "keyword_serp_reads",
   "nap_discrepancies", "page_angles", "page_candidates", "page_dataset", "page_gate_runs",
-  "page_magnet_candidates", "page_plan", "page_plan_runs", "page_sources", "page_studio_sessions",
+  "page_plan", "page_plan_runs", "page_sources", "page_studio_sessions",
   "policy_documents", "question_bank", "question_set_versions", "review_audit_rows",
   "review_tool_submissions", "time_log",
 ]);
@@ -858,8 +858,6 @@ const WRITE_ONLY: Record<string, string> = {
   "dataset_suggestions.decided_by": "who/when beside `status`, which IS selected. dataset_suggestions proposes a field and never declares one.",
   "page_angles.decided_at": "who/when beside the angle row itself, which is selected by id and idea.",
   "page_angles.decided_by": "who/when beside the angle row itself, which is selected by id and idea.",
-  "page_magnet_candidates.decided_at": "who/when beside `status`, which IS selected alongside title, promise and cta_label.",
-  "page_magnet_candidates.decided_by": "who/when beside `status`, which IS selected alongside title, promise and cta_label.",
   "competitor_candidates.selected_by": "who, beside `selected`, which IS read and is step 6's declared output in STEP_PRODUCES.",
   "client_question_sets.approved_by": "who, beside `status` and `approved_at`, both of which ARE selected.",
   "client_keyword_strategy.locked_by": "who, beside the lock itself. isLocked() reads the fingerprint, which is what decides whether the set is frozen.",
@@ -875,7 +873,6 @@ const WRITE_ONLY: Record<string, string> = {
 
   // ── MODEL PROVENANCE: which model produced the row ────────────────────────────────────────────
   "page_angles.model": "which model wrote the angle. Recorded so a bad batch can be traced to a model, not read by anything that branches.",
-  "page_magnet_candidates.model": "which model wrote the magnet candidate. Same trace-only purpose as page_angles.model.",
   "page_gate_runs.model": "which model did the read-through. A failed model read is a SKIP by design, so nothing branches on which one it was.",
   "keyword_serp_reads.model": "which model read the SERP. bestVerdict() decides on `source` and recency, never on the model name.",
   "keyword_serp_reads.actor": "who or what filed the reading. bestVerdict() prefers a typed correction by `source`, which is the field that carries that meaning.",
@@ -905,9 +902,6 @@ const WRITE_ONLY: Record<string, string> = {
   "page_plan.page_kind": "the plan's copy of keyword_clusters.page_kind, which IS read by strategyView. The cluster is where the service-page-or-post decision is made and read.",
   "page_plan.angle_id": "which angle the plan was built from. page_angles is read by id and idea when the angle itself is rendered; the plan reads its own target_keyword and working_title.",
   "page_plan.cluster_id": "which cluster the plan came from. client_keywords.cluster_id carries the same link on the side that is read, and the plan stores its keyword verbatim rather than by reference for the client_pages.question reason.",
-  "page_magnet_candidates.angle_id": "which angle the magnet was built from, beside `plan_id`, which IS selected.",
-  "page_magnet_candidates.post_format":
-    "the magnet candidate's copy of the post format. page_angles.post_format IS read (it is in the angle select list), which is where the format axis is decided.",
   "page_candidates.question_bank_id": "the harvested phrase this candidate came from. question_bank has no client_id, so `question` is stored verbatim on the candidate and that is what every reader selects.",
   "page_candidates.derived_from":
     "for a derived row, what it was built out of, in words, per its column comment. `origin` is the field that IS read, and the honest distinction it carries (harvested = a phrase a buyer typed, derived = an idea this system assembled) is what stops a derived idea collecting the visibility-gap bonus.",
@@ -1099,7 +1093,6 @@ const OWED: Record<string, string> = {
     "the attribution chain's missing link, added 2026-09-25 with no writer and no reader. Wire it where prospects are minted, or drop it: an empty join key silently answers 'no run' for every client.",
   "client_pages.audience_id": "which buyer a page is aimed at. Owed its writer: the migration deliberately landed first so the reader could not 500 the hub on deploy.",
   "client_headlines.audience_id": "which buyer a headline is aimed at, from the same audience model. Owed the same writer.",
-  "page_magnet_candidates.audience_id": "which buyer a magnet is aimed at, from the same audience model. Owed the same writer.",
 };
 
 /**

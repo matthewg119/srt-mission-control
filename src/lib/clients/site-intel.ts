@@ -633,6 +633,23 @@ export async function runSiteIntel(
   const { error } = await supabaseAdmin.from("clients").update(patch).eq("id", clientId);
   if (error) return { ok: false, error: error.message };
 
+  // ‼️ THE CRAWLER DOOR, FOR EVERY CLIENT, NOT JUST SUBFOLDER ONES. On a subdomain we
+  // generate the robots.txt and own the hostname, so zero crawler hits means our content is not
+  // interesting yet. On a subfolder the file lives on a server we do not control and a plugin
+  // update can rewrite it overnight, so zero hits means that OR the door closed, and there is no
+  // way to tell which. Reading it for everybody is what removes the ambiguity later, and on the
+  // call it is the strongest opener this step produces.
+  //
+  // Non-fatal by construction: the site intel is already saved above, and a client whose
+  // robots.txt could not be fetched is a client we say nothing about rather than a failed step.
+  const site = (client.website as string | null) ?? domain;
+  try {
+    const { checkDoor, recordDoor } = await import("./crawler-door");
+    await recordDoor(clientId, await checkDoor(site));
+  } catch (e) {
+    console.error(`[site-intel] crawler door not checked: ${(e as Error).message}`);
+  }
+
   return { ok: true, intel };
 }
 

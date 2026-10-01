@@ -149,6 +149,8 @@ export const STEP_ACTIONS: Record<StepKey, StepAction> = {
     ],
   },
   keyword_set: {
+    // Written first because the tool decision belongs with the keywords: the evidence for it is
+    // the results pages somebody is looking at in this thread.
     verb: "pick",
     bullets: [
       // ‼️ THE PROMPT IS THE FIRST BULLET, AND THAT ORDER IS THE POINT. What is in the set before
@@ -157,8 +159,8 @@ export const STEP_ACTIONS: Record<StepKey, StepAction> = {
       // the answers arrive as `manual` rows, which PRECEDENCE puts above every one of them.
       "`keywords prompt` first: it hands over a research prompt that already knows the offer. Run it in claude.com.",
       "‼️ Paste the list back under `keywords pick:`, one phrase per line. That stores them, approves them and CHOOSES them, and what you choose is what the pages are planned from.",
-      "Already have a set? `keywords` prints the 50 strongest with their numbers and `keywords pick 3, 7, 12` takes them. `keywords map` then groups the picks into 9 pillars with 6 supports each: that is the strategy, and step 21 drafts its 7 pages off the top of it. `keywords pillars` writes candidates when a pillar is missing.",
-      "`keywords drop 4, 9` for anything off-offer, `keywords variations` for more ways to say what you chose, `keywords add:` to store without choosing. `keywords approve` approves every query as the Day-0 measurement pool, which does not choose pages; `keywords approve 411-423` and `keywords approve mine` narrow it.",
+      "Already have a set? `keywords` prints the 50 strongest with their numbers and `keywords pick 3, 7, 12` takes them. `keywords map` groups the picks into 9 pillars with 6 supports each, and `keywords pillars` writes candidates when one is missing. `keywords drop 4, 9` removes anything off-offer, `keywords variations` finds more ways to say what you chose, `keywords add:` stores without choosing, and `keywords approve` approves every query as the Day-0 measurement pool without choosing pages (`keywords approve 411-423` and `keywords approve mine` narrow it).",
+      "‼️ `tools` lists the tool this client could have, and `tool pick 1` picks one. That page is the EIGHTH page, beside the seven. It is decided here rather than at step 21 because the evidence for it is the results pages you are looking at right now.",
       "Then press Done. It ticks once the map is complete, and says exactly what is missing if it is not.",
       "_Optional, never required:_ paste a Google screenshot to score a keyword, `keywords shortlist` for the numbers, then `strategy`, `serp cards` and `strategy approve` group and lock what survived. `keywords delete all` starts over.",
     ],
@@ -174,7 +176,7 @@ export const STEP_ACTIONS: Record<StepKey, StepAction> = {
     verb: "wait",
     bullets: ["Runs itself. It builds the backlog of pages this client could be written, and is regenerated freely."],
   },
-  citation_cleanup_list: {
+  offsite_target_list: {
     verb: "wait",
     bullets: ["Runs itself. It lists the directories carrying a wrong name, address or phone."],
   },
@@ -213,7 +215,7 @@ export const STEP_ACTIONS: Record<StepKey, StepAction> = {
       "`ladder` writes a rung per awareness stage, `ladder pick 4` anchors the offer at one.",
       "`pillar: 7` sets the offer page by its keyword number, `supports auto` takes the top six.",
       "`angles auto` gives each page three ideas, `angle 3 pick 2` keeps one. The idea comes before the line.",
-      "`magnets` lists the offer each page hands over, `magnet 3 pick 2` keeps one.",
+      "`cta 3: <sentence>` sets the one line page 3 hands over with. Left alone it uses the house offer's own label. Offers are not written per page any more, so `magnets` refuses.",
       "`headlines` lists the candidates, `headlines pick 4, 9, 12` keeps seven.",
       "Then press Done. Nothing here publishes.",
     ],
@@ -270,7 +272,7 @@ export const STEP_ACTIONS: Record<StepKey, StepAction> = {
     verb: "confirm",
     bullets: ["Build the profile out: categories, services, hours, photos. Then press Done."],
   },
-  citation_cleanup: {
+  offsite_executed: {
     verb: "confirm",
     bullets: ["Work the cleanup list until the name, address and phone agree everywhere. Then press Done."],
   },
@@ -294,15 +296,18 @@ export const STEP_ACTIONS: Record<StepKey, StepAction> = {
     verb: "confirm",
     bullets: ["Press Done once the review cards are physically printed and with the client."],
   },
-  review_request_configured: {
-    verb: "confirm",
-    bullets: ["Set up how review requests actually go out, then press Done."],
-  },
-  referral_engine_handed: {
+  // ‼️ REWRITTEN ACROSS THE MERGE, NOT COPIED. These were two cards: "configure the automated
+  // request" and "hand the Referral Engine over". Pasting either one across would leave the
+  // other half unsaid, and the half that decides whether any review ever gets asked for is the
+  // one about the PERSON.
+  review_handover: {
     verb: "confirm",
     bullets: [
-      "`review link: <url>` records where their reviews are collected.",
-      "Hand the tool over and show somebody there how to use it. Then press Done.",
+      "Name the person at the clinic who will actually ask patients for reviews. Not the owner unless the owner is the one doing it.",
+      "Set the destination on the Review handover panel: `review link: <the Google review URL>`.",
+      "Without that URL the Post on Google button never appears, and the customer is told to go and find the page herself.",
+      "Show them the tool on their reviews subdomain from a phone, the way a patient will open it.",
+      "Press Done once that person has the link and knows when requests go out.",
     ],
   },
   concierge_live: {
@@ -325,21 +330,6 @@ export const STEP_ACTIONS: Record<StepKey, StepAction> = {
     verb: "confirm",
     bullets: [
       "Add the how-did-you-hear-about-us field to their booking form. It is the only attribution we get.",
-      "Then press Done.",
-    ],
-  },
-  time_log_entries: {
-    verb: "wait",
-    bullets: ["Runs itself off the time log. If it is empty, nobody has logged any hours for this client."],
-  },
-  weekly_report: {
-    verb: "wait",
-    bullets: ["Runs itself on a schedule. Read the first one before it reaches the client."],
-  },
-  day_30_date: {
-    verb: "decide",
-    bullets: [
-      "Set the day 30 retest date, which is when the baseline gets measured again.",
       "Then press Done.",
     ],
   },

@@ -399,55 +399,14 @@ export async function buildSiteReplica(clientId: string): Promise<AutoResult> {
   // written with no sources cited a business they had never read. Proven by running it: every
   // candidate came back with an empty evidenceRefs. Nothing is lost by waiting, because the
   // sections could not have named an unapproved offer anyway.
-  const sectionLabels = written;
-  let magnetDrafts = 0;
-  let magnetNote = "";
-  const { draftMagnetsForClient, hasOwnMagnet, draftsForClient } = await import(
-    "@/lib/concierge/magnet-drafts"
-  );
-
-  if (await hasOwnMagnet(clientId)) {
-    magnetNote = "own";
-  } else {
-    const outstanding = await draftsForClient(clientId);
-    if (outstanding.length > 0) {
-      magnetDrafts = outstanding.length;
-      magnetNote = "waiting";
-    } else {
-      const drafted = await draftMagnetsForClient(clientId, sectionLabels);
-      if (drafted.ok) {
-        magnetDrafts = drafted.candidates.length;
-        magnetNote = "waiting";
-      } else {
-        magnetNote = drafted.error ?? "the offers could not be drafted";
-      }
-    }
-  }
-
-  // ── The five offers, if any are waiting on a decision ──────────────────────
-  lines.push("");
-  if (magnetNote === "own") {
-    lines.push(":white_check_mark: This client already has an offer of their own in the catalogue.");
-  } else if (magnetNote === "waiting") {
-    lines.push(
-      ":point_down: *" +
-        magnetDrafts +
-        " offers about this business are drafted and waiting below.* Until one is approved, " +
-        "every page above falls back to the generic library offer, which is the wrong thing to " +
-        "show somebody a rebuild of their own website."
-    );
-  } else if (magnetNote) {
-    lines.push(":warning: No offers were drafted for this business: " + magnetNote);
-  }
-
-  // ‼️ A SECOND MESSAGE RATHER THAN MORE OF THIS ONE, BECAUSE THIS ONE CANNOT CARRY BUTTONS.
-  // An AutoResult returns text, which runReadyAutoSteps posts for us. Approving is a human act and
-  // needs an action block, so it goes through notifyStep the way the avatar candidates do.
-  if (magnetNote === "waiting" && magnetDrafts > 0) {
-    await postOfferDrafts(clientId).catch((e) =>
-      console.error("[site-replica] offer drafts card failed:", (e as Error).message)
-    );
-  }
+  // ‼️ THE REPLICA USED TO DRAFT FIVE OFFERS ABOUT THE BUSINESS HERE (removed 2026-09-29).
+  // It was the client-scoped half of the per-page magnet lane: no page in sight, five offers
+  // written from the sections just crawled, and a Slack card asking somebody to approve one into
+  // the catalogue. The house offers replaced all of it -- the assistant on a replica hands over
+  // the same thing it hands over everywhere else, which is the point of a house offer.
+  //
+  // The section crawl above is untouched and still files the client's own website as evidence,
+  // which was always the more valuable half of this step.
 
   return {
     ok: true,
@@ -455,57 +414,3 @@ export async function buildSiteReplica(clientId: string): Promise<AutoResult> {
   };
 }
 
-/**
- * The drafted offers, one Approve button each, in this step's thread.
- *
- * ‼️ THE BUTTON CARRIES THE CANDIDATE ID AND NOTHING THAT COULD GO STALE SEPARATELY. The
- * `${clientId}:${id}` shape is what every other card uses, and a re-onboard kills both halves
- * together rather than leaving a live-looking button pointed at half a dead client.
- *
- * Rejecting is deliberately not offered. Setting five aside without choosing is what the `magnet`
- * command in the page studio is for, and a button that discards the batch is one misclick away
- * from an empty catalogue on the morning of a call.
- */
-async function postOfferDrafts(clientId: string): Promise<void> {
-  const { draftsForClient } = await import("@/lib/concierge/magnet-drafts");
-  const { notifyStep } = await import("@/lib/clients/step-board");
-
-  const drafts = await draftsForClient(clientId);
-  if (drafts.length === 0) return;
-
-  const header =
-    ":gift: *" +
-    drafts.length +
-    " offers written for this business.* Approve ONE. It becomes what the assistant hands over " +
-    "on every page of the replica, and on every hub page written later that does not name " +
-    "something more specific.";
-
-  const blocks: unknown[] = [{ type: "section", text: { type: "mrkdwn", text: header } }];
-
-  for (const d of drafts) {
-    const body = [
-      "*" + d.title + "*",
-      d.promise,
-      "_Pill reads:_ " + d.ctaLabel,
-      d.rationale ? "_Why:_ " + d.rationale : "",
-      d.evidenceRefs.length ? "_From:_ " + d.evidenceRefs.join(", ") : "_From: nothing on file_",
-    ]
-      .filter(Boolean)
-      .join("\n");
-
-    blocks.push({
-      type: "section",
-      // 2,900 rather than Slack's 3,000, the same margin bodySections() leaves.
-      text: { type: "mrkdwn", text: body.slice(0, 2900) },
-      accessory: {
-        type: "button",
-        text: { type: "plain_text", text: "Approve this one" },
-        action_id: "client_magnet_approve",
-        value: clientId + ":" + d.id,
-      },
-    });
-  }
-
-  const fallback = drafts.map((d) => d.title + ": " + d.promise).join("\n");
-  await notifyStep(clientId, "site_replica", header + "\n\n" + fallback, blocks as never);
-}

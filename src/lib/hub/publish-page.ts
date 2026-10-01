@@ -37,13 +37,29 @@ import { assertGatePassed, isGateError } from "@/lib/hub/page-gate";
 import { assertDay0Archived, isDay0Error, DAY_ZERO_STEP_KEY } from "@/lib/clients/day-zero";
 import { autoCompleteStep, stepByKey } from "@/lib/clients/delivery-checklist";
 import { capturePage } from "@/lib/clients/page-dataset";
-import { subdomainLabel } from "@/lib/clients/normalize";
+import {
+  resolveDestination,
+  publishableDestinations,
+  destinationLabel,
+  siteUrl,
+} from "@/lib/hub/destinations";
+import type { Destination } from "@/lib/hub/destinations";
 import type { GateCheck } from "@/lib/hub/page-gate";
 
 export type PublishRefusal =
   | { blockedBy: "day_0"; error: string; stepKey: string; waivable: true }
   | { blockedBy: "quality_gate"; error: string; gateReason: string; checks: GateCheck[]; waivable: boolean }
-  | { blockedBy: "not_found"; error: string; waivable: false };
+  | { blockedBy: "not_found"; error: string; waivable: false }
+  // Not waivable, and not a rail. Nothing is wrong with the page: somewhere to put it has
+  // not been decided. A waiver would have to invent an answer to "which domain", which is
+  // the one thing nobody downstream can correct after the fact.
+  | { blockedBy: "destination"; error: string; choices: DestinationOption[]; waivable: false };
+
+/** What the picker renders when publishing needs a destination chosen. */
+export interface DestinationOption {
+  id: string;
+  label: string;
+}
 
 export type PublishResult =
   | { ok: true; slug: string; pageUrl: string | null }
@@ -71,6 +87,18 @@ export async function publishPage(args: {
   publish: boolean;
   /** Recorded on the capture and on the checklist tick. An email from the board, a Slack name from the card. */
   by: string;
+  /**
+   * Which destination this page goes to. Resolved INSIDE this function, never by the
+   * caller.
+   *
+   * ‼️ THE RESOLUTION BELONGS HERE FOR THE REASON THE WHOLE MODULE DOES. Two callers means
+   * two chances to skip the ownership check and publish a page onto another client's
+   * hostname. Both of them pass the raw id through and neither one reads client_hosts.
+   *
+   * Omitted is legal and means "this client has one destination, use it". It does NOT mean
+   * "pick one for me": with several wired, omitting it is refused.
+   */
+  destinationId?: string | null;
 }): Promise<PublishResult> {
   const { data: client } = await supabaseAdmin
     .from("clients")
@@ -115,7 +143,45 @@ export async function publishPage(args: {
     }
   }
 
-  const result = await setPublished(args.clientId, args.pageId, args.publish);
+  // ‼️ THE DESTINATION IS RESOLVED AFTER BOTH RAILS AND BEFORE THE WRITE, and both halves of
+  // that are deliberate.
+  //
+  // After, because it is the least fundamental of the three refusals, by the same reasoning
+  // that puts Day 0 ahead of the gate: asking somebody to choose a domain when the real
+  // problem is that publishing destroys the measurement baseline sends them to fix the
+  // wrong thing, and they would then have to choose again.
+  //
+  // Before the write, because destination_id is written in the same statement as the
+  // status. A refusal here has to leave the page a draft.
+  //
+  // ‼️ UNPUBLISHING RESOLVES NOTHING. Taking a page down is the remedy, and a client whose
+  // destination was disabled or rewired is exactly who most needs to be able to do it.
+  let destination: Destination | null = null;
+  if (args.publish) {
+    const choice = await resolveDestination(args.clientId, args.destinationId);
+    if (!choice.ok) {
+      const wired = await publishableDestinations(args.clientId).catch(() => [] as Destination[]);
+      return {
+        ok: false,
+        refusal: {
+          blockedBy: "destination",
+          error: choice.error,
+          choices: wired.map((d) => ({ id: d.id, label: destinationLabel(d) })),
+          waivable: false,
+        },
+      };
+    }
+    destination = choice.destination;
+  }
+
+  const result = await setPublished(
+    args.clientId,
+    args.pageId,
+    args.publish,
+    // Undefined on an unpublish, so the column is left alone and the page remembers where
+    // it had been.
+    args.publish ? (destination?.id ?? null) : undefined
+  );
   if (!result.ok) {
     return { ok: false, refusal: { blockedBy: "not_found", error: result.error, waivable: false } };
   }
@@ -139,46 +205,33 @@ export async function publishPage(args: {
     });
   }
 
-  // ‼️ THE URL AND THE TICK BOTH DEPEND ON WHICH LANE THIS CLIENT IS ON, AND BOTH WERE WRONG FOR
-  // THE LAUNCH LANE BEFORE THIS BRANCH EXISTED.
-  //
-  // A Slack-lane client publishes to learn.{domain}/{slug}. A Launch Lane client has a `site`
-  // host, where the root is their own pasted home page and the answer pages live one level down
-  // at {domain}/answers/{slug}. Returning the learn. shape for one of those would hand back a URL
-  // that 404s, in the string the board prints and the client is told to go and look at.
-  //
-  // And `first_page` is a step in the OTHER board. A Launch Lane client has no
-  // client_delivery_steps rows at all, so the tick silently matched nothing and logged; harmless,
-  // but it is the Slack lane reaching into a lane that is supposed to have nothing to do with it.
+  // ‼️ BUILT BY siteUrl(), NEVER COMPOSED HERE. This string is what the board prints as
+  // "Published: ...", what the notify_first_page draft sends the client, and what a human
+  // copies into an outreach email. It used to be assembled from subdomainLabel() plus
+  // clients.domain, which answers "where is the hub subdomain" rather than "where did this
+  // page go" -- the same for every page right up until the first subfolder client, and then
+  // wrong for every page of theirs with nothing to notice it by.
   let pageUrl: string | null = null;
+  if (args.publish && destination) {
+    pageUrl = siteUrl(destination, result.slug);
+  }
 
+  // ‼️ THE URL IS siteUrl()'s JOB AND THE TICK IS THE LANE'S, AND THEY ARE SEPARATE QUESTIONS.
+  // The launch lane used to compose its own /answers URL here from client_hosts. It no longer
+  // needs to: a `site` destination carries /answers as its basePath, so the one composer above
+  // already produced the right string. What is genuinely lane-specific is WHICH BOARD gets
+  // ticked, because a Launch Lane client has no client_delivery_steps rows at all and a Slack
+  // client has no client_launch_steps rows.
   if (args.publish) {
-    const isLaunch = client.onboarding_lane === "launch";
-
-    if (isLaunch) {
-      // Read the attached host rather than deriving it: client_hosts records what was ATTACHED,
-      // and clients.domain on a Launch client is whatever was typed at intake, if anything.
-      const { data: host } = await supabaseAdmin
-        .from("client_hosts")
-        .select("host")
-        .eq("client_id", args.clientId)
-        .eq("kind", "site")
-        .eq("enabled", true)
-        .maybeSingle();
-
-      if (host?.host) pageUrl = `https://${host.host as string}/answers/${result.slug}`;
-
+    if (client.onboarding_lane === "launch") {
       // The Launch Lane's own step, through its own engine. Its verifier counts published pages,
       // so this is a real confirmation rather than an assertion.
       const { autoCompleteLaunchStep } = await import("@/lib/launch/steps");
       await autoCompleteLaunchStep(args.clientId, "pages_published", args.by).catch((e) => {
         console.error("[publish-page] pages_published tick failed:", (e as Error).message);
       });
-    } else if (client.domain) {
-      const label = subdomainLabel(client.subdomain as string | null, client.domain as string);
-      pageUrl = `https://${label}.${client.domain}/${result.slug}`;
-
-      // Ticking first_page is what posts the notify_first_page draft, and it now has a real URL
+    } else if (pageUrl) {
+      // Ticking first_page is what posts the notify_first_page draft, and it has a real URL
       // behind it. autoCompleteStep is reused rather than reimplemented: it owns the tick, the
       // checklist refresh and the draft in one place.
       await autoCompleteStep(args.clientId, "first_page", `Published ${pageUrl} by ${args.by}`).catch((e) => {

@@ -62,6 +62,7 @@ import { universeFontClass } from "@/components/hub/universe-fonts";
 import { UniverseBand, UniverseTop } from "@/components/hub/universe-chrome";
 import "@/app/hub/[host]/hub.css";
 import "@/app/hub/[host]/universes.css";
+import { subdomainDestination, type Destination } from "@/lib/hub/destinations";
 
 // A preview must never be a cached render: you preview to see what you just saved.
 export const dynamic = "force-dynamic";
@@ -197,9 +198,9 @@ export default async function HubPreview({ params, searchParams }: Props) {
         {kind === "reviews" ? (
           <ReferralEngine client={client} look={look} engine={engine} />
         ) : slug ? (
-          <PreviewAnswer clientId={params.id} host={host} slug={slug} client={client} />
+          <PreviewAnswer clientId={params.id} destination={subdomainDestination(client.id, host)} slug={slug} client={client} />
         ) : (
-          <PreviewIndex clientId={params.id} host={host} client={client} />
+          <PreviewIndex clientId={params.id} destination={subdomainDestination(client.id, host)} client={client} />
         )}
       </div>
       <UniverseBand universe={kind === "reviews" ? null : skin?.universe} name={client.displayName} where={null} pages={-1} />
@@ -210,11 +211,11 @@ export default async function HubPreview({ params, searchParams }: Props) {
 /** Drafts included, which is the whole difference from the live index. */
 async function PreviewIndex({
   clientId,
-  host,
+  destination,
   client,
 }: {
   clientId: string;
-  host: string;
+  destination: Destination;
   client: Awaited<ReturnType<typeof loadClientForPreview>> & object;
 }) {
   const all = await listAllForBoard(clientId);
@@ -226,7 +227,7 @@ async function PreviewIndex({
   // ‼️ SAMPLE PAGES UNDER THE REAL ONES WHEN THERE ARE FEW (2026-09-16). An almost empty page cannot show a
   // design; the banner says the Latin is a sample, and nothing here is ever on a client's domain.
   const shown = pages.length < GHOST_BELOW ? [...pages, ...GHOST_PAGES] : pages;
-  return <HubIndexBody client={client} host={host} pages={shown} linkBase={previewBase(clientId)} />;
+  return <HubIndexBody client={client} destination={destination} pages={shown} linkBase={previewBase(clientId)} />;
 }
 
 /** Page links inside the preview stay inside the preview. */
@@ -236,19 +237,19 @@ function previewBase(clientId: string): string {
 
 async function PreviewAnswer({
   clientId,
-  host,
+  destination,
   slug,
   client,
 }: {
   clientId: string;
-  host: string;
+  destination: Destination;
   slug: string;
   client: Awaited<ReturnType<typeof loadClientForPreview>> & object;
 }) {
   const all = await listAllForBoard(clientId);
   const ghost = ghostAnswerPage(slug);
   if (ghost && !all.some((p) => p.slug === slug)) {
-    return <HubAnswerBody client={client} host={host} page={ghost} linkBase={previewBase(clientId)} homeHref={`/dashboard/clients/${clientId}/preview`} />;
+    return <HubAnswerBody client={client} destination={destination} page={ghost} linkBase={previewBase(clientId)} homeHref={`/dashboard/clients/${clientId}/preview`} />;
   }
   const page = all.find((p) => p.slug === slug);
   if (!page) notFound();
@@ -265,7 +266,7 @@ async function PreviewAnswer({
   return (
     <HubAnswerBody
       client={client}
-      host={host}
+      destination={destination}
       page={page}
       links={links}
       linkBase={previewBase(clientId)}

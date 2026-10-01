@@ -10,6 +10,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { resolveHost } from "@/lib/hub/resolve";
+import { siteUrl, siteRoot } from "@/lib/hub/destinations";
 import { answerPageMetadata, AnswerPageBody } from "@/components/hub/answer-page";
 import { publishedSitePage, listSitePages } from "@/lib/hub/site-pages";
 import { SitePageBody } from "@/components/hub/site-body";
@@ -29,27 +30,34 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     return { robots: { index: false, follow: false } };
   }
 
+  // ‼️ A `site` HOST HAS TWO NAMESPACES. A one-segment path is a MARKETING page off the root;
+  // the answer pages live under /answers and are served by the sibling route. Both canonical
+  // URLs come from the destination module, so neither can drift from the sitemap.
   if (resolved.kind === "site") {
     const page = await publishedSitePage(resolved.client.id, `/${params.slug}`);
     if (!page) return { robots: { index: false, follow: false } };
+    const url = `${siteRoot(resolved.destination)}/${params.slug}`;
     return {
       title: page.title,
       description: page.metaDescription ?? undefined,
-      alternates: { canonical: `https://${host}/${params.slug}` },
+      alternates: { canonical: url },
       robots: { index: true, follow: true },
       openGraph: {
         type: "website",
         title: page.title,
-        url: `https://${host}/${params.slug}`,
+        url,
         siteName: resolved.client.displayName,
       },
     };
   }
 
   return (
-    (await answerPageMetadata({ host, client: resolved.client, slug: params.slug, base: "" })) ?? {
-      robots: { index: false, follow: false },
-    }
+    (await answerPageMetadata({
+      host,
+      client: resolved.client,
+      slug: params.slug,
+      destination: resolved.destination,
+    })) ?? { robots: { index: false, follow: false } }
   );
 }
 
@@ -73,7 +81,13 @@ export default async function HubSlugPage({ params }: Props) {
     );
   }
 
-  const body = await AnswerPageBody({ host, client, slug: params.slug, base: "" });
+  const body = await AnswerPageBody({
+    host,
+    client,
+    slug: params.slug,
+    base: "",
+    destination: resolved.destination,
+  });
   if (!body) notFound();
   return body;
 }

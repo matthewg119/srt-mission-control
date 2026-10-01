@@ -37,7 +37,11 @@ function jitterRange(): { min: number; max: number } {
 
 export interface EnqueueInput {
   prospectId: string;
-  kind: "nudge" | "pitch";
+  // ‼️ "offsite" WIDENS THE UNION AND THE CHECK WAS WIDENED WITH IT
+  // (docs/2026-09-29-offsite.sql). Nothing enqueues one today: an off-site target is a DOMAIN and
+  // this row needs a person, so citation_outreach drafts and stops. The path exists so that
+  // putting a real address on a draft is a one-line call rather than a schema change.
+  kind: "nudge" | "pitch" | "offsite";
   step?: number;
   recipient: string;
   mailbox: string;

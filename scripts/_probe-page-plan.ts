@@ -31,7 +31,7 @@ import {
 } from "@/lib/clients/page-plan";
 import { outlineFaults, OUTLINE_LIMITS } from "@/lib/hub/draft-page";
 import { readOutline } from "@/lib/hub/pages";
-import { readFrame, CTA_MAX } from "@/lib/concierge/magnet-drafts";
+import { readFrame, CTA_MAX } from "@/lib/concierge/magnet-anchor";
 import { offerBonus, OFFER_BONUS } from "@/lib/clients/artifacts/page-candidates";
 import { normalizePhrase, isAboutOffer, offerVocabulary } from "@/lib/clients/phrase-quality";
 import { planLinksFor, orderIndexPages, type PlanLinkRow, type PublishedPageRef } from "@/lib/hub/plan-links";

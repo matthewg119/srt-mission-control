@@ -11,9 +11,17 @@
 // page there would have watched an indexed URL start 404ing with nothing in any log to explain
 // it. `client_site_pages` refuses the path in a CHECK for the same class of reason.
 //
-// The canonical is built from a `base` the caller supplies, because the same page lives at
-// /{slug} on a hub host and /answers/{slug} on a site host. Getting that wrong does not break
-// the page, it points every canonical at a URL that 404s, which is worse than breaking it.
+// ‼️ THE CANONICAL COMES FROM siteUrl(), NOT FROM A `base` THE CALLER REMEMBERED TO PASS.
+// The same page lives at /{slug} on a hub host, /answers/{slug} on a site host and
+// {theirdomain}/learn/{slug} on a subfolder client, and getting it wrong does not break the page,
+// it points every canonical at a URL that 404s, which is worse than breaking it. A `base` string
+// could express the first two and not the third, and it put the decision in four call sites. The
+// destination carries it now, so the canonical, the og:url, the sitemap entry and the llms.txt
+// line are one function's answer rather than four.
+//
+// `linkBase` stays a path, because an internal href is relative to the origin being served and
+// must NOT become absolute: on a subfolder client the page is served from our origin under their
+// path, and an absolute internal link would send a reader off to the proxy host.
 
 import type { Metadata } from "next";
 import { getPublished, listPublished, planLinkRows } from "@/lib/hub/pages";
@@ -22,6 +30,7 @@ import { HubAnswerBody, plainText, truncate } from "@/components/hub/hub-bodies"
 import { ConciergeEmbed } from "@/lib/concierge/embed";
 import { pageCategoryFor } from "@/lib/hub/page-category";
 import type { HubClient } from "@/lib/hub/resolve";
+import { siteUrl, type Destination } from "@/lib/hub/destinations";
 
 /** "" for a hub host (pages sit at the root), "/answers" for a site host. */
 export type AnswerBase = "" | "/answers";
@@ -30,12 +39,14 @@ export async function answerPageMetadata(args: {
   host: string;
   client: HubClient;
   slug: string;
-  base: AnswerBase;
+  destination: Destination;
 }): Promise<Metadata | null> {
   const page = await getPublished(args.client.id, args.slug);
   if (!page) return null;
 
-  const url = `https://${args.host}${args.base}/${page.slug}`;
+  // One URL, used twice below. Composing it in both slots is how a canonical and an og:url start
+  // disagreeing about the same page, which reads to a crawler as two pages.
+  const url = siteUrl(args.destination, page.slug);
 
   return {
     title: page.title,
@@ -64,8 +75,10 @@ export async function AnswerPageBody(args: {
   client: HubClient;
   slug: string;
   base: AnswerBase;
+  destination: Destination;
 }): Promise<React.ReactElement | null> {
-  const { host, client, slug, base } = args;
+  const { host, client, slug, base, destination } = args;
+
 
   const page = await getPublished(client.id, slug);
   if (!page) return null;
@@ -95,7 +108,7 @@ export async function AnswerPageBody(args: {
       */}
       <HubAnswerBody
         client={client}
-        host={host}
+        destination={destination}
         page={page}
         links={links}
         linkBase={`${base}/`}
