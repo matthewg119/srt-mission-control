@@ -237,6 +237,14 @@ interface PreOfferIdentity {
   email: string;
   /** They have no site AND ticked the free-build box. Only ever true when website is null. */
   wantsFreeWebsite: boolean;
+  /**
+   * The gold reactivation add-on: true accepted, false declined, null never asked.
+   *
+   * ‼️ THREE STATES, NOT TWO. Collapsing "declined" into "not asked" would make the take rate a
+   * ratio against everybody who ever reached the funnel, including the people who never saw the
+   * sheet, which is a number that only ever reads lower than the truth.
+   */
+  wantsReactivation: boolean | null;
 }
 
 /**
@@ -275,6 +283,9 @@ function readIdentity(raw: unknown): PreOfferIdentity | null {
     // from a back button, and honouring it would put "wants a free website" on a Slack card beside
     // the URL of the website they already have.
     wantsFreeWebsite: noSite && o.wantsFreeWebsite === true,
+    // Unlike the free build, this is offered to everybody, so there is no state to cross-check it
+    // against. Anything that is not an explicit boolean is "never answered".
+    wantsReactivation: typeof o.wantsReactivation === "boolean" ? o.wantsReactivation : null,
   };
 }
 
@@ -378,6 +389,13 @@ async function writeIdentity(
         // website options land in their inbox within four hours, and the only thing that makes that
         // true is a person reading this line.
         ...(id.wantsFreeWebsite ? ["ACTION: send free website options within 4 hours."] : []),
+        // ‼️ ON THE CARD FOR THE SAME REASON: an accepted reactivation campaign is work somebody
+        // has promised, and the only thing that makes it happen is a person reading this line.
+        // The declined and never-asked cases say nothing rather than printing a negative, because
+        // a card full of things that are not happening is a card nobody finishes reading.
+        ...(id.wantsReactivation === true
+          ? ["ADD-ON: complimentary reactivation campaign, reviews inside 7 days."]
+          : []),
       ],
       speedToLead: true,
       utmSource: attribution?.utmSource,

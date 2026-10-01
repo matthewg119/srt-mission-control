@@ -442,6 +442,42 @@ export const FREE_WEBSITE = {
 } as const;
 
 /**
+ * The reactivation add-on, offered straight after the website answer.
+ *
+ * ‼️ GOLD, AND THE COLOUR IS THE MESSAGE. Everything else in this funnel is reef green, which is
+ * the product. This one is the only thing on offer that is not the product: it is a campaign run
+ * against a database they already own, so it reads as a bonus rather than as another feature.
+ * Matthew asked for gold explicitly and the whole point is that it does not look like the rest.
+ *
+ * ‼️ IT SITS AFTER THE WEBSITE AND BEFORE THE PHONE, WHICH IS NOT AN ARBITRARY SLOT. The website
+ * answer is the moment we know whether they have anything to put reviews on, and it is the last
+ * low-commitment question before we ask for a mobile number. Asking a yes/no bonus question here
+ * costs nothing; asking it after the price would be a second decision stacked on the real one.
+ *
+ * Declining is free and is not re-asked. Nothing here is charged and nothing is signed.
+ */
+export const REACTIVATION_ADDON = {
+  eyebrow: guard("reactivation eyebrow", "Complimentary"),
+  headline: guard("reactivation headline", "AI Referral Engine fuels on reviews."),
+  body: guard(
+    "reactivation body",
+    "Would you also like a complimentary reactivation campaign to your current customer database, to bring in more reviews in your first 7 days?"
+  ),
+  optIn: guard("reactivation opt in", "Yes, run the reactivation campaign"),
+  optInNote: guard(
+    "reactivation opt in note",
+    "We write it and send it to your existing list. Nothing is charged and nothing is signed."
+  ),
+  accept: guard("reactivation accept", "Yes, include it"),
+  decline: guard("reactivation decline", "No thanks, continue"),
+  ackYes: guard(
+    "reactivation ack yes",
+    "Added. We will build the reactivation campaign off your existing list so the reviews start landing in week one."
+  ),
+  ackNo: guard("reactivation ack no", "No problem, we will start with the engine on its own."),
+} as const;
+
+/**
  * What the assistant says when the chat panel opens on a session that already knows who they are.
  *
  * ‼️ IT MUST NOT RE-ASK ANY OF THE FOUR. SCHEDULING_INTRO opens on ASK_WEBSITE, which is correct

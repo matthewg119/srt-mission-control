@@ -28,14 +28,45 @@ import { LaunchPanels } from "./panels";
  * to sign, and returns null rather than a broken link when that is unset, exactly as
  * clientPreviewUrl does and for the reason it gives.
  */
-function launchPreviewHref(clientId: string): string | null {
+function launchPreviewHref(clientId: string, kind: "launch" | "site"): string | null {
   try {
     const { token } = signOnboardingToken(clientId, PREVIEW_TOKEN_TTL_DAYS, "preview");
-    return `/preview/${token}?kind=launch`;
+    return `/preview/${token}?kind=${kind}`;
   } catch (e) {
     console.error("[dashboard/launch] preview link not minted:", (e as Error).message);
     return null;
   }
+}
+
+/**
+ * Which site this client actually HAS, which is not always the one this lane builds.
+ *
+ * ‼️ `kind=launch` RENDERS client_site_pages AND 404s WHEN THERE ARE NONE.
+ * That is correct for a client who arrived with no website: the pages are pasted in at
+ * `site_pasted` and the preview shows them. It is wrong for a client who brought their own site,
+ * because that step is SKIPPED and the table stays empty for ever, so "Preview the site" led
+ * straight to a 404 on the one client most likely to be looked at first. Measured on SRT: 0
+ * client_site_pages, 7 client_replica_pages.
+ *
+ * `kind=site` renders the replica, which is what `site_replica` built from a crawl of their real
+ * website. So the button shows whichever of the two this client has, and the honest answer when
+ * there is neither is to not offer the button at all.
+ */
+async function previewKindFor(clientId: string): Promise<"launch" | "site" | null> {
+  const [own, replica] = await Promise.all([
+    supabaseAdmin
+      .from("client_site_pages")
+      .select("id", { count: "exact", head: true })
+      .eq("client_id", clientId),
+    supabaseAdmin
+      .from("client_replica_pages")
+      .select("id", { count: "exact", head: true })
+      .eq("client_id", clientId),
+  ]);
+
+  if ((own.count ?? 0) > 0) return "launch";
+  if ((replica.count ?? 0) > 0) return "site";
+  return null;
 }
 
 export const dynamic = "force-dynamic";
@@ -123,7 +154,8 @@ export default async function LaunchClientPage({ params }: Props) {
   const name = (client.dba_name as string) || (client.legal_name as string) || (client.slug as string);
   const settled = steps.filter((s) => s.status === "complete" || s.status === "skipped").length;
   const host = (hostRow.data?.host as string | null) ?? null;
-  const previewHref = launchPreviewHref(client.id as string);
+  const previewKind = await previewKindFor(client.id as string);
+  const previewHref = previewKind ? launchPreviewHref(client.id as string, previewKind) : null;
 
   return (
     <div className="mx-auto max-w-5xl px-6 py-10">
@@ -205,11 +237,25 @@ export default async function LaunchClientPage({ params }: Props) {
             rel="noopener noreferrer"
             className="rounded-lg border border-[rgba(245,166,35,0.35)] bg-[rgba(245,166,35,0.06)] px-3 py-1.5 text-xs text-[#F5A623] hover:text-white"
           >
-            {host ? "Preview (no domain needed)" : "Preview the site"}
+            {previewKind === "site"
+              ? "Preview their current site"
+              : host
+                ? "Preview (no domain needed)"
+                : "Preview the site"}
           </a>
         )}
       </div>
-      {!previewHref && (
+      {/* ‼️ TWO DIFFERENT SILENCES, AND THEY ARE NOT THE SAME PROBLEM. No kind means this client
+          has no site pages of either sort yet, which is an ordinary early state. No href with a
+          kind means the signing key is missing, which is an environment fault somebody has to go
+          and fix. Printing the env message for both sent people hunting a variable that was set. */}
+      {!previewKind && (
+        <p className="mt-2 text-xs text-[rgba(255,255,255,0.4)]">
+          No site to preview yet. Paste one in on the website step, or let the replica build from
+          their existing site.
+        </p>
+      )}
+      {previewKind && !previewHref && (
         <p className="mt-2 text-xs text-[rgba(255,255,255,0.4)]">
           No preview link could be signed: CLIENT_LINK_SECRET is not set on this environment.
         </p>

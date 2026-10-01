@@ -104,7 +104,10 @@ export function LaunchThread({
   const opener = turns.length === 0;
 
   return (
-    <div className="mt-8">
+    <>
+      {/* The scrolling middle. `min-h-0` is what lets it shrink; see the note in page.tsx. */}
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-8">
+        <div className="mx-auto max-w-3xl">
       {opener && (
         <div className="rounded-xl border border-[rgba(255,255,255,0.1)] bg-[rgba(255,255,255,0.02)] p-5">
           <p className="text-sm text-white">Here is what this onboarding needs.</p>
@@ -195,41 +198,46 @@ export function LaunchThread({
         <div ref={endRef} />
       </div>
 
-      {error && (
-        <p className="mt-4 rounded-lg border border-[rgba(245,166,35,0.3)] bg-[rgba(245,166,35,0.05)] px-4 py-3 text-xs text-[#F5A623]">
-          {error}
-        </p>
-      )}
-
-      <div className="mt-6">
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            // Enter sends, shift-enter makes a line. A pasted voice-note transcript is many lines
-            // and arrives as one paste, so it is unaffected either way.
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              void send(input);
-            }
-          }}
-          rows={3}
-          placeholder="Paste a transcript, answer the questions, or say what to do next."
-          className="w-full resize-y rounded-xl border border-[rgba(255,255,255,0.12)] bg-[rgba(255,255,255,0.03)] px-4 py-3 text-sm text-white placeholder:text-[rgba(255,255,255,0.3)] focus:border-[rgba(0,201,167,0.5)] focus:outline-none"
-        />
-        <div className="mt-2 flex items-center justify-between">
-          <p className="text-[11px] text-[rgba(255,255,255,0.3)]">
-            It never buys a domain and never publishes a page. Both are buttons on the board.
-          </p>
-          <button
-            onClick={() => void send(input)}
-            disabled={busy || !input.trim()}
-            className="rounded-lg bg-[#00C9A7] px-4 py-2 text-sm font-medium text-[#0B0B0C] hover:opacity-90 disabled:opacity-40"
-          >
-            {busy ? "Thinking..." : "Send"}
-          </button>
+          {error && (
+            <p className="mt-4 rounded-lg border border-[rgba(245,166,35,0.3)] bg-[rgba(245,166,35,0.05)] px-4 py-3 text-xs text-[#F5A623]">
+              {error}
+            </p>
+          )}
         </div>
       </div>
-    </div>
+
+      {/* The composer, pinned. Never scrolls away, never moves as the thread grows. */}
+      <div className="shrink-0 border-t border-[rgba(255,255,255,0.08)] bg-[rgba(0,0,0,0.25)] px-6 py-4">
+        <div className="mx-auto max-w-3xl">
+          <div className="relative">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                // Enter sends, shift-enter makes a line. A pasted voice-note transcript is many
+                // lines and arrives as one paste, so it is unaffected either way.
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void send(input);
+                }
+              }}
+              rows={2}
+              placeholder="Paste a transcript, answer the questions, or say what to do next."
+              className="w-full resize-none rounded-xl border border-[rgba(255,255,255,0.12)] bg-[rgba(255,255,255,0.03)] py-3 pl-4 pr-28 text-sm text-white placeholder:text-[rgba(255,255,255,0.3)] focus:border-[rgba(0,201,167,0.5)] focus:outline-none"
+            />
+            <button
+              onClick={() => void send(input)}
+              disabled={busy || !input.trim()}
+              className="absolute bottom-2.5 right-2.5 rounded-lg bg-[#00C9A7] px-4 py-2 text-sm font-medium text-[#0B0B0C] hover:opacity-90 disabled:opacity-40"
+            >
+              {busy ? "Thinking..." : "Send"}
+            </button>
+          </div>
+          <p className="mt-2 text-[11px] text-[rgba(255,255,255,0.3)]">
+            It never buys a domain and never publishes a page. Both are buttons on the board.
+          </p>
+        </div>
+      </div>
+    </>
   );
 }

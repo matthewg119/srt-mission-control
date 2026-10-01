@@ -34,6 +34,7 @@ import {
   ASK_WEBSITE_AFTER_NAME,
   CONVO_INTRO,
   FREE_WEBSITE,
+  REACTIVATION_ADDON,
   NO_WEBSITE_OPTION,
   SETUP_TITLE,
 } from "@/config/onboarding2";
@@ -43,6 +44,7 @@ import { readAttribution, track } from "@/lib/medspa/pixel";
 import { ChatPanel } from "../chat-bubble";
 import { Starting } from "../onboarding2-client";
 import { OfferSheet, OPENING_BILLING, type OfferPhase } from "./offer-sheet";
+import { ReactivationSheet } from "./reactivation-sheet";
 import type { UpsellOutcome } from "../free/free-first-picker";
 import type { BillingState, OfferKey } from "@/config/pitch";
 
@@ -99,6 +101,11 @@ export function ConvoFirstFunnel({
   const [billing, setBilling] = useState<BillingState>(OPENING_BILLING);
   const [addonOpen, setAddonOpen] = useState(false);
   const [wantsFreeSite, setWantsFreeSite] = useState(true);
+  // ‼️ `null` IS "NOT ASKED", WHICH IS NOT THE SAME AS `false`. The lead record has to be able to
+  // tell somebody who declined the reactivation campaign from somebody who never saw it, or the
+  // take rate is computed against a denominator that includes people who were never offered it.
+  const [reactivationOpen, setReactivationOpen] = useState(false);
+  const [wantsReactivation, setWantsReactivation] = useState<boolean | null>(null);
   const [starting, setStarting] = useState(false);
   const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [demo, setDemo] = useState(false);
@@ -216,6 +223,7 @@ export function ConvoFirstFunnel({
               phone: answers.phone ?? "",
               email: answers.email ?? "",
               wantsFreeWebsite: answers.website === NO_WEBSITE_OPTION && wantsFreeSite,
+              wantsReactivation,
             },
           }),
         });
@@ -284,8 +292,9 @@ export function ConvoFirstFunnel({
       return;
     }
     if (step === "website") {
-      setStep("phone");
-      void paint([ASK_PHONE_CONVO]);
+      // The reactivation add-on goes here, between the website and the phone. See the note over
+      // REACTIVATION_ADDON for why this slot and not after the price.
+      setReactivationOpen(true);
       return;
     }
     if (step === "phone") {
@@ -300,6 +309,18 @@ export function ConvoFirstFunnel({
       setStep("offer");
       void paint(["Perfect. One thing before we book the call."]).then(() => setSheetOpen(true));
     }
+  }
+
+  /** The gold reactivation add-on, answered. Never blocks the conversation either way. */
+  function closeReactivation(yes: boolean) {
+    setWantsReactivation(yes);
+    setReactivationOpen(false);
+    // The choice is echoed into the thread so the transcript shows what they agreed to, exactly
+    // as the free-website add-on does. A decision taken in a sheet that leaves no trace in the
+    // conversation is one nobody can point at later.
+    if (yes) setMessages((m) => [...m, { role: "user", content: REACTIVATION_ADDON.optIn }]);
+    setStep("phone");
+    void paint([yes ? REACTIVATION_ADDON.ackYes : REACTIVATION_ADDON.ackNo, ASK_PHONE_CONVO]);
   }
 
   /** The free-website add-on, answered. Never blocks the conversation either way. */
@@ -538,6 +559,12 @@ export function ConvoFirstFunnel({
         billing={billing}
         onBilling={setBilling}
         onPick={(offer, outcome) => void start(offer, outcome)}
+      />
+
+      <ReactivationSheet
+        open={reactivationOpen}
+        busy={starting}
+        onAnswer={closeReactivation}
       />
 
       {/* ── The free website add-on ── */}
