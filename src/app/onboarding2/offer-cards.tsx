@@ -51,6 +51,15 @@ import {
 const REEF = "#00C9A7";
 /** The strike. Tailwind has no red at this value in this file's palette, and it is used three ways. */
 const RED = "#ef4444";
+/**
+ * The one blue in the funnel, on the note that explains why the guarantee is yearly only.
+ *
+ * ‼️ IT IS A COLOUR CHANGE WITH A LAYOUT REASON BEHIND IT. That note used to be white at 40%
+ * under a parent set to `opacity-50`, which multiplies to about 20% and reads as grey. Matthew
+ * asked for it in blue on 2026-09-30. Picked to clear 4.5:1 against the card's near-black ground
+ * so it is legible rather than merely present.
+ */
+const BLUE = "#5AA9FF";
 
 /**
  * What a pick or a toggle is reported as.
@@ -409,12 +418,32 @@ export function Line({
   disabled: boolean;
 }) {
   const conciergePrice = line.was === PRICE_CONCIERGE;
+
+  // ‼️ THE STRUCK LINE IS DIMMED BY COLOUR, NOT BY `opacity`, AND THE SWAP IS LOAD-BEARING RATHER
+  // THAN COSMETIC (Matthew, 2026-09-30). This used to carry `opacity-50` when struck, which reads
+  // as the obvious way to say "taken away" and quietly broke the note underneath it.
+  //
+  // `opacity` composites the WHOLE SUBTREE once, so it is a ceiling every descendant is multiplied
+  // by: no child can paint brighter than its parent, whatever colour or opacity it sets on itself.
+  // GUARANTEE_COMMITMENT_NOTE below was `text-white/40` inside this, so it rendered at 0.5 x 0.4,
+  // about 20% white, and read as grey on a near-black card. Recolouring that span alone would have
+  // fixed nothing, because 50% of any colour is still 50%.
+  //
+  // So the dimming moved onto the TEXT COLOUR. Exactly one text-* class is emitted per branch
+  // rather than two with `struck` appending a second, because Tailwind gives `text-white` and
+  // `text-white/50` the same specificity and which one wins is then decided by their order in the
+  // generated stylesheet, which is not something this file gets to control.
   return (
     <span
       className={[
-        "transition-opacity duration-300",
-        line.strong ? "font-semibold text-white" : "text-white/80",
-        struck ? "opacity-50" : "",
+        "transition-colors duration-300",
+        struck
+          ? line.strong
+            ? "font-semibold text-white/60"
+            : "text-white/45"
+          : line.strong
+            ? "font-semibold text-white"
+            : "text-white/80",
       ].join(" ")}
     >
       {/*
@@ -490,7 +519,18 @@ export function Line({
             start showing up. As small print under the card it would answer the objection after the
             reader had already formed it.
           */}
-          <span className="mt-1.5 block text-xs font-normal not-italic text-white/40">
+          {/*
+            ‼️ BLUE, NOT GREY (Matthew, 2026-09-30). It was `text-white/40` under a parent this
+            component set to `opacity-50`, so it painted at roughly 20% white and disappeared into
+            the card. See the note over that parent for why removing the opacity was half the fix.
+
+            The colour is a literal like RED and REEF above, not a Tailwind step, because this is
+            the only blue in the funnel and an arbitrary-value class would not say so.
+          */}
+          <span
+            className="mt-1.5 block text-xs font-normal not-italic"
+            style={{ color: BLUE }}
+          >
             {GUARANTEE_COMMITMENT_NOTE} You save {SAVE_YEARLY_AMOUNT} on the year.
           </span>
         </>

@@ -125,8 +125,22 @@ function buildUrl(
  * that relies on the default is a link that silently changes meaning the day somebody moves the
  * default, and these URLs are pasted into emails and Loom scripts that outlive the deploy.
  */
-export const REPORT_FUNNEL_PATH = "/onboarding2/free";
-export const REPORT_FUNNEL_VARIANT = "1";
+export const REPORT_FUNNEL_PATH = "/onboarding2/start";
+
+/**
+ * ‼️ EMPTY, AND THE EMPTY STRING IS A DECISION RATHER THAN A GAP (2026-09-30).
+ *
+ * `?v=` selected one of the six presentations on /onboarding2/free. /onboarding2/start has no
+ * variants: the six-way presentation test is finished, Matthew picked the bottom sheet, and it is
+ * the only way that route shows an offer. A `v` on these URLs would now be a param nothing reads,
+ * pasted into emails and Loom scripts that outlive several deploys, and the first person to see it
+ * would reasonably assume a test was still running.
+ *
+ * Kept as a constant rather than deleted because buildOnboarding2Url below is the one place that
+ * decides whether to append it, and a future route that DOES have variants sets it here and gets
+ * every audit surface at once. That is the same argument the note above makes for the path.
+ */
+export const REPORT_FUNNEL_VARIANT = "";
 
 /**
  * The signing funnel, for somebody who has already decided.
@@ -150,10 +164,14 @@ export function buildOnboarding2Url(
   // Appended rather than threaded through buildUrl(), which is shared with buildAdsFunnelUrl() and
   // has no business knowing about variants.
   //
+  // ‼️ AN EMPTY VARIANT APPENDS NOTHING AT ALL, rather than a bare `v=`. The current destination
+  // has no variants (see the constant), and `?v=` with no value on every audit link is a param that
+  // looks like a bug to the next person who reads one of these URLs out of an email.
+  if (!REPORT_FUNNEL_VARIANT) return url;
   // ‼️ THE ?/& CHECK IS NOT DEFENSIVE PADDING. buildUrl omits the `?` entirely when every param is
   // empty, and that case is reachable: PricingCta renders on a pending or failed report with no
   // score, no competitor and no counts, and every prop optional. Without the check that report's
-  // button would point at /onboarding2/freev=1.
+  // button would point at /onboarding2/startv=1.
   return `${url}${url.includes("?") ? "&" : "?"}v=${REPORT_FUNNEL_VARIANT}`;
 }
 

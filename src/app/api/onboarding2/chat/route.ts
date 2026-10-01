@@ -434,16 +434,51 @@ async function handleScheduling(args: {
         lead: null,
       };
     }
-  // ── The two steps answered before any lead row exists ──
+  // ── The daypart and the timezone ──
   //
-  // ‼️ NOTHING IS WRITTEN HERE, AND NOTHING NEEDS TO BE. The user turn carrying this answer was
-  // appended to onboarding2_chat_turns by the caller before this function ran, so the answer is
-  // already durable. replayDraft() reads it back on the next request. This branch exists only to
-  // move the conversation on.
+  // ‼️ NOTHING NEEDED TO BE WRITTEN HERE UNTIL THE CONVERSATION-FIRST FUNNEL EXISTED, AND NOW IT
+  // DOES. The original reasoning was sound and is worth keeping: these two are answered before any
+  // lead row exists, the user turn is already durable in onboarding2_chat_turns, and replayDraft()
+  // reads it back on the next request, so the branch only had to move the conversation on. Both
+  // columns were then promoted onto the lead at the email step, which created it.
+  //
+  // /onboarding2/start inverts that. POST /start creates the lead from the four identity answers,
+  // BEFORE the daypart is asked, so the email step never runs in the chat and the promotion that
+  // rode on it never happens. The replay still answers nextIntakeStep correctly, which is why the
+  // conversation itself looks completely fine, and call_daypart and call_timezone stay null
+  // forever.
+  //
+  // ‼️ WHAT THAT COSTS IS NOT COSMETIC, WHICH IS WHY IT IS WORTH A WRITE. lib/onboarding2/card.ts
+  // formats the booked call time with `lead.call_timezone`, and /api/onboarding2/booked hands the
+  // same column to the calendar. A null there does not blank the line, it formats their call in
+  // whatever zone the server defaults to, so the Slack card confidently states the wrong hour and
+  // nothing anywhere reports a problem.
+  //
+  // Best-effort and never fatal: the transcript is still the source of truth for the conversation,
+  // and a failed promotion must not cost somebody the turn they just took.
   if (step === "daypart" || step === "timezone") {
+    if (lead) {
+      // ‼️ RE-NARROWED RATHER THAN CAST. parseIntake returns a plain string, but call_daypart is a
+      // two-value column and readDaypart is the only thing allowed to decide which. Asserting the
+      // union here would let any future parser change write a third value into a checked column and
+      // find out at the database. Anything that is not one of the two is simply not promoted: the
+      // transcript still holds the answer and replayDraft still reads it.
+      const value = parsed.value;
+      if (step === "daypart" && (value === "morning" || value === "afternoon")) {
+        const next = await upsertLead({ email: lead.email, call_daypart: value });
+        if (next) lead = next;
+      } else if (step === "timezone") {
+        const next = await upsertLead({ email: lead.email, call_timezone: value });
+        if (next) lead = next;
+      }
+    }
     const turns = [...args.priorTurns, args.typed];
-    const next = nextIntakeStep(row, lead, turns);
-    return { messages: [promptFor(next, row, lead, turns)], options: optionsFor(next, row, lead, turns), lead: null };
+    const nextStep = nextIntakeStep(row, lead, turns);
+    return {
+      messages: [promptFor(nextStep, row, lead, turns)],
+      options: optionsFor(nextStep, row, lead, turns),
+      lead: null,
+    };
   }
 
   // ── The four identity steps ──
