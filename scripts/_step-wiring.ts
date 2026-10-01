@@ -559,6 +559,7 @@ const NOT_A_PULL: Record<string, string> = {
   AUDIT_INTERNAL_SECRET: "our own routes authenticating to each other",
   CRON_SECRET: "our own cron authenticating to our own routes",
   CLIENT_LINK_SECRET: "signs the preview tokens we mint",
+  HUB_PROXY_SECRET: "a client's own edge authenticating to our /s/ door; buys nothing",
   MEDSPA_LINK_SECRET: "signs our own funnel links",
   FUNNEL_NOTIFY_SECRET: "our own funnel calling our own route",
   PLAYBOOK_UPDATE_SECRET: "our own route",
