@@ -9,6 +9,7 @@ import Link from "next/link";
 import { supabaseAdmin } from "@/lib/db";
 import { LAUNCH_STEPS } from "@/config/launch-steps";
 import { StartLaunchForm } from "./start-launch-form";
+import { FrontDoor } from "./front-door";
 
 export const metadata = { title: "Launch lane | SRT Mission Control" };
 export const dynamic = "force-dynamic";
@@ -53,9 +54,31 @@ export default async function LaunchLanePage() {
         not touch this lane and editing this lane does not touch that one.
       </p>
 
-      <div className="mb-8">
-        <StartLaunchForm />
+      {/* ‼️ THE CONVERSATION IS THE DOOR AND THE FORM IS THE FALLBACK, IN THAT ORDER.
+          Matthew's words: "lets just make the chatbot ask who are you looking to onboard today."
+          The form stays because a grid of labelled inputs is still the fastest way to open a
+          client whose details are already on screen, and because it is the surface the step 1
+          verifier was built against. It is below, and folded. */}
+      <div className="mb-6">
+        <FrontDoor
+          clients={rows.map((r) => ({
+            id: r.id as string,
+            name: (r.dba_name as string) || (r.legal_name as string) || (r.slug as string),
+            vertical: (r.vertical_slug as string) || null,
+            settled: done.get(r.id as string) ?? 0,
+            total: LAUNCH_STEPS.length,
+          }))}
+        />
       </div>
+
+      <details className="mb-8">
+        <summary className="cursor-pointer text-xs text-[rgba(255,255,255,0.4)] hover:text-white">
+          Or open one with the form
+        </summary>
+        <div className="mt-3">
+          <StartLaunchForm />
+        </div>
+      </details>
 
       {error && (
         <p className="rounded-lg border border-[rgba(255,107,107,0.3)] bg-[rgba(255,107,107,0.06)] p-4 text-xs text-[#FF6B6B]">
