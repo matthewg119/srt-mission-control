@@ -88,6 +88,10 @@ const CALLERS = [
   "src/app/api/concierge/action/route.ts",
   "src/app/api/leads/facebook/route.ts",
   "src/app/api/leads/funnel/route.ts",
+  // Added 2026-10-01. The convo-first reorder made /start a lead source: it collects the four
+  // identity answers BEFORE the offer, so it is where a visitor becomes somebody we can contact.
+  // It passes pageFromRequest(req, "/onboarding2/start"), so it answers the question below.
+  "src/app/api/onboarding2/start/route.ts",
   "src/app/api/lhr/optin/route.ts",
   "src/app/api/medspa/optin/route.ts",
   "src/lib/clients/provision.ts",

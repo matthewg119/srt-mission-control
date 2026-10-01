@@ -831,6 +831,16 @@ const WRITE_ONLY_TABLES: Record<string, string> = {
 
 /** Individual columns written and never read, ON PURPOSE. Each entry is a SENTENCE, not a name. */
 const WRITE_ONLY: Record<string, string> = {
+  // ── THE LAUNCH LANE AND THE TOOL LANE, 2026-10-01 ─────────────────────────────────────────────
+  // Provenance and diagnostics: written so a person can answer "who" or "what did we see", and
+  // deliberately not inputs anything selects.
+  "client_site_pages.created_by":
+    "who pasted this marketing page in. The page itself is read on every request; this is the trail beside it, and nothing branches on who typed it.",
+  "client_crawler_probes.observed":
+    "the raw reading from one crawler-door probe: the robots.txt verdict per agent and what a GPTBot-UA request actually got back. It is the EVIDENCE a probe ran, kept whole so a later dispute can be settled by reading it. The pass/fail the gate branches on is stored beside it; re-deriving it from this blob would be two answers to one question.",
+  "launch_conversations.last_turn_at":
+    "when the onboarding conversation was last spoken to. Written every turn; the board reads the STEPS to decide what is outstanding, never the chat's recency, which is the right split: a client who has not typed in a week is not thereby behind.",
+
   // Row bookkeeping on the two tables that were cleaned before BOOKKEEPING_NAMES existed. Kept as
   // named entries rather than folded into the rule, because they are also the worked example of what
   // that rule covers.
@@ -1027,6 +1037,50 @@ const AWAITING_CODE: Record<string, string> = {
  * A NEW dead wire is in neither map and still fails, which is the property that matters.
  */
 const OWED: Record<string, string> = {
+  // ── THE DOMAIN PURCHASE, 2026-10-01 ───────────────────────────────────────
+  // docs/2026-09-30-launch-lane.sql. Every one of these is written by the Vercel registrar call and
+  // read by nothing, because there is no order-history screen yet. They are the receipt for the one
+  // thing in this repository that spends money, so dropping them is the wrong answer: what is owed
+  // is a panel on the domain step that shows what was bought, for how much, and when it renews.
+  "client_domain_orders.vercel_order_id": "the registrar's own id for the purchase. Owed the order-history panel; it is the only handle we have if a renewal has to be chased with Vercel.",
+  "client_domain_orders.expected_price_cents": "what we were quoted before confirming. Owed a reconciliation against what was actually charged, which is the whole reason it was captured separately.",
+  "client_domain_orders.years": "the registration term. Owed the renewal date the order-history panel would show.",
+  "client_domain_orders.auto_renew": "whether the registrar will renew it. Owed the same panel, and it is the field that decides whether a client's domain quietly lapses.",
+  "client_domain_orders.completed_at": "when the purchase settled. Owed the panel; `status` is what the step reads today.",
+  "client_domain_orders.requested_by": "who pressed Buy. Owed the panel rather than WRITE_ONLY, because a spend needs a name next to it where somebody will actually see it.",
+
+  // ── THE TOOL LANE, 2026-10-01 ─────────────────────────────────────────────
+  // docs/2026-09-29-tool-lane.sql. tool-lane.ts selects `id, component_key, vertical` and nothing
+  // else, so an asset is generated, stored whole, and never rendered from these columns. The lane
+  // is half built rather than dead: what is owed is the renderer that serves the asset.
+  "vertical_assets.slug": "the asset's URL segment, unique per vertical. Owed the route that serves it.",
+  "vertical_assets.kind": "which sort of tool it is, constrained by vertical_assets_kind_check. Owed the renderer that branches on it.",
+  "vertical_assets.title": "what the asset is called on the page. Owed the renderer.",
+  "vertical_assets.what_it_does": "the one-line promise shown above the tool. Owed the renderer.",
+  "vertical_assets.inputs": "the fields the tool asks for. Owed the renderer, which is the thing that would turn this into a form.",
+  "vertical_assets.output": "what the tool returns. Owed the renderer.",
+  "vertical_assets.source_keyword": "the approved keyword this asset was generated from. Owed the attribution line that would let a page cite why the tool exists.",
+  "client_assets.vertical_asset_id": "which vertical asset this client instance points at. Written on insert and read only through the `vertical_assets!inner` join, never as a column. Owed the same renderer.",
+  "client_assets.theme_overrides": "per-client colours for the embedded tool. Owed the renderer; until one exists there is nothing for an override to override.",
+
+  // ── OFF-SITE, 2026-10-01 ──────────────────────────────────────────────────
+  // docs/2026-09-29-offsite.sql. NO WRITER AND NO READER, which is a stronger finding than the rest
+  // of this map: these are dead DDL rather than a half-finished read path.
+  "offsite_targets.first_seen_run_id": "which discovery run first found this target. No writer and no reader. Wire it where targets are upserted, or drop it: an empty provenance key answers 'we have always known about this' for every target.",
+  "offsite_targets.notes": "free text about one target. No writer and no reader. Drop it unless the outreach lane is going to let somebody annotate a target.",
+
+  // ── DESTINATIONS, 2026-10-01 ──────────────────────────────────────────────
+  // ‼️ THE ONE ON THIS LIST THAT CHANGES BEHAVIOUR TODAY. resolveDestination's own comment says
+  // "clients.default_destination_id pre-ticks the control; it is not read here on purpose", and
+  // nothing else reads it either, so the picker opens with nothing selected on every client with
+  // more than one destination. That is not bookkeeping, it is a control that does not remember.
+  "clients.default_destination_id":
+    "the destination the publish picker should open on. No writer and no reader: the column landed with docs/2026-09-29-destinations.sql and the picker that would pre-tick from it was never wired. Owed that default, or drop the column and let the picker always ask.",
+
+  // ── THE ONBOARDING CONVERSATION, 2026-10-01 ───────────────────────────────
+  "launch_messages.step_key":
+    "which step the conversation was on when this message was said. Written every turn and read by nothing. Owed the per-step transcript: it is the join that would let a step card show what was actually discussed on it, which is the thing the Slack lane gets free from threads and this lane does not.",
+
   // ── avatar_briefs: the shared-preset nouns ────────────────────────────────
   // Six copies of nouns `client_audiences` owns and reads through its COLUMNS list. They were
   // migrated for a per-vertical inheritance path, were never seeded by the migration's own update,
@@ -1129,7 +1183,7 @@ const READ_DYNAMICALLY: Record<string, string> = {
  * every one of them, so a new column fails by name and with the migration that declared it. This
  * number is kept because it is the thing a person reads, and §6c asserts the two cannot disagree.
  */
-const BOARD_BASELINE = 503;
+const BOARD_BASELINE = 497;
 
 type Verdict = "write_only" | "never_touched";
 interface Finding {
