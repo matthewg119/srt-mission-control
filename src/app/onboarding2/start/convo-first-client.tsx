@@ -80,6 +80,46 @@ interface Report {
 const TYPE_MS = 480;
 const GAP_MS = 260;
 
+/** Which surface is over the thread. Exactly one, or none. */
+type Surface = "offer" | "reactivation" | "freesite" | null;
+
+/**
+ * Mount one sheet, and keep it mounted just long enough to animate out.
+ *
+ * ‼️ THE OUTGOING SHEET IS WHY THIS IS A HOOK AND NOT `{surface === "x" && <Sheet/>}`.
+ * Unmounting on close is the easy version and it kills the closing animation: the sheet vanishes
+ * instead of travelling back down, which is the exact thing offer-sheet.tsx keeps its
+ * mounted-while-closed design for. So `mounted` lags `surface` by one transition: the sheet that
+ * is leaving stays in the DOM with `open` false until its transform has run, and only then goes.
+ *
+ * ‼️ THE OPENING FRAME IS A rAF, NOT A SETTIMEOUT(0). A sheet mounted with `open` already true
+ * has no "before" for the browser to transition FROM, so it appears rather than slides. One
+ * animation frame between mount and open is what gives the transform somewhere to start.
+ *
+ * LEAVE_MS is 360 against the sheets' own 340ms transform. Shorter would cut the tail off; much
+ * longer would leave the old sheet in the layout while the next one arrives, which is the bug
+ * this exists to make impossible.
+ */
+const LEAVE_MS = 360;
+
+function useOneSheet(surface: Surface): { mounted: Surface; open: boolean } {
+  const [mounted, setMounted] = useState<Surface>(surface);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (surface) {
+      setMounted(surface);
+      const id = requestAnimationFrame(() => setOpen(true));
+      return () => cancelAnimationFrame(id);
+    }
+    setOpen(false);
+    const id = window.setTimeout(() => setMounted(null), LEAVE_MS);
+    return () => window.clearTimeout(id);
+  }, [surface]);
+
+  return { mounted, open };
+}
+
 export function ConvoFirstFunnel({
   report,
   utm,
@@ -103,20 +143,35 @@ export function ConvoFirstFunnel({
   // A single nullable surface makes the overlap unrepresentable. Each sheet still mounts while
   // closed and still runs its OWN transform, so they keep their own animations: what they stop
   // sharing is the screen.
-  const [surface, setSurface] = useState<"offer" | "reactivation" | "freesite" | null>(null);
-  const sheetOpen = surface === "offer";
+  const [surface, setSurface] = useState<Surface>(null);
+
+  // ‼️ ONE SHEET IN THE DOM, NOT MERELY ONE SHEET `open`.
+  //
+  // Making `surface` a single value stopped two sheets being open at once and did NOT stop the
+  // overlap, which is the measurement that matters: Matthew still saw both cards after answering
+  // the website. A closed sheet is still mounted, still absolutely positioned against the same
+  // container and still 88% tall, and it is kept that way on purpose so it can animate out. So
+  // "only one is open" was never the same claim as "only one is on screen", and I was debugging
+  // the first while he was reporting the second.
+  //
+  // This renders ONE. `mounted` is the sheet that may exist and `open` drives its transform, so a
+  // sheet still slides in on arrival and still slides out before it goes, which is the animation
+  // he asked to keep. What cannot happen any more is a second panel sitting in the layout behind
+  // the one being read, whatever the stacking turns out to be.
+  const { mounted, open: sheetVisible } = useOneSheet(surface);
+  const sheetOpen = mounted === "offer";
   // ‼️ THE SHEET'S OWN STATE LIVES HERE, NOT IN THE SHEET. A pick flips `starting`, whose render
   // returns <Starting /> and unmounts the sheet; a failed /start then remounts it. Held down
   // there, the phase and the billing choice came back reset, so somebody who hit an error on
   // "Start monthly" was silently returned to the free card. See the note over OfferPhase.
   const [phase, setPhase] = useState<OfferPhase>("card");
   const [billing, setBilling] = useState<BillingState>(OPENING_BILLING);
-  const addonOpen = surface === "freesite";
+  const addonOpen = mounted === "freesite";
   const [wantsFreeSite, setWantsFreeSite] = useState(true);
   // ‼️ `null` IS "NOT ASKED", WHICH IS NOT THE SAME AS `false`. The lead record has to be able to
   // tell somebody who declined the reactivation campaign from somebody who never saw it, or the
   // take rate is computed against a denominator that includes people who were never offered it.
-  const reactivationOpen = surface === "reactivation";
+  const reactivationOpen = mounted === "reactivation";
   const [wantsReactivation, setWantsReactivation] = useState<boolean | null>(null);
   const [starting, setStarting] = useState(false);
   const [sessionToken, setSessionToken] = useState<string | null>(null);
@@ -564,8 +619,9 @@ export function ConvoFirstFunnel({
         className="absolute left-[-9999px] h-0 w-0 opacity-0"
       />
 
+      {sheetOpen && (
       <OfferSheet
-        open={sheetOpen}
+        open={sheetVisible}
         busy={starting}
         error={error}
         phase={phase}
@@ -574,12 +630,11 @@ export function ConvoFirstFunnel({
         onBilling={setBilling}
         onPick={(offer, outcome) => void start(offer, outcome)}
       />
+      )}
 
-      <ReactivationSheet
-        open={reactivationOpen}
-        busy={starting}
-        onAnswer={closeReactivation}
-      />
+      {reactivationOpen && (
+        <ReactivationSheet open={sheetVisible} busy={starting} onAnswer={closeReactivation} />
+      )}
 
       {/* ── The free website add-on ── */}
       {addonOpen && (
