@@ -34,6 +34,7 @@ import { foundationStatus, FOUNDATION_LABELS, type FoundationKind } from "./docu
 import { proposeVocabulary, confirmVocabulary } from "./vocabulary";
 import { proposeOfferFromDocument, confirmOffer, currentOffer } from "./offer";
 import { searchDomains } from "./domain";
+import { dnsFacts } from "./dns-facts";
 
 const TURN_MODEL: ClaudeModel = "claude-sonnet-4-6";
 
@@ -61,6 +62,13 @@ export const ACTION_KINDS = [
   "hand_prompt",
   "complete_step",
   "skip_step",
+  // ‼️ READ ONLY, AND IT BELONGS HERE FOR THE REASON search_domains DOES.
+  // It resolves three names and writes what was SEEN. It cannot create a record, cannot spend
+  // anything and cannot tick a step: recheckDnsRecords only ever writes observed/status onto
+  // rows that already exist, and a name that does not resolve is deliberately left alone rather
+  // than marked wrong. The alternative is the model telling him the DNS is fine because the
+  // database still says `ready`, which is a claim nobody checked.
+  "check_dns",
 ] as const;
 
 export type ActionKind = (typeof ACTION_KINDS)[number];
@@ -113,10 +121,15 @@ export interface BoardContext {
  * and says why, and a key outside the set is refused by executeAction rather than trusted.
  */
 export async function boardContext(clientId: string): Promise<BoardContext> {
-  const [board, docs, offer] = await Promise.all([
+  const [board, docs, offer, dns] = await Promise.all([
     launchBoard(clientId),
     foundationStatus(clientId),
     currentOffer(clientId),
+    // ‼️ ON EVERY TURN, NOT ONLY ON A DNS TURN. Nothing here knows what he is about to ask, and
+    // the failure this prevents is a confident invented answer rather than a missing one. It is
+    // four cheap reads and one nameserver lookup; see dns-facts.ts for why it never resolves the
+    // records themselves.
+    dnsFacts(clientId).catch(() => null),
   ]);
 
   const byKey = new Map(board.map((e) => [e.step.key, e]));
@@ -154,6 +167,8 @@ export async function boardContext(clientId: string): Promise<BoardContext> {
       "",
       `THE OFFER: ${offerLine}`,
       "",
+      dns ? dns.text : "THE DNS: could not be read just now. Say that rather than answering from memory.",
+      "",
       `STEPS YOU MAY ACT ON THIS TURN: ${candidates.length ? candidates.join(", ") : "none"}`,
     ].join("\n"),
   };
@@ -170,7 +185,7 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "",
     "HOW TO TALK:",
     "- One line of context saying what you need and why, then the ask. Never more.",
-    "- Never explain unless he asks.",
+    "- Never explain unless he asks. When he does ask, answer properly: see ANSWERING below.",
     "- Batch your questions. He answers several at once by recording one voice note and pasting",
     "  the transcript back, so ask everything you need in one go and accept answers in any order.",
     "- Never use an em dash or an en dash. Use a comma or a full stop. This is a hard rule.",
@@ -187,6 +202,26 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "- Never change keywords and never touch the concierge without him saying yes in words.",
     `- If you are less than ${Math.round(ACT_THRESHOLD * 100)} percent sure, return no actions and ask instead.`,
     "",
+    "ANSWERING A QUESTION:",
+    "- A question is a turn too. He may ask how something works, what a step means, what is left,",
+    "  why something is refusing, or how to do a piece of setup. Answer it. Returning no actions",
+    "  and only prose is a complete and correct turn.",
+    '- When he asks for a step by step, give the steps, numbered, in order. The "one line, never',
+    '  more" rule above is about not padding an ASK. It is not a word limit on an answer he asked',
+    "  for. Do not make him ask twice for detail he already requested.",
+    "- Answer from the context below and from how this product actually works. Everything under THE",
+    "  BOARD, THE DNS and THE OFFER was read out of the database or observed moments ago.",
+    "- ‼️ NEVER INVENT A VALUE. Hostnames, CNAME targets, record types, registrar screens and step",
+    "  names come out of the context or you do not say them. If the thing he asked about is not in",
+    "  the context, say which part you do not have and what would get it. A confident wrong DNS",
+    "  record costs him an hour and he cannot tell it is wrong by reading it.",
+    "- The DNS block separates what somebody SAID from what the resolver SAW. Keep them separate",
+    "  when you answer. If he wants to know whether it is live, use check_dns and answer from that,",
+    "  rather than reading the stored status out as though it were observed.",
+    "- Say the value and where it goes. The host box takes the label, never the full name: typing",
+    "  the full name into a registrar creates learn.example.com.example.com, and it is the single",
+    "  most common way this goes wrong.",
+    "",
     "THE PROMPT MECHANIC, WHICH MATTERS MORE THAN ANYTHING ELSE YOU DO:",
     "- You do not do research. You hand him a prompt he runs in a separate session and pastes back.",
     '- Use the hand_prompt action with which="avatar_chain" when the four documents are not in hand.',
@@ -201,6 +236,9 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "  hand_prompt          needs which. Returns a prompt for him to run elsewhere.",
     "  complete_step        needs stepKey. It runs the verifier and may refuse.",
     "  skip_step            needs stepKey and reason.",
+    "  check_dns            resolve the records and report what is actually live. No arguments.",
+    "                       Free and read only. Use it whenever he asks whether DNS is working,",
+    "                       rather than reading the stored status back at him.",
     "",
     ctx.text,
     "",
@@ -362,6 +400,37 @@ async function executeAction(
     const prompt = await buildHandoffPrompt(clientId, action.which ?? "");
     if (!prompt.ok) return { kind, ok: false, detail: prompt.error };
     return { kind, ok: true, detail: prompt.label, prompt: prompt.text };
+  }
+
+  if (kind === "check_dns") {
+    const facts = await dnsFacts(clientId);
+    if (!facts.domain) {
+      return { kind, ok: false, detail: "There is no domain on this client yet, so there is nothing to resolve." };
+    }
+    if (facts.rows.length === 0) {
+      return {
+        kind,
+        ok: false,
+        detail: `No DNS record rows exist for ${facts.domain} yet, so there is nothing to check against.`,
+      };
+    }
+
+    // ‼️ THE WRITE HERE IS THE OBSERVATION, WHICH IS THE WHOLE POINT OF THE ACTION.
+    // recheckDnsRecords resolves each name and records what came back. It cannot promote a
+    // record nobody added: a name that does not resolve keeps whatever status a human last set,
+    // deliberately, because propagation takes up to an hour.
+    const { recheckDnsRecords } = await import("@/lib/clients/dns-records");
+    const { fqdn: toFqdn } = await import("@/lib/clients/dns-records");
+    const rows = await recheckDnsRecords(clientId, facts.domain);
+
+    const lines = rows.map((r) => {
+      const name = toFqdn(r.host, facts.domain as string);
+      if (r.verified_at) return `${name}: live and correct`;
+      if (r.observed) return `${name}: resolves to "${r.observed}", which is not the value we want`;
+      return `${name}: does not resolve at all, so the record is not in the registrar yet`;
+    });
+
+    return { kind, ok: true, detail: lines.join(". ") };
   }
 
   return { kind, ok: false, detail: `${kind} is not an action this lane has.` };
