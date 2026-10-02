@@ -49,7 +49,19 @@ async function handle(req: NextRequest) {
       });
     }
 
-    return NextResponse.json({ ok: true, ...result, replies: replies?.replies ?? 0 });
+    // ‼️ A PASSENGER, AND IT MUST NEVER FAIL THE SENDER. This cron's own job is getting outreach
+    // out of the door; the onboarding nudge rides here only because it needs the same five-minute
+    // cadence and vercel.json already carries 17 crons against a Hobby plan documenting 2. Its
+    // errors are reported in the body and swallowed, so a nudge outage cannot stop a send.
+    let nudge: unknown = null;
+    try {
+      const { sweepAbandonedOnboardings } = await import("@/lib/onboarding2/nudge");
+      nudge = await sweepAbandonedOnboardings();
+    } catch (e) {
+      console.error("[cron/outreach-sender] onboarding nudge skipped:", (e as Error).message);
+    }
+
+    return NextResponse.json({ ok: true, ...result, replies: replies?.replies ?? 0, nudge });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[cron/outreach-sender] failed:", message);

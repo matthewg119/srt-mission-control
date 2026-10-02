@@ -227,6 +227,37 @@ export function ConvoFirstFunnel({
     return () => window.clearTimeout(id);
   }, [typing, surface, starting, step, messages.length]);
 
+  /**
+   * Tell the server how far they got. Fire and forget, on purpose.
+   *
+   * ‼️ IT IS NEVER AWAITED BY THE CONVERSATION. The visitor is mid-question; making the next
+   * bubble wait on a Slack round trip would trade the thing they came for against a card only we
+   * read. A failed report costs a thread reply and nothing else, and the five-minute sweep reads
+   * the database rather than Slack, so an outage here still leaves them chaseable.
+   */
+  const reportProgress = useCallback(
+    (step: "phone" | "reactivation" | "email" | "offer", over: Partial<Record<string, unknown>> = {}) => {
+      const name = answers.name ?? "";
+      const phone = answers.phone ?? (over.phone as string | undefined) ?? "";
+      if (!name || !phone) return;
+      void fetch("/api/onboarding2/progress", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          step,
+          company_url_hp: trap,
+          attribution: attribution(),
+          contactName: name,
+          phone,
+          website: answers.website ?? "",
+          email: answers.email ?? "",
+          ...over,
+        }),
+      }).catch(() => {});
+    },
+    [answers, trap]
+  );
+
   /** Paint assistant bubbles one at a time, with the dots up between them. */
   const paint = useCallback(async (lines: string[]) => {
     for (let i = 0; i < lines.length; i++) {
@@ -367,6 +398,9 @@ export function ConvoFirstFunnel({
       return;
     }
     if (step === "phone") {
+      // ‼️ THE LEAD IS BORN HERE. `answers` has not re-rendered with the phone yet, so it is passed
+      // explicitly: reading it off state would send an empty string on the one call that matters.
+      reportProgress("phone", { phone: value });
       setStep("email");
       void paint([ASK_EMAIL_CONVO]);
       return;
@@ -375,6 +409,7 @@ export function ConvoFirstFunnel({
       // ‼️ Lead, not CompleteRegistration. Nothing has been signed and no offer has been chosen;
       // what just happened is that a stranger became somebody we can contact.
       track("Lead");
+      reportProgress("email", { email: value });
       setStep("offer");
       void paint(["Perfect. One thing before we book the call."]).then(() => setSurface("offer"));
     }
@@ -388,6 +423,8 @@ export function ConvoFirstFunnel({
     // as the free-website add-on does. A decision taken in a sheet that leaves no trace in the
     // conversation is one nobody can point at later.
     if (yes) setMessages((m) => [...m, { role: "user", content: REACTIVATION_ADDON.optIn }]);
+    // Reported only once a phone exists, which on this path it does not yet: the reactivation
+    // answer rides the next report instead. recordProgress reads wantsReactivation off the body.
     setStep("phone");
     void paint([yes ? REACTIVATION_ADDON.ackYes : REACTIVATION_ADDON.ackNo, ASK_PHONE_CONVO]);
   }

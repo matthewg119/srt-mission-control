@@ -22,6 +22,7 @@ import { attributionForSigning, upsertLead } from "@/lib/onboarding2/lead";
 import { parseIntake } from "@/lib/onboarding2/intake-steps";
 import { NO_WEBSITE_OPTION } from "@/config/onboarding2";
 import { ingestLead, pageFromRequest } from "@/lib/lead-intake";
+import { markProgressComplete } from "@/lib/onboarding2/progress";
 import { isDemoRequest } from "@/lib/onboarding2/demo";
 import type { AgreementSnapshot } from "@/lib/onboarding2/snapshot";
 import type { Attribution, Onboarding2SigningRow } from "@/lib/onboarding2/types";
@@ -367,6 +368,12 @@ async function writeIdentity(
   // ‼️ DEMO RUNS WRITE ROWS AND SEND NOTHING. The whole reason demo mode is decided server-side
   // (lib/onboarding2/demo.ts) is that a preview should run every line production runs; what it must
   // not do is ring Matthew's phone and open a #hot-leads thread for a test.
+  // ‼️ CLOSE THE PROGRESS LOOP BEFORE THE DEMO RETURN, NOT AFTER.
+  // A row left open is a row the five-minute sweep chases, and marking it finished is the funnel
+  // stating a fact rather than a side effect that escapes it. A demo that completed should not
+  // produce a nudge either.
+  await markProgressComplete(id.phone);
+
   if (isDemo) return;
 
   try {
