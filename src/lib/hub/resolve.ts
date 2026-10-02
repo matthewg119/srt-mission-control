@@ -107,6 +107,19 @@ export type HostResolution =
     }
   | { status: "unknown" };
 
+// ‼️ THE EMBED NAMES ITS FOREIGN KEY, AND A BARE `clients!inner` IS A LIVE OUTAGE.
+//
+// docs/2026-09-29-destinations.sql added clients.default_destination_id referencing
+// client_hosts(id), so there are now TWO foreign keys between these two tables: client_hosts
+// points at clients, and clients points back. PostgREST refuses an ambiguous embed outright with
+// "Could not embed because more than one relationship was found", which resolve.ts turns into a
+// throw, which is a 500 on EVERY hub page and every subfolder page at once.
+//
+// Measured on production 2026-10-01: srtagency.com/learn answered 500 and the raw query named
+// this as the reason. Naming the constraint resolves it and cannot drift, because dropping that
+// FK would fail the query loudly here rather than silently picking the other direction.
+//
+// Any future embed between these tables must name its key too.
 const SELECT =
   "id, legal_name, dba_name, domain, website, address_line1, address_line2, city, state, " +
   "postal_code, phone, email, hours, language, review_destination_primary, review_workflow, theme, hub_skin";
@@ -115,7 +128,7 @@ async function lookup(host: string): Promise<HostResolution> {
   const { data, error } = await supabaseAdmin
     .from("client_hosts")
     .select(
-      `id, host, kind, delivery, base_path, public_origin, site_key, enabled, clients!inner(${SELECT})`
+      `id, host, kind, delivery, base_path, public_origin, site_key, enabled, clients!client_hosts_client_id_fkey!inner(${SELECT})`
     )
     .eq("host", host)
     .eq("enabled", true)
@@ -269,7 +282,7 @@ async function lookupSite(siteKey: string): Promise<HostResolution> {
   const { data, error } = await supabaseAdmin
     .from("client_hosts")
     .select(
-      `id, host, kind, delivery, base_path, public_origin, site_key, enabled, clients!inner(${SELECT})`
+      `id, host, kind, delivery, base_path, public_origin, site_key, enabled, clients!client_hosts_client_id_fkey!inner(${SELECT})`
     )
     .eq("site_key", siteKey)
     .eq("enabled", true)
