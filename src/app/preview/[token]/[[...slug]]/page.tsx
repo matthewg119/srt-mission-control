@@ -85,6 +85,24 @@ interface Props {
      */
     engine?: string;
     look?: string;
+    /**
+     * "0" hides the corner assistant on the SITE previews. Anything else, including absent,
+     * shows it.
+     *
+     * ‼️ IT IS A VIEW OF THE PREVIEW AND NOT A SETTING ON THE CLIENT. It flips nothing in
+     * concierge_configs, writes nothing, and the next link minted without it shows the widget
+     * again. `enabled` keeps its exact meaning (see src/lib/concierge/preview-grant.ts): the
+     * only thing that puts this widget on a real website, still defaulting false, never
+     * touched by the preview lane. What this does is answer "may I show them the site without
+     * the robot in the corner", which is a question about one conversation, not about the
+     * tenant.
+     *
+     * ‼️ DEFAULT ON, AND THE DEFAULT IS WHY IT READS `!== "0"` RATHER THAN `=== "1"`.
+     * Every preview link already pasted into a thread was minted before this parameter existed
+     * and must keep showing the assistant. An opt-in would have silently removed it from all of
+     * them.
+     */
+    assistant?: string;
   };
 }
 
@@ -110,6 +128,16 @@ export default async function TokenPreview({ params, searchParams }: Props) {
   });
 
   const engine = readEngine(searchParams.engine);
+
+  // ‼️ THE SWITCH DOES NOT REACH kind=concierge, AND THAT IS DELIBERATE.
+  // That view IS the assistant demo: its own comment says "the demo is the widget on a page, not
+  // the chat on its own". Honouring the parameter there would render a sample hub page with
+  // nothing on it and no way to tell that was the point. The switch is for the two SITE previews,
+  // where the assistant is a thing sitting on top of the work being shown.
+  const showAssistant = searchParams.assistant !== "0";
+
+  /** Appended to every in-preview link, so the choice survives a click to another page. */
+  const assistantQ = showAssistant ? "" : "&assistant=0";
   const kind =
     searchParams.kind === "reviews"
       ? "reviews"
@@ -185,7 +213,7 @@ export default async function TokenPreview({ params, searchParams }: Props) {
   // same tables: client_site_pages for the site, client_pages for the answers.
   if (kind === "launch") {
     const base = `/preview/${params.token}`;
-    const q = "?kind=launch";
+    const q = `?kind=launch${assistantQ}`;
     const segments = params.slug ?? [];
 
     // Read rather than derived. clients.domain on a Launch client is whatever was typed at
@@ -235,12 +263,14 @@ export default async function TokenPreview({ params, searchParams }: Props) {
               linkSuffix={q}
             />
           )}
-          <ConciergeEmbed
-            clientId={verified.clientId}
-            magnetKey={null}
-            preview={params.token}
-            mascot={searchParams.mascot ?? null}
-          />
+          {showAssistant && (
+            <ConciergeEmbed
+              clientId={verified.clientId}
+              magnetKey={null}
+              preview={params.token}
+              mascot={searchParams.mascot ?? null}
+            />
+          )}
         </HubShell>
       );
     }
@@ -264,12 +294,14 @@ export default async function TokenPreview({ params, searchParams }: Props) {
           href={(path) => (path === "/" ? `${base}${q}` : `${base}${path}${q}`)}
           answersHref={`${base}/answers${q}`}
         />
-        <ConciergeEmbed
-          clientId={verified.clientId}
-          magnetKey={null}
-          preview={params.token}
-          mascot={searchParams.mascot ?? null}
-        />
+        {showAssistant && (
+          <ConciergeEmbed
+            clientId={verified.clientId}
+            magnetKey={null}
+            preview={params.token}
+            mascot={searchParams.mascot ?? null}
+          />
+        )}
       </div>
     );
   }
@@ -292,7 +324,9 @@ export default async function TokenPreview({ params, searchParams }: Props) {
     }));
 
     const href = (path: string) =>
-      path ? `/preview/${params.token}/${path}?kind=site` : `/preview/${params.token}?kind=site`;
+      path
+        ? `/preview/${params.token}/${path}?kind=site${assistantQ}`
+        : `/preview/${params.token}?kind=site${assistantQ}`;
 
     const current = replicaPath ? pages.find((p) => p.path === replicaPath) : null;
     if (replicaPath && !current) notFound();
@@ -326,7 +360,9 @@ export default async function TokenPreview({ params, searchParams }: Props) {
           `enabled` is still false answer at all. It turns nothing on: see
           src/lib/concierge/preview-grant.ts.
         */}
-        <ConciergeEmbed clientId={verified.clientId} magnetKey={magnetKey} preview={params.token} mascot={searchParams.mascot ?? null} />
+        {showAssistant && (
+          <ConciergeEmbed clientId={verified.clientId} magnetKey={magnetKey} preview={params.token} mascot={searchParams.mascot ?? null} />
+        )}
       </div>
     );
   }

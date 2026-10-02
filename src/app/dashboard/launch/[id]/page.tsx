@@ -13,6 +13,7 @@ import { currentOffer } from "@/lib/launch/offer";
 import { signOnboardingToken } from "@/lib/clients/token";
 import { PREVIEW_TOKEN_TTL_DAYS } from "@/lib/clients/referral-engine-preview";
 import { LaunchBoard, type BoardStep } from "./board";
+import { PreviewBar } from "./preview-bar";
 import { LaunchPanels } from "./panels";
 
 /**
@@ -225,26 +226,20 @@ export default async function LaunchClientPage({ params }: Props) {
             </a>
           </>
         )}
-        {/* ‼️ ALWAYS RENDERED, WITH OR WITHOUT A DOMAIN, AND THAT IS THE POINT OF IT.
-            The two links above need an attached host, which needs a bought domain, which is the
-            only thing in this repository that spends money. Until then there was no URL anywhere
-            that showed the site you just pasted: /hub/{host} 404s on every internal host by
-            design. This one serves the same pages off a signed token instead of a hostname. */}
-        {previewHref && (
-          <a
-            href={previewHref}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="rounded-lg border border-[rgba(245,166,35,0.35)] bg-[rgba(245,166,35,0.06)] px-3 py-1.5 text-xs text-[#F5A623] hover:text-white"
-          >
-            {previewKind === "site"
-              ? "Preview their current site"
-              : host
-                ? "Preview (no domain needed)"
-                : "Preview the site"}
-          </a>
-        )}
       </div>
+
+      {/* ‼️ ALWAYS RENDERED, WITH OR WITHOUT A DOMAIN, AND THAT IS THE POINT OF IT.
+          The two links above need an attached host, which needs a bought domain, which is the
+          only thing in this repository that spends money. Until then there was no URL anywhere
+          that showed the site you just pasted: /hub/{host} 404s on every internal host by
+          design. This one serves the same pages off a signed token instead of a hostname.
+
+          ‼️ IT LEFT THE BUTTON ROW ON 2026-10-02 AND BECAME ITS OWN BAR, because it now carries
+          a second control. A switch inlined among four navigation buttons reads as a fifth
+          button, and the one thing this switch must not be mistaken for is an action. */}
+      {previewKind && previewHref && (
+        <PreviewBar href={previewHref} kind={previewKind} hasHost={Boolean(host)} />
+      )}
       {/* ‼️ TWO DIFFERENT SILENCES, AND THEY ARE NOT THE SAME PROBLEM. No kind means this client
           has no site pages of either sort yet, which is an ordinary early state. No href with a
           kind means the signing key is missing, which is an environment fault somebody has to go
