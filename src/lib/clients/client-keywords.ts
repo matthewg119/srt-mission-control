@@ -2375,12 +2375,38 @@ async function persistMap(clientId: string, map: StrategyMap, by: string): Promi
   if (!map.clusters.length) return null;
   const now = new Date().toISOString();
 
+  // ‼️ TWO DELETES, AND THE SECOND ONE EXISTS BECAUSE THIS FUNCTION COLLIDES WITH ITSELF.
+  //
+  // The first clears stale PROPOSED clusters, which is what the original single delete did. It
+  // cannot clear this function's own previous output, because a complete map is written `approved`
+  // (see the note on `status` below) and `neq("status", "approved")` therefore skips exactly the
+  // rows a re-run needs to replace. Measured on srt-agency-llc 2026-10-02: typing `keywords map`
+  // twice left EIGHTEEN clusters, two per pillar, and nothing said so.
+  //
+  // ‼️ AND IT IS SCOPED BY PILLAR RATHER THAN DELETING EVERY DERIVED ROW. keyword-strategy.ts also
+  // writes `origin: "derived"`, so a blanket delete here would destroy the clusters that lane
+  // built from the screenshot pass. Keyed on the pillars THIS map is about to write, the only rows
+  // that go are the ones being replaced in the same statement.
+  const pillarIds = map.clusters.map((c) => c.pillar.id);
+
   const del = await supabaseAdmin
     .from("keyword_clusters")
     .delete()
     .eq("client_id", clientId)
     .eq("origin", "derived")
     .neq("status", "approved");
+  if (!del.error && pillarIds.length) {
+    const mine = await supabaseAdmin
+      .from("keyword_clusters")
+      .delete()
+      .eq("client_id", clientId)
+      .eq("origin", "derived")
+      .in("pillar_keyword_id", pillarIds);
+    if (mine.error && !/does not exist|schema cache/i.test(mine.error.message)) {
+      console.error("[client-keywords] map: own clusters not replaced:", mine.error.message);
+      return null;
+    }
+  }
   if (del.error) {
     // A database without docs/2026-09-26-keyword-strategy.sql has no clusters, which is true of it.
     if (/does not exist|schema cache/i.test(del.error.message)) return null;
