@@ -1,11 +1,14 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
-import { LogOut, X } from "lucide-react";
+import { LogOut, SlidersHorizontal, X } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
 import { navSections } from "@/config/nav";
+import { NavCustomize } from "@/components/nav-customize";
+import { applyOrder, clearNavPrefs, EMPTY_PREFS, readNavPrefs, writeNavPrefs, type NavPrefs } from "@/lib/nav-prefs";
 import { cn } from "@/lib/utils";
 
 interface SidebarUser {
@@ -44,6 +47,29 @@ function SrtLogo() {
 export function Sidebar({ user, isOpen, onClose }: SidebarProps) {
   const pathname = usePathname();
 
+  // ‼️ DEFAULTS ON THE FIRST RENDER, PREFERENCES AFTER. localStorage does not exist on the server,
+  // so reading it during render would make the markup React produced on the server disagree with
+  // the markup it produces in the browser, and the whole sidebar would be thrown away and rebuilt.
+  // Starting empty and filling in an effect means the default order paints first and the person's
+  // own order replaces it a frame later, which is invisible and correct.
+  const [prefs, setPrefs] = useState<NavPrefs>(EMPTY_PREFS);
+  const [customising, setCustomising] = useState(false);
+
+  useEffect(() => setPrefs(readNavPrefs()), []);
+
+  const hidden = new Set(prefs.hidden);
+  const sections = navSections
+    .map((section) => ({
+      ...section,
+      items: applyOrder(section.items, prefs.order[section.label] ?? []).filter(
+        // The active page is never hidden. Somebody who switches a section off and then follows a
+        // link into it would otherwise be standing on a page with no highlighted nav item and no
+        // way back that they can see.
+        (item) => !hidden.has(item.href) || pathname.startsWith(item.href)
+      ),
+    }))
+    .filter((section) => section.items.length > 0);
+
   const sidebarContent = (
     <div className="flex h-full flex-col bg-[#0a0a0a] border-r border-[rgba(255,255,255,0.06)]">
       {/* Logo section */}
@@ -64,7 +90,7 @@ export function Sidebar({ user, isOpen, onClose }: SidebarProps) {
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-3 py-4">
-        {navSections.map((section, sectionIdx) => (
+        {sections.map((section, sectionIdx) => (
           <div key={section.label} className={sectionIdx > 0 ? "mt-5" : ""}>
             <p className="px-3 mb-2 text-[10px] font-semibold uppercase tracking-wider text-[rgba(255,255,255,0.25)]">
               {section.label}
@@ -98,6 +124,13 @@ export function Sidebar({ user, isOpen, onClose }: SidebarProps) {
             </ul>
           </div>
         ))}
+        <button
+          onClick={() => setCustomising(true)}
+          className="mt-5 flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-[rgba(255,255,255,0.35)] transition-colors hover:bg-[rgba(255,255,255,0.03)] hover:text-white"
+        >
+          <SlidersHorizontal className="h-[18px] w-[18px] shrink-0" />
+          <span>Customise</span>
+        </button>
       </nav>
 
       {/* User section */}
@@ -165,6 +198,27 @@ export function Sidebar({ user, isOpen, onClose }: SidebarProps) {
             {sidebarContent}
           </aside>
         </div>
+      )}
+
+      {/* ‼️ OUTSIDE BOTH <aside>s, AND RENDERED ONCE. sidebarContent is used TWICE, for the desktop
+          rail and the mobile overlay, so a modal placed inside it would exist twice in the DOM with
+          the same ids and the same checkboxes, and on a tablet-width screen both would be live. */}
+      {customising && (
+        <NavCustomize
+          sections={navSections}
+          prefs={prefs}
+          onSave={(next) => {
+            setPrefs(next);
+            writeNavPrefs(next);
+            setCustomising(false);
+          }}
+          onReset={() => {
+            clearNavPrefs();
+            setPrefs(EMPTY_PREFS);
+            setCustomising(false);
+          }}
+          onClose={() => setCustomising(false)}
+        />
       )}
     </>
   );
