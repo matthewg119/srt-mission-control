@@ -32,7 +32,33 @@ export const MAPS_GRAMMAR = [
 
 /** Outscraper is billed per record, so an unbounded pull is not expressible. */
 export const MAPS_LIMIT_DEFAULT = 20;
-export const MAPS_LIMIT_MAX = 500;
+
+/**
+ * The most records one command may buy.
+ *
+ * ‼️ 500 WAS OUR CAP, NOT THE VENDOR'S, AND IT WAS SIZED FOR OUTSCRAPER AT $3.00 PER THOUSAND.
+ * DataForSEO charges $0.37 per thousand, so the old ceiling cost $1.50 to reach and the new one costs
+ * $1.80 for ten times the rows. Raised on 2026-10-03 after a 500-record Dallas pull yielded 101
+ * qualified companies and 64 addresses: the yield is fine, the VOLUME was the constraint.
+ *
+ * ‼️ ONE COMMAND, SEVERAL VENDOR CALLS. The endpoint clamps `limit` to 1000 per task, so anything
+ * above that is paged internally by `pullFromDataForSeo` at 1000 a time. That is why the estimate
+ * card charges ceil(limit / 1000) task fees rather than one.
+ *
+ * ‼️ WHAT THIS DOES NOT CHANGE IS THE SLOW PART. Every kept row is crawled for an address, about 30
+ * to 100 per cron tick, so a 5,000-record pull is a crawl measured in hours rather than minutes. The
+ * pull is seconds; the pipeline behind it is not.
+ */
+export const MAPS_LIMIT_MAX = 5000;
+
+/**
+ * The most records the vendor will return for ONE task.
+ *
+ * Measured against the endpoint's own clamp in src/lib/dataforseo-places.ts, which silently reduces
+ * anything larger. Paging above this is the caller's job, so the clamp can never quietly truncate a
+ * pull into a short page that looks like an exhausted cell.
+ */
+export const MAPS_PAGE_MAX = 1000;
 
 /** A metro, roughly. Wide enough to cover the suburbs, tight enough to stay one market. */
 export const MAPS_RADIUS_KM_DEFAULT = 30;
@@ -299,7 +325,9 @@ export function parseMapsCommand(text: string): MapsParse {
         ok: false,
         reason:
           "a limit of " + limit + " is above the cap of " + MAPS_LIMIT_MAX +
-          ". Outscraper bills per record, so the cap is deliberate. Split the pull by metro instead.",
+          ". Every record is crawled and qualified downstream, so the cap is about how much work one " +
+          "batch can carry rather than about the record price. Pull the next slice with `offset " +
+          MAPS_LIMIT_MAX + "`.",
       };
     }
   }

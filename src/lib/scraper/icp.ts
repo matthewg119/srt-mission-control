@@ -33,8 +33,8 @@ export const MED_SPA_ICP = `We sell AI-search visibility to med spas: we get the
 somebody asks ChatGPT or Google's AI for the best med spa in their city.
 
 KEEP a business if all of these hold:
-- It is a med spa, aesthetics clinic, or skin clinic offering injectables, laser treatment, or
-  body contouring under its own brand.
+- It is a med spa, aesthetics clinic, skin clinic, or DERMATOLOGY PRACTICE offering injectables,
+  laser treatment, or body contouring under its own brand.
 - It is owner operated or a small local group, roughly one to three locations.
 - It is in the United States.
 - It has its own website on its own domain.
@@ -44,8 +44,11 @@ DROP a business if any of these hold:
 - It is a location of a national franchise. The ones we see most: Ideal Image, Milan Laser,
   Sono Bello, LaserAway, European Wax Center, Skin Laundry, Restore Hyper Wellness, The DRIPBaR.
   Treat any other business that is plainly a national chain the same way.
-- It is a dermatology practice, a plastic surgery group, or a hospital system, including one with
-  a med spa attached. A physician practice buys differently and is not our buyer.
+- It is a plastic surgery or cosmetic surgery group, or a hospital or health system, including one
+  with a med spa attached. A surgical practice buys differently and is not our buyer.
+- It is a dermatology practice that is purely medical or surgical: skin cancer, Mohs surgery,
+  general dermatology with no cosmetic offering. A derm practice that DOES sell injectables, laser
+  or cosmetic treatment is a KEEP, not a drop.
 - It is outside the United States.
 - It has no website of its own, or its only web presence is a Facebook page, an Instagram link,
   a Linktree, or a booking platform subdomain.
@@ -64,12 +67,16 @@ the same thing should read the same way.`;
  * them, for the same reason. "Not a chain" invites the model to apply its own idea of a chain and
  * it will drop a two-location family practice that is exactly the buyer.
  *
- * ‼️ ORTHODONTIC AND PEDIATRIC PRACTICES ARE KEPT, DELIBERATELY. The med spa profile drops
- * dermatology and plastic surgery because a physician practice buys differently, and it would be
- * easy to read that as "drop the specialists" and carry it over. It does not carry over: every
- * practice here is a physician practice, and an orthodontist competes for "best orthodontist near
- * me" on exactly the offer we sell. The med spa exclusion was about a different BUYER, not about
- * a narrower specialty.
+ * ‼️ ORTHODONTIC AND PEDIATRIC PRACTICES ARE KEPT, DELIBERATELY. The med spa profile drops surgical
+ * groups and hospital systems because they buy differently, and it would be easy to read that as
+ * "drop the specialists" and carry it over. It does not carry over: every practice here is a
+ * physician practice, and an orthodontist competes for "best orthodontist near me" on exactly the
+ * offer we sell. That exclusion was about a different BUYER, not about a narrower specialty.
+ *
+ * ‼️ AND THE MED SPA PROFILE NO LONGER DROPS DERMATOLOGY AT ALL. Matthew, 2026-10-03: "we can do
+ * dermatologist but no plastic surgery". Measured on the 500-lead Dallas pull: 17 dermatologists
+ * were pulled and all 17 were dropped, which is 17 clinics competing for the same cosmetic queries
+ * that were being discarded by a rule written about surgeons.
  */
 export const DENTIST_ICP = `We sell AI-search visibility to dental practices: we get them named
 when somebody asks ChatGPT or Google's AI for the best dentist in their city.

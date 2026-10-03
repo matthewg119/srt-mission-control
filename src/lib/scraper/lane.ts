@@ -93,6 +93,8 @@ import {
   DFS_CATEGORIES,
   MAPS_GRAMMAR,
   MAPS_LIMIT_DEFAULT,
+  MAPS_OFFSET_MAX,
+  MAPS_PAGE_MAX,
   laneHelp,
   parseNextMetroCommand,
   type NextMetroCommand,
@@ -113,7 +115,7 @@ import {
 } from "./coverage";
 import { bumpCellTotal, cellRows, cellsMissingState, insertCells, setCellState, type MeasuredCell } from "./cell-store";
 // The default source. Its endpoint is synchronous, so this half needs no webhook at all.
-import { isConfigured as dfsPlacesConfigured, searchListings } from "@/lib/dataforseo-places";
+import { isConfigured as dfsPlacesConfigured, searchListings, type DfsListing } from "@/lib/dataforseo-places";
 // The listings endpoint honours a coordinate and silently ignores a name, so this is not optional.
 // reverseGeocode goes the other way, and exists only so the coverage card can report by state.
 import { geocodeMetro, reverseGeocode } from "@/lib/geocode";
@@ -1837,7 +1839,16 @@ async function postPullEstimate(batch: BatchRow, command?: MapsCommand): Promise
     [
       ":four: *Pull local businesses*",
       "  Source: `" + parsed.source + "`" +
-        (parsed.source === "dataforseo" ? "  (about $" + (0.012 + parsed.limit * 0.00036).toFixed(3) + " for this pull)" : ""),
+        // ‼️ ONE TASK FEE PER PAGE, NOT ONE PER PULL. The endpoint clamps a task to 1,000 records, so a
+        // 5,000-record command is five tasks and five fees. Charging one would under-quote the card by
+        // four fees, and a spend card that under-quotes is worse than one that does not quote at all.
+        (parsed.source === "dataforseo"
+          ? "  (about $" +
+            (Math.ceil(parsed.limit / MAPS_PAGE_MAX) * 0.012 + parsed.limit * 0.00036).toFixed(3) +
+            " for this pull" +
+            (parsed.limit > MAPS_PAGE_MAX ? ", in " + Math.ceil(parsed.limit / MAPS_PAGE_MAX) + " pages" : "") +
+            ")"
+          : ""),
       "  Vertical: `" + parsed.vertical + "`",
       parsed.source === "dataforseo"
         ? "  Where: `" + parsed.locationName + "`\n  Categories: `" + parsed.categories.join("`, `") + "`"
@@ -1991,17 +2002,68 @@ async function pullFromDataForSeo(batch: BatchRow, runId: string, command: MapsC
   // and pay for it (raw_leads is unique on run_id + place_id only WITHIN a run, so the same
   // businesses land again as new rows under the new run). Measured against DataForSEO on 2026-09-28:
   // offsets 0 / 100 / 200 for Dallas returned 300 distinct businesses with zero overlap.
-  const found = await searchListings({
-    categories: command.categories,
-    locationCoordinate: place.lat + "," + place.lon + "," + command.radiusKm,
-    limit: command.limit,
-    offset: command.offset,
-  });
-  if (!found.ok) {
+  // ‼️ ONE COMMAND, SEVERAL CALLS, BECAUSE THE ENDPOINT CLAMPS `limit` TO 1000 PER TASK. Asking for
+  // 5,000 in one call does not fail, it silently returns 1,000, which would look exactly like a cell
+  // that ran out of businesses and would mark it finished with 4,000 unbought. So the clamp is
+  // honoured here rather than discovered downstream.
+  //
+  // ‼️ AND IT STOPS ON THE VENDOR'S OWN NUMBER, NEVER ON A SHORT PAGE. total_count is exact, so the
+  // loop ends when the offset reaches it; a page that comes back short of its limit for any other
+  // reason (a transient error, a deep offset) must not be read as "there is no more".
+  const coordinate = place.lat + "," + place.lon + "," + command.radiusKm;
+  const items: DfsListing[] = [];
+  let costUsd = 0;
+  let totalCount = 0;
+  let calls = 0;
+  let pageError: string | null = null;
+
+  // ‼️ A HARD CALL BUDGET, BECAUSE EVERY ITERATION SPENDS A TASK FEE. The loop advances by the rows
+  // actually delivered, so a vendor returning one row a page would otherwise make a call per row:
+  // 5,000 HTTP requests, 5,000 task fees, and a lambda that dies long before it finishes. Two spare
+  // calls above the arithmetic minimum absorb a short page without allowing a spin.
+  const maxCalls = Math.ceil(command.limit / MAPS_PAGE_MAX) + 2;
+
+  for (let got = 0; got < command.limit; ) {
+    if (calls >= maxCalls) break;
+    const offset = command.offset + got;
+    // The offset ceiling is measured, not guessed: 100,000 succeeded and 110,000 did not.
+    if (offset >= MAPS_OFFSET_MAX) break;
+    const want = Math.min(MAPS_PAGE_MAX, command.limit - got);
+
+    const page = await searchListings({
+      categories: command.categories,
+      locationCoordinate: coordinate,
+      limit: want,
+      offset,
+    });
+    calls += 1;
+    costUsd += page.costUsd;
+
+    if (!page.ok) {
+      // ‼️ A FAILED PAGE AFTER A GOOD ONE KEEPS WHAT IT ALREADY BOUGHT. Those records are paid for and
+      // discarding them would mean re-buying them. The error is reported on the card instead, and the
+      // cell is left short of its measurement, so the walk offers the remainder again rather than
+      // treating the cell as finished.
+      pageError = page.error ?? "DataForSEO refused the query";
+      break;
+    }
+
+    totalCount = Math.max(totalCount, page.totalCount);
+    items.push(...page.items);
+    got += page.items.length;
+
+    // Exhausted: the vendor has no more rows inside this circle.
+    if (!page.items.length) break;
+    if (offset + page.items.length >= page.totalCount) break;
+  }
+
+  if (!items.length) {
     await updateRun(runId, { spend_approved_at: null });
-    await fail(batch, found.error ?? "DataForSEO refused the query");
+    await fail(batch, pageError ?? "DataForSEO returned no businesses for this search");
     return;
   }
+
+  const found = { items, totalCount, costUsd, ok: true as const };
 
   const rows = found.items
     .map((item) =>
@@ -2040,7 +2102,9 @@ async function pullFromDataForSeo(batch: BatchRow, runId: string, command: MapsC
   await say(
     batch,
     [
-      "Pulled *" + stored.inserted + "* businesses from DataForSEO for $" + found.costUsd.toFixed(4) + ".",
+      "Pulled *" + stored.inserted + "* businesses from DataForSEO for $" + found.costUsd.toFixed(4) +
+        (calls > 1 ? "  _(" + calls + " pages)_" : "") + ".",
+      pageError ? "  :warning: a page failed and the rest was kept: " + pageError : "",
       "  `" + place.label + "` within " + command.radiusKm + "km has *" + found.totalCount +
         "* matching these categories in total, so raise `limit` to go deeper or `radius` to go wider.",
       stored.skipped ? "  " + stored.skipped + " were already in this run and were not stored twice." : "",

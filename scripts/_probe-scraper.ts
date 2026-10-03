@@ -32,6 +32,8 @@ import { COLD_EMAIL_1, COLD_MERGE_FIELDS, renderColdEmail } from "../src/config/
 import {
   MAPS_GRAMMAR,
   MAPS_LIMIT_DEFAULT,
+  MAPS_LIMIT_MAX,
+  MAPS_PAGE_MAX,
   MAPS_RADIUS_KM_DEFAULT,
   MAPS_SOURCE_DEFAULT,
   laneHelp,
@@ -871,7 +873,19 @@ async function liveMx(): Promise<void> {
 
   check("a missing metro is refused", !parseMapsCommand("pull maps medspa | med spa").ok);
   check("an empty command is refused", !parseMapsCommand("pull maps").ok);
-  check("a limit above the cap is refused", !parseMapsCommand("pull maps medspa | Dallas TX | med spa | limit 5000").ok);
+  // ‼️ WRITTEN AGAINST THE CONSTANT, NOT A NUMBER. This assertion hard-coded 5000 as "above the cap"
+  // and silently became a test that the cap is EXACTLY 500 the day the cap moved. Raising it to 5000
+  // on 2026-10-03 turned the check red for the right reason and that is the only reason it was noticed.
+  check("a limit above the cap is refused",
+    !parseMapsCommand("pull maps medspa | Dallas TX | med spa | limit " + (MAPS_LIMIT_MAX + 1)).ok);
+  check("and a limit AT the cap is accepted",
+    parseMapsCommand("pull maps medspa | Dallas TX | med spa | limit " + MAPS_LIMIT_MAX).ok);
+
+  // ‼️ THE VENDOR CLAMPS A TASK TO 1000, so a cap above it means one command is several calls. If
+  // these two ever agree again, pullFromDataForSeo's paging loop has become dead code and a pull of
+  // more than a page would silently return one page and look like an exhausted cell.
+  check("the command cap is above the vendor's per-task page size", MAPS_LIMIT_MAX > MAPS_PAGE_MAX);
+  check("and the page size is the vendor's documented maximum", MAPS_PAGE_MAX === 1000);
   check("a fourth part that is not a limit is refused", !parseMapsCommand("pull maps medspa | Dallas TX | med spa | nonsense").ok);
   check("a fifth part is refused", !parseMapsCommand("pull maps medspa | A | B | limit 5 | more").ok);
 
