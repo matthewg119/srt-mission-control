@@ -125,6 +125,39 @@ for (const file of files) {
 
 console.log(`  checked ${checked} file(s) against ${BANNED.length} banned specifiers`);
 
+// ── The one deliberate bridge ───────────────────────────────────────────────
+//
+// ‼️ THE BAN ABOVE IS ON SPECIFIERS, SO A LANE FILE CAN REACH THE SLACK LANE THROUGH ANY MODULE
+// THAT IS NOT ON THE LIST. That is a real hole and this is what keeps it one hole wide.
+//
+// lane-summary.ts imports config/delivery-steps legitimately (it is not a lane file) and returns
+// TEXT. The launch conversation imports it so it can answer "what about step 21" with the truth
+// instead of "there is no step 21", which is what it said in production on 2026-10-03. That is a
+// summary, not an engine: it ticks nothing and verifies nothing.
+//
+// This asserts the bridge stays single. A second file doing the same thing is how the ban above
+// becomes decorative.
+const BRIDGE = "clients/lane-summary";
+const bridgeUsers = files.filter((file) => {
+  try {
+    return importsOf(readFileSync(file, "utf8")).some((spec) => spec.includes(BRIDGE));
+  } catch {
+    return false;
+  }
+});
+
+if (bridgeUsers.length > 1) {
+  fail(
+    `${bridgeUsers.length} lane files import the cross-lane bridge: ${bridgeUsers.map(relative).join(", ")}. ` +
+      "One is deliberate; two is the ban going decorative. Widen lane-summary.ts instead."
+  );
+} else {
+  console.log(
+    `  the cross-lane bridge is used by ${bridgeUsers.length} lane file(s)` +
+      (bridgeUsers.length === 1 ? ` (${relative(bridgeUsers[0])}), which is the documented one` : "")
+  );
+}
+
 /**
  * The reverse direction. The Slack lane must not learn about this one either: a delivery step
  * that read a launch step would make the 41-step board's behaviour depend on a lane its own

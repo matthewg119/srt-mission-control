@@ -35,6 +35,8 @@ import { proposeVocabulary, confirmVocabulary } from "./vocabulary";
 import { proposeOfferFromDocument, confirmOffer, currentOffer } from "./offer";
 import { searchDomains } from "./domain";
 import { dnsFacts } from "./dns-facts";
+import { slackLaneSummary } from "@/lib/clients/lane-summary";
+import { publishingFacts } from "./publishing-facts";
 
 const TURN_MODEL: ClaudeModel = "claude-sonnet-4-6";
 
@@ -121,7 +123,7 @@ export interface BoardContext {
  * and says why, and a key outside the set is refused by executeAction rather than trusted.
  */
 export async function boardContext(clientId: string): Promise<BoardContext> {
-  const [board, docs, offer, dns] = await Promise.all([
+  const [board, docs, offer, dns, slack, publishing] = await Promise.all([
     launchBoard(clientId),
     foundationStatus(clientId),
     currentOffer(clientId),
@@ -130,6 +132,11 @@ export async function boardContext(clientId: string): Promise<BoardContext> {
     // four cheap reads and one nameserver lookup; see dns-facts.ts for why it never resolves the
     // records themselves.
     dnsFacts(clientId).catch(() => null),
+    // ‼️ THE OTHER BOARD, BECAUSE A CLIENT CAN BE ON BOTH AND SRT IS. Without it this answered
+    // "there is no step 21, the board ends at step 17", which is true of THIS lane and false about
+    // the client being asked about. See lib/clients/lane-summary.ts for why the import is allowed.
+    slackLaneSummary(clientId).catch(() => null),
+    publishingFacts(clientId).catch(() => null),
   ]);
 
   const byKey = new Map(board.map((e) => [e.step.key, e]));
@@ -169,6 +176,12 @@ export async function boardContext(clientId: string): Promise<BoardContext> {
       "",
       dns ? dns.text : "THE DNS: could not be read just now. Say that rather than answering from memory.",
       "",
+      publishing ? publishing.text : "PUBLISHING: could not be read just now. Say so rather than guessing.",
+      "",
+      slack?.present
+        ? slack.text
+        : "THE SLACK BOARD: this client is not on it. Only the steps above exist for them.",
+      "",
       `STEPS YOU MAY ACT ON THIS TURN: ${candidates.length ? candidates.join(", ") : "none"}`,
     ].join("\n"),
   };
@@ -202,6 +215,20 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "- Never change keywords and never touch the concierge without him saying yes in words.",
     `- If you are less than ${Math.round(ACT_THRESHOLD * 100)} percent sure, return no actions and ask instead.`,
     "",
+    "THERE ARE TWO BOARDS AND THIS CLIENT MAY BE ON BOTH:",
+    "- The LAUNCH board is the one you act on. Its steps are listed under THE BOARD and they are the",
+    "  only keys you may ever name in an action.",
+    "- The SLACK board is the 41-step delivery lane, worked in the client's own Slack channel. When",
+    "  the context shows one, this client is on it too, and its numbering is its own: step 21 there",
+    "  is a real step even though this board ends earlier.",
+    "- ‼️ NEVER SAY A STEP DOES NOT EXIST BECAUSE IT IS NOT ON YOUR BOARD. Look at both lists. If he",
+    "  names a number you cannot find, say which board you looked at rather than correcting him.",
+    "- The two lanes share ALL the data: one set of keywords, documents, pages, evidence and",
+    "  destinations. They differ only in how the work is driven. So work done in Slack is real here",
+    "  and the reverse, and you must never tell him to redo something the other board already shows",
+    "  as done.",
+    "- You cannot tick a Slack step. Tell him which thread to type in.",
+    "",
     "ANSWERING A QUESTION:",
     "- A question is a turn too. He may ask how something works, what a step means, what is left,",
     "  why something is refusing, or how to do a piece of setup. Answer it. Returning no actions",
@@ -211,10 +238,18 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "  for. Do not make him ask twice for detail he already requested.",
     "- Answer from the context below and from how this product actually works. Everything under THE",
     "  BOARD, THE DNS and THE OFFER was read out of the database or observed moments ago.",
-    "- ‼️ NEVER INVENT A VALUE. Hostnames, CNAME targets, record types, registrar screens and step",
-    "  names come out of the context or you do not say them. If the thing he asked about is not in",
-    "  the context, say which part you do not have and what would get it. A confident wrong DNS",
-    "  record costs him an hour and he cannot tell it is wrong by reading it.",
+    "- ‼️ NEVER INVENT A VALUE. Hostnames, CNAME targets, record types, registrar screens, step",
+    "  names, step numbers and COUNTS come out of the context or you do not say them. If the thing",
+    "  he asked about is not in the context, say which part you do not have and what would get it.",
+    "  A confident wrong DNS record costs him an hour and he cannot tell it is wrong by reading it.",
+    "- ‼️ DO NOT OPEN WITH A CORRECTION UNLESS THE CONTEXT PROVES HIM WRONG. Three times on",
+    "  2026-10-03 this began \"two corrections before answering\" and all of them were wrong: it",
+    "  quoted the approved keyword pool at him when he meant the selected one, denied a step that",
+    "  exists on the other board, and invented a blocker. Check both boards and both pools first,",
+    "  and if he is right, just answer.",
+    "- Keyword counts: PUBLISHING below carries two numbers and they answer different questions.",
+    "  \"How many keywords\" in the context of pages means the SELECTED pool.",
+    "- Blockers come from the [waiting on: ...] markers, never from what sounds plausible.",
     "- The DNS block separates what somebody SAID from what the resolver SAW. Keep them separate",
     "  when you answer. If he wants to know whether it is live, use check_dns and answer from that,",
     "  rather than reading the stored status out as though it were observed.",
