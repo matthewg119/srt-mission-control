@@ -506,8 +506,13 @@ async function reportStatus(channel: string): Promise<void> {
   // ‼️ A LISTPREP BATCH OWNS NO `scraper_rows`, so the three counts below are all zero for it and
   // `status` would report a finished 900-lead run as having done nothing. Its numbers live on the
   // pipeline run instead.
+  //
+  // ‼️ AND A mapspull BATCH IS THE SAME CASE, which this test missed until 2026-09-28. A Maps pull
+  // keeps its own workflow name for its whole life (that name is how `mapsPullHistory` finds it) while
+  // travelling the listprep road from `qualifying` onward, so it owns a list_pipeline_run and no
+  // scraper_rows either. `status` on a live 500-lead Dallas pull printed rows 0, clean 0, junk 0.
   let lines: string[];
-  if (batch.workflow === "listprep" && batch.list_run_id) {
+  if ((batch.workflow === "listprep" || batch.workflow === "mapspull") && batch.list_run_id) {
     lines = [header, "```", ...funnelLines(await funnelFor(batch.list_run_id)), "```"];
   } else {
     const pending = await countPending(batch.id);
@@ -1105,7 +1110,21 @@ export async function advanceBatch(batch: BatchRow, deadline = Date.now() + MX_B
       // `mv_file_id` guard, write MV verdicts into `scraper_rows` where it has NONE, match nothing,
       // post a summary with no CSV attached, and report itself done. Not an error anywhere: a
       // silent truncation of the whole run, which is the exact failure store.ts's header opens with.
-      if (batch.workflow === "listprep") {
+      // ‼️ mapspull RUNS THE LISTPREP PIPELINE AND KEEPS ITS OWN WORKFLOW NAME, which is what this
+      // test missed. A Maps pull is created with workflow "mapspull" and never renamed, because the
+      // name is what tells `mapsPullHistory` which batches are pulls; but from `qualifying` onward it
+      // travels the exact same road as a dropped CSV, through raw_leads and list_pipeline_runs. So
+      // `=== "listprep"` sent every Maps batch to pollVerification, the scraper_rows path, which threw
+      // "batch is verifying with no mv_file_id" and failed the run.
+      //
+      // It went unseen because no Maps pull had ever reached this stage: the first one sat unreleased
+      // on its drop-review card for 26 hours. The first that did get released, a 500-lead Dallas pull
+      // on 2026-09-28, died here with 64 addresses already found.
+      //
+      // The condition is "does this batch own a list_pipeline_run", and it is written as an explicit
+      // list of workflows rather than as `batch.list_run_id != null` on purpose: this file's own rule
+      // is that intent is branched on by NAME, never inferred from the absence of a value.
+      if (batch.workflow === "listprep" || batch.workflow === "mapspull") {
         await pollListPrepVerification(batch);
         return;
       }
@@ -2404,7 +2423,7 @@ async function sweepEnrich(batch: BatchRow, deadline: number): Promise<boolean> 
   }
 
   await updateBatch(batch.id, { status: "verifying", mv_awaiting_approval: true });
-  await say(
+  const mvTs = await say(
     batch,
     [
       ...enrichLines(summarize(await enrichAttemptsFor(runId))),
@@ -2413,6 +2432,13 @@ async function sweepEnrich(batch: BatchRow, deadline: number): Promise<boolean> 
         " addresses with MillionVerifier. Nothing is uploaded until you react.",
     ].join("\n")
   );
+  // ‼️ THE CARD'S ts IS THE GATE, AND NOT STORING IT MADE THIS CARD UNREACTABLE. `batchByGateTs`
+  // resolves a reaction by matching the message ts against the gate columns, so a card whose ts was
+  // never written resolves to NO gate: the ✅ is read, matched against nothing, and silently ignored.
+  // The card sat there looking like it was waiting for a human who had already clicked it. Measured on
+  // the first 500-lead Dallas pull, 2026-09-28: 64 addresses found, and the run could not be released.
+  // The sibling card in releaseMvUpload has always stored its ts; this one never did.
+  if (mvTs) await updateBatch(batch.id, { mv_approval_ts: mvTs });
   return false;
 }
 

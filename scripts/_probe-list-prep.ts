@@ -81,6 +81,43 @@ async function refuses(tx: TxSQL, label: string, fn: () => Promise<unknown>): Pr
   }
 }
 
+// ── 0. The Maps door travels the listprep road under its OWN workflow name ──────────────────────
+// ‼️ THREE BRANCHES TESTED `workflow === "listprep"` AND A MAPS PULL IS NOT THAT. A batch created by
+// the 4 door keeps workflow "mapspull" for its whole life, because that name is how mapsPullHistory
+// finds it; but from `qualifying` onward it owns a list_pipeline_run and no scraper_rows, exactly
+// like a dropped CSV. Measured on the first 500-lead Dallas pull, 2026-09-28:
+//
+//   advanceBatch's `verifying` arm  -> pollVerification (the scraper_rows path) -> THREW
+//     "batch is verifying with no mv_file_id", and the run died with 64 addresses already found.
+//   reportStatus                    -> printed rows 0, clean 0, junk 0 for a live 500-lead run.
+//
+// Both went unseen because no Maps pull had ever reached the MillionVerifier stage: the only earlier
+// one sat unreleased on its drop-review card for 26 hours. Grepped rather than executed, the same way
+// _probe-scraper.ts pins the dispatch the compiler cannot check.
+{
+  const lane = readFileSync("src/lib/scraper/lane.ts", "utf8");
+  // Whitespace flattened, so a check can span a line break without a regex carrying a real newline.
+  const flat = lane.replace(/\s+/g, " ");
+
+  // ‼️ ANCHORED TO THE POLLER CALL, NOT JUST THE CONDITION TEXT. reportStatus carries the same
+  // condition, so the first version of this check matched THAT and stayed green when only the
+  // verifying arm was reverted. Caught by reverting each fix one at a time and requiring each to be
+  // caught: a check that cannot fail is not a check.
+  check("the verifying arm routes a mapspull batch to the listprep poller",
+    /listprep" \|\| batch\.workflow === "mapspull"\) \{ await pollListPrepVerification/.test(flat));
+  check("and no branch sends it to the scraper_rows poller by testing listprep alone",
+    !/if \(batch\.workflow === "listprep"\) \{/.test(lane));
+  check("reportStatus reads the funnel for a mapspull batch too",
+    /\(batch\.workflow === "listprep" \|\| batch\.workflow === "mapspull"\) && batch\.list_run_id/.test(lane));
+
+  // ‼️ AND THE CARD MUST STORE ITS ts, OR THE CHECK MARK RESOLVES TO NOTHING. batchByGateTs matches a
+  // reaction's ts against the gate columns; a card whose ts was never written is unreactable, and the
+  // ✅ is read, matched against nothing, and silently ignored. It looks like a card waiting for a
+  // human who has already clicked it.
+  check("the MillionVerifier card stores its ts as the mv_approval gate",
+    /mv_approval_ts: mvTs/.test(lane));
+}
+
 async function main() {
   // ── 1. The schema the code names by hand ──────────────────────────────────
   console.log("\n1. the tables, and every column the code names");
