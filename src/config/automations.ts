@@ -12,10 +12,10 @@
 import {
   STAGE_NO_CONTACT,
   STAGE_WORKING,
-  STAGE_EMAIL_PITCH,
-  STAGE_NEGOTIATING,
+    STAGE_FOLLOW_UP,
   STAGE_CLOSED,
-  STAGE_TAKE_OFF_LIST,
+  STAGE_NOT_INTERESTED,
+  STAGE_HOT,
 } from "./stage-display";
 
 export interface AutomationAction {
@@ -78,42 +78,33 @@ export const DEFAULT_AUTOMATIONS: AutomationRule[] = [
     description: "Follow-up SMS + delayed email after first contact",
   },
   {
-    id: "email-pitch-sent",
+    id: "working-stale",
     pipeline: "Pipeline",
-    stage: STAGE_EMAIL_PITCH,
-    trigger: "on_enter",
-    actions: [{ type: "add_tag", tag: "pitched" }],
-    enabled: true,
-    description: "Tag the lead once the AEO pitch has gone out",
-  },
-  {
-    id: "email-pitch-stale",
-    pipeline: "Pipeline",
-    stage: STAGE_EMAIL_PITCH,
+    stage: STAGE_WORKING,
     trigger: "stale",
     staleDays: 3,
     actions: [
-      { type: "notify_team", message: "Pitch sent 3+ days ago with no reply — worth a call" },
+      { type: "notify_team", message: "Contacted 3+ days ago with no reply, worth a call" },
     ],
     enabled: true,
-    description: "Surface pitches that went quiet",
+    description: "Surface contacted leads that went quiet",
   },
   {
-    id: "negotiating-entered",
+    id: "follow-up-entered",
     pipeline: "Pipeline",
-    stage: STAGE_NEGOTIATING,
+    stage: STAGE_FOLLOW_UP,
     trigger: "on_enter",
     actions: [
-      { type: "add_tag", tag: "negotiating" },
-      { type: "notify_team", message: "Lead moved to Negotiating / Follow-up" },
+      { type: "add_tag", tag: "follow-up" },
+      { type: "notify_team", message: "Lead moved to Follow Up" },
     ],
     enabled: true,
     description: "Flag a live conversation to the team",
   },
   {
-    id: "negotiating-stale",
+    id: "follow-up-stale",
     pipeline: "Pipeline",
-    stage: STAGE_NEGOTIATING,
+    stage: STAGE_FOLLOW_UP,
     trigger: "stale",
     staleDays: 2,
     actions: [
@@ -128,21 +119,21 @@ export const DEFAULT_AUTOMATIONS: AutomationRule[] = [
     stage: STAGE_CLOSED,
     trigger: "on_enter",
     actions: [
-      { type: "remove_tag", tag: "negotiating" },
+      { type: "remove_tag", tag: "follow-up" },
       { type: "add_tag", tag: "closed" },
     ],
     enabled: true,
     description: "Clean up tags when a lead closes out",
   },
   {
-    id: "take-off-list",
+    id: "not-interested",
     pipeline: "Pipeline",
-    stage: STAGE_TAKE_OFF_LIST,
+    stage: STAGE_NOT_INTERESTED,
     trigger: "on_enter",
     actions: [
-      { type: "remove_tag", tag: "negotiating" },
+      { type: "remove_tag", tag: "follow-up" },
       { type: "remove_tag", tag: "new-lead" },
-      { type: "add_tag", tag: "take-off-list" },
+      { type: "add_tag", tag: "not-interested" },
     ],
     enabled: true,
     // Tags only. setLeadStatus has already flipped do_not_contact by the time

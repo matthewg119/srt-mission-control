@@ -42,7 +42,7 @@ import {
 } from "../src/lib/clients/harvest";
 import { buildCompactPrompt, buildSectionPrompt, trimToList } from "../src/lib/clients/artifacts/deep-research-run";
 import { scanRunningBody } from "../src/lib/audit-engine/scan-running-email";
-import { ALL_STAGES, STAGE_LOOM_SENT, normalizeStage } from "../src/config/stage-display";
+import { ALL_STAGES, STAGE_FOLLOW_UP, normalizeStage } from "../src/config/stage-display";
 import {
   AUTO_RUNNERS,
   unimplementedAutoSteps,
@@ -616,16 +616,16 @@ ok("both worked rows cite a source URL", workedRows.every((r) => Boolean(r.sourc
 // is generated rather than pasted.
 // ─────────────────────────────────────────────────────────────────────────────
 // The Loom Sent stage, and the spellings that have to land on it.
-ok("Loom Sent is a real chip on the pipeline", ALL_STAGES.some((st) => st.name === STAGE_LOOM_SENT));
+ok("Loom Sent is a real chip on the pipeline", ALL_STAGES.some((st) => st.name === STAGE_FOLLOW_UP));
 ok("it sits between the pitch and the negotiation",
   ALL_STAGES.findIndex((st) => st.name === "Email Pitch") <
-    ALL_STAGES.findIndex((st) => st.name === STAGE_LOOM_SENT) &&
-  ALL_STAGES.findIndex((st) => st.name === STAGE_LOOM_SENT) <
+    ALL_STAGES.findIndex((st) => st.name === STAGE_FOLLOW_UP) &&
+  ALL_STAGES.findIndex((st) => st.name === STAGE_FOLLOW_UP) <
     ALL_STAGES.findIndex((st) => st.name === "Negotiating / Follow-up"));
 // ‼️ Matthew calls it "loom emailed". A stage nothing normalizes to is a stage that silently
 // becomes a stray value on the leads page.
 for (const spelling of ["loom emailed", "Loom Sent", "video sent", "walkthrough sent"]) {
-  ok(`"${spelling}" normalizes onto the chip`, normalizeStage(spelling) === STAGE_LOOM_SENT);
+  ok(`"${spelling}" normalizes onto the chip`, normalizeStage(spelling) === STAGE_FOLLOW_UP);
 }
 
 const scanMail = scanRunningBody({ name: "matthew garcia", website: "https://www.acmemedspa.com/x" });

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { supabaseAdmin } from "@/lib/db";
-import { ALL_STAGES, isTerminalStage, stageColor } from "@/config/stage-display";
+import { ALL_STAGES, isTerminalStage, normalizeStage, stageColor } from "@/config/stage-display";
+import { applyStageFilter, isKnownStage } from "@/lib/stage-query";
 import { formatRelativeTime } from "@/lib/utils";
 import { HuntLink } from "@/components/crm/hunt-nav";
 
@@ -112,7 +113,10 @@ export default async function LeadsPage({
     .range(offset, offset + PAGE_SIZE - 1);
 
   if (!showingTerminal) query = query.neq("working_state", "closed");
-  if (sp.status) query = query.eq("application_stage", sp.status);
+  // ‼️ NOT .eq(). The column holds retired spellings, Zoho-era values, nulls and blanks, and on
+  // 2026-10-03 an .eq() here matched zero of the 7,261 rows spelled "No contact" the moment the
+  // config renamed that stage to "No Contact". See src/lib/stage-query.ts.
+  if (isKnownStage(sp.status)) query = applyStageFilter(query, sp.status!);
   if (sp.unscheduled === "1") query = query.eq("open_task_count", 0);
   if (sp.q) {
     // The term is interpolated into a PostgREST .or() filter expression, where
@@ -254,11 +258,14 @@ export default async function LeadsPage({
                   <span
                     className="rounded-md px-1.5 py-0.5 text-[11px]"
                     style={{
-                      background: `${stageColor(r.application_stage)}22`,
-                      color: stageColor(r.application_stage),
+                      background: `${stageColor(normalizeStage(r.application_stage))}22`,
+                      color: stageColor(normalizeStage(r.application_stage)),
                     }}
                   >
-                    {r.application_stage ?? "—"}
+                    {/* ‼️ NORMALISED, NOT RAW. A null stage rendered as "—" here while the
+                        pipeline board counted the same row under New Lead, so the two pages
+                        disagreed about the same lead. One definition, used by both. */}
+                    {normalizeStage(r.application_stage)}
                   </span>
                 </td>
                 <td className="px-3 py-2.5 text-[rgba(255,255,255,0.45)]">

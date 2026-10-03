@@ -81,7 +81,7 @@ import {
 import { formatSeedLog, installSeed, readLedger, saveOffered, installedBeliefs, selectBelief } from "./seed-ledger";
 import { runThreadAgent } from "./thread-agent";
 import type { AuditReportRow, AuditRunRow, LoomBuyerMap, LoomPickedAvatar } from "./types";
-import { STAGE_LOOM_SENT } from "@/config/stage-display";
+import { STAGE_FOLLOW_UP } from "@/config/stage-display";
 import { enrolLoomFollowup } from "@/lib/followup-operator/loom-enrol";
 
 /**
@@ -926,7 +926,7 @@ async function advanceLoomWizard(
       const { setLeadStatus } = await import("@/lib/crm");
       await setLeadStatus({
         contactId: report.contact_id,
-        status: STAGE_LOOM_SENT,
+        status: STAGE_FOLLOW_UP,
         origin: "ai",
         reason: `Loom walkthrough prepared for report ${report.slug ?? report.id}`,
       });

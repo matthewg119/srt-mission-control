@@ -24,7 +24,7 @@ export function LoginForm() {
       });
 
       if (result?.ok) {
-        router.push("/dashboard");
+        router.push("/dashboard/today");
       } else {
         setError("Invalid email or password");
       }

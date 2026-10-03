@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { PhoneCall, X } from "lucide-react";
-import { STAGE_TAKE_OFF_LIST } from "@/config/stage-display";
 
 // The call form. Its whole job is that you cannot leave without a next date.
 //
@@ -88,9 +87,9 @@ export function LogCallForm({
           outcome,
           notes: notes || undefined,
           next_step: nextStep || undefined,
-          ...(takeOff
-            ? { status: STAGE_TAKE_OFF_LIST }
-            : { next_follow_up_date: followUp }),
+          // Not a stage any more: the lead keeps whatever stage the call left it on, and the
+          // flag is what stops the outreach. See setDoNotContact in src/lib/crm.ts.
+          ...(takeOff ? { do_not_contact: true } : { next_follow_up_date: followUp }),
         }),
       });
       const json = await res.json();

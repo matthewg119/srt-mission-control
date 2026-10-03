@@ -14,7 +14,7 @@
 
 import { supabaseAdmin } from "./db";
 import { invalidateWorklistCache } from "./worklist";
-import { isTakeOffListStage } from "@/config/stage-display";
+
 
 export type CrmOrigin =
   | "mission_control"
@@ -475,7 +475,7 @@ export interface SetLeadStatusInput {
  * OUR flag and only ours, so the reason carries a marker instead of the restore
  * path guessing.
  */
-export const TAKE_OFF_DNC_REASON = "Take Off List";
+export const DNC_MANUAL_REASON = "Marked do not contact";
 
 export interface SetLeadStatusResult {
   ok: boolean;
@@ -514,40 +514,16 @@ export async function setLeadStatus(
       application_stage_origin: input.origin,
     };
 
-    // ── Take Off List ────────────────────────────────────────────────
-    // The stage is only a label. do_not_contact and working_state are what
-    // actually stop the outreach, and every path that could touch this lead
-    // already reads them: the sequence engine, the email and follow-up
-    // directors, the SMS import, the touch policy and the worklist's own
-    // hard drop. Setting them here means nothing else has to learn the stage.
-    const takingOff = isTakeOffListStage(landedStatus);
-    const puttingBack = !takingOff && isTakeOffListStage(oldStatus);
-
-    if (takingOff) {
-      update.do_not_contact = true;
-      update.do_not_contact_reason = input.reason
-        ? `${TAKE_OFF_DNC_REASON}: ${input.reason}`
-        : TAKE_OFF_DNC_REASON;
-      update.do_not_contact_at = now;
-      update.working_state = "closed";
-    } else if (puttingBack) {
-      // Undo our own flag, never somebody else's. A lead that asked us to stop
-      // keeps do_not_contact = true even as the stage goes back to workable,
-      // and the worklist still drops it on that flag alone.
-      const { data: dnc } = await supabaseAdmin
-        .from("contacts")
-        .select("do_not_contact, do_not_contact_reason")
-        .eq("id", contact.id)
-        .maybeSingle();
-      const ours = String(dnc?.do_not_contact_reason ?? "").startsWith(TAKE_OFF_DNC_REASON);
-      if (dnc?.do_not_contact && ours) {
-        update.do_not_contact = false;
-        update.do_not_contact_reason = null;
-        update.do_not_contact_at = null;
-      }
-      update.working_state = "working";
-    }
-
+    // ── do_not_contact is NOT a stage any more ───────────────────────
+    // ‼️ MOVING A LEAD NO LONGER FLIPS THE FLAG, AND THAT IS THE 2026-10-03 CHANGE.
+    // `Take Off List` used to be both a column on the board and the thing that set
+    // do_not_contact, so "this deal is over" and "never contact this record again" could not be
+    // said separately. Matthew's eight stages have no Take Off List, so the flag became what it
+    // should always have been: an explicit decision, made by setDoNotContact() below.
+    //
+    // Every existing row keeps the flag the old stage gave it; the migration rewrites labels and
+    // touches no flag. And every outreach path still reads do_not_contact exactly as before, so
+    // nothing downstream had to learn anything.
     const { error } = await supabaseAdmin
       .from("contacts")
       .update(update)
@@ -560,21 +536,6 @@ export async function setLeadStatus(
         landedStatus,
         error: error.message,
       };
-    }
-
-    if (takingOff) {
-      // An open task on a lead nobody may call again can only ever be snoozed
-      // or ignored. The lead_tasks trigger recomputes open_task_count and
-      // next_action_at, so cancelling here also clears the row from the
-      // "due today" board rather than leaving a ghost on it.
-      const { error: taskError } = await supabaseAdmin
-        .from("lead_tasks")
-        .update({ status: "cancelled" })
-        .eq("contact_id", contact.id)
-        .eq("status", "open");
-      if (taskError) {
-        console.error("[crm.setLeadStatus] cancelling open tasks failed:", taskError.message);
-      }
     }
 
     await supabaseAdmin.from("lead_status_history").insert({
@@ -985,4 +946,79 @@ export async function logCall(a: {
     .neq("working_state", "closed");
 
   return { ok: true, activityId, taskId: task.taskId };
+}
+
+/**
+ * Stop contacting this record, or start again. The teeth that used to hang off the Take Off List
+ * stage, now addressable on their own.
+ *
+ * ‼️ IT IS NOT A STAGE AND MUST NOT BECOME ONE AGAIN. A lead can be flagged at any point in the
+ * pipeline: somebody on Appointment Booked who asks to be removed is still on Appointment Booked,
+ * and the old model could only record that by also declaring the deal over. Everything that could
+ * touch this lead already reads do_not_contact (the sequence engine, the email and follow-up
+ * directors, the SMS import, the touch policy and the worklist's own hard drop), so setting it
+ * here is all that is needed.
+ *
+ * ‼️ TURNING IT OFF UNDOES OUR OWN FLAG AND NEVER SOMEBODY ELSE'S. A lead who personally asked us
+ * to stop carries a reason written by the path that heard them, and clearing that from a dashboard
+ * toggle would put them back into the sequences. Only a flag this function set is reversible here.
+ */
+export async function setDoNotContact(
+  contactId: string,
+  on: boolean,
+  reason?: string | null
+): Promise<{ ok: boolean; error?: string }> {
+  const now = new Date().toISOString();
+
+  if (on) {
+    const { error } = await supabaseAdmin
+      .from("contacts")
+      .update({
+        do_not_contact: true,
+        do_not_contact_reason: reason ? `${DNC_MANUAL_REASON}: ${reason}` : DNC_MANUAL_REASON,
+        do_not_contact_at: now,
+        working_state: "closed",
+      })
+      .eq("id", contactId);
+    if (error) return { ok: false, error: error.message };
+
+    // An open task on a lead nobody may call again can only ever be snoozed or ignored. The
+    // lead_tasks trigger recomputes open_task_count and next_action_at, so cancelling here also
+    // clears the row from the "due today" board rather than leaving a ghost on it.
+    const { error: taskError } = await supabaseAdmin
+      .from("lead_tasks")
+      .update({ status: "cancelled" })
+      .eq("contact_id", contactId)
+      .eq("status", "open");
+    if (taskError) {
+      console.error("[crm.setDoNotContact] cancelling open tasks failed:", taskError.message);
+    }
+    return { ok: true };
+  }
+
+  const { data: row } = await supabaseAdmin
+    .from("contacts")
+    .select("do_not_contact, do_not_contact_reason")
+    .eq("id", contactId)
+    .maybeSingle();
+
+  // ‼️ BOTH PREFIXES, BECAUSE THE OLD ONE IS ON EVERY ROW THE RETIRED STAGE EVER FLAGGED.
+  // Those rows are legitimately ours to undo; the migration deliberately did not touch them.
+  const ours = ["Take Off List", DNC_MANUAL_REASON].some((p) =>
+    String(row?.do_not_contact_reason ?? "").startsWith(p)
+  );
+  if (!row?.do_not_contact || !ours) {
+    return { ok: true };
+  }
+
+  const { error } = await supabaseAdmin
+    .from("contacts")
+    .update({
+      do_not_contact: false,
+      do_not_contact_reason: null,
+      do_not_contact_at: null,
+      working_state: "working",
+    })
+    .eq("id", contactId);
+  return error ? { ok: false, error: error.message } : { ok: true };
 }

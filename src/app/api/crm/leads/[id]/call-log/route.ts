@@ -2,8 +2,8 @@ export const dynamic = "force-dynamic";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { parseBusinessDate } from "@/lib/business-time";
-import { logCall, setLeadStatus } from "@/lib/crm";
-import { isTakeOffListStage, STAGE_NAMES } from "@/config/stage-display";
+import { logCall, setDoNotContact, setLeadStatus } from "@/lib/crm";
+import { STAGE_NAMES } from "@/config/stage-display";
 
 // Log a call against a lead.
 //
@@ -61,7 +61,12 @@ export async function POST(
       { status: 400 }
     );
   }
-  const takingOff = !!status && isTakeOffListStage(status);
+  // ‼️ IT IS A FLAG ON THE BODY NOW, NOT A STAGE (2026-10-03). The caller used to express "take
+  // this one off the list" by sending the Take Off List STATUS, which flipped do_not_contact as a
+  // side effect of a stage change. That stage is gone and do_not_contact is set explicitly, so
+  // the form says what it means. The effect here is unchanged: no follow-up date is required,
+  // because there will be no follow-up.
+  const takingOff = body.do_not_contact === true;
 
   const raw = String(body.next_follow_up_date ?? "").trim();
   if (!raw && !takingOff) {
@@ -106,6 +111,17 @@ export async function POST(
       return NextResponse.json({ error: res.error ?? "failed to log call" }, { status: 500 });
     }
 
+    // ‼️ AND THE FLAG, IN THE SAME SUBMIT. Without this the checkbox on the call form skipped
+    // the follow-up date and then did nothing: the stage that used to carry the flag is gone, so
+    // the route has to set it.
+    let dncResult = null;
+    if (takingOff) {
+      dncResult = await setDoNotContact(contactId, true, body.notes ? String(body.notes) : null);
+      if (!dncResult.ok) {
+        console.error("[crm/call-log] do_not_contact failed:", dncResult.error);
+      }
+    }
+
     // Optional status move in the same submit, so working a lead is one action.
     // Deliberately AFTER logCall: logCall pulls a lead back to working_state
     // 'working', and a take-off has to be the last word on that.
@@ -127,6 +143,7 @@ export async function POST(
       taskId: res.taskId,
       followUpAt: followUp ? followUp.toISOString() : null,
       statusResult,
+      doNotContact: dncResult,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

@@ -4,8 +4,7 @@ import { supabaseAdmin } from "@/lib/db";
 import {
   STAGE_NO_CONTACT,
   STAGE_WORKING,
-  STAGE_EMAIL_PITCH,
-  STAGE_NEGOTIATING,
+  STAGE_FOLLOW_UP,
   STAGE_CLOSED,
 } from "@/config/stage-display";
 
@@ -83,7 +82,7 @@ SRT Agency
     name: "Pitch Sent SMS",
     slug: "pitch-sent-sms",
     type: "SMS",
-    category: STAGE_EMAIL_PITCH,
+    category: STAGE_WORKING,
     subject: null,
     body: `Hi {{first_name}}, just sent over the details on the free build for {{business_name}}. Reply here if anything is unclear.`,
     variables: ["first_name", "business_name"],
@@ -92,7 +91,7 @@ SRT Agency
     name: "Pitch Nudge Email",
     slug: "pitch-nudge-email",
     type: "Email",
-    category: STAGE_EMAIL_PITCH,
+    category: STAGE_WORKING,
     subject: "Did this reach you?",
     body: `Hi {{first_name}},
 
@@ -110,7 +109,7 @@ SRT Agency`,
     name: "Negotiating Recap Email",
     slug: "negotiating-recap-email",
     type: "Email",
-    category: STAGE_NEGOTIATING,
+    category: STAGE_FOLLOW_UP,
     subject: "Where we landed",
     body: `Hi {{first_name}},
 
@@ -129,7 +128,7 @@ SRT Agency
     name: "Kickoff SMS",
     slug: "kickoff-sms",
     type: "SMS",
-    category: STAGE_NEGOTIATING,
+    category: STAGE_FOLLOW_UP,
     subject: null,
     body: `{{first_name}}, starting on the first section for {{business_name}} today. I will send it over for your review before anything goes live.`,
     variables: ["first_name", "business_name"],

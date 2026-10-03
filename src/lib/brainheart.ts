@@ -5,8 +5,8 @@ import {
   normalizeStage,
   STAGE_CLOSED,
   STAGE_NO_CONTACT,
-  STAGE_TAKE_OFF_LIST,
-  STAGE_UNTOUCHED,
+  STAGE_NOT_INTERESTED,
+  STAGE_NEW_LEAD,
 } from "@/config/stage-display";
 
 interface PulseResult {
@@ -40,7 +40,7 @@ async function gatherSystemState(): Promise<SystemState> {
       .select("application_stage")
       .neq("working_state", "closed")
       .neq("application_stage", STAGE_CLOSED)
-      .neq("application_stage", STAGE_TAKE_OFF_LIST),
+      .neq("application_stage", STAGE_NOT_INTERESTED),
 
     // New leads in last 24h
     supabaseAdmin
@@ -54,12 +54,12 @@ async function gatherSystemState(): Promise<SystemState> {
       .select("application_stage, last_activity_at, first_name, last_name, business_name")
       .neq("working_state", "closed")
       .neq("application_stage", STAGE_CLOSED)
-      .neq("application_stage", STAGE_TAKE_OFF_LIST)
+      .neq("application_stage", STAGE_NOT_INTERESTED)
       // A lead nobody has reached yet cannot have "gone quiet", and after the
       // migration these two stages are most of the book. Without them the
       // pulse would report ~8,000 quiet leads every morning and mean nothing.
       .neq("application_stage", STAGE_NO_CONTACT)
-      .neq("application_stage", STAGE_UNTOUCHED)
+      .neq("application_stage", STAGE_NEW_LEAD)
       .lt("last_activity_at", threeDaysAgo)
       .limit(25),
 

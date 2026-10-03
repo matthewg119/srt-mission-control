@@ -1,19 +1,50 @@
-// The stages, and the only place they are defined. Eight as of 2026-09-03.
+// The stages, and the only place they are defined. Eight as of 2026-10-03.
 //
-// This file used to be presentation metadata for Zoho's MCA picklist, which is
-// why the old version carried two pipelines and eighteen stages. SRT is off
-// business funding, so the funding vocabulary (Underwriting, Shopping,
-// Pre-Approved, VC / DL, Contracts Out, Pending Stips, Funding Call, In
-// Funding) is gone and the stage column is owned here now, not by Zoho.
+// This file used to be presentation metadata for Zoho's MCA picklist, which is why an old version
+// carried two pipelines and eighteen stages. SRT is off business funding, so the funding
+// vocabulary is gone and the stage column is owned here now, not by Zoho.
 //
-// Anything that renders, filters, validates or cadences a stage imports from
-// this file. The old copies scattered across the codebase are what let
-// template-editor.tsx drift into offering "Contract In" and "Funded" as stages
-// that no lead could ever be in.
+// Anything that renders, filters, validates or cadences a stage imports from this file. The old
+// copies scattered across the codebase are what let template-editor.tsx drift into offering
+// "Contract In" and "Funded" as stages that no lead could ever be in.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// ‼️ THE 2026-10-03 REWRITE: FOUR STAGES LEFT, THREE ARRIVED, AND do_not_contact
+//    STOPPED BEING A STAGE.
+//
+// Matthew named the eight he wants and asked for the rest deleted. Retired, and where their rows
+// went (docs/2026-10-03-eight-stages.sql does exactly this):
+//
+//   Untouched              -> New Lead              a rename, the meaning is unchanged
+//   Email Pitch            -> Working               a pitch that went out IS a contacted lead
+//   Loom Sent              -> Follow Up             warmer than a pitch, colder than a reply
+//   Negotiating / Follow-up-> Follow Up             a rename
+//   Take Off List          -> Not Interested        the LABEL merges; the FLAG does not, see below
+//
+// ‼️ THE ONE THING THAT WOULD HAVE BROKEN, AND HOW IT DID NOT.
+// `Take Off List` was never just a label: landing on it flipped contacts.do_not_contact, and that
+// flag is what every outreach path in the codebase actually respects. Deleting the stage without
+// replacing the mechanism would have removed the only way to stop contacting somebody.
+//
+// So do_not_contact is now what it should always have been: A FLAG ON THE RECORD, NOT A POSITION
+// IN A PIPELINE. It is set explicitly (setDoNotContact in src/lib/crm.ts, the toggle on the lead
+// profile and the board card menu), it is unchanged in the database, and every existing row keeps
+// the flag the old stage gave it. A lead can now be "Not Interested" and still callable next
+// quarter, which is the common case, or flagged do-not-contact at any stage, which the old model
+// could only express by also calling the deal over.
+//
+// ‼️ AND ONE THING I WARNED WOULD BREAK AND DOES NOT. The funnel's "do not send a second
+// walkthrough" suppression reads audit_reports.loom_url / loom_state, never this stage: see
+// priorReportFor() and call-script.ts. Retiring `Loom Sent` costs visibility on the leads page
+// and costs the suppression nothing. thread-assistant.ts, which was the only writer of that
+// stage, now writes Follow Up.
+// ─────────────────────────────────────────────────────────────────────────────
 
 export interface StageMeta {
   name: string;
   color: string;
+  /** One line, shown under the column heading on the pipeline board. */
+  blurb: string;
 }
 
 export interface StagePipeline {
@@ -22,73 +53,74 @@ export interface StagePipeline {
 }
 
 /**
- * Never had a stage on it. Not the same thing as "No contact".
+ * Arrived and nobody has decided anything about it yet.
  *
- * "No contact" is a decision: somebody looked at this lead and said we have not
- * reached them yet. "Untouched" is the absence of one, and after the Zoho import
- * there are a lot of them: rows the scrapers, funnels and bulk loads created
- * without ever writing application_stage. Lumping them into No contact would
- * bury real uncontacted leads under imported noise on the same call board.
+ * ‼️ IT IS NOT THE SAME AS "No Contact" AND THE TWO MUST BOTH SURVIVE. This is the ABSENCE of a
+ * decision: rows the scrapers, funnels and bulk loads created without ever writing
+ * application_stage, and after the Zoho import there are thousands. "No Contact" is a decision
+ * somebody made. Collapsing them buries real uncontacted leads under imported noise on the same
+ * call board, which is why they also carry different cadences below.
  */
-export const STAGE_UNTOUCHED = "Untouched";
-export const STAGE_NO_CONTACT = "No contact";
+export const STAGE_NEW_LEAD = "New Lead";
+
+/** Somebody looked at this lead and said we have not reached them yet. */
+export const STAGE_NO_CONTACT = "No Contact";
+
+/** In conversation. Reached them, and the pitch is live. */
 export const STAGE_WORKING = "Working";
-export const STAGE_EMAIL_PITCH = "Email Pitch";
-export const STAGE_NEGOTIATING = "Negotiating / Follow-up";
+
+/**
+ * High intent, right now.
+ *
+ * Matthew asked for this one by name on 2026-10-03. It is the only stage on the board that is
+ * about TEMPERATURE rather than about what has happened, which is why it sits between Working and
+ * Appointment Booked rather than in the sequence of events: a lead is moved here by a person who
+ * just spoke to them, not by anything automatic. It carries the fastest cadence of any stage and
+ * it scores on the call board.
+ */
+export const STAGE_HOT = "Hot";
+
+/** There is a meeting in the calendar. */
+export const STAGE_APPOINTMENT_BOOKED = "Appointment Booked";
+
+/** Live conversation that needs chasing. Was "Negotiating / Follow-up". */
+export const STAGE_FOLLOW_UP = "Follow Up";
+
+/**
+ * The deal ended. Won, signed, or concluded.
+ *
+ * ‼️ IT NO LONGER MEANS "lost" AS WELL, AND THAT IS THE POINT OF SPLITTING IT. The old aliases
+ * sent declined, dead, lost and unresponsive here, so a won client and a flat no sat in the same
+ * bucket and the board could not show a close rate. Those now land on Not Interested.
+ */
 export const STAGE_CLOSED = "Closed";
 
 /**
- * The walkthrough video has gone to them.
+ * They said no, or the record is not worth working.
  *
- * ‼️ IT IS A STAGE BECAUSE THE SUPPRESSION HAS TO BE VISIBLE, and until now it was not.
- * `audit_reports.loom_url` and `loom_state` already recorded the fact, and priorReportFor()
- * reads them to stop the funnel offering a second walkthrough to somebody already holding one.
- * But a brake nobody can see is a brake that looks like a bug: a lead who fills the funnel and
- * gets no email is indistinguishable, on the leads page, from a lead the mail failed for.
- *
- * Matthew's framing: "if I run an audit and I got to them via email but after that the client is
- * doing some research in our website we need to make sure this lead stage is loom emailed."
- *
- * It sits after Email Pitch and before Negotiating on purpose. The Loom is the heaviest thing we
- * send before a conversation, so a lead here is warmer than one who has only had the pitch and
- * colder than one who has replied about terms.
- *
- * ‼️ AND IT CARRIES NO TEETH, UNLIKE Take Off List. Landing here changes no flags: the lead stays
- * on the call board, in the sequences and in the follow-up ladder, because a Loom is a reason to
- * follow up rather than a reason to stop. The only behaviour attached to it is the one that
- * already existed in priorReportFor().
+ * Terminal, like Closed, but it is a different answer and the board shows them apart. It does NOT
+ * set do_not_contact: somebody not interested this quarter is a normal thing to pitch again, and
+ * the flag is a separate, explicit decision now. See the header.
  */
-export const STAGE_LOOM_SENT = "Loom Sent";
+export const STAGE_NOT_INTERESTED = "Not Interested";
 
 /**
- * Off the book. Never call, never email, never enroll again.
+ * Left to right, cold to done. The board renders in this order and so does every picker.
  *
- * "Closed" and "Take Off List" are both terminal, and the difference is what
- * you do with the record afterwards. Closed is an outcome: the deal ended, won
- * or lost, and the lead is still a real business we may pitch again next
- * quarter. Take Off List is a verdict on the record itself, a wrong number, a
- * duplicate, a business that does not exist, or someone who told us to stop.
- * Those should not sit in the lead book making the count look bigger than the
- * book actually is.
- *
- * Landing on this stage flips contacts.do_not_contact and drops working_state
- * to 'closed' (see setLeadStatus in src/lib/crm.ts), which is what actually
- * removes the lead from the call board, the sequences and the leads page. The
- * stage alone is only the label; the two flags are the teeth.
+ * ‼️ ORDER IS SEMANTIC HERE, NOT COSMETIC. The pipeline board reads it as the column order and
+ * the lead profile reads it as the picker order, so reordering this array moves the board.
  */
-export const STAGE_TAKE_OFF_LIST = "Take Off List";
-
 export const AEO_PIPELINE: StagePipeline = {
   name: "Pipeline",
   stages: [
-    { name: STAGE_UNTOUCHED, color: "#64748B" },
-    { name: STAGE_NO_CONTACT, color: "#0E8C77" },
-    { name: STAGE_WORKING, color: "#9C27B0" },
-    { name: STAGE_EMAIL_PITCH, color: "#00BCD4" },
-    { name: STAGE_LOOM_SENT, color: "#7C3AED" },
-    { name: STAGE_NEGOTIATING, color: "#F5A623" },
-    { name: STAGE_CLOSED, color: "#6B7280" },
-    { name: STAGE_TAKE_OFF_LIST, color: "#C0392B" },
+    { name: STAGE_NEW_LEAD, color: "#64748B", blurb: "Arrived, nobody has looked yet" },
+    { name: STAGE_NO_CONTACT, color: "#0E8C77", blurb: "Looked at, not reached" },
+    { name: STAGE_WORKING, color: "#9C27B0", blurb: "In conversation" },
+    { name: STAGE_HOT, color: "#EF4444", blurb: "High intent, call today" },
+    { name: STAGE_APPOINTMENT_BOOKED, color: "#2563EB", blurb: "Meeting in the calendar" },
+    { name: STAGE_FOLLOW_UP, color: "#F5A623", blurb: "Needs chasing" },
+    { name: STAGE_CLOSED, color: "#16A34A", blurb: "Won or concluded" },
+    { name: STAGE_NOT_INTERESTED, color: "#C0392B", blurb: "Said no" },
   ],
 } as const;
 
@@ -106,27 +138,48 @@ export function stageColor(stage: string | null | undefined): string {
   return STAGE_BY_LOWER.get(String(stage).trim().toLowerCase())?.color ?? "#9CA3AF";
 }
 
-// ── Normalization ────────────────────────────────────────────────────
-// The migration collapsed contacts.application_stage to a handful, but the
-// column is free-form text with no CHECK constraint, and inbound webhooks,
-// the medspa/TRT syncs and any hand-edited row can still hand us something
-// else. Everything that accepts a stage from outside runs it through here, so
-// a stray value can never put an extra chip on the leads page.
-//
-// ‼️ THE COUNT IS DELIBERATELY NOT WRITTEN DOWN HERE ANY MORE. This comment said "these five"
-// while the list held seven, because two stages were added and the prose was not. AEO_PIPELINE
-// above is the count.
+export function stageMeta(stage: string | null | undefined): StageMeta | null {
+  if (!stage) return null;
+  return STAGE_BY_LOWER.get(String(stage).trim().toLowerCase()) ?? null;
+}
 
-/** Legacy value -> new stage. Mirrors the SQL migration exactly; if you change
- *  one, change the other. Keys are lowercase. */
+// ── Normalization ────────────────────────────────────────────────────
+// contacts.application_stage is free-form text with no CHECK constraint, and inbound webhooks,
+// the medspa/TRT syncs and any hand-edited row can still hand us something else. Everything that
+// accepts a stage from outside runs it through here, so a stray value can never put an extra
+// column on the board.
+//
+// ‼️ THE FIVE RETIRED STAGES ARE ALIASES AND MUST STAY ALIASES FOR EVER. The migration rewrites
+// every row that exists today, but a Slack button, a saved template, a queued automation and an
+// in-flight webhook can all still name one tomorrow. An unaliased "Loom Sent" would fall through
+// to the unknown-value default and quietly land somebody on No Contact.
+
 const STAGE_ALIASES: Record<string, string> = {
-  // The walkthrough went out. Several lanes and several people describe this one differently,
-  // and every spelling has to land on the same chip or the funnel's suppression looks random.
-  "loom sent": STAGE_LOOM_SENT,
-  "loom emailed": STAGE_LOOM_SENT,
-  "loom delivered": STAGE_LOOM_SENT,
-  "video sent": STAGE_LOOM_SENT,
-  "walkthrough sent": STAGE_LOOM_SENT,
+  // ── The five retired on 2026-10-03 ──
+  untouched: STAGE_NEW_LEAD,
+  "email pitch": STAGE_WORKING,
+  "loom sent": STAGE_FOLLOW_UP,
+  "loom emailed": STAGE_FOLLOW_UP,
+  "loom delivered": STAGE_FOLLOW_UP,
+  "video sent": STAGE_FOLLOW_UP,
+  "walkthrough sent": STAGE_FOLLOW_UP,
+  "negotiating / follow-up": STAGE_FOLLOW_UP,
+  negotiating: STAGE_FOLLOW_UP,
+  "follow-up": STAGE_FOLLOW_UP,
+  followup: STAGE_FOLLOW_UP,
+  "take off list": STAGE_NOT_INTERESTED,
+
+  // ── New arrivals, by the names people actually type ──
+  "new lead": STAGE_NEW_LEAD,
+  new: STAGE_NEW_LEAD,
+  hot: STAGE_HOT,
+  "hot lead": STAGE_HOT,
+  "appointment booked": STAGE_APPOINTMENT_BOOKED,
+  "appointment set": STAGE_APPOINTMENT_BOOKED,
+  "meeting booked": STAGE_APPOINTMENT_BOOKED,
+  booked: STAGE_APPOINTMENT_BOOKED,
+  "demo booked": STAGE_APPOINTMENT_BOOKED,
+  "call booked": STAGE_APPOINTMENT_BOOKED,
 
   // Reached them.
   "working - contacted": STAGE_WORKING,
@@ -134,76 +187,78 @@ const STAGE_ALIASES: Record<string, string> = {
   contacted: STAGE_WORKING,
   working: STAGE_WORKING,
 
-  // Done with, one way or the other. Won business closes too: there is no
-  // funding deal left to work, and the AEO pitch starts from scratch.
+  // ‼️ WON AND LOST PART COMPANY HERE, AND THEY USED TO NOT.
+  // Everything that means "we got the business" stays on Closed; everything that means "they said
+  // no" moves to Not Interested. Before this split both sets pointed at Closed, which is why the
+  // book could not report a close rate.
   closed: STAGE_CLOSED,
-  "closed - not converted": STAGE_CLOSED,
   "closed - converted": STAGE_CLOSED,
   converted: STAGE_CLOSED,
   funded: STAGE_CLOSED,
-  "dead declined": STAGE_CLOSED,
-  "deal lost": STAGE_CLOSED,
-  declined: STAGE_CLOSED,
-  "not interested": STAGE_CLOSED,
-  unresponsive: STAGE_CLOSED,
-  lost: STAGE_CLOSED,
-  "lost lead": STAGE_CLOSED,
+  won: STAGE_CLOSED,
+  "closed won": STAGE_CLOSED,
+  signed: STAGE_CLOSED,
 
-  // Not a lead at all, or a lead that told us to stop. These used to collapse
-  // into Closed, which is why the book still counts thousands of rows nobody
-  // will ever call: they were indistinguishable from finished deals.
-  "take off list": STAGE_TAKE_OFF_LIST,
-  "do not call": STAGE_TAKE_OFF_LIST,
-  "do-not-call": STAGE_TAKE_OFF_LIST,
-  dnc: STAGE_TAKE_OFF_LIST,
-  "remove from list": STAGE_TAKE_OFF_LIST,
-  "opted out": STAGE_TAKE_OFF_LIST,
-  "bad lead": STAGE_TAKE_OFF_LIST,
-  "junk lead": STAGE_TAKE_OFF_LIST,
-  "wrong number": STAGE_TAKE_OFF_LIST,
-  "bad number": STAGE_TAKE_OFF_LIST,
-  "out of business": STAGE_TAKE_OFF_LIST,
-  duplicate: STAGE_TAKE_OFF_LIST,
-  dnq: STAGE_TAKE_OFF_LIST,
+  "not interested": STAGE_NOT_INTERESTED,
+  "closed - not converted": STAGE_NOT_INTERESTED,
+  "closed lost": STAGE_NOT_INTERESTED,
+  "dead declined": STAGE_NOT_INTERESTED,
+  "deal lost": STAGE_NOT_INTERESTED,
+  declined: STAGE_NOT_INTERESTED,
+  unresponsive: STAGE_NOT_INTERESTED,
+  lost: STAGE_NOT_INTERESTED,
+  "lost lead": STAGE_NOT_INTERESTED,
+  "do not call": STAGE_NOT_INTERESTED,
+  "do-not-call": STAGE_NOT_INTERESTED,
+  dnc: STAGE_NOT_INTERESTED,
+  "remove from list": STAGE_NOT_INTERESTED,
+  "opted out": STAGE_NOT_INTERESTED,
+  "bad lead": STAGE_NOT_INTERESTED,
+  "junk lead": STAGE_NOT_INTERESTED,
+  "wrong number": STAGE_NOT_INTERESTED,
+  "bad number": STAGE_NOT_INTERESTED,
+  "out of business": STAGE_NOT_INTERESTED,
+  duplicate: STAGE_NOT_INTERESTED,
+  dnq: STAGE_NOT_INTERESTED,
 };
 
-/** Substring fallback for the values Zoho stored off-picklist. "Not interested"
- *  was live on 29 of a 2,400-lead sample against a list that said "Not
- *  Interested", so exact matching alone silently left dead leads workable. */
-const CLOSED_KEYWORDS = [
-  "declined", "dead", "lost", "not interested",
-];
-
-/** Same idea for the take-off values. Checked BEFORE CLOSED_KEYWORDS, because
- *  "Junk Lead - Dead" is junk first and dead second. */
-const TAKE_OFF_KEYWORDS = [
-  "dnq", "junk", "duplicate", "do not call", "do-not-call", "opted out",
-  "wrong number", "bad number", "out of business", "take off",
+/**
+ * Substring fallback for the values Zoho stored off-picklist. "Not interested" was live on 29 of a
+ * 2,400-lead sample against a list that said "Not Interested", so exact matching alone silently
+ * left dead leads workable.
+ *
+ * ‼️ ONE LIST NOW, NOT TWO. There used to be a TAKE_OFF list checked before this one, because
+ * "Junk Lead - Dead" had to be junk first and dead second. Both destinations are Not Interested
+ * now, so the ordering problem is gone with the stage.
+ */
+const NOT_INTERESTED_KEYWORDS = [
+  "declined", "dead", "lost", "not interested", "dnq", "junk", "duplicate",
+  "do not call", "do-not-call", "opted out", "wrong number", "bad number",
+  "out of business", "take off",
 ];
 
 /**
- * Any stage string -> one of the seven.
+ * Any stage string -> one of the eight.
  *
- * Null or blank means nobody ever set one, which is "Untouched". An unrecognized
- * NON-blank value is different: somebody wrote something, we just do not know
- * what it meant, so it falls to "No contact" rather than being called untouched.
- * Neither default hides the lead: both stay on the call board.
+ * Null or blank means nobody ever set one, which is New Lead. An unrecognized NON-blank value is
+ * different: somebody wrote something, we just do not know what it meant, so it falls to No
+ * Contact rather than being called new. Neither default hides the lead: both stay on the call
+ * board.
  */
 export function normalizeStage(stage: string | null | undefined): string {
-  if (!stage) return STAGE_UNTOUCHED;
+  if (!stage) return STAGE_NEW_LEAD;
   const lower = String(stage).trim().toLowerCase();
-  if (!lower) return STAGE_UNTOUCHED;
+  if (!lower) return STAGE_NEW_LEAD;
   if (STAGE_BY_LOWER.has(lower)) return STAGE_BY_LOWER.get(lower)!.name;
   if (STAGE_ALIASES[lower]) return STAGE_ALIASES[lower];
-  if (TAKE_OFF_KEYWORDS.some((k) => lower.includes(k))) return STAGE_TAKE_OFF_LIST;
-  if (CLOSED_KEYWORDS.some((k) => lower.includes(k))) return STAGE_CLOSED;
+  if (NOT_INTERESTED_KEYWORDS.some((k) => lower.includes(k))) return STAGE_NOT_INTERESTED;
   return STAGE_NO_CONTACT;
 }
 
 // ── Terminal vs pre-contact ──────────────────────────────────────────
 
-/** Genuinely done. Never call these. */
-export const TERMINAL_STAGES: readonly string[] = [STAGE_CLOSED, STAGE_TAKE_OFF_LIST];
+/** The deal is over, one way or the other. Nothing to work. */
+export const TERMINAL_STAGES: readonly string[] = [STAGE_CLOSED, STAGE_NOT_INTERESTED];
 
 const TERMINAL_LOWER = new Set(TERMINAL_STAGES.map((s) => s.toLowerCase()));
 
@@ -213,26 +268,14 @@ export function isTerminalStage(stage: string | null | undefined): boolean {
 }
 
 /**
- * Stages that mean "stop contacting this record", as opposed to "this deal is
- * over". setLeadStatus turns this into the do_not_contact flag, and every
- * outreach path in the codebase already respects that flag, so nothing else
- * has to learn about the new stage.
- */
-export function isTakeOffListStage(stage: string | null | undefined): boolean {
-  if (!stage) return false;
-  return normalizeStage(stage) === STAGE_TAKE_OFF_LIST;
-}
-
-/**
  * Pre-contact rather than closed.
  *
- * "No contact" and "Untouched" MUST both be here. isDeadStage() gates the
- * worklist's hard drop in src/lib/worklist.ts, and after the migration the
- * overwhelming majority of the book sits at one of these two. If this list
- * loses either entry, the call board goes empty and it looks like data loss
- * rather than a config bug.
+ * ‼️ BOTH ENTRIES MUST STAY. isDeadStage() gates the worklist's hard drop in
+ * src/lib/worklist.ts, and the overwhelming majority of the book sits at one of these two. If
+ * this list loses either entry the call board goes empty and it looks like data loss rather than
+ * a config bug.
  */
-export const PRE_CONTACT_STAGES: readonly string[] = [STAGE_UNTOUCHED, STAGE_NO_CONTACT];
+export const PRE_CONTACT_STAGES: readonly string[] = [STAGE_NEW_LEAD, STAGE_NO_CONTACT];
 
 const PRE_CONTACT_LOWER = new Set(PRE_CONTACT_STAGES.map((s) => s.toLowerCase()));
 
@@ -244,10 +287,9 @@ export function isDeadStage(stage: string | null | undefined): boolean {
 }
 
 // ── Follow-up cadence ────────────────────────────────────────────────
-// How long a lead in each stage may sit untouched before the worklist surfaces
-// it. firstTouchHours applies when there has been no activity at all;
-// repeatDays applies after the first touch. src/lib/worklist.ts uses this
-// alongside isDeadStage(), which is why they live together.
+// How long a lead in each stage may sit untouched before the worklist surfaces it.
+// firstTouchHours applies when there has been no activity at all; repeatDays applies after the
+// first touch. src/lib/worklist.ts uses this alongside isDeadStage().
 
 export interface StageCadence {
   firstTouchHours: number;
@@ -255,17 +297,20 @@ export interface StageCadence {
 }
 
 export const STAGE_CADENCE: Record<string, StageCadence> = {
-  // Bulk-imported and never looked at. Workable, but it should not outrank a
-  // lead someone deliberately marked as not yet contacted, so the repeat is
-  // slower. The worklist's age tie-breakers do the rest of the sorting.
-  [STAGE_UNTOUCHED]: { firstTouchHours: 24, repeatDays: 7 },
+  // Bulk-imported and never looked at. Workable, but it should not outrank a lead someone
+  // deliberately marked as not yet contacted, so the repeat is slower.
+  [STAGE_NEW_LEAD]: { firstTouchHours: 24, repeatDays: 7 },
   // Speed to lead: a brand-new lead is worth 15 minutes, not a day.
   [STAGE_NO_CONTACT]: { firstTouchHours: 0.25, repeatDays: 1 },
   [STAGE_WORKING]: { firstTouchHours: 24, repeatDays: 3 },
-  // A pitch email needs time to be read before the nudge is anything but noise.
-  [STAGE_EMAIL_PITCH]: { firstTouchHours: 48, repeatDays: 3 },
+  // ‼️ THE FASTEST ON THE BOARD, BECAUSE SOMEBODY PUT THEM HERE BY HAND. Nothing lands a lead on
+  // Hot automatically; a person who just spoke to them did. Four hours is roughly "later the same
+  // day", which is what that person meant by moving the card.
+  [STAGE_HOT]: { firstTouchHours: 4, repeatDays: 1 },
+  // There is a meeting. The chase is about keeping it, not about making it.
+  [STAGE_APPOINTMENT_BOOKED]: { firstTouchHours: 24, repeatDays: 2 },
   // Live conversation. A missed day here is what costs the yes.
-  [STAGE_NEGOTIATING]: { firstTouchHours: 24, repeatDays: 2 },
+  [STAGE_FOLLOW_UP]: { firstTouchHours: 24, repeatDays: 2 },
 };
 
 export const DEFAULT_CADENCE: StageCadence = { firstTouchHours: 24, repeatDays: 5 };
@@ -284,4 +329,8 @@ export function cadenceFor(stage: string | null | undefined): StageCadence {
 }
 
 /** Where a missed day actually costs the deal. Scores +25 on the call board. */
-export const HOT_STAGES: readonly string[] = [STAGE_NEGOTIATING];
+export const HOT_STAGES: readonly string[] = [
+  STAGE_HOT,
+  STAGE_APPOINTMENT_BOOKED,
+  STAGE_FOLLOW_UP,
+];
