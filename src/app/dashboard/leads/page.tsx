@@ -21,6 +21,8 @@ type LeadSearchParams = {
   status?: string;
   q?: string;
   unscheduled?: string;
+  /** Where the lead came from: the `source` column, e.g. "Med Spa Scrape - No Website". */
+  source?: string;
   page?: string;
 };
 
@@ -114,6 +116,11 @@ export default async function LeadsPage({
   if (!showingTerminal) query = query.neq("working_state", "closed");
   if (sp.status) query = query.eq("application_stage", sp.status);
   if (sp.unscheduled === "1") query = query.eq("open_task_count", 0);
+  // ‼️ AN EXACT MATCH, NOT A LIKE. `source` is written by the importers that fill this table
+  // ("Med Spa Scrape - No Website", "TRT Clinic Scrape"), so it is a controlled vocabulary rather
+  // than free text, and a substring match would silently merge "Med Spa Scrape" with
+  // "Med Spa Scrape - No Website" -- which are the call list and the email list, two different jobs.
+  if (sp.source) query = query.eq("source", sp.source);
   if (sp.q) {
     // The term is interpolated into a PostgREST .or() filter expression, where
     // a comma separates conditions, a dot separates column.operator.value and a
@@ -126,6 +133,22 @@ export default async function LeadsPage({
       );
     }
   }
+
+  // ‼️ THE SOURCE LIST IS READ FROM THE TABLE, NEVER HARD-CODED. Every importer writes its own
+  // value ("TRT Clinic Scrape", "Med Spa Scrape - No Website", "reachinbox"), so a checked-in list
+  // would be stale the first time somebody added a lane, and the chip for the newest lead source
+  // would be the one missing. Capped, because this is a filter bar rather than a report.
+  const { data: sourceRows } = await supabaseAdmin
+    .from("contacts")
+    .select("source")
+    .not("source", "is", null)
+    .limit(5000);
+  const sourceCounts = new Map<string, number>();
+  for (const r of (sourceRows ?? []) as Array<{ source: string | null }>) {
+    const key = (r.source ?? "").trim();
+    if (key) sourceCounts.set(key, (sourceCounts.get(key) ?? 0) + 1);
+  }
+  const sources = [...sourceCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 14);
 
   const { data, count } = await query;
   const rows = (data ?? []) as unknown as LeadRow[];
@@ -140,7 +163,9 @@ export default async function LeadsPage({
   const queueIds = rows.map((r) => r.id);
   const queueBase = sp.q
     ? `Search: ${sp.q}`
-    : sp.status
+    : sp.source
+      ? `Source: ${sp.source}`
+      : sp.status
       ? `Leads: ${sp.status}`
       : sp.unscheduled === "1"
         ? "Leads with no follow-up"
@@ -168,6 +193,7 @@ export default async function LeadsPage({
           />
           {sp.status && <input type="hidden" name="status" value={sp.status} />}
           {sp.unscheduled === "1" && <input type="hidden" name="unscheduled" value="1" />}
+          {sp.source && <input type="hidden" name="source" value={sp.source} />}
           <button className="rounded-lg border border-[rgba(255,255,255,0.12)] px-3 py-1.5 text-xs text-white">
             Search
           </button>
@@ -216,6 +242,44 @@ export default async function LeadsPage({
           ))}
         </div>
       </div>
+
+      {/* ‼️ A SECOND, INDEPENDENT AXIS. Stage and source answer different questions ("where is this
+          lead in the pipeline" against "which list did it come from"), so the source chips CLEAR
+          neither the stage nor the search: "the no-website med spas that are still untouched" is the
+          whole point of having both. Each chip toggles itself off when it is already on. */}
+      {sources.length > 0 && (
+        <div className="mb-5">
+          <p className="mb-2 text-[10px] uppercase tracking-widest text-[rgba(255,255,255,0.35)]">
+            Lead source
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            <Link
+              href={hrefWith(sp, { source: null })}
+              className={`rounded-lg border px-2.5 py-1 text-[11px] ${
+                !sp.source
+                  ? "border-white/40 text-white"
+                  : "border-[rgba(255,255,255,0.08)] text-[rgba(255,255,255,0.45)]"
+              }`}
+            >
+              Any source
+            </Link>
+            {sources.map(([name, n]) => (
+              <Link
+                key={name}
+                href={hrefWith(sp, { source: sp.source === name ? null : name })}
+                className={`rounded-lg border px-2.5 py-1 text-[11px] ${
+                  sp.source === name
+                    ? "border-[#4FC3F7] text-[#4FC3F7]"
+                    : "border-[rgba(255,255,255,0.08)] text-[rgba(255,255,255,0.45)]"
+                }`}
+              >
+                {name}{" "}
+                <span className="text-[rgba(255,255,255,0.3)]">{n.toLocaleString()}</span>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="overflow-x-auto rounded-xl border border-[rgba(255,255,255,0.07)]">
         <table className="w-full min-w-[860px] text-left text-xs">
