@@ -20,7 +20,7 @@
 //   - publishing a page. publishPage() is the one publisher and needs an explicit yes.
 // Adding either to ACTION_KINDS is not a feature, it is the removal of a control.
 
-import { callClaudeJSON, type ClaudeModel } from "@/lib/claude-calls";
+import { callClaudeJSON, callClaudeText, type ClaudeModel } from "@/lib/claude-calls";
 import { hasBannedDash } from "@/lib/copy-guard";
 import { supabaseAdmin } from "@/lib/db";
 import {
@@ -612,20 +612,54 @@ export async function runTurn(args: {
     .map((m) => `${m.role === "user" ? "MATTHEW" : "YOU"}: ${m.content}`)
     .join("\n\n");
 
-  const result = await callClaudeJSON<TurnPlan>({
-    model: TURN_MODEL,
-    system: systemPrompt(ctx, args.clientName),
-    user: [transcript, `MATTHEW: ${args.message}`].filter(Boolean).join("\n\n"),
-    maxTokens: 2000,
-    temperature: 0.3,
-    validate: isTurnPlan,
-    schemaHint:
-      '{ "say": string, "asks": string[], "actions": [{ "kind": string, "stepKey"?: string, ' +
-      '"reason"?: string, "whatIsSold"?: string, "promise"?: string, "domains"?: string[], ' +
-      '"which"?: string }], "confidence": number }',
-  });
+  const system = systemPrompt(ctx, args.clientName);
+  const user = [transcript, `MATTHEW: ${args.message}`].filter(Boolean).join("\n\n");
 
-  const plan = result.data;
+  // !! 4000, NOT 2000, AND THE OLD NUMBER WAS SET BEFORE THIS TURN COULD ANSWER QUESTIONS.
+  // The context now carries two boards, both keyword pools, the DNS records and the publishing
+  // facts, and the ANSWERING rules invite a numbered walk-through when he asks for one. He asked
+  // for "the bird eye view" on 2026-10-03 and the reply was cut off mid-word at `both po`, which
+  // truncated the JSON and failed the parse. callClaudeJSON retries once on stop_reason
+  // max_tokens, so the budget it retried INTO was not enough either.
+  let plan: TurnPlan | null = null;
+  try {
+    const result = await callClaudeJSON<TurnPlan>({
+      model: TURN_MODEL,
+      system,
+      user,
+      maxTokens: 4000,
+      temperature: 0.3,
+      validate: isTurnPlan,
+      schemaHint:
+        '{ "say": string, "asks": string[], "actions": [{ "kind": string, "stepKey"?: string, ' +
+        '"reason"?: string, "whatIsSold"?: string, "promise"?: string, "domains"?: string[], ' +
+        '"which"?: string }], "confidence": number }',
+    });
+    plan = result.data;
+  } catch (e) {
+    // !! AN ENVELOPE PROBLEM MUST NOT SWALLOW A GOOD ANSWER.
+    //
+    // What he saw was "The turn failed: Claude JSON parse error" followed by 500 characters of a
+    // reply that was answering his question correctly. The model knew the answer; the JSON wrapper
+    // around it did not survive. Losing the answer and showing him the error is the worst of the
+    // three possible outcomes.
+    //
+    // The fallback re-asks in prose, and it is SAFE because prose carries no actions: nothing can
+    // tick, skip, lock or resolve down this path. That is the right trade when the structured
+    // channel is the thing that broke. It answers and does nothing.
+    console.error("[launch/turn] structured turn failed, prose fallback:", (e as Error).message);
+    const prose = await callClaudeText({
+      model: TURN_MODEL,
+      system: system + "\n\nAnswer in plain prose. Do not return JSON. Take no actions: this reply only answers.",
+      user,
+      maxTokens: 4000,
+      temperature: 0.3,
+    }).catch(() => null);
+
+    const text = (typeof prose === "string" ? prose : ((prose as { text?: string } | null)?.text ?? "")).trim();
+    if (!text) throw e;
+    plan = { say: text, asks: [], actions: [], confidence: 0 };
+  }
 
   // ‼️ THE DASH CHECK RUNS ON MODEL OUTPUT AT RUNTIME, WHICH IS WHAT copy-guard CANNOT DO.
   // guard() throws at module load and only covers hardcoded copy. Anything a model wrote has to be
