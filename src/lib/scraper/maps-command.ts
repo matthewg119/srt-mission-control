@@ -109,7 +109,29 @@ export const MAPS_SOURCE_DEFAULT: MapsSource = "dataforseo";
  * is not paying to read nail salons: `day_spa` and `beauty_salon` are deliberately absent.
  */
 export const DFS_CATEGORIES: Record<string, string[]> = {
-  medspa: ["medical_spa", "facial_spa", "skin_care_clinic"],
+  // ‼️ WIDENED ON 2026-10-04 AGAINST MEASURED KEEP RATES, NOT BY TASTE. The 500-record Dallas pull
+  // reported, by the primary category Google shows for each business:
+  //
+  //   medical_spa                 146 pulled, 78 kept   53%
+  //   laser_hair_removal_service    6 pulled,  4 kept   67%   <- better than anything already listed
+  //   permanent_make_up_clinic      6 pulled,  3 kept   50%
+  //   skin_care_clinic             77 pulled,  7 kept    9%
+  //   facial_spa                   71 pulled,  5 kept    7%
+  //
+  // The two weak ones are kept anyway: they are where most of the nail salons ride in, but they still
+  // produced 12 real clinics per 500, which is ~120 per 5,000, and the junk they bring is dropped by a
+  // free rule or by a Haiku call costing about four cents a batch. Noise that gets filtered is cheaper
+  // than coverage that is never pulled.
+  //
+  // ‼️ AND day_spa AND beauty_salon ARE STILL ABSENT. They kept 0 of 35 between them. That is the line:
+  // a category earns a place by converting, not by sounding adjacent.
+  medspa: [
+    "medical_spa",
+    "facial_spa",
+    "skin_care_clinic",
+    "laser_hair_removal_service",
+    "permanent_make_up_clinic",
+  ],
   dentist: ["dentist", "cosmetic_dentist"],
 };
 

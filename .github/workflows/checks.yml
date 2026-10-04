@@ -118,6 +118,13 @@ jobs:
       - name: National coverage cells (the geometry, and that nowhere is uncovered)
         run: bun --no-env-file run scripts/_probe-cells.ts
 
+      # ‼️ THE ONE THAT DECIDES WHOSE NAME GOES IN A GREETING. A wrong owner is not a missing lead:
+      # it is permuted into six addresses, verified, and mailed to a real stranger addressed as
+      # somebody else. The load-bearing rail is the eight-character containment floor, without which
+      # "spa" matches every clinic in America. Offline, no key, no network.
+      - name: NPPES owner lookup (that it cannot name the wrong clinic)
+        run: bun --no-env-file run scripts/_probe-nppes.ts
+
       # ‼️ THE ONE THAT STOPS DEAD WIRES COMING BACK. It reads docs/*.sql and src/ off disk and
       # touches no database, which is what makes it gateable: its whole value is that it runs without
       # anybody remembering to run it. It carries a board-wide baseline count that may only go DOWN.

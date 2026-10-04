@@ -1,7 +1,7 @@
 // Probe: the two vendor behaviours the national crawl rests on, against the live account.
 //
 //   bun run scripts/_probe-cells-live.ts           refuses, and prints what it would spend
-//   bun run scripts/_probe-cells-live.ts --yes      SPENDS about $0.06
+//   bun run scripts/_probe-cells-live.ts --yes      SPENDS about $0.12
 //
 // ‼️ IT SPENDS MONEY, SO IT IS OPT-IN AND IT IS NEVER IN CI. Same convention as _probe-gbp-live.ts and
 // _probe-attribution-live.ts. The offline suite (_probe-cells.ts) proves the geometry and the walk with
@@ -38,13 +38,13 @@ function check(label: string, cond: boolean, detail?: string): void {
 }
 
 const PROBE_USD = 0.0124;
-const CALLS = 5;
+const CALLS = 10;  // 3 Dallas radii + 2 cells + 5 category keys
 
 async function main(): Promise<void> {
   const go = process.argv.includes("--yes");
   if (!go) {
     console.log(
-      "This probe SPENDS. " + CALLS + " count probes at $" + PROBE_USD.toFixed(4) +
+      "This probe SPENDS. about " + CALLS + " count probes at $" + PROBE_USD.toFixed(4) +
       " = about $" + (CALLS * PROBE_USD).toFixed(2) + ", plus two free Nominatim lookups.\n" +
       "Re-run with --yes to actually spend it."
     );
@@ -102,6 +102,25 @@ async function main(): Promise<void> {
     // A child is inside its parent's circle, so it cannot hold more. This is the invariant the whole
     // split relies on, and it is the cheapest possible end-to-end check that the geometry is real.
     check("a child never holds more than its parent", kidCount <= seedCount, `${kidCount} <= ${seedCount}`);
+  }
+
+  // ‼️ EVERY CATEGORY KEY IS CHECKED ON ITS OWN, BECAUSE A WRONG ONE FAILS SILENTLY. DataForSEO does
+  // not refuse an unknown category; it filters on what it understood, so a typo in one of five keys
+  // returns a plausible list that is quietly missing a whole segment. The keys are hand-written from
+  // Google's display names ("Laser hair removal service" -> laser_hair_removal_service), which is a
+  // guess until something asks. Dallas is dense enough that any real aesthetics category has rows
+  // inside 30km, so a zero here means the KEY is wrong rather than the city being empty.
+  console.log("\nevery category key on its own, in Dallas (a zero means a bad key):");
+  for (const cat of categories) {
+    const r = await searchListings({
+      categories: [cat],
+      locationCoordinate: "32.7767,-96.7970,30",
+      limit: 1,
+    });
+    spent += r.costUsd;
+    console.log("  " + cat.padEnd(30) + (r.ok ? "total_count=" + r.totalCount : "REFUSED: " + r.error));
+    check("`" + cat + "` is a category DataForSEO knows", r.ok && r.totalCount > 0,
+      r.ok ? "returned " + r.totalCount : String(r.error));
   }
 
   // 3. The reverse geocoder, which is free, and the validator that stops foreign provinces.

@@ -89,6 +89,7 @@ import {
 } from "./rules";
 import { allKeys, countTruncatedNames, dedupeColumns, isKeyActive, splitDuplicates } from "./dedup";
 import { mailProviderOf, resolveMxBatch } from "./mx";
+import { lookupOwner as nppesOwner } from "./nppes";
 import {
   DFS_CATEGORIES,
   MAPS_GRAMMAR,
@@ -2437,6 +2438,24 @@ async function sweepEnrich(batch: BatchRow, deadline: number): Promise<boolean> 
         } catch {
           // A site that refuses a crawl is not a failed lead, and it is not a crawled one either:
           // leaving siteEmail undefined lets the rung try, which is the old behaviour.
+        }
+      }
+
+      // ‼️ THE REGISTRY IS ASKED ONLY WHEN THE SITE DID NOT SAY, AND THAT ORDER IS THE WHOLE POINT.
+      // A clinic's own About page naming its founder is better evidence than a federal filing, and it
+      // has already been fetched by the crawl above. This rung exists for the ~45 companies per 100
+      // that the crawl leaves nameless, measured on the 500-record Dallas pull. Free, cached for six
+      // months, and a refusal when the business name does not match is an ordinary outcome: plenty of
+      // facial and skin care businesses employ no licensed clinician and so have no NPI at all.
+      if (!ownerName) {
+        const owner = await nppesOwner({
+          businessName: lead.businessName,
+          city: lead.city ?? null,
+          state: lead.state ?? null,
+        });
+        if (owner) {
+          ownerName = owner.firstName + " " + owner.lastName;
+          await setOwnerName(lead.id, ownerName);
         }
       }
 
