@@ -43,7 +43,7 @@ export async function publishingFacts(clientId: string): Promise<PublishingFacts
   const [kw, pages, evidence, client, dests] = await Promise.all([
     supabaseAdmin
       .from("client_keywords")
-      .select("approved, selected_at, dropped_at")
+      .select("phrase, category, approved, selected_at, dropped_at")
       .eq("client_id", clientId),
     supabaseAdmin.from("client_pages").select("status").eq("client_id", clientId),
     count("page_sources", clientId),
@@ -57,6 +57,39 @@ export async function publishingFacts(clientId: string): Promise<PublishingFacts
   const pageRows = (pages.data ?? []) as Record<string, unknown>[];
   const published = pageRows.filter((p) => p.status === "published").length;
   const day0 = (client.data?.day_0_archived_at as string | null) ?? null;
+
+  // ‼️ THE PHRASES, NOT ONLY THE COUNT, AND THE COUNT ALONE WAS A DEAD END.
+  // Asked for "the breakdown of my 30 selected keywords" the chat answered "I don't have the
+  // individual keyword names in my context, only the count" and offered to hand him a prompt to
+  // reconstruct them. They were thirty rows in a table it was already reading. A number is the
+  // answer to "how many"; it is useless for the decision he was actually making, which was which
+  // of them becomes the lead magnet.
+  //
+  // Grouped by category because that is the shape of the strategy: the categories ARE the
+  // candidate pillars, so a flat list would hide the one structure he needs to see.
+  const picked = rows.filter((r) => r.selected_at && !r.dropped_at);
+  const byCategory = new Map<string, string[]>();
+  for (const r of picked) {
+    const k = String(r.category ?? "uncategorised");
+    if (!byCategory.has(k)) byCategory.set(k, []);
+    byCategory.get(k)!.push(String(r.phrase));
+  }
+  // ‼️ CAPPED, AND THE CAP ANNOUNCES ITSELF. Thirty phrases is nothing; three hundred would crowd
+  // out the board, the documents and the DNS, and the model would start answering worse about
+  // everything else. A silent truncation would be worse than the cap: it would invite a confident
+  // "those are all of them" about a list that was cut.
+  const KEYWORD_CAP = 120;
+  const keywordLines: string[] = [];
+  let shown = 0;
+  for (const [cat, phrases] of [...byCategory].sort((a, b) => b[1].length - a[1].length)) {
+    if (shown >= KEYWORD_CAP) break;
+    const room = phrases.slice(0, Math.max(0, KEYWORD_CAP - shown));
+    shown += room.length;
+    keywordLines.push(`    ${cat} (${phrases.length}): ${room.join("; ")}`);
+  }
+  if (picked.length > shown) {
+    keywordLines.push(`    ...and ${picked.length - shown} more not listed here. Say so rather than implying this is all of them.`);
+  }
 
   const destLines = dests.length
     ? dests.map((d) => `    ${d.delivery}: ${siteUrl(d, "<slug>")}`)
@@ -74,6 +107,9 @@ export async function publishingFacts(clientId: string): Promise<PublishingFacts
       "  THE TWO KEYWORD POOLS, WHICH ARE DIFFERENT QUESTIONS:",
       `    approved: ${approved}. The measurement breadth, frozen at Day 0. Nothing is published from it.`,
       `    selected: ${selected}. ‼️ THIS is what pages are planned from. Quote this one when asked how many keywords there are for pages.`,
+      ...(keywordLines.length
+        ? ["  THE SELECTED KEYWORDS THEMSELVES, grouped by category. You HAVE these: never say you only have a count.", ...keywordLines]
+        : ["  No keywords are selected yet, so there is nothing for pages to be planned from."]),
       `  evidence on file: ${evidence} source(s) in the client library, which is what a draft argues from.`,
       `  pages: ${pageRows.length} drafted, ${published} published.`,
       "  where a published page would land:",
