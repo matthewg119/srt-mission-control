@@ -244,7 +244,7 @@ async function artifactOnRecord(ctx: VerifyCtx, label: string): Promise<Verdict>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The map. Record<StepKey, Verifier> is the compile-time proof it covers all 43.
+// The map. Record<StepKey, Verifier> is the compile-time proof it covers all 37.
 //
 // (It said 33 for a long time while the array grew to 39. The NUMBER is prose and drifts; the
 // TYPE is the thing that actually holds, and adding site_replica to delivery-steps.ts broke this
@@ -838,9 +838,9 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
   //
   // It still TICKS rather than refusing, for the reason presence_pdf's note gives: the list is
   // generated, the step is auto, and refusing here would deadlock a board over a legitimately
-  // skipped sweep. citation_cleanup, further down, is the step that DOES refuse on not_checked,
+  // skipped sweep. offsite_executed, further down, is the step that DOES refuse on not_checked,
   // because "the cleanup was executed" is a different claim from "the list was built".
-  citation_cleanup_list: async (ctx) => {
+  offsite_target_list: async (ctx) => {
     const filed = await artifactOnRecord(ctx, "the citation cleanup list");
     if (!filed.ok) return filed;
 
@@ -1466,7 +1466,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
 
     const { loadSweepView, countByStatus } = await import("./presence-sweep");
     const { rows, hidden } = await loadSweepView(ctx.clientId);
-    // Hidden rows are the audience narrowing the sweep, not the query failing. See citation_cleanup_list.
+    // Hidden rows are the audience narrowing the sweep, not the query failing. See offsite_target_list.
     if (rows.length + hidden !== total) return dbUnreachable("nap_discrepancies");
 
     const counts = countByStatus(rows);
@@ -1743,7 +1743,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
   //
   // The not_checked refusal comes FIRST. A board with two confirmed mismatches and sixteen
   // untouched rows would otherwise refuse only about the two, which reads as "sixteen are fine".
-  citation_cleanup: async (ctx) => {
+  offsite_executed: async (ctx) => {
     // Counted separately from loadSweep because loadSweep swallows a query error into an empty
     // array, and "the query failed" must never render as "no rows exist". Same reason countRows
     // returns null rather than 0.
@@ -1794,7 +1794,7 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
   // on an unresolved record would park the step in a terminal `error` over propagation, which
   // is not a fault. But this verifier passed that flag straight through and printed the note
   // underneath, so a live board read ":white_check_mark: subdomain_live" above the words
-  // "0 of 3 resolving". Same class of bug as citation_cleanup: the check ran, the answer was no,
+  // "0 of 3 resolving". Same class of bug as offsite_executed: the check ran, the answer was no,
   // and the tick did not look at it.
   //
   // The hub CNAME is the one that decides. `reviews` and the Search Console TXT are checked and
@@ -1924,133 +1924,46 @@ export const STEP_VERIFIERS: Record<StepKey, Verifier> = {
         "card exists on a counter."
     ),
 
-  review_request_configured: async (ctx) => {
-    const mode = ctx.client.review_request_mode as string | null;
-    // card_only is a real recorded decision on the row, so it is system evidence. It is also
-    // half the label: "configured in their booking system, OR card_only recorded".
-    if (mode === "card_only") {
-      return verified("clients.review_request_mode is card_only, which this step's label allows");
-    }
-    if (mode === "booking_system") {
-      return artifactInThread(
-        ctx,
-        "the automation being switched on",
-        "The mode is recorded as booking_system, so post a screenshot of the configured request " +
-          "into this thread. Their booking software is not something this app can query."
-      );
-    }
-    // ‼️ THIS REFUSAL USED TO POINT AT A CONTROL THAT DID NOT EXIST, so the step could never be
-    // confirmed by anybody. `clients.review_request_mode` had two readers (here and
-    // call-sheet.ts) and NO WRITER anywhere in the repo — the same readers-with-no-writer class
-    // as competitor_candidates.selected. The Review handover panel is that writer now, and the
-    // todo names its URL rather than "the client board" generally.
-    return notYet(
-      "clients.review_request_mode",
-      "not set, so neither branch of this step has been chosen",
-      "Record it on the Review handover panel of the client board: booking_system or card_only. " +
-        "The label allows either, but it has to be one of them. While you are there, add the " +
-        "review URLs: the tool's Post on Google button reads them and shows a fallback hint " +
-        "when they are missing."
-    );
-  },
+  /**
+   * The merged review handover.
+   *
+   * ‼️ IT CHECKS THE DESTINATION URL, WHICH IS THE HALF THAT WAS UNCHECKABLE BEFORE. The old
+   * `review_request_configured` read clients.review_request_mode, a column with two readers and
+   * no writer, so it refused for every client and told people to set it on a control that did
+   * not exist. The panel exists now, and the URL is what makes the Post on Google button appear
+   * at all: without it every customer gets the fallback hint telling her to go and find the
+   * review page herself.
+   */
+  review_handover: async (ctx) => {
+    const { data } = await supabaseAdmin
+      .from("clients")
+      .select("review_request_mode, review_owner_name, review_workflow")
+      .eq("id", ctx.clientId)
+      .maybeSingle();
 
-  referral_engine_handed: async (ctx) => {
-    const owner = ctx.client.review_owner_name as string | null;
-    const replies = await humanReplies(ctx);
-    if (replies === null) return threadUnreadable;
-    if (replies.length === 0) {
+    const mode = (data?.review_request_mode as string | null) ?? null;
+    const owner = (data?.review_owner_name as string | null) ?? null;
+    const bag = (data?.review_workflow ?? {}) as Record<string, unknown>;
+    const url = typeof bag.google_url === "string" ? bag.google_url.trim() : "";
+
+    const missing: string[] = [];
+    if (!mode) missing.push("how requests go out");
+    if (!owner) missing.push("who is doing it");
+    if (!url) missing.push("the Google review URL");
+
+    if (missing.length) {
       return notYet(
-        "replies in this step's thread",
-        "nothing in the thread yet",
-        `Reply naming who it was handed to${owner ? ` (the record says ${owner})` : ""} and how ` +
-          "they were shown it. The step says handed to the NAMED PERSON, and a link sent to a " +
-          "business address is not a handover."
-      );
-    }
-    return confirmed(
-      `a reply in this thread records the handover: "${replies[0].slice(0, 80)}"`,
-      "That is somebody's account of the handover, written down."
-    );
-  },
-
-  time_log_entries: async (ctx) => {
-    const day0 = ctx.client.day_0_archived_at as string | null;
-    let q = supabaseAdmin
-      .from("time_log")
-      .select("id", { count: "exact", head: true })
-      .eq("client_id", ctx.clientId);
-    if (day0) q = q.gte("logged_at", day0);
-    const { count, error } = await q;
-    if (error) return dbUnreachable("time_log");
-
-    if (!count) {
-      return notYet(
-        day0 ? `time_log entries since day 0 (${day0})` : "time_log entries for this client",
-        "none",
-        "Log the time on the client board. This is what the pilot's cost is measured from, so " +
-          "an empty log makes the pilot unevaluable rather than free."
-      );
-    }
-    return verified(`${count} time log entr${count === 1 ? "y" : "ies"}${day0 ? " since day 0" : ""}`);
-  },
-
-  // ‼️ THIS STEP COULD NEVER BE TICKED BY ANYBODY, AND IT USED `artifactOnRecord` TO DO IT.
-  //
-  // That helper demands `output_ref` plus a `client_docs` row, i.e. it assumes a generator ran
-  // through deliverArtifact. `weekly_report` has no AUTO_RUNNERS entry and is in ROUTE_COMPLETED
-  // on purpose: it is a PREDICATE about ongoing behaviour, not a document. runWeeklyReports
-  // writes a `client_weekly_reports` row, posts the body into the step's thread, and calls
-  // autoCompleteStep — which lands here, gets `not_yet`, and writes nothing. Every week. Forever.
-  //
-  // The `todo` made it worse by telling whoever read it to "un-tick and re-tick to re-run the
-  // generator", naming a generator that does not exist and never will.
-  //
-  // Same class as review_request_configured: a verifier pointed at the wrong evidence, so honest
-  // finished work reads as outstanding. The real evidence is the reports themselves.
-  weekly_report: async (ctx) => {
-    const { data, error, count } = await supabaseAdmin
-      .from("client_weekly_reports")
-      .select("week_stamp", { count: "exact" })
-      .eq("client_id", ctx.clientId)
-      .order("week_stamp", { ascending: false })
-      .limit(1);
-
-    if (error) return dbUnreachable("client_weekly_reports");
-
-    if (!count) {
-      return notYet(
-        "client_weekly_reports rows for this client",
-        "no weekly report has posted yet",
-        "Nothing is owed here until the digest next runs, and it posts on one weekday. This is " +
-          "a rhythm rather than a task: the first report that actually posts ticks the step by " +
-          "itself, so there is nothing to do but let it run."
+        "the review handover",
+        `on file: ${[mode && "the mode", owner && "the owner", url && "the URL"].filter(Boolean).join(", ") || "nothing"}`,
+        `Set ${missing.join(", ")} on the Review handover panel on the client board.`
       );
     }
 
-    const newest = (data?.[0]?.week_stamp as string | null) ?? null;
     return verified(
-      `${count} weekly report${count === 1 ? "" : "s"} posted for this client`,
-      ...(newest ? [`newest is week ${newest}`] : [])
+      `requests go out by ${mode}, ${owner} is the named person, and the review destination is set`
     );
   },
 
-  day_30_date: async (ctx) => {
-    const replies = await humanReplies(ctx);
-    if (replies === null) return threadUnreadable;
-    const dated = replies.find((r) => DATE_RE.test(r));
-    if (!dated) {
-      return notYet(
-        "replies in this step's thread carrying a date",
-        replies.length > 0 ? `${replies.length} replies, none with a date` : "nothing in the thread yet",
-        "Reply with the day-30 report date. The reminder rides on the follow-up digest and " +
-          "counts from the Day-0 stamp, so this is the human record of what was promised."
-      );
-    }
-    return confirmed(
-      `a reply in this thread names a date: "${dated.slice(0, 80)}"`,
-      "That is the date somebody wrote down, not a scheduled job."
-    );
-  },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -360,6 +360,153 @@ export const SCHEDULING_INTRO: string[] = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
+// THE CONVERSATION-FIRST FUNNEL (/onboarding2/start, 2026-09-30).
+//
+// ‼️ THE WHOLE POINT IS THAT THE OFFER IS NO LONGER THE FIRST THING ON SCREEN. The thread opens
+// cold, takes a name, a website, a mobile number and an email, WRITES A HOT LEAD, and only then
+// asks which offer. A visitor who closes the tab on the offer sheet used to leave nothing at all;
+// now they leave a contact row and a number somebody can ring.
+//
+// ‼️ THESE FOUR PROMPTS ARE ASKED BY THE BROWSER, NOT BY THE SERVER, AND THAT IS UNAVOIDABLE
+// RATHER THAN A SHORTCUT. POST /start has to know the offer to freeze the right agreement, so no
+// session exists while these are being asked and there is nothing for a server turn to attach to.
+// They are validated twice: once here for the typing experience, and again on /start, which is the
+// only side that counts.
+//
+// ‼️ THE OPENER IS TWO MESSAGES AND THE SECOND ONE IS THE QUESTION (Matthew, 2026-09-30). A
+// greeting with the question bolted onto the end of it reads as a form label rather than as
+// somebody talking.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Said before anything is asked. Names what is about to happen and nothing else. */
+export const CONVO_INTRO = guard(
+  "convo intro",
+  "Hi, I am the SRT assistant. I will help you get your account set up."
+);
+export const ASK_NAME_FIRST = guard("ask name first", "First, what is your full name?");
+/** `{first}` is their first name, or the clause is dropped. See firstNameClause() in the client. */
+export const ASK_WEBSITE_AFTER_NAME = guard(
+  "ask website after name",
+  "Nice to meet you{first}. What is your business website?"
+);
+export const ASK_PHONE_CONVO = guard("ask phone convo", "Got it. What is the best mobile number for you?");
+export const ASK_EMAIL_CONVO = guard("ask email convo", "And the best email to send everything to?");
+
+/**
+ * The button beside the website box.
+ *
+ * ‼️ THE WEBSITE STEP IS THE ONLY ONE IN THE FUNNEL THAT TAKES A CHIP **AND** TYPING AT ONCE
+ * (Matthew, 2026-09-30). The booking steps stay selection-only, because a typed day is a day we
+ * have to parse and can get wrong. A website is either theirs or they do not have one, and before
+ * this existed "I dont have a website" was typed into the box and bounced off the validator as a
+ * malformed address, which is what it looks like to a regex and not at all what it means.
+ *
+ * ‼️ THE STRING IS MATCHED AGAINST THIS CONSTANT, NEVER AGAINST ITS OWN TEXT. Both the client and
+ * /start compare to this exact export, so rewording the button cannot quietly start rejecting the
+ * answer it produces.
+ */
+export const NO_WEBSITE_OPTION = guard("no website option", "I don't have a website");
+
+/**
+ * The free-website add-on, offered only to somebody who has just said they have no site.
+ *
+ * ‼️ IT IS AN ADD-ON, NOT A FOURTH OFFER, AND IT NEVER BLOCKS THE BOOKING. A tick sets a flag on
+ * the lead and adds a line to the Slack card. Declining continues the conversation unchanged. It
+ * carries no price, no term and no window beyond the four hours, which is a delivery promise about
+ * sending options rather than a commitment to build anything.
+ *
+ * ‼️ THE CHECKBOX SHIPS PRE-TICKED. Matthew's call: the thing behind it costs nothing and commits
+ * nobody, so an unticked box would be asking somebody to opt in to a free sample. Worth knowing
+ * that this is a deliberate default and not an oversight, because it is the kind of default a
+ * later reader assumes was a mistake.
+ */
+export const FREE_WEBSITE = {
+  eyebrow: guard("free site eyebrow", "While we are here"),
+  headline: guard("free site headline", "Get a free website."),
+  body: guard(
+    "free site body",
+    "Do not pay unless you love it. We will email you a few options within 4 hours."
+  ),
+  optIn: guard("free site opt in", "Yes, send me the options"),
+  optInNote: guard(
+    "free site opt in note",
+    "Nothing is charged, and you are not committing to anything by looking."
+  ),
+  cta: guard("free site cta", "Continue"),
+  /** Said in the thread once the add-on is answered, so the choice is visible in the transcript. */
+  ackYes: guard(
+    "free site ack yes",
+    "Done. A few options will be in your inbox within 4 hours. Nothing is charged unless you love one."
+  ),
+  ackNo: guard("free site ack no", "No problem, we will work with what you have."),
+} as const;
+
+/**
+ * The reactivation add-on, offered straight after the website answer.
+ *
+ * ‼️ GOLD, AND THE COLOUR IS THE MESSAGE. Everything else in this funnel is reef green, which is
+ * the product. This one is the only thing on offer that is not the product: it is a campaign run
+ * against a database they already own, so it reads as a bonus rather than as another feature.
+ * Matthew asked for gold explicitly and the whole point is that it does not look like the rest.
+ *
+ * ‼️ IT SITS AFTER THE WEBSITE AND BEFORE THE PHONE, WHICH IS NOT AN ARBITRARY SLOT. The website
+ * answer is the moment we know whether they have anything to put reviews on, and it is the last
+ * low-commitment question before we ask for a mobile number. Asking a yes/no bonus question here
+ * costs nothing; asking it after the price would be a second decision stacked on the real one.
+ *
+ * Declining is free and is not re-asked. Nothing here is charged and nothing is signed.
+ */
+export const REACTIVATION_ADDON = {
+  eyebrow: guard("reactivation eyebrow", "Complimentary"),
+  headline: guard("reactivation headline", "AI Referral Engine fuels on reviews."),
+  body: guard(
+    "reactivation body",
+    "Would you also like a complimentary reactivation campaign to your current customer database, to bring in more reviews in your first 7 days?"
+  ),
+  optIn: guard("reactivation opt in", "Yes, run the reactivation campaign"),
+  optInNote: guard(
+    "reactivation opt in note",
+    "We write it and send it to your existing list. Nothing is charged and nothing is signed."
+  ),
+  accept: guard("reactivation accept", "Yes, include it"),
+  decline: guard("reactivation decline", "No thanks, continue"),
+  ackYes: guard(
+    "reactivation ack yes",
+    "Added. We will build the reactivation campaign off your existing list so the reviews start landing in week one."
+  ),
+  ackNo: guard("reactivation ack no", "No problem, we will start with the engine on its own."),
+} as const;
+
+/**
+ * What the assistant says when the chat panel opens on a session that already knows who they are.
+ *
+ * ‼️ IT MUST NOT RE-ASK ANY OF THE FOUR. SCHEDULING_INTRO opens on ASK_WEBSITE, which is correct
+ * for the funnel that collects the website inside the chat and is exactly wrong here: the website
+ * was answered three questions before the offer, and asking again is the single most visible way
+ * to tell somebody their answers were thrown away.
+ *
+ * The server agrees with this by arithmetic rather than by being told: /start writes the four
+ * identity columns onto the signing row, so nextIntakeStep() finds them filled and returns
+ * `daypart` on the very first turn.
+ */
+/**
+ * The header line on the setup conversation.
+ *
+ * ‼️ CHAT_UI.title SAYS "Questions about the agreement" AND IT IS WRONG ON THIS THREAD. That
+ * constant was written when the panel sat beside a contract somebody was reading, and it outlived
+ * the screen: a visitor answering "mornings or afternoons" is currently told, in the only piece of
+ * chrome on the page, that they are asking questions about an agreement that is not on screen and
+ * will not be signed here. It is still exactly right on /sign/[token], which is why this is a
+ * second constant rather than an edit to that one.
+ */
+export const SETUP_TITLE = guard("setup title", "SRT Agency");
+
+export const SCHEDULING_INTRO_KNOWN: string[] = [
+  guard("sched known 1", "You are all set. Let us get your onboarding call booked."),
+  DAYPART_PROMPT,
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
 // The close, said once every question is answered.
 //
 // ‼️ THESE LINES ARE SENT VERBATIM BY THE ROUTE, NOT WRITTEN BY THE MODEL. A prompt telling a

@@ -8,6 +8,7 @@
 // it is not counted as one anywhere.
 
 import { resolveHost } from "@/lib/hub/resolve";
+import { siteUrl } from "@/lib/hub/destinations";
 import { listPublished } from "@/lib/hub/pages";
 
 // NOT `export const revalidate`. That is a FULL-ROUTE cache, and revalidateTag() does not
@@ -25,9 +26,16 @@ export async function GET(
   const host = decodeURIComponent(params.host);
   const resolved = await resolveHost(host);
 
-  if (resolved.status !== "ok" || resolved.kind !== "hub") {
+  // The AI Referral Engine is one tool on one URL and has nothing to describe.
+  if (resolved.status !== "ok" || resolved.kind === "reviews") {
     return new Response("Not found", { status: 404, headers: { "content-type": "text/plain" } });
   }
+
+  // ‼️ ON A SITE HOST THE ANSWERS LIVE UNDER /answers, AND siteUrl() IS WHAT KNOWS THAT.
+  // This file exists to hand a model a list of URLs it can fetch and quote, so every link in it
+  // being one level wrong makes the file actively misleading rather than merely absent. The base
+  // used to be recomputed here; it now rides on the destination, so this file and the sitemap and
+  // the canonical tag cannot disagree about where an answer page is.
 
   const { client } = resolved;
   const pages = await listPublished(client.id);
@@ -46,7 +54,10 @@ export async function GET(
     "## Answers",
     "",
     ...(pages.length
-      ? pages.map((page) => `- [${page.title}](https://${host}/${page.slug}): ${page.question}`)
+      ? pages.map(
+          (page) =>
+            `- [${page.title}](${siteUrl(resolved.destination, page.slug)}): ${page.question}`
+        )
       : ["- (none published yet)"]),
     "",
     ...(client.website ? ["## Elsewhere", "", `- [Main website](${client.website})`, ""] : []),

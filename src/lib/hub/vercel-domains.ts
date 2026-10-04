@@ -188,6 +188,73 @@ export async function attachHost(host: string): Promise<DomainState> {
   return { host, attached: true, verified, misconfigured, target, error: null };
 }
 
+/**
+ * Attach a hostname that REDIRECTS to another one, rather than serving anything itself.
+ *
+ * ‼️ THIS IS HOW www GETS HANDLED, AND WHY THE LAUNCH LANE NEEDS NO SECOND client_hosts ROW.
+ * client_hosts is unique on (client_id, kind), so a client cannot hold two 'site' rows, and
+ * widening that index would collide head-on with the in-flight destinations work which re-keys
+ * it to (client_id, kind, delivery). Vercel will do the redirect itself: POST
+ * /v10/projects/{id}/domains accepts `redirect` and `redirectStatusCode`, so www.example.com
+ * never reaches this application, never resolves a client, and never needs a row.
+ *
+ * 308, not 301: permanent AND method-preserving. A 301 is permitted to turn a POST into a GET,
+ * which would silently break a form posted to the www spelling of the site.
+ *
+ * ‼️ AN EXISTING ATTACHMENT IS NOT RECONFIGURED. If the hostname is already on the project this
+ * returns what is there and says so, the same idempotency split attachHost() draws: "already
+ * ours" and "somebody else's" are different outcomes and a 409 does not separate them. Silently
+ * rewriting a redirect somebody set by hand is the kind of change nobody goes looking for.
+ */
+export async function attachRedirectHost(host: string, redirectTo: string): Promise<DomainState> {
+  const base: DomainState = {
+    host,
+    attached: false,
+    verified: false,
+    misconfigured: null,
+    target: null,
+    error: null,
+  };
+
+  if (host === redirectTo) {
+    return { ...base, error: "A domain cannot redirect to itself." };
+  }
+
+  const cfg = vercelConfig();
+  if (!cfg) return { ...base, error: "HUB_VERCEL_TOKEN or HUB_VERCEL_PROJECT_ID is not set." };
+
+  const existing = await call(`/v9/projects/${cfg.projectId}/domains/${encodeURIComponent(host)}`, cfg);
+  if (existing.status === 200) {
+    const to = (existing.body.redirect as string | null) ?? null;
+    return {
+      ...base,
+      attached: true,
+      verified: existing.body.verified === true,
+      error:
+        to === redirectTo
+          ? null
+          : `${host} is already attached to this project ${to ? `redirecting to ${to}` : "serving directly"}, not redirecting to ${redirectTo}. Left alone.`,
+    };
+  }
+
+  const added = await call(`/v10/projects/${cfg.projectId}/domains`, cfg, {
+    method: "POST",
+    body: JSON.stringify({ name: host, redirect: redirectTo, redirectStatusCode: 308 }),
+  });
+
+  if (added.status !== 200 && added.status !== 201) {
+    const err = added.body.error as { code?: string; message?: string } | undefined;
+    const code = err?.code ?? `http_${added.status}`;
+    const message = err?.message ?? "Vercel refused the domain.";
+    if (code === "domain_already_in_use") {
+      return { ...base, error: `${host} is attached to a different Vercel project or account. ${message}` };
+    }
+    return { ...base, error: `${code}: ${message}` };
+  }
+
+  return { ...base, attached: true, verified: added.body.verified === true };
+}
+
 export interface WantedHost {
   host: string;
   kind: "hub" | "reviews";
@@ -297,11 +364,22 @@ export async function registerClientHosts(clientId: string): Promise<RegisterRes
     states.push(state);
     if (state.error) warnings.push(state.error);
 
+    // ‼️ delivery IS WRITTEN AND NAMED IN THE ARBITER, AND BOTH HALVES ARE REQUIRED.
+    // client_hosts_client_kind_delivery_key is three columns as of
+    // docs/2026-09-29-destinations.sql, and ON CONFLICT infers its arbiter by matching key
+    // expressions -- a two-column target against a three-column index is 42P10 at PLAN
+    // time, so this statement would stop running at all rather than collide on data. The
+    // same failure the nap_discrepancies seed had, one table over.
+    //
+    // This function attaches hostnames to Vercel, which is only ever how a SUBDOMAIN is
+    // served. A subfolder destination is wired by the client's own proxy and is written
+    // elsewhere; writing the literal here keeps this function unable to touch one.
     await supabaseAdmin.from("client_hosts").upsert(
       {
         client_id: clientId,
         host,
         kind,
+        delivery: "subdomain",
         enabled: true,
         vercel_attached_at: state.attached ? now : null,
         vercel_verified: state.attached ? state.verified : null,
@@ -310,7 +388,7 @@ export async function registerClientHosts(clientId: string): Promise<RegisterRes
         vercel_error: state.error,
         updated_at: now,
       },
-      { onConflict: "client_id,kind" }
+      { onConflict: "client_id,kind,delivery" }
     );
 
     if (state.target) await writeCnameTarget(clientId, recordKey, state.target);
@@ -331,8 +409,20 @@ export async function registerClientHosts(clientId: string): Promise<RegisterRes
 }
 
 export interface ClientHostRow {
+  /**
+   * ‼️ SELECTED BECAUSE A DESTINATION NEEDS AN IDENTITY THE BOARD CAN NAME.
+   * client_pages.destination_id points at this, so a picker that could not read it would
+   * have to identify a destination by hostname -- which is exactly the derivation the
+   * client_hosts table exists to avoid, and it has no answer at all for two destinations
+   * that differ only in delivery.
+   */
+  id: string;
   host: string;
   kind: "hub" | "reviews";
+  delivery: "subdomain" | "subfolder" | "cms";
+  base_path: string | null;
+  public_origin: string | null;
+  site_key: string | null;
   enabled: boolean;
   vercel_attached_at: string | null;
   vercel_verified: boolean | null;
@@ -346,9 +436,10 @@ export async function loadClientHosts(clientId: string): Promise<ClientHostRow[]
   const { data } = await supabaseAdmin
     .from("client_hosts")
     .select(
-      "host, kind, enabled, vercel_attached_at, vercel_verified, vercel_misconfigured, vercel_checked_at, vercel_error"
+      "id, host, kind, delivery, base_path, public_origin, site_key, enabled, vercel_attached_at, vercel_verified, vercel_misconfigured, vercel_checked_at, vercel_error"
     )
     .eq("client_id", clientId)
-    .order("kind");
+    .order("kind")
+    .order("delivery");
   return (data ?? []) as unknown as ClientHostRow[];
 }

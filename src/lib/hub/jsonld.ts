@@ -22,7 +22,16 @@ function prune(obj: Json): Json {
   return out;
 }
 
-export function localBusinessJsonLd(client: HubClient, host: string): Json {
+/**
+ * @param hubUrl The absolute URL of the hub index, already built.
+ *
+ * ‼️ A URL, NOT A HOSTNAME, AND THE PARAMETER WAS RENAMED SO THE CHANGE CANNOT BE MISSED.
+ * It used to take a bare `host` and compose `https://${host}/` here. That is a second
+ * answer to "where does this hub live", and it is wrong for a subfolder destination, where
+ * the index is a path on the client's own origin rather than the root of a hostname.
+ * siteUrl() is the one place that decides; this only prints what it was handed.
+ */
+export function localBusinessJsonLd(client: HubClient, hubUrl: string): Json {
   const address = prune({
     "@type": "PostalAddress",
     streetAddress: [client.addressLine1, client.addressLine2].filter(Boolean).join(", ") || null,
@@ -39,7 +48,7 @@ export function localBusinessJsonLd(client: HubClient, host: string): Json {
     // The hub is a page ABOUT the business, not the business's main site. `url` points at
     // the hub because that is the page this markup describes; `sameAs` carries their real
     // website so an engine can join the two into one entity rather than inventing a second.
-    url: `https://${host}/`,
+    url: hubUrl,
     sameAs: client.website ? [client.website] : [],
     telephone: client.phone,
     email: client.email,

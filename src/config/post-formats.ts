@@ -35,7 +35,22 @@ export type PostFormatId =
   | "list"
   | "comparison"
   | "decision_guide"
-  | "teardown";
+  | "teardown"
+  // ─── The four that can EARN A LINK, added 2026-09-29 ──────────────────────────────────
+  //
+  // ‼️ THE OFF-SITE LANE IS NOT A LANE BESIDE THE PAGE PLAN, IT IS A KIND OF PAGE. Every shape
+  // above answers a buyer's question, which is the job, and none of them gives anybody else a
+  // reason to link to it. A roundup names other people; a review is what its subject links to;
+  // a tool is the asset that gets linked without being asked; a data study is the only one of
+  // the four nobody else can copy. Without these the target list has nothing to point at.
+  //
+  // ‼️ AND THEY ARE OFFERED ONLY WHERE THE AVATAR MAKES THEM PLAUSIBLE. fitsThemes is the gate
+  // that already exists for that. A roundup of tools a med spa owner would never open is
+  // filler with a link attached, which is worse than no page.
+  | "roundup"
+  | "review"
+  | "tool"
+  | "data_study";
 
 export const POST_FORMAT_IDS: readonly PostFormatId[] = [
   "answer_first",
@@ -43,6 +58,10 @@ export const POST_FORMAT_IDS: readonly PostFormatId[] = [
   "comparison",
   "decision_guide",
   "teardown",
+  "roundup",
+  "review",
+  "tool",
+  "data_study",
 ] as const;
 
 export function isPostFormatId(v: unknown): v is PostFormatId {
@@ -487,6 +506,311 @@ export const POST_FORMATS: readonly PostFormat[] = [
       openingRule:
         "ANSWER FIRST MEANS STATE THE CLAIM AND YOUR VERDICT ON IT. The first section quotes the " +
         "claim and says plainly what is true in it and what is not, before any of it is unpacked.",
+    },
+  },
+  {
+    id: "roundup",
+    label: "Roundup",
+    // Not Price and not Booking. A roundup of what to buy is a comparison of a category; a
+    // roundup of where to book is a directory page nobody has a reason to link to.
+    fitsThemes: ["Comparison", "Guide", "Tool", "General"],
+    magnetCategory: "Comparison",
+    askedAs: {
+      shape:
+        "The best of a category for one named buyer, including things that are not ours, with the criteria stated before anything is named.",
+      requires: [
+        "the category, narrow enough that the list is not endless",
+        "the one buyer it is for, named the way she would describe herself",
+        "what put something on the list, stated before the first entry",
+        "what was considered and left off, and why",
+      ],
+      refuse: [
+        "a roundup with only our own thing on it, which is an advertisement wearing a list",
+        "ranking a named competing BUSINESS, which is a judgement about them rather than a fact about the category",
+        "criteria written after the entries, which is a ranking reverse engineered to win",
+        "an entry with nothing it is best at, which is padding to reach a round number",
+      ],
+    },
+    dataset: [
+      {
+        key: "category",
+        label: "The category",
+        kind: "string",
+        required: true,
+        prompt: "What kind of thing is this a list of?",
+      },
+      {
+        key: "buyer",
+        label: "Who it is for",
+        kind: "string",
+        required: true,
+        prompt: "Who is this list for? Describe her the way she would describe herself.",
+      },
+      {
+        key: "inclusionCriteria",
+        label: "What put them on the list",
+        kind: "string[]",
+        required: true,
+        prompt: "What did something have to do to make this list?",
+      },
+      {
+        key: "entries",
+        label: "The entries",
+        kind: "row[]",
+        required: true,
+        prompt: "Name each one and the single thing it is best at.",
+      },
+      {
+        key: "excluded",
+        label: "What was left off",
+        kind: "string[]",
+        required: true,
+        prompt: "What did you look at and leave off, and why?",
+      },
+    ],
+    outline: {
+      minSections: 8,
+      maxSections: 14,
+      minGaps: 4,
+      // An entry section named after its entry is divergent already, so the floor bites the
+      // same way it does on a ranked list: it refuses a roundup that is every entry's price.
+      minDivergent: 5,
+      exemptSubjects: ["comparison"],
+      openingRule:
+        "ANSWER FIRST MEANS NAME THE CRITERIA AND THE TOP PICK. The first section says what put " +
+        "something on this list and which one wins for the buyer named, before any entry is unpacked.",
+    },
+  },
+  {
+    id: "review",
+    label: "Review",
+    fitsThemes: ["Comparison", "Price", "Tool", "General"],
+    magnetCategory: "Comparison",
+    askedAs: {
+      shape:
+        "One subject, used first hand: who it suits, who it does not, what it costs, what goes wrong, and a verdict.",
+      requires: [
+        "the one subject, and only one",
+        "who it is NOT for, stated as plainly as who it is for",
+        "what it costs, or that the price is not published",
+        "the verdict, in a sentence",
+      ],
+      refuse: [
+        "a review of a competing business rather than of a thing",
+        "a review with no downside, which nobody finishes reading and nobody believes",
+        "a verdict hedged into meaninglessness",
+        "claiming hands-on experience of something nobody here has used",
+      ],
+    },
+    dataset: [
+      {
+        key: "subject",
+        label: "What is being reviewed",
+        kind: "string",
+        required: true,
+        prompt: "What exactly are you reviewing? One thing.",
+      },
+      {
+        key: "whoItIsFor",
+        label: "Who it suits",
+        kind: "string",
+        required: true,
+        prompt: "Who is this genuinely right for?",
+      },
+      {
+        key: "whoItIsNotFor",
+        label: "Who it does not suit",
+        kind: "string",
+        required: true,
+        prompt: "And who should not buy it? Be specific.",
+      },
+      {
+        key: "cost",
+        label: "What it costs",
+        kind: "string",
+        required: true,
+        prompt: "What does it cost? If the price is not published, say so.",
+      },
+      {
+        key: "whatBreaks",
+        label: "What goes wrong",
+        kind: "string",
+        required: true,
+        prompt: "What goes wrong with it, or disappoints people?",
+      },
+      {
+        key: "verdict",
+        label: "The verdict",
+        kind: "string",
+        required: true,
+        prompt: "So what is your verdict, in one sentence?",
+      },
+    ],
+    outline: {
+      minGaps: 4,
+      minDivergent: 5,
+      exemptSubjects: ["comparison"],
+      openingRule:
+        "ANSWER FIRST MEANS GIVE THE VERDICT. The first section says who it is for, who it is " +
+        "not, and what you concluded, before any of it is justified.",
+    },
+  },
+  {
+    id: "tool",
+    label: "Tool",
+    // Tool and Price both, because the tool that earns its place most often is the one that
+    // answers a cost question a sentence cannot.
+    fitsThemes: ["Tool", "Price", "Guide", "General"],
+    magnetCategory: "Tool",
+    askedAs: {
+      shape:
+        "An interactive asset the reader USES: a calculator, a quiz, a checker or a template, with the page built around it.",
+      requires: [
+        "the one question a reader comes to it holding",
+        "what she has to type in, in words she already knows",
+        "what it gives back, and what she can do with it",
+        "where the numbers behind it come from",
+      ],
+      refuse: [
+        "a tool whose inputs she would have to look up, which is a form nobody finishes",
+        "an answer a sentence on an ordinary page would have given just as well",
+        "an estimate presented as a quote",
+        "a result that cannot be produced without asking for a name or an email",
+      ],
+    },
+    dataset: [
+      {
+        key: "question",
+        label: "What she comes to it holding",
+        kind: "string",
+        required: true,
+        prompt: "What is the one question somebody opens this to answer?",
+      },
+      {
+        key: "inputs",
+        label: "What she types in",
+        kind: "row[]",
+        required: true,
+        prompt: "What does she have to enter? Name each one the way she would say it.",
+      },
+      {
+        key: "output",
+        label: "What it gives back",
+        kind: "string",
+        required: true,
+        prompt: "What does it show her, and what can she do with it?",
+      },
+      {
+        key: "method",
+        label: "Where the numbers come from",
+        kind: "string",
+        required: true,
+        prompt: "What is the calculation, or the rule behind the answer?",
+      },
+      {
+        key: "limits",
+        label: "When it is wrong",
+        kind: "string",
+        required: true,
+        prompt: "When would this give her the wrong answer?",
+      },
+    ],
+    outline: {
+      // Short. The asset IS the page, and a calculator buried under eleven sections of prose
+      // is a page with a calculator at the bottom that nobody reaches.
+      //
+      // ‼️ THE DIVERGENCE FLOOR IS NOT LOWERED FOR IT, AND THE PROBE CAUGHT THE ATTEMPT. The
+      // first cut set minDivergent to three on the grounds that a tool page is mostly tool.
+      // That is the same argument every format could make, and the floor exists because a
+      // shape-specific exemption is how a page becomes four pricing sections and two fear
+      // sections. What a short shape may change is how many sections it has, so the FLOOR
+      // stayed and the minimum rose to meet it: six sections, five of them about something
+      // other than price, fear or process, which the four fields below already are.
+      minSections: 6,
+      maxSections: 10,
+      minGaps: 3,
+      minDivergent: 5,
+      exemptSubjects: ["comparison"],
+      openingRule:
+        "ANSWER FIRST MEANS THE TOOL IS FIRST. The asset sits at the top of the page and the " +
+        "first section is what it answers and how to read the result, never a preamble about why it matters.",
+    },
+  },
+  {
+    id: "data_study",
+    label: "Data study",
+    fitsThemes: ["Comparison", "Price", "Guide", "General"],
+    // Deliberately none. A study's shape says nothing about which offer it hands over to, and
+    // the theme already carries every value the lead_magnets check allows.
+    magnetCategory: null,
+    askedAs: {
+      shape:
+        "Numbers we measured ourselves, with the method, the sample and the limits stated as plainly as the finding.",
+      requires: [
+        "the one question the numbers answer",
+        "what was counted, over what, and when",
+        "how big the sample was",
+        "what the numbers do NOT show",
+      ],
+      refuse: [
+        "a figure nobody here measured, which is another outfit's study with our name on it",
+        "a sample too small to carry the claim being made from it",
+        "a finding stated without the method that produced it",
+        "rounding a number up to make it a better headline",
+      ],
+    },
+    dataset: [
+      {
+        key: "question",
+        label: "What the numbers answer",
+        kind: "string",
+        required: true,
+        prompt: "What question do these numbers settle?",
+      },
+      {
+        key: "whatWasCounted",
+        label: "What was counted",
+        kind: "string",
+        required: true,
+        prompt: "What exactly did you count, and over what period?",
+      },
+      {
+        key: "sampleSize",
+        label: "How big the sample was",
+        kind: "number",
+        required: true,
+        prompt: "How many did you look at?",
+      },
+      {
+        key: "method",
+        label: "How it was measured",
+        kind: "string",
+        required: true,
+        prompt: "How did you measure it? Somebody has to be able to repeat this.",
+      },
+      {
+        key: "findings",
+        label: "What came back",
+        kind: "row[]",
+        required: true,
+        prompt: "What did you find? One line per finding, with the number.",
+      },
+      {
+        key: "limits",
+        label: "What it does not show",
+        kind: "string",
+        required: true,
+        prompt: "What would somebody be wrong to conclude from this?",
+      },
+    ],
+    outline: {
+      minGaps: 4,
+      minDivergent: 5,
+      exemptSubjects: ["comparison"],
+      mandatoryShapes: ["what", "how"],
+      openingRule:
+        "ANSWER FIRST MEANS LEAD WITH THE FINDING AND THE SAMPLE IN THE SAME BREATH. The first " +
+        "section states what was found and what it was found across, before any of the method is explained.",
     },
   },
 ] as const;

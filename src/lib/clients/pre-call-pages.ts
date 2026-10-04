@@ -83,7 +83,7 @@ async function frameContext(
   const { loadOffer, isLocked } = await import("./offers");
   const { confirmedAvatarFor } = await import("./avatars");
   const { conciergeTenant } = await import("@/lib/concierge/for-client");
-  const { anchorFor } = await import("@/lib/concierge/magnet-drafts");
+  const { anchorFor } = await import("@/lib/concierge/magnet-anchor");
   const { stepNumber } = await import("@/config/delivery-steps");
 
   const [offer, avatar, tenant, client] = await Promise.all([
@@ -707,22 +707,16 @@ async function draftOne(
     // candidate would otherwise mint a second magnet. Non-fatal, and deliberately so. The page is
     // already saved by this point, so a failure here costs an offer and never the draft, which is
     // the right way round.
+    // ‼️ THE FRAME NO LONGER MINTS A MAGNET, AND THIS IS WHERE IT DID (2026-09-29).
+    // A drafted page used to stage its planned framing as a candidate and approve it straight
+    // through, which was the one insert into lead_magnets. Matthew's call: a page does not get
+    // its own invented offer.
+    //
+    // page_plan.magnet_frame SURVIVES and is still written by `magnet N pick K` at step 21.
+    // It is the framing of the anchor -- the words this page uses to hand over to the house
+    // offer -- and the CTA sentence below is exactly what it is for. What went is the step
+    // that turned that framing into a new row in the catalogue.
     let magnetNote = "";
-    if (!page.leadMagnetKey && row.frame) {
-      const { stageFrameCandidate, approveMagnetCandidate } = await import("@/lib/concierge/magnet-drafts");
-      const staged = await stageFrameCandidate({
-        clientId,
-        pageId: page.id,
-        frame: row.frame,
-        body: drafted.page.answerMd,
-      });
-      if (staged.ok) {
-        const minted = await approveMagnetCandidate({ clientId, pageId: page.id, candidateId: staged.candidateId, by: env.by });
-        if (!minted.ok) magnetNote = minted.error;
-      } else {
-        magnetNote = staged.error;
-      }
-    }
 
     // ‼️ THE CTA SENTENCE LANDS ON THE PAGE HERE, AND AFTER THE MINT RATHER THAN BEFORE IT.
     // The decision was made on the plan row, because it is made while the plan is approved and there
@@ -1035,11 +1029,32 @@ export async function verifyPreCallPages(clientId: string): Promise<PreCallCheck
   }
 
   const magnets = withBody.filter((r) => pages.get(r.pageId as string)?.leadMagnetKey).length;
+
+  // ‼️ THE TOOL IS THE EIGHTH SLOT AND IT IS CHECKED SEPARATELY, WHICH IS WHAT "its own slot"
+  // MEANS IN A VERIFIER. The prompt said to widen a count of seven; this function never counted
+  // one, so there was nothing to widen. What it could not say before is whether the tool a client
+  // picked at step twelve had actually been built, and a tool nobody built is the one page Matthew
+  // demos on the call.
+  //
+  // Only when a tool was PICKED. A client with no tool is not an incomplete client: the tool is an
+  // eighth page beside the seven, not a required one.
+  const { clientTool } = await import("./tool-lane");
+  const tool = await clientTool(clientId).catch(() => null);
+  if (tool && tool.status !== "live" && !tool.pageId) {
+    return {
+      ok: false,
+      broken: false,
+      found: `the \`${tool.componentKey}\` tool is picked but has no page yet`,
+      todo: "Draft its page in the page studio and set its component key, or \`tool pick\` a different one at step twelve.",
+    };
+  }
+
   return {
     ok: true,
     evidence: [
       `${withBody.length} drafts in client_pages linked to approved plan rows (1 pillar, ${withBody.length - 1} supports)`,
       `${magnets} of them carry a magnet framing the anchor offer`,
+      ...(tool ? [`plus the ${tool.componentKey} tool page, the eighth slot`] : []),
     ],
   };
 }

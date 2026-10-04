@@ -33,6 +33,7 @@ import {
 import { HUB_FACES, FACE_STACKS } from "../src/lib/hub/faces";
 import { safeFontFamily } from "../src/lib/hub/theme";
 import type { HubClient } from "../src/lib/hub/resolve";
+import { subdomainDestination } from "../src/lib/hub/destinations";
 
 // tsconfig sets jsx:"preserve" for Next, so tsx compiles the components with the classic
 // transform and expects React in scope. Same shim as _probe-hub-skin-live.ts.
@@ -159,9 +160,11 @@ const replica = [
 ];
 const href = (p: string) => `/x/${p}`;
 
+const dest = subdomainDestination("probe-client", host);
+
 const render = (skin: StoredSkin | null) => ({
-  index: renderToStaticMarkup(React.createElement(HubIndexBody, { client: client(skin), host, pages })),
-  answer: renderToStaticMarkup(React.createElement(HubAnswerBody, { client: client(skin), host, page: answer })),
+  index: renderToStaticMarkup(React.createElement(HubIndexBody, { client: client(skin), destination: dest, pages })),
+  answer: renderToStaticMarkup(React.createElement(HubAnswerBody, { client: client(skin), destination: dest, page: answer })),
   replica: renderToStaticMarkup(
     React.createElement(HubReplicaBody, { client: client(skin), page: replica[1], pages: replica, href })
   ),

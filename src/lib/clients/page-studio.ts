@@ -630,29 +630,14 @@ async function claim(session: Session, n: number): Promise<void> {
       "Or just talk, and what you send goes into the page word for word. `undo` takes the last one back out."
   );
 
-  // ‼️ THE OFFERS ARE WRITTEN WITH THE PAGE, NOT ASKED FOR AFTERWARDS.
-  // Matthew, 2026-09-04: "I want lead magnet ideas ready as drafts in the onboarding page for
-  // speed", and the magnet belongs "inside the drafting workflow not side by side it". So this
-  // hangs off the claim rather than off a step or a command: by the time anybody types `magnet`,
-  // five offers about THIS client and THIS question are already in the thread.
+  // ‼️ NOTHING IS MINTED WHEN A PAGE IS CLAIMED ANY MORE, AND THIS IS WHERE IT USED TO BE.
+  // Claiming a question drafted five invented offers about it before anybody had typed a word
+  // of the page. Matthew's call, 2026-09-29: a page does not get its own offer. It hands over
+  // to one of the house offers, or it IS a tool.
   //
-  // ‼️ ONLY ON A NEW PAGE. `resumed` means somebody is coming back to a draft they already
-  // started, and re-rolling five offers they have already read, possibly after they picked one,
-  // would replace a decision with a fresh guess.
-  //
-  // A failure is SAID and never blocks the claim. Drafting a page with no offers ready is slow;
-  // it is not broken, and `magnet more` is the retry.
-  if (!opened.resumed) {
-    const { draftMagnetsForPage } = await import("@/lib/concierge/magnet-drafts");
-    const drafted = await draftMagnetsForPage(session.clientId, opened.id);
-    await say(
-      session.threadTs,
-      drafted.ok
-        ? renderDrafts(drafted.candidates)
-        : `:warning: No offers were drafted for this page: ${drafted.error}\n` +
-          "`magnet more` tries again, or `magnet <key>` picks one from the catalogue."
-    );
-  }
+  // What replaced it is not a different generator, it is the absence of one. The page's offer
+  // comes from client_pages.lead_magnet_key, which the ladder fills from the house offers when
+  // nothing names one, and a tool page's offer is the tool.
 }
 
 /** Append what he said, verbatim, and say what happened to it. */
@@ -1553,7 +1538,7 @@ async function planContext(
   const { loadOffer, isLocked } = await import("./offers");
   const { confirmedAvatarFor } = await import("./avatars");
   const { conciergeTenant } = await import("@/lib/concierge/for-client");
-  const { anchorFor } = await import("@/lib/concierge/magnet-drafts");
+  const { anchorFor } = await import("@/lib/concierge/magnet-anchor");
 
   const [offer, avatar, tenant, client] = await Promise.all([
     loadOffer(clientId),
@@ -1604,7 +1589,7 @@ async function planCommand(session: Session, arg: string): Promise<void> {
       return;
     }
     const { conciergeTenant } = await import("@/lib/concierge/for-client");
-    const { anchorFor } = await import("@/lib/concierge/magnet-drafts");
+    const { anchorFor } = await import("@/lib/concierge/magnet-anchor");
     const tenant = await conciergeTenant(session.clientId);
     const anchor = tenant ? await anchorFor(session.clientId, tenant.audience) : null;
     await say(session.threadTs, [lead, plan.formatPlan(current.rows, anchor?.title ?? null)].filter(Boolean).join("\n\n"));
@@ -1901,34 +1886,6 @@ async function check(session: Session): Promise<void> {
 }
 
 /**
- * The five, as a person reads them before picking one.
- *
- * Numbered rather than keyed, because these do not have keys yet: a candidate only becomes a
- * `magnet_key` at the moment somebody approves it. The number is positional against
- * draftsForPage(), which orders by created_at so the list is stable between two readings.
- */
-function renderDrafts(
-  drafts: Array<{ title: string; promise: string; ctaLabel: string; rationale: string | null }>
-): string {
-  if (drafts.length === 0) {
-    return "No offers came back for this page. `magnet more` tries again.";
-  }
-  return [
-    `*${drafts.length} offers written for this page.* \`magnet 1\` to \`magnet ${drafts.length}\` picks one.`,
-    "",
-    ...drafts.flatMap((d, i) =>
-      [
-        `*${i + 1}.* ${d.title}`,
-        `    _"${d.ctaLabel}"_ on the pill. ${d.promise}`,
-        d.rationale ? `    ${d.rationale}` : "",
-      ].filter(Boolean)
-    ),
-    "",
-    "None of them right? `magnet more` writes five different ones, `magnet no` sets them aside.",
-  ].join("\n");
-}
-
-/**
  * `magnet` — what this page is written to earn, named before it is drafted.
  *
  * ‼️ IT IS A COMMAND HERE FOR THE SAME REASON IT IS A DROPDOWN ON THE BOARD: the Slack lane is a
@@ -1938,15 +1895,14 @@ function renderDrafts(
  *
  * Bare `magnet` lists. `magnet <key>` sets. `magnet none` clears it back to the ladder.
  *
- * ‼️ IT ALSO LISTS THE FIVE THIS PAGE HAD WRITTEN FOR IT, AND THOSE COME FIRST (2026-09-04).
- * Until now every client's list was the same six library rows, none of them about this client,
- * because nothing in src/ had ever inserted into lead_magnets. draftMagnetsForPage runs when the
- * page is claimed, so by the time anybody types this the five are already here. `magnet 3` mints
- * one and points the page at it; `magnet more` re-rolls; the catalogue keys still work as before.
+ * ‼️ IT PICKS FROM THE HOUSE OFFERS AND NO LONGER MINTS ONE (2026-09-29). It used to list five
+ * offers written for THIS page, drafted the moment the page was claimed, and `magnet 3` minted
+ * the chosen one into lead_magnets. That whole lane is gone: a page does not get its own
+ * invented offer, it hands over to one of the house offers or it IS a tool.
  *
- * ‼️ A BARE DIGIT IS SAFE HERE AND IS NOT SAFE ONE LEVEL UP. The top-level digit branch claims a
- * page and only fires while session.pageId is null; this one requires a claimed page. They can
- * never both match, which is why the number does not have to be spelled some other way.
+ * What did not change is the mechanism. client_pages.lead_magnet_key was always the right
+ * pointer and still is; only what can fill it changed, from five things a model wrote about one
+ * question to the small set of things this business actually gives people.
  */
 async function magnet(session: Session, arg: string): Promise<void> {
   if (!session.pageId) {
@@ -1956,8 +1912,6 @@ async function magnet(session: Session, arg: string): Promise<void> {
 
   const pageId = session.pageId;
   const { magnetsForClient } = await import("@/lib/concierge/for-client");
-  const { draftsForPage, approveMagnetCandidate, draftMagnetsForPage, rejectAllDrafts } =
-    await import("@/lib/concierge/magnet-drafts");
   const choices = await magnetsForClient(session.clientId);
 
   if (choices.length === 0) {
@@ -1980,120 +1934,46 @@ async function magnet(session: Session, arg: string): Promise<void> {
       .maybeSingle();
 
     const current = (page?.lead_magnet_key as string | null) ?? null;
-    const drafts = await draftsForPage(pageId);
-
-    const lines = [
-      current
-        ? `This page is written toward \`${current}\`.`
-        : "This page names no magnet, so the widget falls back to whatever the ladder picks.",
-    ];
-
-    if (drafts.length) {
-      lines.push(
-        "",
-        `*Written for this page* (\`magnet 1\` to \`magnet ${drafts.length}\` picks one):`,
-        ...drafts.flatMap((d, i) => [
-          `*${i + 1}.* ${d.title}`,
-          `    _"${d.ctaLabel}"_ on the pill. ${d.promise}`,
-          d.rationale ? `    ${d.rationale}` : "",
-        ]),
-        "",
-        "*Or one already in the catalogue:*"
-      );
-    } else {
-      lines.push("", "*The catalogue:*");
-    }
-
-    lines.push(
-      ...choices.map(
-        (c) =>
-          `\`${c.magnetKey}\` is ${c.title} (${c.scope})${c.deliverable ? "" : " · asset missing"}`
-      ),
-      "",
-      drafts.length
-        ? "`magnet <number>` picks one of the five, `magnet <key>` picks a catalogue one, " +
-          "`magnet more` writes five fresh ones, `magnet none` hands it back to the ladder."
-        : "`magnet <key>` to pick one, `magnet more` to write five for this page, " +
-          "`magnet none` to hand it back to the ladder."
-    );
-
-    await say(session.threadTs, lines.filter((l) => l !== "").join("\n"));
-    return;
-  }
-
-  // `magnet more` — the re-roll. Says so before it starts, because it takes a model call and a
-  // silent twenty seconds reads as a command that did nothing.
-  if (wanted === "more" || wanted === "again") {
-    await say(session.threadTs, "Writing five fresh offers for this page.");
-    const res = await draftMagnetsForPage(session.clientId, pageId, { replace: true });
-    if (!res.ok) {
-      await say(session.threadTs, `:warning: ${res.error}`);
-      return;
-    }
-    await say(session.threadTs, renderDrafts(res.candidates));
-    return;
-  }
-
-  // `magnet <number>` — approve one of this page's own drafts. Read fresh rather than trusting a
-  // number typed against a list somebody may have re-rolled since.
-  const asNumber = /^([0-9]{1,2})$/.exec(wanted);
-  if (asNumber) {
-    const drafts = await draftsForPage(pageId);
-    if (drafts.length === 0) {
-      await say(
-        session.threadTs,
-        "There are no drafted offers on this page right now. `magnet more` writes five."
-      );
-      return;
-    }
-    const picked = drafts[Number(asNumber[1]) - 1];
-    if (!picked) {
-      await say(session.threadTs, `Pick a number between 1 and ${drafts.length}.`);
-      return;
-    }
-
-    const approved = await approveMagnetCandidate({
-      clientId: session.clientId,
-      pageId,
-      candidateId: picked.id,
-      by: "page studio",
-    });
-
-    if (!approved.ok) {
-      await say(session.threadTs, `:warning: That was not set: ${approved.error}`);
-      return;
-    }
 
     await say(
       session.threadTs,
-      `This page now earns *${approved.title}*. The pill will read "${approved.ctaLabel}".\n` +
-        (approved.framesKey
-          ? `It is a framing of the anchor \`${approved.framesKey}\`, so the widget hands over that one offer.\n`
-          : `It is in this client's catalogue as \`${approved.magnetKey}\`, so any other page can name it too.\n`) +
-        "*Next:* `outline` writes the skeleton. `draft` will write the answer to stop where that offer begins."
-    );
-    return;
-  }
-
-  if (wanted === "no" || wanted === "reject") {
-    const res = await rejectAllDrafts(pageId, "page studio");
-    await say(
-      session.threadTs,
-      res.ok
-        ? `Set aside ${res.count} drafted offer${res.count === 1 ? "" : "s"}. \`magnet more\` writes five new ones.`
-        : `That did not save: ${res.error}`
+      [
+        current
+          ? `This page is written toward \`${current}\`.`
+          : "This page names no offer, so the widget falls back to whatever the ladder picks.",
+        "",
+        "*The house offers:*",
+        ...choices.map(
+          (c) =>
+            `\`${c.magnetKey}\` is ${c.title} (${c.scope})${c.deliverable ? "" : " · asset missing"}`
+        ),
+        "",
+        "`magnet <key>` points this page at one, `magnet none` hands it back to the ladder.",
+      ].join("\n")
     );
     return;
   }
 
   if (wanted === "none") {
     const { setPageMagnet } = await import("@/lib/hub/pages");
-    const res = await setPageMagnet(session.clientId, session.pageId, null);
+    const res = await setPageMagnet(session.clientId, pageId, null);
     await say(
       session.threadTs,
       res.ok
         ? "Cleared. The ladder decides what this page offers, which is the same thing on every page."
         : `That did not save: ${res.error}`
+    );
+    return;
+  }
+
+  // ‼️ A BARE DIGIT USED TO APPROVE ONE OF FIVE INVENTED OFFERS AND NOW MEANS NOTHING HERE.
+  // Saying so beats falling through to "there is no `2` for this client", which reads as a
+  // catalogue that happens not to contain it rather than as a lane that was removed.
+  if (/^[0-9]{1,2}$/.test(wanted)) {
+    await say(
+      session.threadTs,
+      "Offers are not written per page any more. Name one of the house offers above, " +
+        "or make this page a tool with `tool pick <n>` at step twelve."
     );
     return;
   }
@@ -2108,7 +1988,7 @@ async function magnet(session: Session, arg: string): Promise<void> {
   }
 
   const { setPageMagnet } = await import("@/lib/hub/pages");
-  const res = await setPageMagnet(session.clientId, session.pageId, picked.magnetKey);
+  const res = await setPageMagnet(session.clientId, pageId, picked.magnetKey);
   if (!res.ok) {
     await say(session.threadTs, `That did not save: ${res.error}`);
     return;
@@ -2563,7 +2443,7 @@ async function aimLines(clientId: string): Promise<string[]> {
   const { confirmedAvatarFor } = await import("./avatars");
 
   const { conciergeTenant } = await import("@/lib/concierge/for-client");
-  const { anchorFor } = await import("@/lib/concierge/magnet-drafts");
+  const { anchorFor } = await import("@/lib/concierge/magnet-anchor");
 
   const [offer, avatar, tenant] = await Promise.all([
     loadOffer(clientId),

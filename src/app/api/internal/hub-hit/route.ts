@@ -21,6 +21,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resolveHost } from "@/lib/hub/resolve";
 import { listPublished } from "@/lib/hub/pages";
+import { listSitePages } from "@/lib/hub/site-pages";
 import { recordHit, slugFromPath } from "@/lib/hub/analytics";
 
 export const runtime = "nodejs";
@@ -64,6 +65,25 @@ async function isRealPath(clientId: string, kind: string, path: string): Promise
   // The AI Referral Engine is one tool on one URL. It has no slugs at all.
   if (kind === "reviews") return false;
   if (HUB_FILES.has(path)) return true;
+
+  // ‼️ A `site` HOST HAS TWO PATH NAMESPACES AND THE CLOSED SET IS THE UNION OF BOTH.
+  // Its marketing pages live at one-segment paths in client_site_pages, and its answer pages
+  // live under /answers. Without this branch every hit on a Launch Lane client would be
+  // discarded as an unreal path, and the table this product is sold on would read zero for them
+  // while looking perfectly healthy for everybody else.
+  if (kind === "site") {
+    if (path === "/answers") return true;
+
+    if (path.startsWith("/answers/")) {
+      const answerSlug = path.slice("/answers/".length);
+      if (!answerSlug) return false;
+      const pages = await listPublished(clientId);
+      return pages.some((p) => p.slug === answerSlug);
+    }
+
+    const sitePages = await listSitePages(clientId);
+    return sitePages.some((p) => p.path === path);
+  }
 
   const slug = slugFromPath(path);
   if (!slug) return false;

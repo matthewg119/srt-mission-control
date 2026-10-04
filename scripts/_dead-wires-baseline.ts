@@ -5,7 +5,7 @@
 // column added by a migration and read by nothing fails BY NAME and names its own migration.
 //
 // ‼️ IT MAY ONLY GET SHORTER. Regenerate: bun run scripts/_probe-dead-wires.ts --write
-// Columns: 503
+// Columns: 497
 
 export const UNREAD_COLUMNS: readonly string[] = [
   "ai_decisions.raw_response",
@@ -345,15 +345,10 @@ export const UNREAD_COLUMNS: readonly string[] = [
   "onboarding2_leads.city",
   "onboarding2_leads.client_id",
   "onboarding2_leads.contact_id",
-  "onboarding2_leads.contact_name",
   "onboarding2_leads.ip_hash",
-  "onboarding2_leads.is_demo",
-  "onboarding2_leads.phone",
   "onboarding2_leads.qualifying",
   "onboarding2_leads.qualifying_answered",
   "onboarding2_leads.qualifying_completed_at",
-  "onboarding2_leads.signed_at",
-  "onboarding2_leads.signer_title",
   "onboarding2_leads.signing_id",
   "onboarding2_leads.source_url",
   "onboarding2_leads.state",
@@ -361,7 +356,6 @@ export const UNREAD_COLUMNS: readonly string[] = [
   "onboarding2_leads.utm_content",
   "onboarding2_leads.utm_medium",
   "onboarding2_leads.utm_source",
-  "onboarding2_leads.website",
   "onboarding2_signings.address_line1",
   "onboarding2_signings.address_postal",
   "onboarding2_signings.ai_visibility_score",

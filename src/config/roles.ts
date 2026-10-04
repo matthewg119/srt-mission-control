@@ -36,7 +36,7 @@ export const ROLE_LABEL: Record<DayRole, string> = {
 export const ROLE_ORDER: readonly DayRole[] = ["onboarder", "writer", "delivery", "outreach"];
 
 /**
- * ‼️ "outreach" IS PROSPECT-FACING ONLY. Talking to a CLIENT (weekly_report, referral_engine_handed)
+ * ‼️ "outreach" IS PROSPECT-FACING ONLY. Talking to a CLIENT (weekly_report, review_handover)
  * is delivery. If client comms ever become their own hat, that is a fifth role and a diff, not a
  * quiet reinterpretation of this one.
  *
@@ -66,7 +66,7 @@ export const STEP_ROLE: Record<StepKey, DayRole> = {
   pre_call_pages: "writer",
 
   // ── Before the call: building things rather than deciding them ─────────────
-  citation_cleanup_list: "delivery",
+  offsite_target_list: "delivery",
   hub_preview: "delivery",
   referral_engine_preview: "delivery",
   concierge_preview: "delivery",
@@ -85,17 +85,13 @@ export const STEP_ROLE: Record<StepKey, DayRole> = {
   first_page: "writer",
   day_zero_archive: "delivery",
   gbp_buildout: "delivery",
-  citation_cleanup: "delivery",
+  offsite_executed: "delivery",
   subdomain_live: "delivery",
   cards_printed: "delivery",
-  review_request_configured: "delivery",
-  referral_engine_handed: "delivery",
+  review_handover: "delivery",
   concierge_live: "delivery",
   tracking_installed: "delivery",
   self_report_field: "delivery",
-  time_log_entries: "delivery",
-  weekly_report: "delivery",
-  day_30_date: "delivery",
 };
 
 export function roleForStep(key: StepKey): DayRole {

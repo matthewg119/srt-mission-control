@@ -12,6 +12,7 @@
 // and it is invisible from a browser. Verify it with a request, never by reading the code.
 
 import { resolveHost } from "@/lib/hub/resolve";
+import { siteUrl } from "@/lib/hub/destinations";
 
 // NOT `export const revalidate`. That is a FULL-ROUTE cache, and revalidateTag() does not
 // reach it — so publishing a page busted the data cache while this handler kept serving a
@@ -50,7 +51,7 @@ export async function GET(
       "User-agent: *",
       "Allow: /",
       "",
-      `Sitemap: https://${host}/sitemap.xml`,
+      `Sitemap: ${siteUrl(resolved.destination, "sitemap.xml")}`,
       "",
     ].join("\n");
   })();

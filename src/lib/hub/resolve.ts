@@ -16,8 +16,24 @@ import { unstable_cache, revalidateTag } from "next/cache";
 import { supabaseAdmin } from "@/lib/db";
 import { readTheme, activeTheme, type HubTheme } from "@/lib/hub/theme";
 import { readSkin, activeSkin, type StoredSkin } from "@/lib/hub/skin";
+import { destinationFromRow, type Destination } from "@/lib/hub/destinations";
 
-export type HubKind = "hub" | "reviews";
+/**
+ * What a resolved hostname IS.
+ *
+ * `hub` is learn.{theirdomain}: an answer index plus one level of answer slugs, on a hostname a
+ * client's own registrar points at us. `reviews` is the referral engine. `site` is a Launch Lane
+ * client's whole website, on a domain SRT bought and holds, where the apex serves pasted
+ * marketing pages and /answers/* serves the same answer pages `hub` has always served.
+ *
+ * ‼️ ADDING A KIND CHANGES WHAT MIDDLEWARE LETS THROUGH, AND THE ORDER MATTERS.
+ * Middleware cannot tell these apart: it has no database, by design. Every external hostname
+ * gets the SAME path allowlist and the branch on kind happens here, after the row is resolved.
+ * So a path allowed for a `site` host is a path allowed on every client-controlled hostname,
+ * `hub` ones included. That is why the allowlist gained exactly one narrow pattern and not a
+ * prefix.
+ */
+export type HubKind = "hub" | "reviews" | "site";
 
 /** The cache tag every host row shares. Re-attaching a domain busts all of them. */
 export const HOSTS_TAG = "client-hosts";
@@ -72,9 +88,38 @@ export interface HubClient {
 }
 
 export type HostResolution =
-  | { status: "ok"; host: string; kind: HubKind; client: HubClient }
+  | {
+      status: "ok";
+      host: string;
+      kind: HubKind;
+      client: HubClient;
+      /**
+       * Where this hostname's pages live, for siteUrl().
+       *
+       * ‼️ CARRIED HERE BECAUSE THE LOOKUP ALREADY READ THE ROW. Every public URL the hub
+       * emits -- canonical, OG, the sitemap, llms.txt, the JSON-LD on the page -- used to
+       * be composed from `host` alone, which answers "what hostname served this request"
+       * rather than "where does this page live". Those are the same string on a subdomain
+       * and different on a subfolder, so a second lookup downstream would be a second
+       * chance to answer it the old way.
+       */
+      destination: Destination;
+    }
   | { status: "unknown" };
 
+// ‼️ THE EMBED NAMES ITS FOREIGN KEY, AND A BARE `clients!inner` IS A LIVE OUTAGE.
+//
+// docs/2026-09-29-destinations.sql added clients.default_destination_id referencing
+// client_hosts(id), so there are now TWO foreign keys between these two tables: client_hosts
+// points at clients, and clients points back. PostgREST refuses an ambiguous embed outright with
+// "Could not embed because more than one relationship was found", which resolve.ts turns into a
+// throw, which is a 500 on EVERY hub page and every subfolder page at once.
+//
+// Measured on production 2026-10-01: srtagency.com/learn answered 500 and the raw query named
+// this as the reason. Naming the constraint resolves it and cannot drift, because dropping that
+// FK would fail the query loudly here rather than silently picking the other direction.
+//
+// Any future embed between these tables must name its key too.
 const SELECT =
   "id, legal_name, dba_name, domain, website, address_line1, address_line2, city, state, " +
   "postal_code, phone, email, hours, language, review_destination_primary, review_workflow, theme, hub_skin";
@@ -82,7 +127,9 @@ const SELECT =
 async function lookup(host: string): Promise<HostResolution> {
   const { data, error } = await supabaseAdmin
     .from("client_hosts")
-    .select(`host, kind, enabled, clients!inner(${SELECT})`)
+    .select(
+      `id, host, kind, delivery, base_path, public_origin, site_key, enabled, clients!client_hosts_client_id_fkey!inner(${SELECT})`
+    )
     .eq("host", host)
     .eq("enabled", true)
     .maybeSingle();
@@ -95,7 +142,7 @@ async function lookup(host: string): Promise<HostResolution> {
 
   if (!data) return { status: "unknown" };
 
-  const row = data as unknown as {
+  const row = data as unknown as Record<string, unknown> & {
     host: string;
     kind: HubKind;
     clients: Record<string, unknown>;
@@ -103,7 +150,15 @@ async function lookup(host: string): Promise<HostResolution> {
   const c = row.clients;
   if (!c) return { status: "unknown" };
 
-  return { status: "ok", host: row.host, kind: row.kind, client: toHubClient(c) };
+  return {
+    status: "ok",
+    host: row.host,
+    kind: row.kind,
+    client: toHubClient(c),
+    // client_id is not selected: the join means it is the client we just read, and asking
+    // PostgREST for it as well would be a second name for the same fact.
+    destination: destinationFromRow({ ...row, client_id: c.id }),
+  };
 }
 
 /**
@@ -211,6 +266,64 @@ export async function resolveHost(rawHost: string): Promise<HostResolution> {
   const host = rawHost.trim().toLowerCase();
   if (!host) return { status: "unknown" };
   return cached(host);
+}
+
+// ────────────────────────────────────────────────────────────────────
+// The subfolder door
+// ────────────────────────────────────────────────────────────────────
+//
+// ‼️ A SECOND KEY INTO THE SAME TABLE, NOT A SECOND TABLE. A subfolder destination is
+// reached at /s/{siteKey} because the client's own server proxies to us: the Host header that
+// arrives is OURS, so there is no hostname to resolve on. Everything else about it -- the
+// client, the theme, the pages -- is identical, which is why this shares toHubClient and the
+// same cache tag rather than growing a parallel resolver.
+
+async function lookupSite(siteKey: string): Promise<HostResolution> {
+  const { data, error } = await supabaseAdmin
+    .from("client_hosts")
+    .select(
+      `id, host, kind, delivery, base_path, public_origin, site_key, enabled, clients!client_hosts_client_id_fkey!inner(${SELECT})`
+    )
+    .eq("site_key", siteKey)
+    .eq("enabled", true)
+    .maybeSingle();
+
+  // Same split as lookup(): a miss is 404, a failure is 503. An indexed subfolder going 404
+  // during a database blip is the same quiet deindexing, one delivery over.
+  if (error) throw new Error(`[hub/resolve] site lookup failed for ${siteKey}: ${error.message}`);
+  if (!data) return { status: "unknown" };
+
+  const row = data as unknown as Record<string, unknown> & {
+    host: string;
+    kind: HubKind;
+    clients: Record<string, unknown>;
+  };
+  const c = row.clients;
+  if (!c) return { status: "unknown" };
+
+  return {
+    status: "ok",
+    host: row.host,
+    kind: row.kind,
+    client: toHubClient(c),
+    destination: destinationFromRow({ ...row, client_id: c.id }),
+  };
+}
+
+const cachedSite = unstable_cache(lookupSite, ["hub-site"], {
+  revalidate: 300,
+  tags: [HOSTS_TAG],
+});
+
+/**
+ * Resolve a site key to its client.
+ *
+ * Same contract as resolveHost: `unknown` on a miss, THROWS on a failure.
+ */
+export async function resolveSite(rawKey: string): Promise<HostResolution> {
+  const key = rawKey.trim().toLowerCase();
+  if (!key) return { status: "unknown" };
+  return cachedSite(key);
 }
 
 /**

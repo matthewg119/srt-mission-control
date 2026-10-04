@@ -59,7 +59,7 @@ export interface AudienceProposal {
 /**
  * What to seed `concierge_configs.audience` with, and whether anybody should be asked.
  *
- * Pure and database free, so scripts/_probe-magnet-drafts.ts proves the whole mapping offline with
+ * Pure and database free, so scripts/_probe-house-offers.ts proves the whole mapping offline with
  * no model and no rows, the same way rungOf() is proved in magnets.ts.
  *
  * The caller passes the vertical from `verticalFor(clientId)` in clients/harvest.ts, which walks
@@ -80,7 +80,7 @@ export function proposeAudience(
    * audiences.ts already refuses to guess.
    *
    * ‼️ STILL PURE. The caller loads it (defaultStanceFor in clients/avatars.ts) and passes it in, so
-   * this stays database free and _probe-magnet-drafts.ts keeps proving the whole mapping offline.
+   * this stays database free and _probe-house-offers.ts keeps proving the whole mapping offline.
    */
   briefStance?: string | null
 ): AudienceProposal {

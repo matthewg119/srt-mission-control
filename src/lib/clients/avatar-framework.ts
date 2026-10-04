@@ -307,6 +307,16 @@ export interface FrameworkScriptInput {
   letter: string;
   /** The research heading contract, from researchHeadingContract() in deep-research-run.ts. */
   headingContract: readonly string[];
+  /**
+   * Where the four answers are brought back to.
+   *
+   * ‼️ IT IS A PARAMETER BECAUSE THE LAUNCH LANE HAS NO SLACK AND THIS SCRIPT SAID "Slack thread".
+   * That is the delivery lane's surface. A Launch Lane client is worked entirely on the dashboard,
+   * so the instruction named a place that does not exist for it and sent somebody looking for a
+   * thread nobody opened. Default is the Slack wording, so the lane that has always used this is
+   * unchanged.
+   */
+  returnTo?: string;
 }
 
 /**
@@ -329,7 +339,7 @@ export function buildFrameworkScript(input: FrameworkScriptInput): string {
     "Paste each message below, in order, into ONE conversation in claude.com (or ChatGPT). Wait for each",
     "answer before pasting the next. Turn deep research ON for message 3b only.",
     "",
-    "Bring back four answers into this Slack thread, each as its own message with its prefix:",
+    `Bring back four answers into ${input.returnTo ?? "this Slack thread"}, each as its own message with its prefix:`,
     "  research:       the deep research from message 3b",
     "  avatar sheet:   the answer to message 4",
     "  short offer:    the answer to message 5",

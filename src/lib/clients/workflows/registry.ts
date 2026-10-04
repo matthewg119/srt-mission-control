@@ -82,6 +82,43 @@ export const CLIENT_WORKFLOWS: Record<string, ClientWorkflow> = {
       return runGbpSocialPosts(ctx);
     },
   },
+  offsite_targets: {
+    key: "offsite_targets",
+    label: "Off-site targets",
+    description:
+      "Read every source the AI engines cited while answering this client's audit questions, roll them up by domain, classify each one, and save the list. Use it when somebody asks where the engines get their answers, or who to approach for a mention.",
+    needs: "an audit on file for this client",
+    // About the engines' sources, not about one buyer.
+    needsAudience: false,
+    run: async (ctx) => {
+      const { runOffsiteTargets } = await import("./offsite-targets");
+      return runOffsiteTargets(ctx);
+    },
+  },
+  quote_request: {
+    key: "quote_request",
+    label: "Ask for a source",
+    description:
+      "When the quality gate refuses a page for a claim nothing on file supports, draft an email asking a named expert for one quotable sentence that settles it. Use it instead of softening the claim.",
+    needs: "a page currently refused by the quality gate",
+    needsAudience: false,
+    run: async (ctx) => {
+      const { runQuoteRequest } = await import("./quote-request");
+      return runQuoteRequest(ctx);
+    },
+  },
+  citation_outreach: {
+    key: "citation_outreach",
+    label: "Off-site outreach drafts",
+    description:
+      "Draft one email per off-site target: the sites an AI engine cited while answering this client's market, and the subjects we named on our own roundups and reviews. Reviewed drafts only; nothing is queued and nothing sends.",
+    needs: "off-site targets on file and a locked offer",
+    needsAudience: false,
+    run: async (ctx) => {
+      const { runCitationOutreach } = await import("./citation-outreach");
+      return runCitationOutreach(ctx);
+    },
+  },
   post_call_email: {
     key: "post_call_email",
     label: "Post-call email",

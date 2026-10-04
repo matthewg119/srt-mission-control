@@ -43,7 +43,7 @@ export const REVIEW_LINK_STEPS = new Set([
   "offer_locked",
   "referral_engine_preview",
   "review_card_pdf",
-  "referral_engine_handed",
+  "review_handover",
 ]);
 
 export type SetReviewLinkResult =

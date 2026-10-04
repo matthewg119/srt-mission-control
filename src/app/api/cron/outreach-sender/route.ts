@@ -24,8 +24,27 @@ async function handle(req: NextRequest) {
   if (!isAuthorized(req)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
   const dry = req.nextUrl.searchParams.get("dry") === "1";
+
+  // ‼️ THE PASSENGER RUNS BEFORE THE SENDER'S OWN GATE, AND PUTTING IT AFTER WAS A DEAD FEATURE.
+  //
+  // This route returns on the next line whenever OUTREACH_SENDER_ENABLED is unset, which it is in
+  // production and has been the whole time. The onboarding nudge was added below that return, so
+  // it never executed once: measured 2026-10-03, a real abandoned signup sat for 22 hours with
+  // `nudged_at` null while the sweep's own query would have picked it up immediately.
+  //
+  // The two have nothing to do with each other. The nudge rides this file only for its five-minute
+  // schedule, so it belongs above anything that decides whether EMAIL should go out. Its errors are
+  // swallowed and reported in the body, so it still cannot fail the send either way.
+  let nudge: unknown = null;
+  try {
+    const { sweepAbandonedOnboardings } = await import("@/lib/onboarding2/nudge");
+    nudge = await sweepAbandonedOnboardings();
+  } catch (e) {
+    console.error("[cron/outreach-sender] onboarding nudge skipped:", (e as Error).message);
+  }
+
   if (!dry && !senderEnabled()) {
-    return NextResponse.json({ ok: true, skipped: "OUTREACH_SENDER_ENABLED is not set" });
+    return NextResponse.json({ ok: true, skipped: "OUTREACH_SENDER_ENABLED is not set", nudge });
   }
 
   try {
@@ -49,7 +68,7 @@ async function handle(req: NextRequest) {
       });
     }
 
-    return NextResponse.json({ ok: true, ...result, replies: replies?.replies ?? 0 });
+    return NextResponse.json({ ok: true, ...result, replies: replies?.replies ?? 0, nudge });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[cron/outreach-sender] failed:", message);

@@ -11,9 +11,12 @@ import { ReportHeader } from "@/components/audit-report/ReportHeader";
 import { ScoreGauge } from "@/components/audit-report/ScoreGauge";
 import { BlockBreakdown } from "@/components/audit-report/BlockBreakdown";
 import { PromptTable } from "@/components/audit-report/PromptTable";
+import { SourcesSection } from "@/components/audit-report/SourcesSection";
+import { targetsForReport } from "@/lib/clients/offsite-targets";
 import { CompetitorSection } from "@/components/audit-report/CompetitorSection";
 import { MethodologyFooter } from "@/components/audit-report/MethodologyFooter";
 import { PricingCta } from "@/components/audit-report/PricingCta";
+import { ReferralEngineNudge } from "@/components/audit-report/ReferralEngineNudge";
 import type { AuditReportRow, AuditRunRow } from "@/lib/audit-engine/types";
 
 export const metadata: Metadata = {
@@ -73,6 +76,12 @@ export default async function ReportPage({ params }: { params: { slug: string } 
             citedDomains={view.citedDomains}
             likelyCompetitors={row.competitors}
           />
+          {/*
+            Where the engines read before answering. The data was always collected and never
+            shown: see SourcesSection. It renders nothing when a report has no citations, which
+            is every report run before the engines started returning them.
+          */}
+          <SourcesSection targets={await targetsForReport(row.id)} />
         </>
       )}
 
@@ -98,6 +107,37 @@ export default async function ReportPage({ params }: { params: { slug: string } 
         }}
       />
       <MethodologyFooter createdAt={row.created_at} />
+
+      {/*
+        The same door as Get Started above, reachable from anywhere on the page.
+
+        ‼️ EVERY PROP IS THE ONE PricingCta WAS JUST GIVEN, INCLUDING utm, AND THAT IS NOT
+        DUPLICATION TO TIDY AWAY. Both build their href through buildOnboarding2Url(), so a prop
+        dropped here does not break anything visible: it silently produces a funnel link missing a
+        score, a slug or a campaign, and the signing that follows is then attributable to nothing.
+        The two lists must stay equal. If a third surface ever needs them, lift them into one
+        object in this component rather than letting a third copy drift.
+
+        ‼️ RENDERED EVEN ON A PENDING OR FAILED REPORT, deliberately. Somebody whose audit did not
+        complete has still asked us to look at them, and the free engine does not depend on a score.
+        buildOnboarding2Url omits missing params rather than sending them blank, which is documented
+        behaviour on the destination.
+      */}
+      <ReferralEngineNudge
+        score={row.score}
+        city={row.city}
+        business={row.client_name}
+        competitor={view.mostRecommended[0]?.name ?? null}
+        mentioned={view.totalMentioned}
+        totalPrompts={view.totalPrompts}
+        reportSlug={params.slug}
+        utm={{
+          utmSource: row.utm_source,
+          utmMedium: row.utm_medium,
+          utmCampaign: row.utm_campaign,
+          utmContent: row.utm_content,
+        }}
+      />
     </main>
   );
 }

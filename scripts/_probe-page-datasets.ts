@@ -60,7 +60,6 @@ const NEW_COLUMNS: Record<string, string[]> = {
     "variant_no", "rerun_of",
   ],
   page_plan: ["audience_id", "offer_id", "angle_id"],
-  page_magnet_candidates: ["plan_id", "angle_id"],
   page_angles: [
     "client_id", "plan_id", "audience_id", "offer_id", "idea", "promise", "narrative",
     "indoctrination", "awareness_entry", "awareness_target", "proof_needed", "status",

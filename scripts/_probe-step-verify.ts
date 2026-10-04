@@ -78,9 +78,37 @@ const verifierKeys = Object.keys(STEP_VERIFIERS);
 // call pack and keep the rest." Nothing else on the board moved. Their orphaned rows are deleted
 // AFTER the deploy by docs/2026-09-12-call-pack-orphans.sql, because loadRows and reachableCursor
 // both re-seed a client whose row count is short, so an early delete puts them straight back.
+//
+// ‼️ DOWN to 37 on 2026-09-29, the second time it has gone backwards, and four steps came off
+// at once. What is being acknowledged:
+//
+//   review_request_configured + referral_engine_handed -> review_handover. They were always one
+//   conversation with one person: the named human at the clinic who will actually ask patients
+//   for reviews. Split, the handover could be ticked while nobody had been told how requests go
+//   out, which is the half that decides whether any of it happens. The verifier now checks the
+//   Google review URL, which is what makes the Post on Google button appear at all: without it
+//   every customer gets the fallback hint telling her to go and find the page herself.
+//
+//   time_log_entries and weekly_report were PREDICATES ABOUT ONGOING BEHAVIOUR, not work. One
+//   counted whether the log had rows, the other whether reports were firing. A board is a list
+//   of things to do, and a permanent row that is true this week and false next week is not one.
+//   Both already had a nudge in the daily digest, which is where an ongoing fact belongs.
+//
+//   day_30_date asked somebody to write down Day 0 plus thirty. report-reminders.ts already
+//   derives it from the day_zero_archive stamp and nudges on the exact day.
+//
+// The two renames (citation_cleanup_list -> offsite_target_list, citation_cleanup ->
+// offsite_executed) changed no count: a rename is a new key plus a LEGACY_STEP_KEYS entry.
+// review_tool_handed was REPOINTED rather than left, because currentStepKey does one hop and not
+// a chain, so a two-hop entry is a dead Slack button that looks alive.
+//
+// The dns_records + subdomain_live merge in the prompt was NOT taken: it crosses the phase
+// contiguity rule and inverts a blocker, both probe-enforced. Matthew's call, made with both
+// stated: 37 rather than 36.
+//
 // If you are reading this because it failed: update the number here, the prose count at the top of
 // src/config/delivery-steps.ts, and the one in step-verify.ts.
-ok(`${stepKeys.length} steps defined`, stepKeys.length === 41, `found ${stepKeys.length}, expected 41`);
+ok(`${stepKeys.length} steps defined`, stepKeys.length === 37, `found ${stepKeys.length}, expected 37`);
 
 const missing = stepKeys.filter((k) => !(k in STEP_VERIFIERS));
 ok("every step has a verifier", missing.length === 0, missing.join(", "));
@@ -212,8 +240,7 @@ No client id given, skipping the live half. Pass one to run all ${stepKeys.lengt
     "day_zero_archive",
     "gbp_buildout",
     "cards_printed",
-    "referral_engine_handed",
-    "day_30_date",
+    "review_handover",
   ];
   for (const key of THREAD_TIER) {
     const verdict = await verifyStep(clientId, key);

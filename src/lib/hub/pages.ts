@@ -49,6 +49,16 @@ export interface ClientPage {
    * written before this column existed.
    */
   ctaLine: string | null;
+  /**
+   * The reviewed component this page renders above its body, from `component_key`.
+   *
+   * ‼️ A KEY INTO src/config/tool-components.ts, NEVER A PATH AND NEVER A URL. An unknown
+   * key renders nothing at all: a page missing its tool is a visible, fixable state, and
+   * rendering something for it would put a component nobody chose on a client's live domain.
+   *
+   * Null on every ordinary page, which is all of them. Only a tool page names one.
+   */
+  componentKey: string | null;
   status: PageStatus;
   publishedAt: string | null;
   updatedAt: string | null;
@@ -57,7 +67,7 @@ export interface ClientPage {
 // ‼️ ONE STRING LITERAL, NOT A CONCATENATION. supabase-js parses this at the type level, and
 // "a" + "b" widens to `string`, which turns every read here into GenericStringError.
 const COLUMNS =
-  "id, slug, title, question, prompt_block, answer_md, meta_description, lead_magnet_key, cta_line, status, published_at, updated_at";
+  "id, slug, title, question, prompt_block, answer_md, meta_description, lead_magnet_key, cta_line, component_key, status, published_at, updated_at";
 
 function toPage(row: Record<string, unknown>): ClientPage {
   return {
@@ -70,6 +80,7 @@ function toPage(row: Record<string, unknown>): ClientPage {
     metaDescription: (row.meta_description as string | null) ?? null,
     leadMagnetKey: (row.lead_magnet_key as string | null) ?? null,
     ctaLine: (row.cta_line as string | null) ?? null,
+    componentKey: (row.component_key as string | null) ?? null,
     status: row.status as PageStatus,
     publishedAt: (row.published_at as string | null) ?? null,
     updatedAt: (row.updated_at as string | null) ?? null,
@@ -383,7 +394,20 @@ export async function savePage(input: SavePageInput): Promise<{ ok: true; id: st
 export async function setPublished(
   clientId: string,
   pageId: string,
-  published: boolean
+  published: boolean,
+  /**
+   * Where it went. Written in the SAME statement as the status, deliberately.
+   *
+   * ‼️ A SEPARATE UPDATE WOULD BE A WINDOW IN WHICH A PAGE IS LIVE AND DOES NOT KNOW WHERE.
+   * Every URL this page emits -- its own canonical, its entry in the sitemap, the link in
+   * llms.txt -- is built from the destination, so a row that is `published` with a null
+   * destination_id for even one read is a row that answers those questions with the old
+   * subdomain. One statement, or the two facts can disagree.
+   *
+   * Undefined leaves the column alone, which is what an unpublish wants: taking a page down
+   * must not forget where it had been.
+   */
+  destinationId?: string | null
 ): Promise<{ ok: true; slug: string } | { ok: false; error: string }> {
   const { data: existing, error: readError } = await supabaseAdmin
     .from("client_pages")
@@ -400,6 +424,7 @@ export async function setPublished(
     updated_at: new Date().toISOString(),
   };
   if (published && !existing.published_at) patch.published_at = new Date().toISOString();
+  if (destinationId !== undefined) patch.destination_id = destinationId;
 
   const { error } = await supabaseAdmin
     .from("client_pages")

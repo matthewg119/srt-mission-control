@@ -31,7 +31,6 @@ import {
 import { conciergeSwitchState } from "@/lib/clients/concierge-enabled";
 import { embedSnippet } from "@/lib/clients/concierge-addon";
 import { magnetsForClient } from "@/lib/concierge/for-client";
-import { draftsByPageFor } from "@/lib/concierge/magnet-drafts";
 import { ThemeForm, type ThemeView } from "./theme-form";
 import { BaselineForm } from "./baseline-form";
 import { CompetitorForm } from "./competitor-form";
@@ -175,12 +174,11 @@ export default async function ClientDetailPage({
   const hubMagnets: MagnetChoiceView[] = await magnetsForClient(id);
   // The five offers written for each page, so the picker leads with this client's own rather than
   // the shared catalogue. One query for every page, keyed by page id.
-  const hubMagnetCandidates = await draftsByPageFor(id);
 
   // The three grids a person fills in: the presence sweep (steps 4, 5 and 25), the competitor
   // pick (step 7) and the review audit. Every one of them writes a column that had a
   // reader and no writer until 2026-08-24, which is why three delivery steps could never be
-  // confirmed and citation_cleanup returned a green tick over work nobody had done.
+  // confirmed and offsite_executed returned a green tick over work nobody had done.
   const [sweepRows, candidates, reviewRows, avatarCandidates, avatarConfirmed] = await Promise.all([
     loadSweep(id),
     loadCandidates(id),
@@ -703,8 +701,8 @@ export default async function ClientDetailPage({
         <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="text-sm font-medium text-white">Review handover</h2>
           <span className="text-xs text-[rgba(255,255,255,0.4)]">
-            steps {stepNumber("review_request_configured")} and{" "}
-            {stepNumber("referral_engine_handed")}
+            steps {stepNumber("review_handover")} and{" "}
+            {stepNumber("review_handover")}
           </span>
         </div>
         <ReviewWorkflowForm clientId={id} view={reviewWorkflowView} />
@@ -830,7 +828,6 @@ export default async function ClientDetailPage({
           pages={hubPages}
           prompts={auditPrompts}
           magnets={hubMagnets}
-          magnetCandidates={hubMagnetCandidates}
           day0ArchivedAt={(client.day_0_archived_at as string | null) ?? null}
           day0Source={(client.day_0_source as string | null) ?? null}
         />

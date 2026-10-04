@@ -23,6 +23,7 @@
 import { NextResponse, type NextRequest, type NextFetchEvent } from "next/server";
 import { auth } from "@/lib/auth";
 import { classifyHost, normalizeHost } from "@/lib/hub/host-classify";
+import { externalPathDecision, hubRewritePath, isConciergePath } from "@/lib/hub/hub-paths";
 
 /**
  * A bare 404. Never 401 or 403, which confirm the route exists, and never a redirect to
@@ -43,25 +44,12 @@ function notFound(json: boolean): NextResponse {
       });
 }
 
-/** The per-host generated files. Rewritten, because public/robots.txt is the app's own. */
-const HUB_FILES = new Set(["/robots.txt", "/sitemap.xml", "/llms.txt"]);
-
-/**
- * One page segment. No slash, no dot, no encoded traversal — so nothing under /api or
- * /dashboard can match, and neither can /foo.php. The hub's whole public surface is the
- * index plus one level of slugs.
- */
-const HUB_SLUG = /^\/[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$/;
-
-/**
- * The only API route reachable on a client-controlled hostname.
- *
- * ‼️ A NAME, NOT A PREFIX, AND IT STAYS THAT WAY. Turning this into a startsWith on
- * "/api/hub/" would publish every present and future route under that folder on every
- * hostname a client's registrar points at us. The hit log deliberately lives outside that
- * folder for the same reason -- see HIT_ENDPOINT below.
- */
-const HUB_API = "/api/hub/reviews/submit";
+// ‼️ THE PATH ALLOWLIST MOVED TO src/lib/hub/hub-paths.ts AND DID NOT CHANGE MEANING.
+// HUB_FILES, HUB_SLUG, HUB_ANSWER, HUB_API and CONCIERGE_FRAME live there now, next to the
+// predicates that read them, because inlined here nothing could reach them: the one thing
+// standing between a client's DNS zone and the CRM had no test. It does now
+// (scripts/_probe-hub-allowlist.ts). That file is pure and imports nothing, exactly as
+// host-classify.ts is and for the same stated reason.
 
 /**
  * Where the hit log is posted.
@@ -74,13 +62,21 @@ const HUB_API = "/api/hub/reviews/submit";
 const HIT_ENDPOINT = "/api/internal/hub-hit";
 
 /**
- * The concierge frame document: /w/{client-slug}, one segment, same shape rule as HUB_SLUG.
+/**
+ * The subfolder door: /s/{siteKey}, then the hub path under it.
  *
- * No dot, no slash, no encoded traversal, so /w/../api/anything cannot match and neither can
- * /w/foo.php. The slug is `clients.slug`, which is already unique-constrained, so the embed
- * snippet a clinic pastes into their site carries a name they recognise rather than a uuid.
+ * ‼️ INTERNAL BRANCH ONLY, AND THAT IS NOT A DETAIL. A client proxies
+ * their-site.com/learn to us, so the request arrives on OUR hostname with their path on it.
+ * Allowing /s/* on the external branch would publish every client subfolder on every
+ * client hostname, which is the exact cross-serving the /hub/{host} path segment exists to
+ * prevent. HUB_SLUG forbids a slash, so this can never be reached from outside by accident:
+ * it is refused by the allowlist with no rule of its own.
+ *
+ * ‼️ AND IT IS GATED ON A SHARED SECRET. Internal hosts include *.vercel.app, where the
+ * inner Host header is caller-controlled. Without the header this is a way to read any
+ * client's pages off a deployment URL by guessing a site key.
  */
-const CONCIERGE_FRAME = /^\/w\/[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$/;
+const SITE_PATH = /^\/s\/[a-z0-9][a-z0-9-]{0,62}(?:\/[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?|\/(?:robots\.txt|sitemap\.xml|llms\.txt))?$/;
 
 /**
  * Record one hub request, out of band.
@@ -186,39 +182,32 @@ export default function middleware(req: NextRequest, ev: NextFetchEvent) {
   // there the hostname belongs to a client's registrar. Do not read this as permission to
   // loosen that one.
   if (hostClass === "concierge") {
-    const ok =
-      path === "/embed.js" ||
-      CONCIERGE_FRAME.test(path) ||
-      path === "/api/concierge" ||
-      path.startsWith("/api/concierge/");
-    if (!ok) return notFound(path.startsWith("/api/"));
+    if (!isConciergePath(path)) return notFound(path.startsWith("/api/"));
     return NextResponse.next();
   }
 
   // ── EXTERNAL: a hostname somebody else's registrar points at us ─────────────
   if (hostClass === "external") {
-    // The hub's internal path is not a public route. It is reachable only by the rewrite
-    // below, so asking for it directly is a miss like any other.
-    if (path === "/hub" || path.startsWith("/hub/")) return notFound(false);
+    // ‼️ THE WHOLE DECISION, IN ORDER, IN ONE PURE FUNCTION. It used to be three checks
+    // sequenced here, where a test could reach the pieces but not the sequence, and reading one
+    // piece alone is actively misleading: the shape check says yes to /dashboard, and what makes
+    // that harmless is the rewrite two lines below, not the check. See hub-paths.ts.
+    const decision = externalPathDecision(path);
 
-    // The AI Referral Engine's submit endpoint. The host travels as a request header rather than
-    // in the path: an API route has no full-route cache to key, so there is nothing here
-    // for a header to leak across.
-    if (path === HUB_API) {
+    if (decision === "refuse") return notFound(path.startsWith("/api/"));
+
+    if (decision === "forward_api") {
       const headers = new Headers(req.headers);
       headers.set("x-hub-host", host);
       return NextResponse.next({ request: { headers } });
     }
-
-    const isHubPath = path === "/" || HUB_FILES.has(path) || HUB_SLUG.test(path);
-    if (!isHubPath) return notFound(path.startsWith("/api/"));
 
     // REWRITE, never redirect. The host goes in the PATH and not in a header, because
     // Next's full-route cache keys on the pathname: two clients sharing the path /pricing
     // behind an ISR cache keyed only by path would serve one clinic's page on the other
     // clinic's hostname. The host segment is what keeps those cache entries disjoint.
     const url = req.nextUrl.clone();
-    url.pathname = `/hub/${host}${path === "/" ? "" : path}`;
+    url.pathname = hubRewritePath(host, path);
 
     // AFTER the allowlist, so nothing refused above is ever counted, and out of band so the
     // rewrite below is returned at the same speed it always was.
@@ -232,6 +221,35 @@ export default function middleware(req: NextRequest, ev: NextFetchEvent) {
   // The hub is never double-served. The same page answering on a noindex host is a
   // canonical mess, and it keeps the two applications disjoint in both directions.
   if (path === "/hub" || path.startsWith("/hub/")) return notFound(false);
+
+  // ── The subfolder door ───────────────────────────────────────────────────
+  //
+  // A client's own server proxies a path to us and this answers it. The response carries
+  // x-robots-tag: noindex on OUR copy, because the canonical is on their origin and two
+  // indexable copies of one page is the duplicate content this whole model refuses.
+  if (path === "/s" || path.startsWith("/s/")) {
+    const secret = process.env.HUB_PROXY_SECRET;
+    // ‼️ UNSET IS CLOSED, NOT OPEN. A missing secret must not mean "no check": that is how
+    // a deployment without the variable set becomes a way to read every client's pages.
+    //
+    // ‼️ A QUERY PARAMETER IS ACCEPTED AS WELL AS A HEADER, AND THAT IS NOT A WEAKENING.
+    // A Vercel rewrite CANNOT set a request header: `rewrites` has no header field, and
+    // `headers` sets RESPONSE headers. A client whose whole integration is two lines in their
+    // vercel.json therefore has no way to send one, so a header-only door would be a door
+    // nobody can open by the means we are telling them to use.
+    //
+    // The two are equivalent in what they protect against. The request is server to server --
+    // their edge to our origin -- so the parameter never reaches a browser, never lands in a
+    // referrer and is not in any URL a visitor sees. What it defends is the same thing: a
+    // deployment URL plus a guessed site key.
+    const presented = req.headers.get("x-hub-proxy") ?? req.nextUrl.searchParams.get("k");
+    if (!secret || presented !== secret) return notFound(false);
+    if (!SITE_PATH.test(path)) return notFound(false);
+
+    const res = NextResponse.next();
+    res.headers.set("x-robots-tag", "noindex");
+    return res;
+  }
 
   // Unchanged from before the hub existed: NextAuth's own guard, on /dashboard only.
   // Everything else on this host keeps whatever protection it already had.

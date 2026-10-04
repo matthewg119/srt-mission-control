@@ -32,7 +32,12 @@ import { callClaudeJSON } from "@/lib/claude-calls";
 import { hasBannedDash } from "@/lib/copy-guard";
 import { supabaseAdmin } from "@/lib/db";
 import { isAwarenessStage, type AwarenessStage } from "@/lib/audit-engine/awareness";
-import { getPostFormat, isPostFormatId, type PostFormat, type PostFormatId } from "@/config/post-formats";
+import {
+  getPostFormat,
+  isPostFormatId,
+  type PostFormat,
+  type PostFormatId,
+} from "@/config/post-formats";
 import type { LadderRung } from "./offer-ladder";
 
 const MODEL = "claude-sonnet-4-6" as const;
@@ -409,8 +414,22 @@ const AUTO = /^\s*[`*_]*(angles?|magnets?|offers?)\s+auto[`*_]*\s*$/i;
  * "list the angles" would silently redraft all seven pages as list posts. Requiring `all` makes the
  * rewrite-everything verb impossible to type by accident.
  */
-const SHAPE =
-  /^\s*[`*_]*(angles?)\s+all\s+(answer[_ ]first|list|comparison|decision[_ ]guide|teardown)[`*_]*\s*$/i;
+// ‼️ THIS IS THE SECOND COPY OF THE FORMAT LIST AND IT FAILS SILENTLY, WHICH IS WHY A PROBE
+// GUARDS IT. client-headlines.ts holds the other copy as a Record<PostFormatId, string>, so
+// adding a format there is a compile error that names itself. Here it is an alternation inside
+// a regex: add a format to post-formats.ts and forget this line, and `angles all roundup`
+// matches nothing, falls through to the next pattern, and does something else without
+// complaining. A command that quietly does the wrong thing is worse than one that refuses.
+//
+// It stays a literal rather than being built from POST_FORMAT_IDS because a regex assembled by
+// string concatenation puts every backslash one escaping layer away from the thing it protects,
+// and getting that wrong also fails silently. _probe-post-formats.ts asserts that every id in
+// the registry parses through this pattern, which is the check that actually catches the drift.
+//
+// The underscore is relaxed to "underscore or space" so `angles all decision guide` still
+// parses, which is what people type.
+export const SHAPE =
+  /^\s*[`*_]*(angles?)\s+all\s+(answer[_ ]first|list|comparison|decision[_ ]guide|teardown|roundup|review|tool|data[_ ]study)[`*_]*\s*$/i;
 const PICK = /^\s*[`*_]*(angle|magnet|offer)\s+(\d+)\s+pick\s+(\d+)[`*_]*\s*$/i;
 const MORE = /^\s*[`*_]*(angle|magnet|offer)\s+(\d+)\s+more[`*_]*\s*$/i;
 
@@ -939,62 +958,14 @@ export async function angleLines(clientId: string): Promise<string[]> {
 // The offer that rides on the idea
 // ─────────────────────────────────────────────────────────────────────────────
 
-interface PlanMagnet {
-  id: string;
-  planId: string;
-  title: string;
-  promise: string;
-  ctaLabel: string;
-  conciergeEntry: string;
-  status: string;
-}
-
-async function magnetsByPlan(clientId: string): Promise<Map<string, PlanMagnet[]>> {
-  const { data, error } = await supabaseAdmin
-    .from("page_magnet_candidates")
-    .select("id, plan_id, title, promise, cta_label, concierge_entry, status")
-    .eq("client_id", clientId)
-    .not("plan_id", "is", null)
-    .neq("status", "rejected")
-    .order("created_at", { ascending: true })
-    .order("id", { ascending: true });
-
-  const out = new Map<string, PlanMagnet[]>();
-  if (error || !data) {
-    if (error) console.error(`[page-angles] magnet read failed: ${error.message}`);
-    return out;
-  }
-  for (const r of data) {
-    const m: PlanMagnet = {
-      id: String(r.id),
-      planId: String(r.plan_id),
-      title: String(r.title),
-      promise: String(r.promise),
-      ctaLabel: String(r.cta_label),
-      conciergeEntry: String(r.concierge_entry),
-      status: String(r.status),
-    };
-    const list = out.get(m.planId) ?? [];
-    list.push(m);
-    out.set(m.planId, list);
-  }
-  return out;
-}
-
-/** Draft the offers for one planned page. Wrapped so a failure never costs the angle pick. */
-async function draftMagnetsFor(clientId: string, planId: string): Promise<string> {
-  try {
-    const { draftMagnetsForPlan } = await import("@/lib/concierge/magnet-drafts");
-    const res = await draftMagnetsForPlan(clientId, planId, { replace: true });
-    return res.ok
-      ? `:gift: ${res.candidates.length} offers drafted for it. \`magnets\` lists them.`
-      : `:warning: No offers drafted: ${res.error ?? "unknown"}`;
-  } catch (e) {
-    return `:warning: No offers drafted: ${(e as Error).message}`;
-  }
-}
-
-/** The card block for the offers, page by page, mirroring angleLines. */
+/**
+ * What each planned page hands over.
+ *
+ * ‼️ IT READS THE HOUSE OFFER AND NO LONGER LISTS CANDIDATES. Every page used to have five
+ * offers written for it, and this printed them numbered so `magnet N pick K` could choose. The
+ * candidates are gone; what a page hands over is now either the sentence somebody wrote for it
+ * (`cta N:`) or the house offer the ladder resolves, which is the same on every page by design.
+ */
 export async function magnetLines(clientId: string): Promise<string[]> {
   const { loadPlan } = await import("./page-plan");
   const plan = await loadPlan(clientId);
@@ -1003,34 +974,26 @@ export async function magnetLines(clientId: string): Promise<string[]> {
   const pages = plan.rows.filter((r) => r.role).sort((a, b) => a.rank - b.rank);
   if (!pages.length) return [];
 
-  const byPlan = await magnetsByPlan(clientId);
-  const lines = ["*The offer the assistant hands over on each page*"];
+  const lines = ["*The sentence each page hands over with*"];
   let anyMissing = false;
 
   pages.forEach((p, i) => {
-    const mine = byPlan.get(p.id) ?? [];
     const label = `${i + 1}. ${p.role === "pillar" ? "Pillar" : "Support"}: ${p.targetKeyword}`;
-    const chosen = p.frame?.title ? String(p.frame.title) : null;
-
-    if (chosen) {
+    const sentence = p.ctaLine ? String(p.ctaLine) : null;
+    if (sentence) {
       lines.push(`${label}  :white_check_mark:`);
-      lines.push(`     ${chosen}`);
+      lines.push(`     ${sentence}`);
       return;
     }
-    if (!mine.length) {
-      anyMissing = true;
-      lines.push(`${label}  _no offers yet_`);
-      return;
-    }
-    lines.push(label);
-    mine.forEach((m, j) => lines.push(`     ${j + 1}. ${m.title}  _${m.ctaLabel}_`));
+    anyMissing = true;
+    lines.push(`${label}  _the house offer's own words_`);
   });
 
   lines.push("");
   lines.push(
     anyMissing
-      ? "`magnets auto` drafts offers for every page that has none. `magnet 3 pick 2` keeps one."
-      : "`magnet 3 pick 2` keeps one. `magnet 3 more` rewrites the offers under one page."
+      ? "`cta 3: <sentence>` sets the words page 3 hands over with. Left alone, it uses the house offer's own label."
+      : "`cta 3: <sentence>` rewrites the words page 3 hands over with."
   );
   return lines;
 }
@@ -1065,72 +1028,22 @@ export async function handlePageAngleThreadReply(args: {
   }
 
   // ── The offers ────────────────────────────────────────────────────────────
+  // ‼️ THE WHOLE `magnets` BRANCH REFUSES NOW (2026-09-29), AND THE FRAME WENT WITH IT.
+  // `magnets auto` wrote five offers per planned page, `magnet N pick K` chose one of them as
+  // the page's framing, and the drafter minted the chosen one into lead_magnets. The options
+  // this command picked between WERE the candidates, so removing the candidate table removes
+  // the list: there is nothing left for a pick to pick from.
+  //
+  // page_plan.magnet_frame keeps its column and its readers. Nothing writes it any more, and the
+  // CTA sentence falls back to the house offer's own cta_label, which is what it always did when
+  // no frame existed.
   if (cmd.what === "magnet") {
-    const { loadPlan } = await import("./page-plan");
-    const plan = await loadPlan(args.clientId);
-    if ("error" in plan) return { message: `:warning: ${plan.error}` };
-    const pages = plan.rows.filter((r) => r.role).sort((a, b) => a.rank - b.rank);
-
-    if (cmd.kind === "auto" || cmd.kind === "more") {
-      const targets =
-        cmd.kind === "more"
-          ? pages.slice(cmd.page - 1, cmd.page)
-          : pages.filter((p) => !p.frame?.title);
-      if (!targets.length) {
-        return {
-          message:
-            cmd.kind === "more"
-              ? `:warning: There is no page ${cmd.page}. \`magnets\` lists them.`
-              : ":information_source: Every planned page already has an offer picked. `magnet 3 more` rewrites one.",
-        };
-      }
-      return {
-        message: `:hourglass_flowing_sand: Writing offers for ${targets.length} page${targets.length === 1 ? "" : "s"}, from the idea each one argues. About a minute.`,
-        after: async () => {
-          const notes: string[] = [];
-          for (const t of targets) notes.push(`${t.targetKeyword}: ${await draftMagnetsFor(args.clientId, t.id)}`);
-          const listed = await magnetLines(args.clientId);
-          await say([...notes, ...(listed.length ? ["", ...listed] : [])].join("\n"));
-          await refresh();
-        },
-      };
-    }
-
-    // magnet N pick K: the chosen framing becomes page_plan.magnet_frame, which is what the drafter
-    // already mints from after the body. Nothing new mints here, deliberately: approveMagnetCandidate
-    // stays the one and only route into lead_magnets.
-    const row = pages[cmd.page - 1];
-    if (!row) return { message: `:warning: There is no page ${cmd.page}. \`magnets\` lists them.` };
-
-    const mine = (await magnetsByPlan(args.clientId)).get(row.id) ?? [];
-    const choice = mine[cmd.option - 1];
-    if (!choice) {
-      return {
-        message: `:warning: Page ${cmd.page} has ${mine.length} offer${mine.length === 1 ? "" : "s"} on file, so there is no option ${cmd.option}.`,
-      };
-    }
-
-    const { error } = await supabaseAdmin
-      .from("page_plan")
-      .update({
-        magnet_frame: {
-          title: choice.title,
-          ctaLabel: choice.ctaLabel,
-          conciergeEntry: choice.conciergeEntry,
-        },
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", row.id)
-      .eq("client_id", args.clientId);
-    if (error) return { message: `:warning: The offer was not saved: ${error.message}` };
-
     return {
       message: [
-        `:gift: *Page ${cmd.page} hands over:* ${choice.title}`,
-        `The pill reads: ${choice.ctaLabel}`,
-        "It is minted into the catalogue when the page is drafted, and the assistant offers it on that page rather than whatever the ladder ranks.",
-      ].join("\n"),
-      after: refresh,
+        ":information_source: Offers are not written per page any more.",
+        "Every page hands over to one of the house offers, and `cta N: <sentence>` sets the words",
+        "page N uses to do it. One page can be a tool instead: `tool pick <n>` at step twelve.",
+      ].join(" "),
     };
   }
 
@@ -1193,13 +1106,11 @@ export async function handlePageAngleThreadReply(args: {
     ]
       .filter(Boolean)
       .join("\n"),
-    // ‼️ THE OFFERS ARE DRAFTED ON THE PICK RATHER THAN WAITING TO BE ASKED FOR. The idea is the
-    // brief for them, so the moment it exists is the moment they can be written, and a person who
-    // has just decided what a page argues should not have to know a second command to get the thing
-    // the assistant will hand over on it. Non-fatal: a failure here costs offers, never the pick.
+    // ‼️ PICKING AN ANGLE USED TO FIRE THE MAGNET DRAFTER HERE, AND THAT IS WHY THE FLOW WAS
+    // NEVER ACTUALLY MAGNET-FREE. Removing the explicit commands left this one, which wrote five
+    // offers per page every time somebody chose what a page argues. Nothing mints now; the pick
+    // refreshes the card and stops.
     after: async () => {
-      const note = await draftMagnetsFor(args.clientId, row.id);
-      await say(`Page ${cmd.page}: ${note}`);
       await refresh();
     },
   };

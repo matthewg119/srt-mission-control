@@ -321,6 +321,35 @@ const KEYWORDS: CommandSpec = {
  * `prompt short`, gated on avatar_harvest. Two steps answering one bare word is how somebody types
  * it in the wrong thread, gets a plausible answer, and files research against the wrong step.
  */
+/**
+ * The tool lane, which lives in step twelve's thread.
+ *
+ * ‼️ HERE RATHER THAN IN STEP TWENTY-ONE, AND THE PROBE IS WHAT NOTICED IT WAS MISSING.
+ * handleToolThreadReply gates on `keyword_set`, and a handler that claims a step with no spec
+ * pointing back at it is a command nobody can discover and the wrong-thread pointer cannot
+ * redirect.
+ */
+const TOOLS: CommandSpec = {
+  label: "tools",
+  test: /^\s*[`*_]*tools?[`*_]*\s*$/i,
+  // `tool` alone is too close to ordinary speech to earn a pointer from another thread.
+  unmistakable: /^\s*[`*_]*tools[`*_]*\s*$/i,
+  pointAt: "keyword_set",
+  what: "The tool lane",
+  implementedIn: "src/lib/clients/tool-lane.ts",
+  mustBeOnTheCard: true,
+};
+
+const TOOL_PICK: CommandSpec = {
+  label: "tool pick 1",
+  test: /^\s*[`*_]*tool\s+pick\s+(\d{1,2})[`*_]*\s*$/i,
+  unmistakable: /^\s*[`*_]*tool\s+pick\s+\d{1,2}[`*_]*\s*$/i,
+  pointAt: "keyword_set",
+  what: "The tool lane",
+  implementedIn: "src/lib/clients/tool-lane.ts",
+  mustBeOnTheCard: true,
+};
+
 const KEYWORDS_PROMPT: CommandSpec = {
   label: "keywords prompt",
   test: /^\s*[`*_]*keywords\s+prompt\b/i,
@@ -840,6 +869,8 @@ export const STEP_COMMANDS: Record<StepKey, readonly CommandSpec[]> = {
     ...LETTER,
   ],
   keyword_set: [
+    TOOLS,
+    TOOL_PICK,
     KEYWORDS,
     KEYWORDS_PROMPT,
     KEYWORDS_ADD,
@@ -862,7 +893,7 @@ export const STEP_COMMANDS: Record<StepKey, readonly CommandSpec[]> = {
   ],
   custom_question_set: [OBJECTION],
   page_candidates: [],
-  citation_cleanup_list: [],
+  offsite_target_list: [],
   hub_preview: [TEMPLATE, TEMPLATE_RESET, TEMPLATE_PICK],
   referral_engine_preview: [TEMPLATE, TEMPLATE_RESET, TEMPLATE_PICK, REVIEW_LINK, REVIEW_PLATFORM],
   concierge_preview: [MASCOT, MASCOT_CONCEPTS, MASCOT_PICK, MASCOT_SKIP, MASCOT_CORNER, MASCOT_KEEP],
@@ -901,18 +932,14 @@ export const STEP_COMMANDS: Record<StepKey, readonly CommandSpec[]> = {
   // ── After the call ────────────────────────────────────────────────────────
   day_zero_archive: [PHOTOGRAPH, AVATAR],
   gbp_buildout: [],
-  citation_cleanup: [],
+  offsite_executed: [],
   subdomain_live: [],
   first_page: [],
   cards_printed: [],
-  review_request_configured: [],
-  referral_engine_handed: [REVIEW_LINK, REVIEW_PLATFORM],
+  review_handover: [REVIEW_LINK, REVIEW_PLATFORM],
   concierge_live: [],
   tracking_installed: [],
   self_report_field: [],
-  time_log_entries: [],
-  weekly_report: [],
-  day_30_date: [],
 };
 
 /**

@@ -16,6 +16,7 @@
     "trt:run": "bun run scripts/run-trt.ts",
     "trt:owners": "bun run scripts/enrich-trt-owners.ts",
     "migration:check": "bun run scripts/_probe-migration-state.ts",
+    "launch:probe": "bun run scripts/_probe-launch-isolation.ts && bun run scripts/_probe-hub-allowlist.ts && bun run scripts/_probe-site-sanitize.ts && bun run scripts/_probe-concierge-naming.ts && bun run scripts/_probe-intake-validation.ts",
     "test:artifacts": "bun run scripts/test-onboarding-artifacts.ts",
     "notes:archive": "bun run scripts/export-funding-notes.ts",
     "scraper:disposable": "bun run scripts/refresh-disposable-domains.ts"
@@ -41,6 +42,7 @@
     "@stripe/stripe-js": "^9.13.0",
     "@supabase/supabase-js": "^2.98.0",
     "@types/qrcode": "^1.5.6",
+    "@types/sanitize-html": "^2.16.2",
     "@vercel/functions": "^3.6.2",
     "@xyflow/react": "^12.10.1",
     "bcryptjs": "^3.0.3",
@@ -64,6 +66,7 @@
     "recharts": "^3.8.1",
     "remark-gfm": "^4.0.1",
     "ringcentral-web-phone": "^2.4.4",
+    "sanitize-html": "^2.17.7",
     "stripe": "^22.4.0",
     "tailwind-merge": "^2.6.0",
     "tailwindcss-animate": "^1.0.7",

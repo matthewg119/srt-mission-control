@@ -32,6 +32,7 @@ import {
   LANGUAGE_VALUE_BY_LABEL,
 } from "@/config/client-intake";
 import { clean, normalizePhone } from "@/lib/medspa/validate";
+import { checkCity, checkState, checkPostalCode, checkAddressLine1 } from "@/lib/validate/intake-fields";
 import { normalizeTarget } from "@/lib/scan/normalize";
 import { normalizeAddress, normalizeState } from "@/lib/clients/normalize";
 
@@ -132,11 +133,41 @@ export async function POST(req: NextRequest) {
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
 
   if (step === 1) {
+    // ‼️ STEP 1 IS THE CANONICAL NAP AND NOTHING WAS CHECKING ITS SHAPE.
+    //
+    // normalizeState() is deliberately loose ("anything longer is left alone for a human to
+    // fix"), city and ZIP were not looked at at all, and the whole point of this step is that
+    // "we will read these back to you on the call, and then make every directory match them".
+    // A ZIP of 7777777777777 would have been read down the phone, pushed at nineteen listings,
+    // and written into the JSON-LD on every published page.
+    //
+    // It REFUSES rather than correcting, because this form is filled in by the CLIENT, and a
+    // value silently rewritten under somebody is the opposite of reading it back to them. The
+    // messages come from the same module the Launch Lane form uses, so both sides of the
+    // business agree on what a state is.
+    const napChecks: [string, string, { ok: boolean; error?: string }][] = [
+      ["city", "City", checkCity(String(answers.city ?? ""), false)],
+      ["state", "State", checkState(String(answers.state ?? ""), false)],
+      ["postal_code", "ZIP", checkPostalCode(String(answers.postal_code ?? ""), false)],
+      ["address_line1", "Street address", checkAddressLine1(String(answers.address_line1 ?? ""), false)],
+    ];
+
+    for (const [key, label, verdict] of napChecks) {
+      // Only what was actually sent. A step saved partially must not be refused over a field
+      // that is not on screen yet.
+      if (answers[key] === undefined || String(answers[key] ?? "").trim() === "") continue;
+      if (!verdict.ok) {
+        return NextResponse.json({ ok: false, field: key, error: `${label}: ${verdict.error}` }, { status: 400 });
+      }
+    }
+
     for (const [key, value] of Object.entries(answers)) {
       if (!STEP_1_COLUMNS.has(key)) continue;
       patch[key] =
         key === "state"
-          ? normalizeState(value as string)
+          ? // The strict check above already passed, so this resolves "arizona" to "AZ" instead
+            // of leaving it for a human. normalizeState stays for the callers that predate this.
+            (checkState(String(value ?? ""), false).value ?? normalizeState(value as string))
           : key === "phone"
             ? // E.164, never the typed string. The form shows "(336) 833-2303" and the
               // database stores "+13368332303", so the same human typing their number
@@ -165,7 +196,7 @@ export async function POST(req: NextRequest) {
     // The cost is not cosmetic. `domain` is what hostsFor(), seedDnsRecords() and the whole
     // hub lane are built from, so hub_preview fails with "No domain on file" and takes
     // referral_engine_preview, review_card_pdf, dns_records, subdomain_live, first_page and
-    // referral_engine_handed down with it. Eight steps of a 33-step runner were unreachable for
+    // review_handover down with it. Eight steps of a 33-step runner were unreachable for
     // anyone who signed up through /start. Confirmed on the live re-run of srtagency.com.
     const typedWebsite = typeof answers.website === "string" ? answers.website.trim() : "";
     if (typedWebsite) {

@@ -15,6 +15,7 @@ import {
   Clapperboard,
   PhoneCall,
   Sunrise,
+  Rocket,
 } from "lucide-react";
 
 export interface NavSection {
@@ -36,6 +37,12 @@ export const navSections: NavSection[] = [
       // lands on /dashboard (BrainHeart), so there are two front doors until that moves. Worth doing
       // deliberately rather than as a side effect of adding a nav line.
       { label: "Today", href: "/dashboard/today", icon: Sunrise },
+      // ‼️ SECOND, AND IT IS THE ONLY WAY INTO THE LAUNCH LANE FROM THE CHROME.
+      // /dashboard/launch has existed since the lane shipped and was reachable only by typing the
+      // URL, which is why onboarding a client meant finding an old message with the link in it.
+      // Matthew asked for it near the top; the order below is a default a person can change, see
+      // nav-customize.tsx.
+      { label: "Onboarding", href: "/dashboard/launch", icon: Rocket },
       { label: "BrainHeart", href: "/dashboard", icon: Brain },
       { label: "Vektor", href: "/dashboard/assistant", icon: MessageSquare },
       { label: "Call list", href: "/dashboard/worklist", icon: PhoneCall },

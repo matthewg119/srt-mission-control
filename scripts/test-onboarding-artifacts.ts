@@ -961,7 +961,7 @@ const stillUnimplemented = unimplementedAutoSteps();
 // Every auto step with no runner is now completed by a ROUTE instead. Nothing is merely missing.
 //
 // The five that used to be on this list — review_audit, custom_question_set, page_candidates,
-// citation_cleanup_list, referral_engine_preview — have real runners as of 2026-08-22, which is what
+// offsite_target_list, referral_engine_preview — have real runners as of 2026-08-22, which is what
 // took unreachableAutoSteps() to empty. The four that remain are here because a runner would be
 // the WRONG shape for them, not because nobody got to them:
 const expectedUnimplemented = [
@@ -970,8 +970,9 @@ const expectedUnimplemented = [
   // Predicates about ongoing behaviour, not documents. A runner is called once and parks a
   // failure in `error`, so one here would report a permanent failure for work that had simply
   // not happened yet.
-  "time_log_entries", // ticked by /api/clients/[id]/time-log on the first entry
-  "weekly_report", // ticked by runWeeklyReports on the first report that posts
+  // time_log_entries and weekly_report were here until the 41-to-37 board reduction. They are not
+  // "no longer auto", they are no longer STEPS: both were predicates about ongoing behaviour that
+  // nothing could run, which is why they sat in ROUTE_COMPLETED rather than having runners.
   // day_zero_archive is NOT here: it carries `gate: true` rather than `auto: true`, so it never
   // claimed to run itself in the first place. That distinction is the point of this assertion.
 ];
@@ -3018,7 +3019,12 @@ import { pageSlug } from "../src/lib/hub/pages";
   // the call is prepared. The KEYS are gone from the array and their rows are deleted by
   // docs/2026-09-12-call-pack-orphans.sql, which runs AFTER the deploy: while the old code is
   // live, a client with fewer rows than steps gets both re-seeded by loadRows and reachableCursor.
-  eq("the step count is what the last person to change it said", STEPS.length, 41);
+  // ‼️ 41 -> 37, THE SECOND TIME THIS NUMBER HAS GONE DOWN, and the same acknowledgement is owed.
+  // The destinations branch retired four steps whose work either merged into a neighbour or was a
+  // predicate nothing could run. Orphan rows for the retired keys are left behind rather than
+  // deleted, exactly as the 43-to-41 note above describes: the board renders from the registry, so
+  // a row for a key nobody lists is invisible rather than wrong.
+  eq("the step count is what the last person to change it said", STEPS.length, 37);
   // The prep call sits before the harvest and the keyword step, and blocks both. Moving it back
   // behind call_booked would put every keyword and every pre-call page on a PROPOSED offer again.
   ok("the offer is locked before the harvest",
@@ -3454,7 +3460,10 @@ import * as visionT from "../src/lib/hub/skin-vision";
   // ‼️ ALL FIVE RENDERERS WRITE THE ROOT THROUGH ONE FUNCTION. A trait on four of them renders on a
   // call and not on the client's own domain, which is the preview lying.
   for (const file of [
-    ["app", "hub", "[host]", "layout.tsx"],
+    // ‼️ THE SHELL, NOT THE LAYOUT. hub/[host]/layout.tsx used to apply .hub-root itself; the
+    // launch lane extracted that into HubShell/SiteShell so a site host and a hub host could not
+    // drift apart. The assertion follows the markup rather than the filename it used to live in.
+    ["components", "hub", "hub-shell.tsx"],
     ["app", "dashboard", "clients", "[id]", "preview", "[[...slug]]", "page.tsx"],
     ["app", "preview", "[token]", "[[...slug]]", "page.tsx"],
     ["lib", "hub", "page-preview.ts"],
@@ -3528,7 +3537,10 @@ import * as visionT from "../src/lib/hub/skin-vision";
     awarenessForPage("", "botox vs dysport").awareness_entry, 2);
 
   const kwSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "client-keywords.ts"), "utf8");
-  eq("both keyword inserts write a stage", (kwSrc.match(/awareness_stage: stageOf\(/g) ?? []).length, 2);
+  // Three now, not two, and all three are real: the two inserts into client_keywords plus the
+  // expansion path. The assertion is that no write site forgets the stage, so the number tracks
+  // the write sites rather than being a fact about how many there ought to be.
+  eq("every keyword write sets a stage", (kwSrc.match(/awareness_stage: stageOf\(/g) ?? []).length, 3);
   ok("the keyword read carries it", /KW_COLUMNS =[\s\S]{0,200}awareness_stage/.test(kwSrc));
   const planSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "page-plan.ts"), "utf8");
   ok("the plan insert writes both numbers", /\.\.\.awarenessForPage\(c\.question/.test(planSrc));

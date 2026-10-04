@@ -245,7 +245,7 @@ export const STEP_NEEDS: Record<StepKey, StepNeed> = {
     needs: [],
     wants: ["avatar.search_phrases", "avatar.headline_ideas"],
   },
-  citation_cleanup_list: {
+  offsite_target_list: {
     kind: "nothing",
     why: "the list is built from the directories the sweep found, and is ranked by what it measured",
   },
@@ -307,27 +307,24 @@ export const STEP_NEEDS: Record<StepKey, StepNeed> = {
     why: "the before photograph. It archives what was already measured and asks for nothing",
   },
   gbp_buildout: { kind: "nothing", why: "categories, services and photos are entered in Google, not here" },
-  citation_cleanup: { kind: "nothing", why: "the list built at step 15 is executed; no new field is owed" },
+  offsite_executed: { kind: "nothing", why: "the list built at step 15 is executed; no new field is owed" },
   subdomain_live: { kind: "nothing", why: "DNS and Search Console verification, both observed" },
   first_page: {
     kind: "nothing",
     why: "the pages were drafted and gated at step 21; publishing them collects nothing new",
   },
   cards_printed: { kind: "nothing", why: "a physical deliverable handed over in person" },
-  review_request_configured: { kind: "nothing", why: "a setting in their booking system, or the printed cards" },
-  referral_engine_handed: { kind: "nothing", why: "a named person is given the tool; the naming is not a dataset field" },
+  // ‼️ NOT "fields". That kind names avatar./audience./offer. paths, and everything this
+  // step needs lives on `clients` and is collected on the Review handover panel rather than in
+  // the dataset. Saying "nothing" here is honest: it needs no dataset field, and its verifier
+  // is what checks the three columns.
+  review_handover: { kind: "nothing", why: "collected on the Review handover panel, not in the dataset" },
   concierge_live: {
     kind: "nothing",
     why: "the switch, the booking destination and the audience were all confirmed at concierge_preview",
   },
   tracking_installed: { kind: "nothing", why: "the pixel is live or it is not, and a real session proves it" },
   self_report_field: { kind: "nothing", why: "six options added to their own booking form" },
-  time_log_entries: { kind: "nothing", why: "hours recorded as work happens" },
-  weekly_report: {
-    kind: "nothing",
-    why: "the report is assembled from what was measured. ATTRIBUTION_NOT_WIRED says in writing what it cannot count",
-  },
-  day_30_date: { kind: "nothing", why: "a date for the day-30 retest" },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -493,7 +490,7 @@ export const STEP_PRODUCES: Record<StepKey, StepProduces> = {
       "of keyword_set's selection either",
   },
   page_candidates: { kind: "nothing", why: "the candidates are frozen onto the page-studio session row, which the digit picker reads within one thread rather than a later step" },
-  citation_cleanup_list: { kind: "nothing", why: "the ranked list is nap_discrepancies read by status, which step 24 executes and step 25 reports on" },
+  offsite_target_list: { kind: "nothing", why: "the ranked list is nap_discrepancies read by status, which step 24 executes and step 25 reports on" },
   hub_preview: {
     kind: "outputs",
     outputs: [
@@ -540,18 +537,14 @@ export const STEP_PRODUCES: Record<StepKey, StepProduces> = {
     ],
   },
   gbp_buildout: { kind: "nothing", why: OBSERVED },
-  citation_cleanup: { kind: "nothing", why: "the confirmed_status it writes is read by the same step's verifier and by step 25's PDF, both of which re-read the rows rather than a summary column" },
+  offsite_executed: { kind: "nothing", why: "the confirmed_status it writes is read by the same step's verifier and by step 25's PDF, both of which re-read the rows rather than a summary column" },
   subdomain_live: { kind: "nothing", why: OBSERVED },
   first_page: { kind: "nothing", why: "publishing flips client_pages.status, which the hub renders from; nothing later on the board draws from it" },
   cards_printed: { kind: "nothing", why: OBSERVED },
-  review_request_configured: { kind: "nothing", why: FIELDS_ONLY },
-  referral_engine_handed: { kind: "nothing", why: OBSERVED },
+  review_handover: { kind: "nothing", why: OBSERVED },
   concierge_live: { kind: "nothing", why: "the switch is concierge_configs.enabled, read by the widget at request time rather than by a later step" },
   tracking_installed: { kind: "nothing", why: "a real session in hub_hits proves it, and the weekly report counts sessions rather than reading a flag this step set" },
   self_report_field: { kind: "nothing", why: OBSERVED },
-  time_log_entries: { kind: "nothing", why: "hours are time_log rows the weekly report counts, not a column a later step names" },
-  weekly_report: { kind: "nothing", why: "the report is assembled from what was measured; ATTRIBUTION_NOT_WIRED says in writing what it cannot count" },
-  day_30_date: { kind: "nothing", why: OBSERVED },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

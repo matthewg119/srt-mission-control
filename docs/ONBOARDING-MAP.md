@@ -194,7 +194,7 @@ Site, hosting and DNS intelligence
 | [Done] reads | no table |
 | Dataset fields | none: hosting, DNS and the site are observed from the network, never answered |
 | Feeds | nothing: it observes or hands over something outside this system, and records no artifact a later step draws from |
-| Downstream | `clients` is selected in 96 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
+| Downstream | `clients` is selected in 109 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
 
 **[Done] refuses on:**
 
@@ -262,7 +262,7 @@ Presence sweep: manual tier, screenshots in the thread
 | [Done] reads | no table |
 | Dataset fields | none: screenshots of profiles that already exist, filed as evidence against client_docs. Nothing in them is a value a later step reads, and a field saying a screenshot was taken would record our activity rather than the client |
 | Feeds | nothing: the artifact is an IMAGE filed against client_docs, and its own STEP_NEEDS entry records why: nothing in it is a value a later step reads |
-| Downstream | steps 15 `citation_cleanup_list`, 22 `call_sheet` declare they wait on this |
+| Downstream | steps 15 `offsite_target_list`, 22 `call_sheet` declare they wait on this |
 
 **[Done] refuses on:**
 
@@ -415,7 +415,7 @@ One offer proposed from what they told us at intake
 | [Done] reads | no table |
 | Dataset fields | none: the proposal is written from what intake already said, so nothing has to be collected for it. What it LOSES, the proposal's own reasoning before offer_locked overwrites it, is a missing history row rather than a missing field |
 | Feeds | nothing: the proposal is superseded by offer_locked, and its own STEP_NEEDS entry records that what it loses is a missing history row rather than a field |
-| Downstream | `client_offers` is selected in 1 other file(s), e.g. `src/lib/clients/archive.ts`; `clients` is selected in 96 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
+| Downstream | `client_offers` is selected in 4 other file(s), e.g. `src/app/api/launch/[id]/documents/route.ts`, `src/lib/clients/archive.ts`, `src/lib/launch/offer.ts`; `clients` is selected in 109 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
 
 **[Done] refuses on:**
 
@@ -544,7 +544,7 @@ Keywords: 200+ ways the offer is said, approved by me
 | [Done] reads | no table |
 | Dataset fields | 1 needed, 3 wanted |
 | Feeds | `client_keywords.selected_at` → 21 `pre_call_pages`; `keyword_serp_reads.keyword_id` → 21 `pre_call_pages` |
-| Downstream | steps 13 `custom_question_set`, 14 `page_candidates`, 21 `pre_call_pages` declare they wait on this; `client_keywords` is selected in 6 other file(s), e.g. `src/lib/clients/anchor-ladder.ts`, `src/lib/clients/archive.ts`, `src/lib/clients/keyword-cards.ts`; `keyword_clusters` is selected in 2 other file(s), e.g. `src/lib/clients/keyword-strategy.ts`, `src/lib/clients/serp-cards.ts` |
+| Downstream | steps 13 `custom_question_set`, 14 `page_candidates`, 21 `pre_call_pages` declare they wait on this; `client_keywords` is selected in 7 other file(s), e.g. `src/lib/clients/anchor-ladder.ts`, `src/lib/clients/archive.ts`, `src/lib/clients/keyword-cards.ts`; `keyword_clusters` is selected in 2 other file(s), e.g. `src/lib/clients/keyword-strategy.ts`, `src/lib/clients/serp-cards.ts` |
 
 **[Done] refuses on:**
 
@@ -655,9 +655,9 @@ Step 14 can complete. 1 thing would make it better.
     no research is stored for this avatar
 ```
 
-### 15. `citation_cleanup_list`
+### 15. `offsite_target_list`
 
-Citation cleanup list built and ranked
+Off-site targets: listings to fix, listings to claim, cited sources to pitch
 
 | | |
 | --- | --- |
@@ -669,7 +669,7 @@ Citation cleanup list built and ranked
 | [Done] reads | no table |
 | Dataset fields | none: the list is built from the directories the sweep found, and is ranked by what it measured |
 | Feeds | nothing: the ranked list is nap_discrepancies read by status, which step 24 executes and step 25 reports on |
-| Downstream | step 30 `citation_cleanup` declares it waits on this |
+| Downstream | step 30 `offsite_executed` declares it waits on this |
 
 **[Done] refuses on:**
 
@@ -740,7 +740,7 @@ AI Referral Engine preview live, themed to match
 | [Done] reads | no table |
 | Dataset fields | none: the AI Referral Engine mirrors listings that already exist and asks for no dataset field |
 | Feeds | nothing: it observes or hands over something outside this system, and records no artifact a later step draws from |
-| Downstream | `client_delivery_steps` is selected in 29 other file(s), e.g. `src/app/api/clients/[id]/time-log/route.ts`, `src/app/api/internal/board-kick/route.ts`, `src/app/api/internal/run-step/route.ts` |
+| Downstream | `client_delivery_steps` is selected in 31 other file(s), e.g. `src/app/api/clients/[id]/time-log/route.ts`, `src/app/api/internal/board-kick/route.ts`, `src/app/api/internal/run-step/route.ts` |
 
 **[Done] refuses on:**
 
@@ -774,7 +774,7 @@ AI Concierge preview live, ready to demo on the call
 | [Done] reads | `concierge_configs` |
 | Dataset fields | 1 needed, 2 wanted |
 | Feeds | nothing: everything it records is a dataset field, and dataset-spec.ts declares the step that fills each one |
-| Downstream | steps 19 `site_replica`, 21 `pre_call_pages` declare they wait on this; `client_delivery_steps` is selected in 29 other file(s), e.g. `src/app/api/clients/[id]/time-log/route.ts`, `src/app/api/internal/board-kick/route.ts`, `src/app/api/internal/run-step/route.ts`; `concierge_configs` is selected in 12 other file(s), e.g. `src/app/demo/concierge/page.tsx`, `src/lib/clients/concierge-addon.ts`, `src/lib/clients/concierge-audience.ts` |
+| Downstream | steps 19 `site_replica`, 21 `pre_call_pages` declare they wait on this; `client_delivery_steps` is selected in 31 other file(s), e.g. `src/app/api/clients/[id]/time-log/route.ts`, `src/app/api/internal/board-kick/route.ts`, `src/app/api/internal/run-step/route.ts`; `concierge_configs` is selected in 13 other file(s), e.g. `src/app/demo/concierge/page.tsx`, `src/lib/clients/concierge-addon.ts`, `src/lib/clients/concierge-audience.ts` |
 
 **[Done] refuses on:**
 
@@ -872,7 +872,7 @@ Review card PDF generated
 
 ### 21. `pre_call_pages`
 
-Seven pages drafted before the call: one pillar for the offer, six supports
+Seven pages drafted before the call, one pillar and six supports, plus the tool page in its own slot
 
 | | |
 | --- | --- |
@@ -884,7 +884,7 @@ Seven pages drafted before the call: one pillar for the offer, six supports
 | [Done] reads | no table |
 | Dataset fields | 3 needed, 7 wanted |
 | Feeds | nothing: the drafts are client_pages rows, and the gate reads them by body hash within the publishing step rather than through a column a later step names |
-| Downstream | step 22 `call_sheet` declares it waits on this; `client_pages` is selected in 15 other file(s), e.g. `src/app/api/clients/[id]/hub/route.ts`, `src/app/dashboard/clients/[id]/page.tsx`, `src/lib/clients/client-reads.ts`; `page_plan` is selected in 15 other file(s), e.g. `src/lib/clients/artifacts/call-sheet.ts`, `src/lib/clients/batch-research.ts`, `src/lib/clients/client-headlines.ts` |
+| Downstream | step 22 `call_sheet` declares it waits on this; `client_pages` is selected in 17 other file(s), e.g. `src/app/api/clients/[id]/hub/route.ts`, `src/app/dashboard/clients/[id]/page.tsx`, `src/lib/clients/client-reads.ts`; `page_plan` is selected in 14 other file(s), e.g. `src/lib/clients/artifacts/call-sheet.ts`, `src/lib/clients/batch-research.ts`, `src/lib/clients/client-headlines.ts` |
 
 **[Done] refuses on:**
 
@@ -1011,7 +1011,7 @@ Call held: NAP aloud, question set approved, consent confirmed, preview and the 
 | [Done] reads | no table |
 | Dataset fields | none: the call itself. What it captures is written by offer_locked, not here |
 | Feeds | nothing: what the call captures is written by offer_locked, not here |
-| Downstream | steps 25 `access_granted`, 26 `dns_records`, 27 `agreement_signed`, 28 `day_zero_archive`, 34 `review_request_configured`, 36 `concierge_live`, 37 `tracking_installed`, 38 `self_report_field` declare they wait on this |
+| Downstream | steps 25 `access_granted`, 26 `dns_records`, 27 `agreement_signed`, 28 `day_zero_archive`, 34 `review_handover`, 35 `concierge_live`, 36 `tracking_installed`, 37 `self_report_field` declare they wait on this |
 
 **[Done] refuses on:**
 
@@ -1147,7 +1147,7 @@ Day-0 scan archived, before any change lands
 | [Done] reads | no table |
 | Dataset fields | none: the before photograph. It archives what was already measured and asks for nothing |
 | Feeds | `clients.day_0_archived_at` → 32 `first_page` |
-| Downstream | steps 29 `gbp_buildout`, 30 `citation_cleanup`, 32 `first_page`, 39 `time_log_entries`, 41 `day_30_date` declare they wait on this |
+| Downstream | steps 29 `gbp_buildout`, 30 `offsite_executed`, 32 `first_page` declare they wait on this |
 
 **[Done] refuses on:**
 
@@ -1204,14 +1204,14 @@ Google Business Profile buildout: categories, services, photos, Q&A seeded
 *Step 29* asks for nothing from the datasets: categories, services and photos are entered in Google, not here.
 ```
 
-### 30. `citation_cleanup`
+### 30. `offsite_executed`
 
-Citation cleanup executed from the list
+Off-site executed: the listings fixed and claimed, the sources approached
 
 | | |
 | --- | --- |
 | Phase, mode | After the call, manual |
-| Waits on | `day_zero_archive`, `citation_cleanup_list` |
+| Waits on | `day_zero_archive`, `offsite_target_list` |
 | Runner | none |
 | Writes | nothing |
 | Reads | nothing |
@@ -1253,7 +1253,7 @@ Subdomain live and verified in Search Console
 | [Done] reads | no table |
 | Dataset fields | none: DNS and Search Console verification, both observed |
 | Feeds | nothing: it observes or hands over something outside this system, and records no artifact a later step draws from |
-| Downstream | steps 32 `first_page`, 35 `referral_engine_handed`, 36 `concierge_live` declare they wait on this |
+| Downstream | steps 32 `first_page`, 34 `review_handover`, 35 `concierge_live` declare they wait on this |
 
 **[Done] refuses on:**
 
@@ -1288,7 +1288,7 @@ First pages published, measured track first
 | [Done] reads | `page_gate_runs` |
 | Dataset fields | none: the pages were drafted and gated at step 21; publishing them collects nothing new |
 | Feeds | nothing: publishing flips client_pages.status, which the hub renders from; nothing later on the board draws from it |
-| Downstream | step 40 `weekly_report` declares it waits on this |
+| Downstream | nothing downstream declares a dependency on it |
 
 **[Done] refuses on:**
 
@@ -1343,59 +1343,25 @@ Cards printed and handed to the clinic
 *Step 33* asks for nothing from the datasets: a physical deliverable handed over in person.
 ```
 
-### 34. `review_request_configured`
+### 34. `review_handover`
 
-Automated request configured in their booking system, or card_only recorded
-
-| | |
-| --- | --- |
-| Phase, mode | After the call, manual |
-| Waits on | `call_held` |
-| Runner | none |
-| Writes | nothing |
-| Reads | nothing |
-| [Done] reads | no table |
-| Dataset fields | none: a setting in their booking system, or the printed cards |
-| Feeds | nothing: everything it records is a dataset field, and dataset-spec.ts declares the step that fills each one |
-| Downstream | nothing downstream declares a dependency on it |
-
-**[Done] refuses on:**
-
-- clients.review_request_mode
-
-**Feeds, and what carries it:**
-
-- nothing: everything it records is a dataset field, and dataset-spec.ts declares the step that fills each one
-
-**Fed by:**
-
-- no earlier step declares an artifact this one consumes
-
-**What it would have to ask, with nothing on file:**
-
-```
-*Step 34* asks for nothing from the datasets: a setting in their booking system, or the printed cards.
-```
-
-### 35. `referral_engine_handed`
-
-AI Referral Engine handed to the named person
+Review handover: the named person has the Referral Engine and knows how requests go out
 
 | | |
 | --- | --- |
 | Phase, mode | After the call, manual |
-| Waits on | `subdomain_live` |
+| Waits on | `call_held`, `subdomain_live` |
 | Runner | none |
 | Writes | nothing |
 | Reads | nothing |
-| [Done] reads | no table |
-| Dataset fields | none: a named person is given the tool; the naming is not a dataset field |
+| [Done] reads | `clients` |
+| Dataset fields | none: collected on the Review handover panel, not in the dataset |
 | Feeds | nothing: it observes or hands over something outside this system, and records no artifact a later step draws from |
 | Downstream | nothing downstream declares a dependency on it |
 
 **[Done] refuses on:**
 
-- replies in this step's thread
+- the review handover
 
 **Feeds, and what carries it:**
 
@@ -1408,10 +1374,10 @@ AI Referral Engine handed to the named person
 **What it would have to ask, with nothing on file:**
 
 ```
-*Step 35* asks for nothing from the datasets: a named person is given the tool; the naming is not a dataset field.
+*Step 34* asks for nothing from the datasets: collected on the Review handover panel, not in the dataset.
 ```
 
-### 36. `concierge_live`
+### 35. `concierge_live`
 
 AI Concierge enabled: audience confirmed, booking destination set, consent copy approved
 
@@ -1446,10 +1412,10 @@ AI Concierge enabled: audience confirmed, booking destination set, consent copy 
 **What it would have to ask, with nothing on file:**
 
 ```
-*Step 36* asks for nothing from the datasets: the switch, the booking destination and the audience were all confirmed at concierge_preview.
+*Step 35* asks for nothing from the datasets: the switch, the booking destination and the audience were all confirmed at concierge_preview.
 ```
 
-### 37. `tracking_installed`
+### 36. `tracking_installed`
 
 SRT pixel live on the client site, first real session seen
 
@@ -1463,7 +1429,7 @@ SRT pixel live on the client site, first real session seen
 | [Done] reads | no table |
 | Dataset fields | none: the pixel is live or it is not, and a real session proves it |
 | Feeds | nothing: a real session in hub_hits proves it, and the weekly report counts sessions rather than reading a flag this step set |
-| Downstream | `clients` is selected in 96 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
+| Downstream | `clients` is selected in 109 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
 
 **[Done] refuses on:**
 
@@ -1481,10 +1447,10 @@ SRT pixel live on the client site, first real session seen
 **What it would have to ask, with nothing on file:**
 
 ```
-*Step 37* asks for nothing from the datasets: the pixel is live or it is not, and a real session proves it.
+*Step 36* asks for nothing from the datasets: the pixel is live or it is not, and a real session proves it.
 ```
 
-### 38. `self_report_field`
+### 37. `self_report_field`
 
 How did you hear about us: six options live on their own booking form
 
@@ -1515,107 +1481,5 @@ How did you hear about us: six options live on their own booking form
 **What it would have to ask, with nothing on file:**
 
 ```
-*Step 38* asks for nothing from the datasets: six options added to their own booking form.
-```
-
-### 39. `time_log_entries`
-
-Time log has entries from day 0
-
-| | |
-| --- | --- |
-| Phase, mode | After the call, auto |
-| Waits on | `day_zero_archive` |
-| Runner | none |
-| Writes | nothing |
-| Reads | nothing |
-| [Done] reads | `time_log` |
-| Dataset fields | none: hours recorded as work happens |
-| Feeds | nothing: hours are time_log rows the weekly report counts, not a column a later step names |
-| Downstream | nothing downstream declares a dependency on it |
-
-**[Done] refuses on:**
-
-- time_log entries since day 0 (<...>)
-
-**Feeds, and what carries it:**
-
-- nothing: hours are time_log rows the weekly report counts, not a column a later step names
-
-**Fed by:**
-
-- no earlier step declares an artifact this one consumes
-
-**What it would have to ask, with nothing on file:**
-
-```
-*Step 39* asks for nothing from the datasets: hours recorded as work happens.
-```
-
-### 40. `weekly_report`
-
-Weekly report firing
-
-| | |
-| --- | --- |
-| Phase, mode | After the call, auto |
-| Waits on | `first_page` |
-| Runner | none |
-| Writes | nothing |
-| Reads | nothing |
-| [Done] reads | `client_weekly_reports` |
-| Dataset fields | none: the report is assembled from what was measured. ATTRIBUTION_NOT_WIRED says in writing what it cannot count |
-| Feeds | nothing: the report is assembled from what was measured; ATTRIBUTION_NOT_WIRED says in writing what it cannot count |
-| Downstream | nothing downstream declares a dependency on it |
-
-**[Done] refuses on:**
-
-- client_weekly_reports rows for this client
-
-**Feeds, and what carries it:**
-
-- nothing: the report is assembled from what was measured; ATTRIBUTION_NOT_WIRED says in writing what it cannot count
-
-**Fed by:**
-
-- no earlier step declares an artifact this one consumes
-
-**What it would have to ask, with nothing on file:**
-
-```
-*Step 40* asks for nothing from the datasets: the report is assembled from what was measured. ATTRIBUTION_NOT_WIRED says in writing what it cannot count.
-```
-
-### 41. `day_30_date`
-
-Day-30 report date set
-
-| | |
-| --- | --- |
-| Phase, mode | After the call, manual |
-| Waits on | `day_zero_archive` |
-| Runner | none |
-| Writes | nothing |
-| Reads | nothing |
-| [Done] reads | no table |
-| Dataset fields | none: a date for the day-30 retest |
-| Feeds | nothing: it observes or hands over something outside this system, and records no artifact a later step draws from |
-| Downstream | nothing downstream declares a dependency on it |
-
-**[Done] refuses on:**
-
-- replies in this step's thread carrying a date
-
-**Feeds, and what carries it:**
-
-- nothing: it observes or hands over something outside this system, and records no artifact a later step draws from
-
-**Fed by:**
-
-- no earlier step declares an artifact this one consumes
-
-**What it would have to ask, with nothing on file:**
-
-```
-*Step 41* asks for nothing from the datasets: a date for the day-30 retest.
+*Step 37* asks for nothing from the datasets: six options added to their own booking form.
 ```

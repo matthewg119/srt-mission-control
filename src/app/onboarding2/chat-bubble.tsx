@@ -31,9 +31,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   CHAT_UI,
   CLOSING_SUMMARY,
+  DAYPART_OPTIONS,
   OTHER_PROMPT,
   QUALIFYING_INTRO,
   SCHEDULING_INTRO,
+  SCHEDULING_INTRO_KNOWN,
   SCHEDULING_UI,
 } from "@/config/onboarding2";
 import { OFFER_INCLUDES } from "@/config/pitch";
@@ -119,6 +121,9 @@ export function ChatPanel({
   sessionToken,
   fullscreen = false,
   demo,
+  knownIdentity = false,
+  layout = "panel",
+  title,
 }: {
   sessionToken: string;
   /**
@@ -133,6 +138,40 @@ export function ChatPanel({
    */
   fullscreen?: boolean;
   demo: boolean;
+  /**
+   * The session already knows their name, website, phone and email.
+   *
+   * ‼️ IT CHANGES THE OPENING LINES AND NOTHING ELSE, AND THAT IS THE POINT. The server is
+   * already correct without being told: /start wrote the four identity columns, so
+   * nextIntakeStep() finds them filled and the first real turn comes back as the daypart. What it
+   * could not fix is the two bubbles this component paints BEFORE any turn exists, which are
+   * hard-coded to SCHEDULING_INTRO and open on "What is your business website?" That question was
+   * answered three steps before the offer, and re-asking it is the most visible possible way to
+   * tell somebody their answers were thrown away.
+   *
+   * ‼️ THE CHIPS ARE SEEDED WITH IT, for the reason the mount effect already records: the route
+   * only returns options once there is a turn to answer, so the first question on screen has none
+   * unless this component supplies them. SCHEDULING_INTRO_KNOWN ends on DAYPART_PROMPT, which is a
+   * two-chip question, so it needs the same seeding the daypart used to get when it opened cold.
+   */
+  knownIdentity?: boolean;
+  /**
+   * Where the panel sits above 640px. See the note over `shell` below.
+   *
+   * "panel" is the floating bottom-right card the review tool uses and is the default everywhere.
+   * "centre" is a centred, phone-proportioned card, for a route where this panel IS the page.
+   */
+  layout?: "panel" | "centre";
+  /**
+   * The header line.
+   *
+   * ‼️ CHAT_UI.title IS "Questions about the agreement" AND IT IS WRONG ON A BOOKING THREAD. It
+   * was written when this panel sat beside a contract somebody was reading, and it survived the
+   * removal of that screen: a visitor answering "mornings or afternoons" is currently told they are
+   * asking questions about an agreement that is not on screen and will not be signed here. Passed
+   * in rather than changed at source, because the constant is still exactly right on /sign/[token].
+   */
+  title?: string;
 }) {
   // ‼️ IT STARTS OPEN, AND SEEDING THIS FROM `fullscreen` WAS A BUG I SHIPPED (2026-09-25). This
   // component is only rendered at stage === "chat", which is the moment the conversation IS the page, so
@@ -164,6 +203,8 @@ export function ChatPanel({
   const [bookingUrl, setBookingUrl] = useState<string | null>(null);
   const [booking, setBooking] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  /** The composer, so the answer to the next question can be typed without a click. */
+  const entryRef = useRef<HTMLTextAreaElement>(null);
 
   // The effect that forced it open went with the line above: it can no longer be closed by mistake, and
   // re-opening on a prop change would fight the close button rather than help it.
@@ -171,6 +212,40 @@ export function ChatPanel({
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, busy, options]);
+
+  // ── THE COMPOSER TAKES ITS FOCUS BACK THE MOMENT THE ASSISTANT IS DONE ──
+  //
+  // ‼️ MATTHEW'S RULE, AND IT IS A RULE FOR EVERY CONVERSATIONAL SURFACE WE SHIP, not a nicety on
+  // this one (2026-09-30). Seven questions answered on a laptop is seven answers and, without
+  // this, seven clicks back into the box between them. The click is invisible in a demo and
+  // relentless when you are the one filling the funnel in.
+  //
+  // ‼️ NOT ON A TOUCH DEVICE. Focusing a textarea on a phone opens the soft keyboard, so a reader
+  // who has just been handed three bubbles to read would get half the panel eaten by a keyboard
+  // they did not ask for, mid-scroll. `hover: none` is the honest test for "no mouse here" and is
+  // read at the moment of focusing rather than cached, so a tablet that gains a keyboard is not
+  // stuck with the answer it gave on first render.
+  //
+  // ‼️ preventScroll IS LOAD-BEARING. The composer sits below the scrolling message column, and a
+  // default focus() scrolls it into view, which drags the thread away from the bubble that just
+  // arrived. The effect above has already put the reader at the bottom; this must not fight it.
+  useEffect(() => {
+    if (busy || scheduled || otherOpen) return;
+    // The calendar owns the screen while it is up, and a focused textarea behind an iframe is a
+    // keystroke going somewhere nobody can see.
+    if (bookingUrl && !booking) return;
+    if (typeof window !== "undefined" && window.matchMedia("(hover: none)").matches) return;
+    const id = window.setTimeout(() => {
+      try {
+        entryRef.current?.focus({ preventScroll: true });
+      } catch {
+        // Older Safari has no options argument on focus(). A focused box that scrolled is still
+        // better than a box nobody can type into.
+        entryRef.current?.focus();
+      }
+    }, 40);
+    return () => window.clearTimeout(id);
+  }, [busy, scheduled, otherOpen, bookingUrl, booking, messages.length]);
 
   /**
    * Paint an array of bubbles one at a time.
@@ -303,13 +378,21 @@ export function ChatPanel({
   useEffect(() => {
     if (!open || started) return;
     setStarted(true);
-    setMessages(SCHEDULING_INTRO.map((content) => ({ role: "assistant" as const, content })));
-    // ‼️ NO CHIPS ON THE OPENING TURN ANY MORE (2026-09-27). It used to open on the daypart, which
-    // is a two-chip question, so the first thing on screen was two buttons. The first question is now
-    // the website, which is typed, and seeding the old options here would put Mornings and Afternoons
-    // under "What is your business website?". The daypart chips still arrive from the server on the
-    // turn that asks for them, which is where every other question's options already come from.
-  }, [open, started]);
+    const intro = knownIdentity ? SCHEDULING_INTRO_KNOWN : SCHEDULING_INTRO;
+    setMessages(intro.map((content) => ({ role: "assistant" as const, content })));
+    // ‼️ NO CHIPS ON THE OPENING TURN WHEN IT OPENS COLD (2026-09-27). It used to open on the
+    // daypart, which is a two-chip question, so the first thing on screen was two buttons. The cold
+    // first question is the website, which is typed, and seeding the old options there would put
+    // Mornings and Afternoons under "What is your business website?".
+    //
+    // ‼️ AND THAT IS EXACTLY WHY THEY COME BACK WHEN THE IDENTITY IS ALREADY IN (2026-09-30). The
+    // rule was never "no chips on the first turn", it was "the chips must match the question", and
+    // SCHEDULING_INTRO_KNOWN ends on DAYPART_PROMPT. Everything after this turn still gets its
+    // options from the route, which is where every other question's come from.
+    if (knownIdentity) {
+      setOptions([DAYPART_OPTIONS.morning, DAYPART_OPTIONS.afternoon]);
+    }
+  }, [open, started, knownIdentity]);
 
   function tapOption(value: string) {
     if (otherOption && value === otherOption) {
@@ -347,17 +430,52 @@ export function ChatPanel({
   // and the composer are out of it. That is a cramped 640px calendar. Booking is the step this page
   // exists for, so it gets more room for as long as it is on screen and gives it back afterwards.
   const calendarUp = Boolean(bookingUrl) && !booking;
+
+  // ── WHERE THE PANEL SITS ABOVE 640px ──
+  //
+  // ‼️ "centre" IS NOT A SKIN, IT IS WHAT KEEPS THE HANDOVER FROM LOOKING LIKE TWO PRODUCTS
+  // (2026-09-30). /onboarding2/start runs its own conversation as a centred, phone-proportioned
+  // card and then hands over to this component mid-thread. Left on the corner default, the panel
+  // jumped from the middle of the screen to the bottom right at the exact moment somebody chose an
+  // offer, which reads as the page having reloaded into something else.
+  //
+  // ‼️ THE CORNER IS STILL THE DEFAULT, AND DELIBERATELY SO. Matthew asked on 2026-09-25 for this
+  // to be the same floating panel the review tool opens in, so that the three places a person meets
+  // the assistant are recognisably one product. That call stands everywhere it was made about. What
+  // it did not anticipate is a route where the panel IS the page and nothing sits behind it, which
+  // is the one case this prop exists for.
+  //
+  // Below 640px there is no difference at all: full bleed either way, which is what makes the
+  // Calendly embed usable on a phone.
   const shell = fullscreen
     ? "fixed inset-0 z-50 flex flex-col"
-    : [
-        "fixed inset-0 z-50 flex flex-col",
-        "sm:inset-auto sm:bottom-6 sm:right-6 sm:overflow-hidden sm:rounded-[14px] sm:border sm:shadow-2xl",
-        calendarUp
-          ? "sm:h-[min(44rem,calc(100vh-3rem))] sm:w-[min(34rem,calc(100vw-3rem))]"
-          : "sm:h-[min(38rem,calc(100vh-3rem))] sm:w-[min(28rem,calc(100vw-3rem))]",
-      ].join(" ");
+    : layout === "centre"
+      ? [
+          "fixed inset-0 z-50 flex flex-col",
+          // sm:relative, never sm:static: the "Other" prompt is an absolute child and anchors here.
+          "sm:relative sm:z-auto sm:mx-auto sm:overflow-hidden sm:rounded-[22px] sm:border sm:shadow-2xl",
+          calendarUp
+            ? "sm:h-[min(46rem,calc(100vh-4rem))] sm:w-[min(34rem,calc(100vw-2rem))]"
+            : "sm:h-[min(44rem,calc(100vh-4rem))] sm:w-[min(26rem,calc(100vw-2rem))]",
+        ].join(" ")
+      : [
+          "fixed inset-0 z-50 flex flex-col",
+          "sm:inset-auto sm:bottom-6 sm:right-6 sm:overflow-hidden sm:rounded-[14px] sm:border sm:shadow-2xl",
+          calendarUp
+            ? "sm:h-[min(44rem,calc(100vh-3rem))] sm:w-[min(34rem,calc(100vw-3rem))]"
+            : "sm:h-[min(38rem,calc(100vh-3rem))] sm:w-[min(28rem,calc(100vw-3rem))]",
+        ].join(" ");
+
+  // The centred layout needs a parent to centre it in, and this component is mounted directly
+  // under a min-h-screen <main>. Wrapping here rather than at the call site keeps "where the panel
+  // sits" a single decision in a single file.
+  const wrap =
+    layout === "centre" && !fullscreen
+      ? "sm:flex sm:min-h-screen sm:flex-col sm:items-center sm:justify-center sm:px-4 sm:py-10"
+      : "";
 
   return (
+    <div className={wrap}>
     <div className={shell} style={{ backgroundColor: PANEL.bg, color: PANEL.ink, borderColor: PANEL.line }}>
       {fullscreen && demo && (
         <div className="bg-amber-400 px-4 py-2 text-center text-xs font-bold text-[#0a0a0a]">
@@ -367,7 +485,7 @@ export function ChatPanel({
 
       <div className="flex items-center justify-between border-b px-4 py-3" style={{ borderColor: PANEL.line }}>
         <span className="text-sm font-semibold">
-          {bookingUrl || !scheduled ? CHAT_UI.title : "A few quick questions"}
+          {bookingUrl || !scheduled ? (title ?? CHAT_UI.title) : "A few quick questions"}
         </span>
         {/* No close button in full screen. There is nothing behind it to go back to. */}
         {!fullscreen && (
@@ -485,6 +603,7 @@ export function ChatPanel({
         style={{ borderColor: PANEL.line }}
       >
         <textarea
+          ref={entryRef}
           rows={1}
           /* 16px on the control itself, or iOS zooms the whole panel on focus. hub.css carries the same
              note on .va-bar textarea, and it is the one place a font size is not a style choice. */
@@ -549,6 +668,7 @@ export function ChatPanel({
           </div>
         </div>
       )}
+    </div>
     </div>
   );
 }

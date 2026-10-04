@@ -138,7 +138,6 @@ const PRE_LOCK_STEPS = DELIVERY_STEPS.slice(
 const WIPE = [
   "page_gate_runs",
   "page_sources",
-  "page_magnet_candidates",
   "page_studio_sessions",
   // ‼️ client_id is NOT NULL on every row this touches, and the filter below is what keeps it that
   // way. The seven LIBRARY magnets carry client_id null; deleting those breaks the widget for every

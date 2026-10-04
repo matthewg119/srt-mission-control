@@ -135,7 +135,7 @@ export async function planMapData(clientId: string): Promise<PlanMapData | { err
 
   const { loadOffer } = await import("./offers");
   const { conciergeTenant } = await import("@/lib/concierge/for-client");
-  const { anchorFor } = await import("@/lib/concierge/magnet-drafts");
+  const { anchorFor } = await import("@/lib/concierge/magnet-anchor");
   const { loadKeywords } = await import("./client-keywords");
 
   const [clientRes, pagesRes, offer, tenant, keywords] = await Promise.all([

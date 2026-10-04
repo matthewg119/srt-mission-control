@@ -170,7 +170,7 @@ export function intakePatchFrom(
   // V1 EIGHT STEPS. api/onboarding/save's own comment records it: hostsFor(), seedDnsRecords()
   // and the entire hub lane are built from `domain`, so hub_preview fails with "No domain on
   // file" and takes referral_engine_preview, review_card_pdf, concierge_preview, dns_records,
-  // subdomain_live, first_page and referral_engine_handed down with it.
+  // subdomain_live, first_page and review_handover down with it.
   //
   // ‼️ IT COMES OFF THE SIGNING ROW NOW, NOT OFF AN ANSWER (2026-09-03). The website moved to
   // screen one when the question set went from nine to six, and this line moved with it. Reading

@@ -123,7 +123,7 @@ export function ReviewWorkflowForm({
       <div className="grid gap-4 sm:grid-cols-2">
         <div>
           <label className={LABEL} htmlFor="rw-mode">
-            How they ask (step {stepNumber("review_request_configured")})
+            How they ask (step {stepNumber("review_handover")})
           </label>
           <select
             id="rw-mode"
@@ -145,16 +145,16 @@ export function ReviewWorkflowForm({
                 {view.bookingSoftware ? ` They use ${view.bookingSoftware}.` : ""}
               </>
             ) : mode === "card_only" ? (
-              `Recorded, and that is a complete answer. Step ${stepNumber("review_request_configured")} confirms on this alone.`
+              `Recorded, and that is a complete answer. Step ${stepNumber("review_handover")} confirms on this alone.`
             ) : (
-              `Step ${stepNumber("review_request_configured")} refuses until this is one of the two. The label allows either.`
+              `Step ${stepNumber("review_handover")} refuses until this is one of the two. The label allows either.`
             )}
           </p>
         </div>
 
         <div>
           <label className={LABEL} htmlFor="rw-owner">
-            Who owns the tool (step {stepNumber("referral_engine_handed")})
+            Who owns the tool (step {stepNumber("review_handover")})
           </label>
           <input
             id="rw-owner"
@@ -165,8 +165,8 @@ export function ReviewWorkflowForm({
           />
           <p className="mt-1 text-[11px] text-[rgba(255,255,255,0.45)]">
             {roleNotName
-              ? `That is a role, not a person. Step ${stepNumber("referral_engine_handed")} says handed to the NAMED person, and a link sent to a desk is a link nobody owns.`
-              : `Step ${stepNumber("referral_engine_handed")}'s card reads this back so you can check the handover went to the right person.`}
+              ? `That is a role, not a person. Step ${stepNumber("review_handover")} says handed to the NAMED person, and a link sent to a desk is a link nobody owns.`
+              : `Step ${stepNumber("review_handover")}'s card reads this back so you can check the handover went to the right person.`}
           </p>
         </div>
       </div>
@@ -287,8 +287,8 @@ export function ReviewWorkflowForm({
             <li>No reviews host is attached yet, so the QR on the cards has nothing to open.</li>
           )}
           <li>
-            Step {stepNumber("review_request_configured")} confirms on the mode above. Step{" "}
-            {stepNumber("referral_engine_handed")} confirms on a handover to the named person, with
+            Step {stepNumber("review_handover")} confirms on the mode above. Step{" "}
+            {stepNumber("review_handover")} confirms on a handover to the named person, with
             the evidence in its own Slack thread.
           </li>
         </ul>
