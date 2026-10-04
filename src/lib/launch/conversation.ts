@@ -71,6 +71,12 @@ export const ACTION_KINDS = [
   // than marked wrong. The alternative is the model telling him the DNS is fine because the
   // database still says `ready`, which is a claim nobody checked.
   "check_dns",
+  // ‼️ READ ONLY, AND AN ACTION RATHER THAN ALWAYS-ON CONTEXT. Matthew, 2026-10-04, asked for the
+  // chat to be able to quote the four foundation documents. They are 16k, 20k and 23k characters
+  // on SRT alone, so loading them every turn would crowd out the board, both keyword pools and the
+  // DNS, and make it answer worse about everything to answer better about one thing. As an action
+  // the model asks for the one it needs, which is the same shape search_domains and check_dns use.
+  "read_document",
 ] as const;
 
 export type ActionKind = (typeof ACTION_KINDS)[number];
@@ -84,7 +90,7 @@ export interface LaunchAction {
   promise?: string;
   /** search_domains */
   domains?: string[];
-  /** hand_prompt */
+  /** hand_prompt, and read_document: which document to open. */
   which?: string;
 }
 
@@ -197,6 +203,8 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "He is the only person who will ever read you. He is terse and he is fast.",
     "",
     "HOW TO TALK:",
+    "- Short by default: two or three lines and the next action. He asks when he wants the long",
+    "  version, and ANSWERING below says what to do when he does.",
     "- One line of context saying what you need and why, then the ask. Never more.",
     "- Never explain unless he asks. When he does ask, answer properly: see ANSWERING below.",
     "- Batch your questions. He answers several at once by recording one voice note and pasting",
@@ -214,6 +222,11 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "  because both spend something that cannot be taken back. Tell him to press the button.",
     "- Never change keywords and never touch the concierge without him saying yes in words.",
     `- If you are less than ${Math.round(ACT_THRESHOLD * 100)} percent sure, return no actions and ask instead.`,
+    "- ‼️ THAT BAR DOES NOT APPLY TO complete_step, read_document, check_dns, search_domains or",
+    "  read_offer. Those either prove themselves or change nothing: a tick runs the step's verifier",
+    "  and is refused unless the database already supports it, and the rest are reads. Matthew asked",
+    "  for act-then-tell-me, so when a step looks done, TICK IT and say what the verifier answered.",
+    "  A skip is different and stays behind the bar: nothing verifies a skip, it is an assertion.",
     "",
     "THE JOB, AND EVERY ANSWER IS MEASURED AGAINST IT:",
     "- Get this client onboarded and their pages posted. That outcome IS the job. A step is worth",
@@ -287,6 +300,11 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "  hand_prompt          needs which. Returns a prompt for him to run elsewhere.",
     "  complete_step        needs stepKey. It runs the verifier and may refuse.",
     "  skip_step            needs stepKey and reason.",
+    "  read_document        needs which: deep_research, avatar_sheet, short_offer,",
+    "                       necessary_beliefs, sales_letter or awareness_ladder. Free and read",
+    "                       only. Use it before answering anything about the avatar, the offer,",
+    "                       the beliefs or what a lead magnet should be: quoting the document",
+    "                       beats describing it, and you can open it in the same turn you answer.",
     "  check_dns            resolve the records and report what is actually live. No arguments.",
     "                       Free and read only. Use it whenever he asks whether DNS is working,",
     "                       rather than reading the stored status back at him.",
@@ -451,6 +469,40 @@ async function executeAction(
     const prompt = await buildHandoffPrompt(clientId, action.which ?? "");
     if (!prompt.ok) return { kind, ok: false, detail: prompt.error };
     return { kind, ok: true, detail: prompt.label, prompt: prompt.text };
+  }
+
+  if (kind === "read_document") {
+    const want = (action.which ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+    const { foundationText } = await import("./documents");
+    const docs = await foundationText(clientId);
+    if (!docs || docs.length === 0) {
+      return { kind, ok: false, detail: "No documents are on file for this client yet." };
+    }
+    const hit = docs.find((d) => d.kind === want);
+    if (!hit) {
+      return {
+        kind,
+        ok: false,
+        detail: `There is no "${action.which ?? ""}" on file. On file: ${docs.map((d) => d.kind).join(", ")}.`,
+      };
+    }
+    // ‼️ CLIPPED, AND THE CLIP IS DECLARED IN THE TEXT THE MODEL READS. The Slack lane learned this
+    // one the expensive way: final-prompt.ts carries 12,000 characters of a document and the honest
+    // answer to "does it carry the document" is "12,000 characters of it, and it says so". A silent
+    // clip produces a confident summary of a document whose second half nobody read.
+    const BUDGET = 12_000;
+    const clipped = hit.content.length > BUDGET;
+    const body = clipped ? hit.content.slice(0, BUDGET) : hit.content;
+    return {
+      kind,
+      ok: true,
+      detail:
+        `${hit.kind}, ${hit.content.length} characters` +
+        (clipped ? `, of which the first ${BUDGET} follow. Say so if you summarise it.` : ", in full.") +
+        `
+
+${body}`,
+    };
   }
 
   if (kind === "check_dns") {
@@ -685,8 +737,23 @@ export async function runTurn(args: {
   const say = clean(plan.say ?? "");
   const asks = (plan.asks ?? []).map((a) => clean(String(a)));
 
-  const heldBack = plan.confidence < ACT_THRESHOLD && (plan.actions ?? []).length > 0;
-  const toRun = heldBack ? [] : (plan.actions ?? []).slice(0, MAX_ACTIONS_PER_TURN);
+  // ‼️ A TICK IS NOT A GUESS, SO IT IS NOT HELD BACK. Matthew, 2026-10-04, chose "act, then tell
+  // me", and `complete_step` is the one action where that is safe for a structural reason rather
+  // than an optimistic one: setLaunchStep runs the step's VERIFIER and refuses anything it cannot
+  // prove from the database. A confident model and a hesitant one get the same answer from it, so
+  // a confidence score adds nothing except a turn of latency.
+  //
+  // ‼️ `skip_step` IS STILL GATED, AND THE DIFFERENCE IS THE WHOLE POINT. A skip has no verifier:
+  // it is an assertion that something does not apply, recorded with a reason and nothing to check
+  // it against. That is exactly the shape of claim a 90 percent confidence bar exists for.
+  const SELF_PROVING: ReadonlySet<string> = new Set(["complete_step", "read_document", "check_dns", "search_domains", "read_offer"]);
+  const proposed = plan.actions ?? [];
+  const risky = proposed.filter((a) => !SELF_PROVING.has(a.kind));
+  const heldBack = plan.confidence < ACT_THRESHOLD && risky.length > 0;
+  const toRun = (heldBack ? proposed.filter((a) => SELF_PROVING.has(a.kind)) : proposed).slice(
+    0,
+    MAX_ACTIONS_PER_TURN
+  );
 
   const results: ActionResult[] = [];
   let settled: string | null = null;
