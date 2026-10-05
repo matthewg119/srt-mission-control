@@ -12,11 +12,16 @@
 // the one place this system is deliberately strict. The one exception is starting a WORKFLOW, which
 // produces drafts and posts them for a person to read (workflows/registry.ts).
 //
+// get_onboarding_sheet RENDERS A DOCUMENT AND STILL COUNTS AS A READ, which is the whole reason it
+// streams fresh bytes instead of filing them: see the header of
+// src/app/api/onboarding-sheet/route.ts for why storeGeneratedDoc() was rejected here.
+//
 // Spread into AI_TOOLS, so the web chat, Slack and Telegram all get them with no extra wiring:
 // ai-tools.ts's own header says that is the point of merging there rather than at each call site.
 
 import type { ToolExecutionResult } from "./ai-tools";
 import { resolveClient } from "./clients/client-reads";
+import { appUrl } from "./onboarding2/constants";
 
 type Input = Record<string, unknown>;
 
@@ -38,6 +43,22 @@ function result(data: unknown): ToolExecutionResult {
 
 function fail(message: string, extra: Input = {}): ToolExecutionResult {
   return result({ error: message, ...extra });
+}
+
+/**
+ * The download link for the setup sheet.
+ *
+ * ‼️ A LINK AND NOT BYTES, BECAUSE A TOOL RESULT CANNOT CARRY A FILE. Every surface the tool
+ * loop feeds -- the web chat, Slack, Telegram -- gets a JSON string and renders prose, and
+ * executeTool() has no channel to upload into. The route behind this link is session-gated, so
+ * following it from a phone needs a dashboard login; that is a real limit and not a bug to hide.
+ */
+function sheetUrl(arg: { client: string } | { clinic: string }): string {
+  const q =
+    "client" in arg
+      ? `client=${encodeURIComponent(arg.client)}`
+      : `clinic=${encodeURIComponent(arg.clinic)}`;
+  return `${appUrl()}/api/onboarding-sheet?${q}`;
 }
 
 /** Every tool takes the same `client` argument, so one description explains it once. */
@@ -134,6 +155,23 @@ export const CLIENT_TOOLS = [
       required: ["client"],
     },
   },
+  {
+    name: "get_onboarding_sheet",
+    description:
+      "The printed setup sheet for an onboarding call: the one-page form the clinic is walked through and writes on, covering checkout timing, one referral deal per service, who treats patients, links and the compliance checkboxes. Use for 'I am about to onboard X, give me the PDF', 'the setup sheet for X', 'the onboarding form'. WORKS FOR A CLINIC THAT IS NOT IN THE SYSTEM YET: give the name and it returns a blank sheet with that name on it. Returns a link to download.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        ...CLIENT_ARG,
+        clinic_name: {
+          type: "string",
+          description:
+            "The clinic's name, for a clinic with no client record yet. Use this when the call is before provisioning. The name is printed on the masthead and nothing is read from the database.",
+        },
+      },
+      required: [] as string[],
+    },
+  },
   // ── The workflows, which are the one thing here that is not a read ──────────
   {
     name: "list_client_workflows",
@@ -195,6 +233,64 @@ export async function executeClientTool(toolName: string, input: Input): Promise
     if (toolName === "list_client_workflows") {
       const { listClientWorkflows } = await import("./clients/workflows/registry");
       return result({ tool: "list_client_workflows", workflows: listClientWorkflows() });
+    }
+
+    // ‼️ HANDLED BEFORE need(), BECAUSE THE WHOLE POINT IS THAT THE CLIENT MAY NOT EXIST YET.
+    // "I am about to onboard Med Spa 123" is usually said before anything is provisioned, so a
+    // tool that demanded a resolvable client would fail on the sentence it was built for.
+    if (toolName === "get_onboarding_sheet") {
+      const ref = s(input.client);
+      const typed = s(input.clinic_name);
+      if (!ref && !typed) {
+        return fail("Name the clinic: a client slug, or just their name if they are not in the system yet.");
+      }
+
+      if (ref) {
+        const found = await resolveClient(ref);
+        if (found.ok) {
+          return result({
+            tool: "get_onboarding_sheet",
+            mode: "prefilled",
+            client: found.client.name,
+            slug: found.client.slug,
+            url: sheetUrl({ client: found.client.id }),
+            note:
+              "Prefilled with the clinic name, the service list off intake, the booking system and " +
+              "the chosen review platform. Everything else is blank lines to write on during the call.",
+          });
+        }
+
+        // ‼️ TWO MATCHES IS A QUESTION AND NEVER A GUESS. Handing over the wrong clinic's sheet
+        // is worse than one more question: it is read aloud on a call as if it were theirs.
+        if (found.candidates.length > 1) {
+          return fail(found.error, {
+            candidates: found.candidates.map((c) => ({ name: c.name, slug: c.slug })),
+            next: "Ask which one, by slug. Do not choose.",
+          });
+        }
+
+        // No row at all, which is ORDINARY for a clinic about to be onboarded. A blank sheet in
+        // their name is the right answer, and the note says plainly that nothing was prefilled so
+        // nobody believes the empty lines are what the database holds.
+        const name = typed ?? ref;
+        return result({
+          tool: "get_onboarding_sheet",
+          mode: "blank",
+          clinicName: name,
+          url: sheetUrl({ clinic: name }),
+          note:
+            `No client record matches "${ref}", so this is a blank sheet with that name on the ` +
+            "masthead. Nothing is prefilled. Say so, rather than implying it was read from their file.",
+        });
+      }
+
+      return result({
+        tool: "get_onboarding_sheet",
+        mode: "blank",
+        clinicName: typed,
+        url: sheetUrl({ clinic: typed as string }),
+        note: "A blank sheet in that name. Nothing is prefilled, because no client record was named.",
+      });
     }
 
     if (toolName === "find_client") {

@@ -25,6 +25,12 @@ import { fidelityLine, sniffImageFormat, namedLabel } from "../src/lib/pdf/kit";
 import { clickPathFor } from "../src/lib/clients/dns-records";
 import { renderPresencePdf } from "../src/lib/clients/artifacts/presence-pdf";
 import { renderReviewCard } from "../src/lib/clients/artifacts/review-card";
+import {
+  renderOnboardingSheet,
+  clampClinicName,
+  sheetFilename,
+  MAX_CLINIC_NAME,
+} from "../src/lib/clients/artifacts/onboarding-sheet";
 import { ALL_PLATFORMS } from "../src/config/presence-platforms";
 import type { SweepRow } from "../src/lib/clients/presence-sweep";
 import zlib from "node:zlib";
@@ -4178,6 +4184,104 @@ import * as visionT from "../src/lib/hub/skin-vision";
   ok("the import runs before the ops channel and board are created", provSrc.indexOf("importFromArchive") < provSrc.indexOf("await createOpsChannel(clientId"));
   const archiveSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "clients", "archive.ts"), "utf8");
   ok("nothing is deleted without an archive of exactly that client", /archive\.source_client_id !== args\.clientId/.test(archiveSrc));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The onboarding setup sheet
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// ‼️ IT HAD NO COVERAGE AT ALL UNTIL THE CHAT TOOL MADE IT REACHABLE. While its only caller was
+// a CLI somebody ran by hand and looked at, that was defensible. Now an assistant hands the
+// document to Matthew on the way into a call, so the sheet is read by somebody who did not
+// render it.
+//
+// ‼️ AND THE CLAMP IS THE REASON THIS BLOCK EXISTS. The masthead and the page-2 running header
+// draw the clinic name with a bare doc.text() while every other long string in that module goes
+// through splitTextToSize. The chat tool is the first CALLER-CONTROLLED path into that draw
+// call, so an unclamped name is a name that runs off the paper.
+
+{
+  const blank = renderOnboardingSheet({
+    clinicName: "Med Spa 123",
+    services: [],
+    bookingSoftware: null,
+    reviewPlatform: null,
+  });
+  const blankText = pdfText(blank);
+
+  ok("a blank sheet renders", blank.subarray(0, 5).toString() === "%PDF-");
+  ok("the clinic name is on it", blankText.includes("Med Spa 123"));
+  ok(
+    "all six sections are there",
+    ["Checkout", "referred friend gets", "works on patients", "Links and feedback", "automated", "Sign-off"].every(
+      (s) => blankText.includes(s)
+    )
+  );
+
+  // ‼️ A BLANK SHEET MUST NOT IMPLY WE HOLD ANSWERS WE DO NOT HAVE. This is the exact failure the
+  // chat tool's `mode: "blank"` field and its note exist to stop the model committing in prose,
+  // and it has to be true of the document itself as well.
+  ok("a blank sheet claims no booking system", !blankText.includes("Booking system on file"));
+  ok("and says the review destination is still open", blankText.includes("confirm on the call"));
+
+  // The module's own rules, asserted on the page rather than on the branch.
+  ok("nothing on the sheet is labelled HIPAA", !/HIPAA/i.test(blankText));
+  ok("the real artifact is named instead", blankText.includes("Business Associate Agreement"));
+
+  const prefilled = pdfText(
+    renderOnboardingSheet({
+      clinicName: "Acme Med Spa",
+      services: ["Botox", "Dermal filler", "Hydrafacial"],
+      bookingSoftware: "Boulevard",
+      reviewPlatform: "Google",
+    })
+  );
+  ok("prefilled services are printed", prefilled.includes("Hydrafacial"));
+  ok("a booking system on file is named", prefilled.includes("Boulevard"));
+  ok("the review destination on file is named", prefilled.includes("Google"));
+
+  // ── The clamp, which the route and the chat tool both stand on ──
+  eq("a short name is tidied and kept", clampClinicName("  Med  Spa 123 "), "Med Spa 123");
+  ok("a long name is clipped to the masthead width", clampClinicName("x".repeat(400)).length <= MAX_CLINIC_NAME);
+  ok("and says it was clipped", clampClinicName("x".repeat(400)).endsWith("..."));
+  ok(
+    "control characters never reach a content stream",
+    !/[\u0000-\u001f]/.test(clampClinicName(`a${String.fromCharCode(0)}b${String.fromCharCode(10)}c`))
+  );
+  eq("an empty name clamps to empty, so the route can refuse it", clampClinicName("   "), "");
+  eq("the filename is a slug", sheetFilename("Med Spa 123!"), "SRT-setup-sheet-med-spa-123.pdf");
+  eq("a nameless sheet still has a filename", sheetFilename(""), "SRT-setup-sheet-clinic.pdf");
+
+  // ‼️ THE TOOL IS A READ AND THE ROUTE FILES NOTHING, which is the claim the prompt now makes in
+  // so many words. A storeGeneratedDoc call here would make both sentences false, and
+  // client_docs.client_id is `not null references clients(id)` so it could not serve the blank
+  // mode anyway. Grepped rather than trusted.
+  const sheetRoute = fs.readFileSync(
+    path.join(__dirname, "..", "src", "app", "api", "onboarding-sheet", "route.ts"),
+    "utf8"
+  );
+  // ‼️ COMMENT-STRIPPED FIRST, FOR THE REASON _probe-referral-invite.ts STRIPS: that route's
+  // header NAMES storeGeneratedDoc to explain why it was rejected, so a raw grep fails on the
+  // prose that documents the rule it is checking. Measured, not predicted -- it failed exactly
+  // this way on the first run.
+  // The split character is built from a char code rather than written as an escape, which is
+  // _probe-review-gating.ts's LF constant and its reason: nothing an editor, a formatter or a
+  // heredoc does can turn it into something else. This line arrived as a literal newline once.
+  const LF = String.fromCharCode(10);
+  const sheetRouteCode = sheetRoute
+    .split(LF)
+    .filter((l) => !l.trim().startsWith("//"))
+    .join(LF);
+  ok("the sheet route files nothing", !/storeGeneratedDoc|deliverArtifact|\.insert\(/.test(sheetRouteCode));
+  ok("and it is behind the dashboard session", /await auth\(\)/.test(sheetRoute) && /401/.test(sheetRoute));
+  ok("the file is handed over as an attachment", /attachment; filename=/.test(sheetRoute));
+
+  const toolsSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "client-tools.ts"), "utf8");
+  ok("the tool refuses to choose between two clinics", /Ask which one, by slug\. Do not choose\./.test(toolsSrc));
+  const promptSrc = fs.readFileSync(path.join(__dirname, "..", "src", "lib", "ai.ts"), "utf8");
+  // A tool the prompt never names is a tool the model cannot use. That is the whole failure mode
+  // this wiring existed to fix, so it is asserted rather than assumed.
+  ok("the prompt names the tool", promptSrc.includes("get_onboarding_sheet"));
 }
 
 // ‼️ EVERY LANE APPENDS ABOVE THIS SUMMARY, NEVER BELOW IT. scripts/_probe-dm-pitch.ts

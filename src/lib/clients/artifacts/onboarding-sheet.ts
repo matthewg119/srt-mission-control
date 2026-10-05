@@ -232,6 +232,44 @@ function servicesGrid(cur: Cursor, services: string[]): void {
   }
 }
 
+/**
+ * How long a clinic name may be before it is clipped, and why there is a limit at all.
+ *
+ * ‼️ THE MASTHEAD LINE IS NOT WRAPPED. The "Clinic" draw below and the page-2 running header in
+ * newPage() both use a bare doc.text(); every other long string in this file goes through
+ * splitTextToSize. That was harmless while the only two inputs were a literal in the CLI and a
+ * column somebody typed at intake. A name arriving from a chat message is the first
+ * CALLER-CONTROLLED path into that draw call, so the clamp lives here, next to the reason,
+ * and the one route that takes a typed name applies it.
+ *
+ * 48 is measured, not guessed: the field is (CONTENT_W - 6) / 2 = 88mm and the name is drawn at
+ * 9.5pt helvetica, which fits about 52 characters. Clipping before that is what stops a long
+ * name running through the "Date" rule beside it.
+ *
+ * ASCII dots rather than U+2026: these are jsPDF's WinAnsi standard fonts and a clipped clinic
+ * name is not the place to discover what happens at the edge of that encoding.
+ */
+export const MAX_CLINIC_NAME = 48;
+
+export function clampClinicName(raw: string): string {
+  const name = (raw ?? "")
+    // Control characters would otherwise reach a PDF content stream.
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (name.length <= MAX_CLINIC_NAME) return name;
+  return `${name.slice(0, MAX_CLINIC_NAME - 3).trimEnd()}...`;
+}
+
+/** The file a person ends up with in Downloads, named so it is findable a week later. */
+export function sheetFilename(clinic: string): string {
+  const slug = clampClinicName(clinic)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `SRT-setup-sheet-${slug || "clinic"}.pdf`;
+}
+
 export interface OnboardingSheetInput {
   clinicName: string;
   /** Pre-filled from intake when we have it. Blank rows otherwise. */
@@ -378,8 +416,14 @@ export function renderOnboardingSheet(input: OnboardingSheetInput): Buffer {
  * missing intake row means fewer prefills, not no sheet. Returning nothing because a select
  * failed would be the one outcome that makes the call impossible to run.
  */
-export async function generateOnboardingSheet(clientId: string): Promise<Buffer> {
-  let clinicName = "Clinic";
+export async function generateOnboardingSheet(
+  clientId: string,
+  opts: { clinicName?: string } = {}
+): Promise<Buffer> {
+  // ‼️ THE CALLER'S NAME IS THE FALLBACK, NOT THE WORD "Clinic". A failed prefill read still
+  // produces a sheet, by design, and until this argument existed that sheet was mastheaded
+  // "Clinic" even for a client the caller had just resolved BY NAME.
+  let clinicName = clampClinicName(opts.clinicName ?? "") || "Clinic";
   let services: string[] = [];
   let bookingSoftware: string | null = null;
   let reviewPlatform: string | null = null;
@@ -392,10 +436,11 @@ export async function generateOnboardingSheet(clientId: string): Promise<Buffer>
       .maybeSingle();
 
     const row = (data ?? {}) as Record<string, unknown>;
-    clinicName =
+    clinicName = clampClinicName(
       (typeof row.dba_name === "string" && row.dba_name.trim()) ||
-      (typeof row.legal_name === "string" && row.legal_name.trim()) ||
-      clinicName;
+        (typeof row.legal_name === "string" && row.legal_name.trim()) ||
+        clinicName
+    );
     bookingSoftware =
       typeof row.booking_software === "string" && row.booking_software.trim()
         ? row.booking_software.trim()
