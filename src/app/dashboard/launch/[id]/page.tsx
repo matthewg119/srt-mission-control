@@ -14,6 +14,8 @@ import { signOnboardingToken } from "@/lib/clients/token";
 import { PREVIEW_TOKEN_TTL_DAYS } from "@/lib/clients/referral-engine-preview";
 import { LaunchBoard, type BoardStep } from "./board";
 import { LaunchPanels } from "./panels";
+import { launchPagesState } from "@/lib/launch/pages";
+import { LaunchPagesPanel } from "./pages-panel";
 
 /**
  * A RELATIVE preview link, and the relativeness is load-bearing.
@@ -116,7 +118,7 @@ export default async function LaunchClientPage({ params }: Props) {
     );
   }
 
-  const [board, docs, offer, hostRow, audienceRow] = await Promise.all([
+  const [board, docs, offer, hostRow, audienceRow, pages] = await Promise.all([
     launchBoard(client.id as string),
     foundationStatus(client.id as string),
     currentOffer(client.id as string),
@@ -132,6 +134,9 @@ export default async function LaunchClientPage({ params }: Props) {
       .eq("client_id", client.id as string)
       .eq("is_primary", true)
       .maybeSingle(),
+    // The page run, read here so the panel renders filled rather than empty-then-populated. It
+    // never throws: a plan that cannot be read hands the panel null and it says so.
+    launchPagesState(client.id as string).catch(() => null),
   ]);
 
   const steps: BoardStep[] = board.map((e) => ({
@@ -262,7 +267,16 @@ export default async function LaunchClientPage({ params }: Props) {
       )}
 
       <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <LaunchBoard clientId={client.id as string} steps={steps} />
+        {/* ‼️ THE PAGE RUN GOES IN THE WIDE COLUMN, NOT THE 320px RAIL. Seven pages with three
+            headline candidates each does not fit a rail, and a headline read half cut off is a
+            decision made on half the words. */}
+        <div>
+          <LaunchBoard clientId={client.id as string} steps={steps} />
+          <LaunchPagesPanel
+            clientId={client.id as string}
+            initial={pages && !("error" in pages) ? pages : null}
+          />
+        </div>
         <LaunchPanels
           clientId={client.id as string}
           documents={docs ?? []}

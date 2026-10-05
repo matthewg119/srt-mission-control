@@ -43,7 +43,7 @@ export async function publishingFacts(clientId: string): Promise<PublishingFacts
   const [kw, pages, evidence, client, dests] = await Promise.all([
     supabaseAdmin
       .from("client_keywords")
-      .select("phrase, category, approved, selected_at, dropped_at")
+      .select("phrase, category, role, approved, selected_at, dropped_at")
       .eq("client_id", clientId),
     supabaseAdmin.from("client_pages").select("status").eq("client_id", clientId),
     count("page_sources", clientId),
@@ -68,11 +68,42 @@ export async function publishingFacts(clientId: string): Promise<PublishingFacts
   // Grouped by category because that is the shape of the strategy: the categories ARE the
   // candidate pillars, so a flat list would hide the one structure he needs to see.
   const picked = rows.filter((r) => r.selected_at && !r.dropped_at);
+
+  // ‼️ THE STRATEGY MAP, WHICH IS A DIFFERENT QUESTION FROM THE KEYWORD LIST AND WAS MISSING.
+  // Asked "what is our strategy map" the chat had every selected phrase in front of it and no way
+  // to say which one was the pillar, because `role` was not in the select above. The pillar and its
+  // supports ARE the plan's skeleton: one page aims at the pillar and every other page links to it.
+  // Answering that question with a flat list of thirty phrases is answering a different one.
+  //
+  // A person picks the pillar and it is never chosen from the scores, so no pillar means NO MAP.
+  // Saying so is the answer; offering the selected list as though it were one is the failure this
+  // file exists to stop.
+  const pillar = picked.find((r) => r.role === "pillar") ?? null;
+  const supports = picked.filter((r) => r.role === "support");
+  const label = (r: Record<string, unknown>): string =>
+    `${String(r.phrase)}${r.category ? ` (${String(r.category)})` : ""}`;
+
+  const mapLines = pillar
+    ? [
+        "  THE STRATEGY MAP, which is what the pages are built around. Quote this when asked about strategy:",
+        `    pillar: ${label(pillar)}`,
+        ...(supports.length
+          ? supports.map((s) => `    support: ${label(s)}`)
+          : ["    no supports are picked yet, so the pillar has nothing linking to it."]),
+      ]
+    : [
+        "  THE STRATEGY MAP: no pillar is picked yet, so there is no map. Say that plainly rather than" +
+          " offering the selected keywords as if they were one.",
+      ];
+
   const byCategory = new Map<string, string[]>();
   for (const r of picked) {
     const k = String(r.category ?? "uncategorised");
     if (!byCategory.has(k)) byCategory.set(k, []);
-    byCategory.get(k)!.push(String(r.phrase));
+    // The role rides along with the phrase, so the grouped list below and the map above cannot
+    // disagree about which of these is the pillar.
+    const role = r.role === "pillar" || r.role === "support" ? ` [${String(r.role)}]` : "";
+    byCategory.get(k)!.push(`${String(r.phrase)}${role}`);
   }
   // ‼️ CAPPED, AND THE CAP ANNOUNCES ITSELF. Thirty phrases is nothing; three hundred would crowd
   // out the board, the documents and the DNS, and the model would start answering worse about
@@ -107,6 +138,7 @@ export async function publishingFacts(clientId: string): Promise<PublishingFacts
       "  THE TWO KEYWORD POOLS, WHICH ARE DIFFERENT QUESTIONS:",
       `    approved: ${approved}. The measurement breadth, frozen at Day 0. Nothing is published from it.`,
       `    selected: ${selected}. ‼️ THIS is what pages are planned from. Quote this one when asked how many keywords there are for pages.`,
+      ...mapLines,
       ...(keywordLines.length
         ? ["  THE SELECTED KEYWORDS THEMSELVES, grouped by category. You HAVE these: never say you only have a count.", ...keywordLines]
         : ["  No keywords are selected yet, so there is nothing for pages to be planned from."]),
