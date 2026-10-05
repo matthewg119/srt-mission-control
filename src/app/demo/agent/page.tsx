@@ -74,7 +74,21 @@ const DEMO_CLIENT: HubClient = {
   // field names and `google_url` is what destinationsFor() looks for, so the old key matched
   // nothing, the list came back empty and the demo rendered exactly the fallback hint the comment
   // above says it was configured to avoid. Nothing errored, which is why it survived.
-  reviewWorkflow: { google_url: "https://example.com/demo-review-destination" },
+  //
+  // ‼️ `referral_email` IS ON HERE SO THE DEMO SHOWS THE BOX IT ADDS, and that is the same class
+  // of fault the `google_url` note above records. referralEmailConfig() reads this bag, every
+  // flag in it defaults to FALSE for a real client, and a synthetic client with no bag therefore
+  // renders the walk with her email box missing: the demo would silently show the version from
+  // before the emails existed, and nothing would error.
+  //
+  // ‼️ IT SENDS NOTHING FROM THIS PAGE. The box is collected and the demo never reaches a write:
+  // `referral` is a literal so nothing is queried, and the invite POST is only made from a real
+  // reviews host. `notify_to` is deliberately absent, so even the clinic notice has nowhere to go.
+  // What is on display is the field, not the mail.
+  reviewWorkflow: {
+    google_url: "https://example.com/demo-review-destination",
+    referral_email: { enabled: true, email_referrer: true, email_friend: true },
+  },
   // No onAccent here: themeStyle() computes --hub-on-accent from the accent's luminance, which is
   // the whole reason a bright accent does not get unreadable white button text. Setting it by hand
   // would be this page disagreeing with every other one about the same colour.
