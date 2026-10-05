@@ -129,16 +129,23 @@ export async function ReferralEngine({
         what a customer notices and nobody testing a single page ever does.
       */}
       <HubLogo client={client} />
-      <VirtualAgentClient
-        businessName={client.displayName}
-        // "Miami, FL" where both are on file, one of them where only one is, and omitted
-        // entirely otherwise. Never a half-rendered ", FL".
-        location={[client.city, client.state].filter(Boolean).join(", ") || null}
-        clientId={client.id}
-        destinations={destinations}
-        needsSpanish={needsSpanish}
-        referral={referralConfig}
-      />
+      {/*
+        ‼️ ONE FRAME AROUND THE WHOLE FLOW. See .rev-frame in hub.css: the opening card, the chat
+        panel and her finished review were three different widths on a desktop, which is three
+        products in one session. The panel centres itself to this same width.
+      */}
+      <div className="rev-frame">
+        <VirtualAgentClient
+          businessName={client.displayName}
+          // "Miami, FL" where both are on file, one of them where only one is, and omitted
+          // entirely otherwise. Never a half-rendered ", FL".
+          location={[client.city, client.state].filter(Boolean).join(", ") || null}
+          clientId={client.id}
+          destinations={destinations}
+          needsSpanish={needsSpanish}
+          referral={referralConfig}
+        />
+      </div>
     </>
   );
 }

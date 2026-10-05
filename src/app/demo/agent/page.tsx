@@ -213,73 +213,75 @@ export default function AgentDemo({
       // makes a theme look different from everywhere else.
       style={{ ...skinStyle(client.skin), ...themeStyle(client.theme) }}
     >
-      <Ribbon clientKey={clientKey} mode={mode} />
       <div className="hub-wrap">
         {/* `referral` passed as a literal, so nothing is queried. See DEMO_REFERRAL. */}
         <ReferralEngine
           client={client}
           referral={{ ...DEMO_REFERRAL, clinicPhone: client.phone, mode }}
         />
+        <Ribbon clientKey={clientKey} mode={mode} />
       </div>
     </div>
   );
 }
 
 /** Dark, amber, and unmistakably not part of the page. Same treatment as the other ribbons. */
+/**
+ * The switcher, and it is deliberately the quietest thing on the page now.
+ *
+ * ‼️ THE ORANGE "PREVIEW" BANNER ACROSS THE TOP IS GONE (2026-10-05, Matthew: "please get rid of
+ * the preview orange text"). It sat above the clinic's own name in a colour no client's theme
+ * contains, so the first thing anybody judged was our scaffolding rather than their tool. The
+ * page is still noindex and still touches no database; what changed is that it stops announcing
+ * that in the one place a prospect looks first.
+ *
+ * ‼️ IT MOVED BELOW THE FLOW RATHER THAN BEING DELETED. The whole value of this page is walking
+ * the two referral shapes and the two skins side by side; a demo with no way to switch is two
+ * links somebody has to keep in a note. Underneath, small and grey, it is out of the way without
+ * being gone.
+ */
 function Ribbon({ clientKey, mode }: { clientKey: string; mode: string }) {
-  const currentMode = MODES.find((m) => m.key === mode);
+  const link = (active: boolean) => ({
+    color: active ? "rgba(0,0,0,0.75)" : "rgba(0,0,0,0.4)",
+    fontWeight: active ? 600 : 400,
+    textDecoration: active ? "none" : "underline",
+  });
+
   return (
     <div
       style={{
-        background: "#1d1d1f",
-        color: "rgba(255,255,255,0.75)",
-        borderBottom: "1px solid rgba(255,255,255,0.12)",
-        padding: "10px 16px",
-        font: "13px/1.6 ui-sans-serif, system-ui, sans-serif",
+        maxWidth: "26rem",
+        margin: "2.5rem auto 0",
+        paddingTop: "1rem",
+        borderTop: "1px solid rgba(0,0,0,0.08)",
+        font: "12px/1.7 ui-sans-serif, system-ui, sans-serif",
+        color: "rgba(0,0,0,0.35)",
         display: "flex",
         flexWrap: "wrap",
-        gap: "14px",
+        gap: "10px",
         alignItems: "baseline",
       }}
     >
-      <strong style={{ color: "#F5A623" }}>PREVIEW</strong>
-      <span>
-        Design demo of the review tool. Nothing here is live, nothing is indexed and nothing you
-        type is stored.
-      </span>
-      <span style={{ display: "flex", gap: "10px", alignItems: "baseline" }}>
-        <span style={{ opacity: 0.6 }}>referral:</span>
-        {MODES.map((choice) => (
-          <a
-            key={choice.key}
-            href={`/demo/agent?client=${clientKey}&mode=${choice.key}`}
-            style={{
-              color: mode === choice.key ? "#F5A623" : "rgba(255,255,255,0.75)",
-              fontWeight: mode === choice.key ? 700 : 400,
-              textDecoration: mode === choice.key ? "none" : "underline",
-            }}
-          >
-            {choice.label}
-          </a>
-        ))}
-      </span>
-      {currentMode ? <span style={{ opacity: 0.55 }}>{currentMode.note}</span> : null}
-      <span style={{ display: "flex", gap: "10px", alignItems: "baseline" }}>
-        <span style={{ opacity: 0.6 }}>skin:</span>
-        {CLIENTS.map((choice) => (
-          <a
-            key={choice.key}
-            href={`/demo/agent?client=${choice.key}&mode=${mode}`}
-            style={{
-              color: clientKey === choice.key ? "#F5A623" : "rgba(255,255,255,0.75)",
-              fontWeight: clientKey === choice.key ? 700 : 400,
-              textDecoration: clientKey === choice.key ? "none" : "underline",
-            }}
-          >
-            {choice.label}
-          </a>
-        ))}
-      </span>
+      <span>Demo.</span>
+      {MODES.map((choice) => (
+        <a
+          key={choice.key}
+          href={`/demo/agent?client=${clientKey}&mode=${choice.key}`}
+          style={link(mode === choice.key)}
+        >
+          {choice.label}
+        </a>
+      ))}
+      <span style={{ opacity: 0.5 }}>|</span>
+      {CLIENTS.map((choice) => (
+        <a
+          key={choice.key}
+          href={`/demo/agent?client=${choice.key}&mode=${mode}`}
+          style={link(clientKey === choice.key)}
+        >
+          {choice.label}
+        </a>
+      ))}
     </div>
   );
 }

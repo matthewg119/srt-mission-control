@@ -56,6 +56,12 @@ body:has(.hub-root) {
   --hub-measure: 44rem;
   --hub-base: 17px;
   --hub-radius: 8px;
+  /* ‼️ DECLARED ON THE ROOT, NOT ON .rev-frame, BECAUSE THE PANEL IS position: fixed. A fixed
+     element is laid out against the viewport but still INHERITS from its DOM parent, and the
+     panel's parent chain reaches .hub-root; putting this on .rev-frame alone would resolve to
+     nothing in .va-shell .va-panel and the panel would silently fall back to its min(). One
+     width, one declaration, both the card and the panel. */
+  --rev-frame-w: 26rem;
 
   background: var(--hub-bg);
   color: var(--hub-fg);
@@ -503,11 +509,21 @@ body:has(.hub-root) {
    over identical markup, which is exactly why it was cheap to build, walk and delete. What it
    cost: the masthead and the client's mark, and a notes step with the reading rail inside a
    fixed scrolling column. */
+/* ‼️ CENTRED AND PHONE WIDTH ON EVERY SCREEN SINCE 2026-10-05, AND IT USED TO FLOAT BOTTOM
+   RIGHT. Matthew, looking at it on a laptop: "this wide open looks ugly ... ideally we want to
+   mantain the size of the same window that we create so the User experience is not over the
+   place and just in this small window if its pc or mobile."
+
+   He is right, and the reason is not taste. A patient meets this on a phone at a counter, where
+   a bottom-right card IS the whole screen. On a desktop the same markup became a small widget
+   adrift in a metre of empty page, so the two experiences were not the same product and the
+   desktop one is what a clinic owner judges it by. One width, one position, both. */
 .va-shell .va-panel {
-  right: 1.5rem;
-  bottom: 1.5rem;
-  width: min(28rem, calc(100vw - 3rem));
-  height: min(38rem, calc(100vh - 3rem));
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(var(--rev-frame-w), calc(100vw - 2rem));
+  height: min(40rem, calc(100vh - 2rem));
 }
 
 
@@ -766,6 +782,23 @@ body:has(.hub-root) {
   color: var(--va-mut);
 }
 
+/* ── The frame: one window, phone width, on a phone and on a laptop ────────── */
+/* ‼️ EVERY SCREEN OF THIS FLOW LIVES INSIDE IT, which is the point. The opening card, the chat
+   panel and her finished review used to be three different widths on a desktop: a 44rem text
+   column, a 28rem widget in the corner, and a 44rem column again. That is three products in one
+   session. One frame means the thing she taps Start on is the thing that fills with the chat and
+   the thing her review appears in.
+
+   The tint is the CLIENT's accent-soft, so this is one design wearing each clinic's colour: pale
+   pink for Med Spa 123, pale teal for Northlight, from the same two variables. */
+.rev-frame {
+  max-width: var(--rev-frame-w);
+  margin: 0 auto;
+  padding: 2rem 1.5rem 1.75rem;
+  background: var(--hub-accent-soft);
+  border-radius: 20px;
+}
+
 /* ── The opening card (2026-10-05) ─────────────────────────────────────────── */
 /* ‼️ REPLACES hub-head + a bare Start BUTTON. Matthew called the old one horrible and he was
    right: an eyebrow, a heading and a button gave a patient standing at a counter no reason to
@@ -796,7 +829,7 @@ body:has(.hub-root) {
 .rev-open-name { font-size: 0.9375rem; font-weight: 600; color: var(--hub-fg); }
 .rev-open-where { font-size: 0.8125rem; color: var(--hub-muted); }
 
-.rev-open { max-width: 28rem; }
+.rev-open { max-width: none; }
 
 .rev-open-eyebrow {
   margin: 0 0 0.75rem;

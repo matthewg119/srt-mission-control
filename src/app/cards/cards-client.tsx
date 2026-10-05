@@ -72,6 +72,7 @@ export function CardsClient() {
   const [sendError, setSendError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [bookingUrl, setBookingUrl] = useState<string | null>(null);
+  const [booked, setBooked] = useState(false);
 
   const bubbleId = useRef(0);
   const played = useRef<Set<string>>(new Set());
@@ -147,6 +148,29 @@ export function CardsClient() {
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
   }, [bubbles, typing]);
+
+  /**
+   * Calendly tells the parent window when a booking completes.
+   *
+   * ‼️ THE ORIGIN IS CHECKED, because this listens on `window` and anything can post to it. The
+   * only message that moves this screen on is one from calendly.com saying `calendly.event_
+   * scheduled`; everything else is ignored, including a well-meaning extension.
+   *
+   * ‼️ AND IT ONLY EVER CONFIRMS. Nothing here re-sends the lead or changes what was stored: the
+   * lead went in before the calendar was ever rendered, so a booking that fails to emit costs a
+   * line of copy rather than the clinic.
+   */
+  useEffect(() => {
+    function onMessage(e: MessageEvent) {
+      if (typeof e.origin !== "string" || !e.origin.endsWith("calendly.com")) return;
+      const data = e.data as { event?: unknown } | null;
+      if (data && typeof data === "object" && data.event === "calendly.event_scheduled") {
+        setBooked(true);
+      }
+    }
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
 
   /** Her typed answer, validated before it is kept. */
   function commit(raw: string) {
@@ -424,16 +448,32 @@ export function CardsClient() {
         </div>
       )}
 
-      {awaiting === "done" && bookingUrl && (
-        <div className="cd-composer">
+      {awaiting === "done" && bookingUrl && !booked && (
+        <div className="cd-cal">
           {/*
-            ‼️ THE BOOKING LINK IS RENDERED, NOT REDIRECTED TO. A funnel that navigates away the
-            instant the lead is saved loses anybody whose tap did not register, and the lead is
-            already ours by this point. They choose when to go.
+            ‼️ THE CALENDAR IS INSIDE THE WINDOW, NOT A LINK OUT. Matthew, 2026-10-05: onboarding2
+            "was adding a widget to the thing making it better because they had to book the call
+            inside of the UI which is what i want". Every hop out of this card is somewhere to
+            lose a clinic that has already answered six questions.
+
+            ‼️ embed_domain IS APPENDED HERE AND NOT ON THE SERVER. It has to be the host the
+            BROWSER is on, and the server cannot know whether that is the apex, mission, or a
+            preview deployment. Getting it wrong does not break the frame; it stops Calendly
+            emitting event_scheduled, which is the silent failure the helper's header describes.
           */}
-          <a className="cd-primary" href={bookingUrl} target="_blank" rel="noopener noreferrer">
-            Pick a time
-          </a>
+          <iframe
+            title="Pick a time"
+            src={`${bookingUrl}&embed_domain=${encodeURIComponent(
+              typeof window === "undefined" ? "" : window.location.hostname
+            )}`}
+            style={{ width: "100%", height: "100%", border: 0 }}
+          />
+        </div>
+      )}
+
+      {booked && (
+        <div className="cd-composer">
+          <p className="cd-booked">You are booked. We will see you then.</p>
         </div>
       )}
     </div>

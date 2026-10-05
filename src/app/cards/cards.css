@@ -250,6 +250,22 @@
   color: var(--cd-mut);
 }
 
+/* The inline calendar. Tall enough that Calendly's month grid is not itself scrolling inside a
+   scroller, which is the thing that makes an embedded booker feel broken on a laptop. */
+.cd-cal {
+  height: 34rem;
+  margin: 0 1rem 1rem;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.cd-booked {
+  margin: 0;
+  font-weight: 700;
+  color: var(--cd-accent);
+}
+
 .cd-error {
   margin: 0;
   padding: 0 1rem;

@@ -17,7 +17,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { ingestLead, pageFromRequest } from "@/lib/lead-intake";
 import { validEmail, validName } from "@/lib/medspa/validate";
-import { bookingPageUrl } from "@/lib/calendly";
+import { bookingPageUrl, calendlyEmbedUrl } from "@/lib/calendly";
 import { CARDS_SOURCE, NO_WEBSITE, REVENUE_BANDS } from "@/config/onboarding-cards";
 import { REVIEW_PLATFORMS } from "@/lib/hub/review-destinations";
 
@@ -142,10 +142,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   // ‼️ ONLY FOR THE CALL BRANCH, AND null IS A FINE ANSWER. With Calendly unconfigured the walk
-  // still completes and the closing line still makes sense; the client renders the button only
+  // still completes and the closing line still makes sense; the client renders the calendar only
   // when there is a URL. A funnel that dead-ends on a missing env var would be worse than one
   // that quietly tells Matthew to send a link.
-  const booking = finish === "call" ? bookingPageUrl("install") : null;
+  //
+  // ‼️ SHAPED FOR AN INLINE EMBED, NOT A LINK OUT. Matthew, 2026-10-05: onboarding2 "was adding a
+  // widget to the thing making it better because they had to book the call inside of the UI which
+  // is what i want". A clinic that has just answered six questions should not be handed off to
+  // another tab to finish; every hop is somewhere to lose them. Their name and email are already
+  // ours, so the calendar opens with both filled in.
+  const booking =
+    finish === "call"
+      ? calendlyEmbedUrl(bookingPageUrl("install"), { name: leadName, email })
+      : null;
 
   return NextResponse.json({ ok: true, bookingUrl: booking });
 }

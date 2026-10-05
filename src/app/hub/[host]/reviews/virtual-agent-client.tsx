@@ -189,6 +189,23 @@ export function VirtualAgentClient({
   const [friendContact, setFriendContact] = useState("");
   const [templateKey, setTemplateKey] = useState(INVITE_TEMPLATES[0].key);
   const [inviteSent, setInviteSent] = useState(false);
+  /**
+   * The invite in three beats, which is Matthew's sequence of 2026-10-05.
+   *
+   * ‼️ IT IS THREE SCREENS BECAUSE ONE SCREEN ASKED TOO MUCH AT ONCE. The step used to open with
+   * two text fields, a contacts button, three wording chips, a message preview and three send
+   * buttons, all at a counter with somebody waiting. His fix: tell her to go and get the number,
+   * let her leave, and ask for it only once she is back.
+   *
+   * `instruct` go and find it, press Done when you have it
+   * `confirm`  did you actually copy it? A No goes back rather than forward
+   * `enter`    now type it, or skip
+   *
+   * ‼️ THE CONFIRM STEP IS NOT A NAG. She has just come back from another app, which on a phone
+   * means this page may have been unloaded and restored; asking is how she finds out whether the
+   * thing she copied survived, before she is looking at an empty box wondering what she did wrong.
+   */
+  const [invitePhase, setInvitePhase] = useState<"instruct" | "confirm" | "enter">("instruct");
   const [inviteError, setInviteError] = useState<string | null>(null);
   /**
    * Minted once per visit, so the message she previews carries the code that gets stored.
@@ -964,6 +981,7 @@ export function VirtualAgentClient({
                     it is us writing to her friends in her name.
                   */
                   <div className="va-composer va-invite">
+                    {(invitePhase === "enter" || inviteSent) && (
                     <div className="va-bar is-stack">
                       <input
                         type="text"
@@ -983,13 +1001,63 @@ export function VirtualAgentClient({
                         Or pick from contacts
                       </button>
                     </div>
+                    )}
+
+                    {/* ── Beat one: go and get it ── */}
+                    {invitePhase === "instruct" && !inviteSent && (
+                      <>
+                        <p className="va-invite-note">
+                          Open your contacts and find their number. Come back and press Done when
+                          you have it copied.
+                        </p>
+                        <button
+                          type="button"
+                          className="va-send is-wide"
+                          onClick={() => setInvitePhase("confirm")}
+                        >
+                          Done
+                        </button>
+                      </>
+                    )}
+
+                    {/* ── Beat two: did it actually work ── */}
+                    {invitePhase === "confirm" && !inviteSent && (
+                      <>
+                        <p className="va-invite-note">
+                          Did you copy their number?
+                          {referrerOffer ? ` You get ${referrerOffer} once they book.` : ""}
+                        </p>
+                        <div className="va-chips is-pair">
+                          <button
+                            type="button"
+                            className="va-chip"
+                            onClick={() => setInvitePhase("enter")}
+                          >
+                            Yes
+                          </button>
+                          {/*
+                            ‼️ A No GOES BACK, NOT FORWARD. She has not got the number yet, so the
+                            next screen would be an empty box she cannot fill. This is the only
+                            backwards move in the whole walk and it exists because this is the only
+                            step that sends her out of the page.
+                          */}
+                          <button
+                            type="button"
+                            className="va-chip"
+                            onClick={() => setInvitePhase("instruct")}
+                          >
+                            Not yet
+                          </button>
+                        </div>
+                      </>
+                    )}
 
                     {/*
                       ‼️ THE WORDING PICKER AND THE PREVIEW ARE `text` MODE ONLY. In `internal`
                       mode there is no message, so showing her one to choose and read would be
                       the screen describing something that will not happen.
                     */}
-                    {inviteMode === "text" && (
+                    {inviteMode === "text" && (invitePhase === "enter" || inviteSent) && (
                       <>
                         <div className="va-chips" role="group" aria-label="Message wording">
                           {INVITE_TEMPLATES.map((t) => (
@@ -1009,7 +1077,7 @@ export function VirtualAgentClient({
                       </>
                     )}
 
-                    {inviteMode === "internal" && !inviteSent && (
+                    {inviteMode === "internal" && invitePhase === "enter" && !inviteSent && (
                       <p className="va-invite-note">
                         {businessName} will reach out to them directly.
                       </p>
@@ -1025,7 +1093,7 @@ export function VirtualAgentClient({
                       <button type="button" className="va-send is-wide" onClick={finishInvite}>
                         Done, next question
                       </button>
-                    ) : inviteMode === "internal" ? (
+                    ) : invitePhase !== "enter" ? null : inviteMode === "internal" ? (
                       <button type="button" className="va-send is-wide" onClick={recordInvite}>
                         Pass their details on
                       </button>
