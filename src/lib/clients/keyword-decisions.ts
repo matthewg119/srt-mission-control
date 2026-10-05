@@ -18,7 +18,14 @@
 // That gives a reversible decision without a Slack app scope nobody has granted, and the card
 // re-renders saying which of the two just happened.
 
-import { slack } from "@/lib/slack-bot";
+// ‼️ @/lib/slack-bot IS IMPORTED INSIDE handleKeywordCardReaction, NOT HERE, AND THAT IS LOAD-BEARING
+// FOR A LANE THAT HAS NOTHING TO DO WITH SLACK. selectKeywordIds() below is the repo's ONLY writer of
+// client_keywords.selected_at: step-needs.ts declares `writtenIn` pointing at this file and
+// _probe-dead-wires.ts §8 greps it before believing the declaration, so a second writer anywhere is a
+// half-truth in the generated docs. The Launch Lane now selects keywords from its chat and must call
+// THIS function, and _probe-launch-isolation.ts bans any lane file whose imports mention `lib/slack`.
+// Resolving the client one line later inside the one handler that posts keeps this module importable
+// by both lanes without a second writer and without a bridge. Same posture page-plan.ts already has.
 import { supabaseAdmin } from "@/lib/db";
 import { DROP_EMOJI, PICK_EMOJI, VARY_EMOJI } from "./keyword-cards";
 import type { KeywordOrigin } from "./keyword-expansion";
@@ -85,6 +92,10 @@ export async function handleKeywordCardReaction(args: {
 
   const row = await keywordByCardTs(args.slackTs);
   if (!row) return false;
+
+  // The Slack client, resolved here so the module carries none at rest. See the note where the
+  // static import used to be: this is the only function in the file that needs it.
+  const { slack } = await import("@/lib/slack-bot");
 
   // From here on the card IS ours, so every path returns true and nothing below in the chain sees it.
   if (args.userId && args.userId === (await slack.getBotUserId())) return true;
@@ -178,6 +189,64 @@ export async function selectKeywordIds(args: {
   }).catch(() => {});
 
   return { ok: true, selected: rows.length };
+}
+
+/**
+ * Step a set of keywords back to undecided.
+ *
+ * ‼️ IT LIVES BESIDE selectKeywordIds FOR THE REASON THAT ONE GIVES: `selected_at` has exactly one
+ * writer and it is this file, because step-needs.ts declares `writtenIn` here and
+ * _probe-dead-wires.ts §8 greps this file before believing it. Clearing the column somewhere else
+ * would make that declaration a half-truth, so the bulk undo belongs here next to the bulk do.
+ *
+ * ‼️ IT UNSELECTS, IT NEVER DROPS, and the difference is why ✖ on a card cannot be reused for this.
+ * There, one press steps a kept keyword back to undecided and a SECOND press drops it, which makes
+ * the reaction an undo in a repo that gets no reaction_removed event. A caller naming a list of
+ * phrases has said nothing about dropping any of them, and a soft drop is remembered forever so a
+ * re-expansion will not propose the phrase again. Dropping stays a per-keyword decision.
+ *
+ * `approved` is deliberately left alone: approval is the measurement pool and selection is the page
+ * pool, and they answer different questions.
+ */
+export async function unselectKeywordIds(args: {
+  clientId: string;
+  ids: readonly string[];
+  by: string;
+}): Promise<{ ok: true; unselected: number } | { ok: false; error: string }> {
+  if (!args.ids.length) return { ok: true, unselected: 0 };
+
+  const now = new Date().toISOString();
+  const { data, error } = await supabaseAdmin
+    .from("client_keywords")
+    .update({ selected_at: null, selected_by: null, updated_at: now })
+    .eq("client_id", args.clientId)
+    .in("id", args.ids)
+    .select("id, phrase, category, rank, score, origin, use");
+
+  if (error) {
+    if (!missingColumn(error)) console.error("[clients/keyword-decisions] unselect failed:", error.message);
+    return { ok: false, error: error.message };
+  }
+
+  const rows = data ?? [];
+  const { recordKeywordDecisions } = await import("./keyword-dataset");
+  await recordKeywordDecisions({
+    clientId: args.clientId,
+    action: "unselect",
+    actor: args.by,
+    rows: rows.map((r) => ({
+      id: (r.id as string) ?? "",
+      phrase: (r.phrase as string) ?? "",
+      category: (r.category as string) ?? "general",
+      use: ((r.use as string) ?? "query") as "query" | "hook",
+      origin: ((r.origin as string) ?? "manual") as KeywordOrigin,
+      rank: (r.rank as number | null) ?? null,
+      score: (r.score as number) ?? 0,
+    })),
+    context: { via: "typed" },
+  }).catch(() => {});
+
+  return { ok: true, unselected: rows.length };
 }
 
 /**

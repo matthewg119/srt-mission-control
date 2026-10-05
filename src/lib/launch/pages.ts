@@ -27,6 +27,7 @@
 // publish has been refused, needs a written reason, and is never a second button beside Publish.
 // The one on /dashboard/clients/[id] stays the only one.
 
+import { supabaseAdmin } from "@/lib/db";
 import { readDay0 } from "@/lib/clients/day-zero";
 import { autoCompleteLaunchStep } from "@/lib/launch/steps";
 import {
@@ -219,11 +220,68 @@ export async function launchPagesState(clientId: string): Promise<LaunchPagesSta
   };
 }
 
+/**
+ * The page run as a block of text for the conversation's context.
+ *
+ * ‼️ IT IS IN THE CONTEXT ON EVERY TURN, NOT ONLY BEHIND read_pages, AND THE REASON IS A MEASURED
+ * WRONG ANSWER. On 2026-10-05, with seven rows sitting in page_plan waiting on approval, the chat
+ * answered "Pages: 0 drafted, 0 published. No page run has started yet." Both numbers were right
+ * and the sentence was false: publishingFacts counts client_pages, which stays empty until drafting,
+ * so a plan that exists is invisible to it and "0 pages" reads as "nothing has happened". That is
+ * the same shape of error publishing-facts.ts was written for, one table further on.
+ *
+ * Capped, and the cap announces itself, for the reason the keyword list is capped.
+ */
+export async function pageRunText(clientId: string): Promise<string> {
+  const st = await launchPagesState(clientId);
+  if ("error" in st) return "THE PAGE RUN: could not be read just now. Say so rather than guessing.";
+
+  if (!st.plan.length) {
+    return [
+      "THE PAGE RUN:",
+      st.ready
+        ? "  No pages are planned yet. run_pages stage=plan_new proposes one pillar and six supports from the SELECTED keywords."
+        : `  Nothing can be planned yet. Waiting on: ${st.missing.join("; ")}.`,
+    ].join("\n");
+  }
+
+  const CAP = 20;
+  const shown = st.plan.slice(0, CAP);
+  const lines = shown.map((p) => {
+    const has = [
+      p.headline ? "headline" : null,
+      p.hasOutline ? "skeleton" : null,
+      p.hasBody ? "body" : null,
+      p.pageStatus === "published" ? "LIVE" : null,
+    ].filter(Boolean);
+    return `    ${p.rank}. [${p.role}] ${p.headline ?? p.workingTitle} <- ${p.targetKeyword} (${p.status}${has.length ? ", " + has.join(", ") : ", nothing written yet"})`;
+  });
+
+  return [
+    "THE PAGE RUN, COUNTED FROM page_plan AND client_pages:",
+    `  ‼️ ${st.plan.length} page(s) ARE PLANNED. A plan exists before any page does, so "0 drafted" never means "nothing has started".`,
+    `  ${st.proposed} proposed, ${st.approved} approved, ${st.drafted} with a body, ${st.outstanding} still to draft.`,
+    `  stage: ${st.stageText}`,
+    "  the planned pages, and the keyword each one aims at:",
+    ...lines,
+    ...(st.plan.length > shown.length
+      ? [`    ...and ${st.plan.length - shown.length} more not listed. Say so rather than implying this is all of them.`]
+      : []),
+    ...(st.needHeadline.length ? [`  still need a headline: ${st.needHeadline.join(", ")}`] : []),
+    ...(st.needSkeleton.length ? [`  still need a skeleton: ${st.needSkeleton.join(", ")}`] : []),
+    "  ‼️ THE WORKING TITLES ARE WRITTEN AT PLAN TIME AND THE KEYWORDS ARE HIS OWN PICKS. If he does",
+    "  not recognise a title, that is the title being new, not the keyword being wrong.",
+  ].join("\n");
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // The actions
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const LAUNCH_PAGE_ACTIONS = [
+  "keywords_select",
+  "keywords_unselect",
+  "strategy_set",
   "ladder_write",
   "ladder_pick",
   "plan_new",
@@ -277,6 +335,61 @@ export interface LaunchPagesInput {
   pageId?: string | null;
   /** publish: which destination, once the picker has been answered. */
   destinationId?: string | null;
+  /** keywords_select / keywords_unselect: the phrases, exactly as they are spelled in the pool. */
+  phrases?: string[] | null;
+  /** strategy_set: the one pillar phrase, and the supports under it. */
+  pillar?: string | null;
+  supports?: string[] | null;
+}
+
+/**
+ * Typed phrases to this client's own keyword rows.
+ *
+ * ‼️ IT REFUSES AN UNKNOWN PHRASE AND NAMES IT, rather than selecting what it did match. A partial
+ * write here is the worst outcome available: the caller believes a list of seven is in play, six
+ * are, and the page plan that comes out is built off a set nobody chose. Keywords are never minted
+ * here either, by anybody: this resolves against what the pool already holds.
+ */
+async function resolvePhrases(
+  clientId: string,
+  phrases: readonly string[]
+): Promise<{ ok: true; rows: Array<{ id: string; phrase: string }> } | { ok: false; error: string }> {
+  const want = phrases.map((p) => String(p ?? "").trim()).filter(Boolean);
+  if (!want.length) return { ok: false, error: "No keywords were named." };
+
+  const { data, error } = await supabaseAdmin
+    .from("client_keywords")
+    .select("id, phrase, normalized, dropped_at")
+    .eq("client_id", clientId);
+  if (error) return { ok: false, error: error.message };
+
+  // Matched on a squashed lower-case form, and on `normalized` as well as `phrase`, because he
+  // types these from memory and "CHATGPT local business ranking" should not miss on its capitals.
+  const key = (s: string): string => s.toLowerCase().replace(/\s+/g, " ").trim();
+  const byKey = new Map<string, { id: string; phrase: string }>();
+  for (const r of (data ?? []) as Array<Record<string, unknown>>) {
+    if (r.dropped_at) continue;
+    const row = { id: String(r.id), phrase: String(r.phrase) };
+    byKey.set(key(row.phrase), row);
+    if (r.normalized) byKey.set(key(String(r.normalized)), row);
+  }
+
+  const rows: Array<{ id: string; phrase: string }> = [];
+  const missing: string[] = [];
+  for (const w of want) {
+    const hit = byKey.get(key(w));
+    if (hit) rows.push(hit);
+    else missing.push(w);
+  }
+  if (missing.length) {
+    return {
+      ok: false,
+      error:
+        `Not in this client's keyword pool: ${missing.join("; ")}. Nothing was changed. ` +
+        "A keyword has to exist before it can be picked, so add it where the pool is built rather than here.",
+    };
+  }
+  return { ok: true, rows };
 }
 
 /** The pre-call rows at the moment of the action, rank-ordered. */
@@ -294,6 +407,73 @@ export async function runLaunchPagesAction(input: LaunchPagesInput): Promise<Lau
   const { clientId, actor } = input;
 
   switch (input.action) {
+    // ── The keywords, and which of them the whole build hangs off ─────────────
+    //
+    // ‼️ selectKeywordIds AND unselectKeywordIds ARE CALLED, NEVER AN UPDATE WRITTEN HERE.
+    // client_keywords.selected_at has exactly one writer by design: step-needs.ts declares it as
+    // living in keyword-decisions.ts and _probe-dead-wires.ts greps that file before believing the
+    // declaration. A second writer in this lane would make the generated docs wrong about the one
+    // column that decides what every page is built from.
+    case "keywords_select": {
+      const got = await resolvePhrases(clientId, input.phrases ?? []);
+      if (!got.ok) return { ok: false, error: got.error };
+      const { selectKeywordIds } = await import("@/lib/clients/keyword-decisions");
+      const res = await selectKeywordIds({ clientId, ids: got.rows.map((r) => r.id), by: actor });
+      if (!res.ok) return { ok: false, error: res.error };
+      return {
+        ok: true,
+        message:
+          `Selected ${res.selected}: ${got.rows.map((r) => r.phrase).join("; ")}. ` +
+          "The page plan is built from the selected pool, so re-propose it if it was already planned.",
+      };
+    }
+
+    case "keywords_unselect": {
+      const got = await resolvePhrases(clientId, input.phrases ?? []);
+      if (!got.ok) return { ok: false, error: got.error };
+      const { unselectKeywordIds } = await import("@/lib/clients/keyword-decisions");
+      const res = await unselectKeywordIds({ clientId, ids: got.rows.map((r) => r.id), by: actor });
+      if (!res.ok) return { ok: false, error: res.error };
+      return {
+        ok: true,
+        message:
+          `Stepped ${res.unselected} back to undecided: ${got.rows.map((r) => r.phrase).join("; ")}. ` +
+          "They are still approved and still measurable; they are just out of the page pool.",
+      };
+    }
+
+    // ‼️ THE PILLAR AND THE SUPPORTS ARE THE PLAN'S SKELETON, so this is the decision that matters
+    // most on this list. One page aims at the pillar and every other page links to it.
+    case "strategy_set": {
+      const { pickPillarById, pickSupportsByIds } = await import("@/lib/clients/anchor-ladder");
+      const notes: string[] = [];
+
+      if (input.pillar) {
+        const got = await resolvePhrases(clientId, [input.pillar]);
+        if (!got.ok) return { ok: false, error: got.error };
+        const res = await pickPillarById(clientId, got.rows[0].id, actor);
+        if (!res.ok) return { ok: false, error: res.message };
+        notes.push(res.message);
+      }
+
+      if (input.supports?.length) {
+        const got = await resolvePhrases(clientId, input.supports);
+        if (!got.ok) return { ok: false, error: got.error };
+        // setRole clears every row holding this role before it writes, so this REPLACES the set
+        // rather than adding to it. Said out loud because "supports: a, b" meaning "only a and b"
+        // is the opposite of what a person usually expects from a list.
+        const res = await pickSupportsByIds(clientId, got.rows.map((r) => r.id), actor);
+        if (!res.ok) return { ok: false, error: res.message };
+        notes.push(res.message);
+      }
+
+      if (!notes.length) return { ok: false, error: "Name a pillar, or supports, or both." };
+      return {
+        ok: true,
+        message: `${notes.join(" ")} The supports named REPLACE the previous set. Re-propose the plan to build pages off this.`,
+      };
+    }
+
     // ── The ladder, which is what the anchor offer is picked off ───────────────
     //
     // ‼️ NO CRON_SECRET AND NO WAVE HERE. writeLadder is one model call that stores one document, so
