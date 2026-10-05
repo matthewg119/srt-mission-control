@@ -719,6 +719,32 @@ const DEFAULT_OFFER: CommandSpec = {
   implementedIn: "src/lib/clients/referral-setup.ts",
 };
 
+/**
+ * The other half of the two-sided deal (2026-10-05).
+ *
+ * ‼️ A SEPARATE COMMAND FROM `service offer:` AND NOT A SECOND ARGUMENT TO IT. Setting what the
+ * friend gets and what she gets are two decisions a clinic makes at different times, and one
+ * command taking both would mean restating the friend's deal every time her thank-you changed.
+ * Both patterns end in "offer:", so each is anchored on its own full first word.
+ */
+const REFERRER_OFFER: CommandSpec = {
+  label: "referrer offer: Botox = 20% off your next session",
+  test: /^\s*[`*_]*referrer\s+offer\s*:\s*[^=]+=\s*\S+/i,
+  unmistakable: /^\s*[`*_]*referrer\s+offer\s*:/i,
+  pointAt: "review_handover",
+  what: "What a referred friend gets, per service",
+  implementedIn: "src/lib/clients/referral-setup.ts",
+};
+
+const DEFAULT_REWARD: CommandSpec = {
+  label: "default reward: <what she gets>",
+  test: /^\s*[`*_]*default\s+reward\s*:\s*\S+/i,
+  unmistakable: /^\s*[`*_]*default\s+reward\s*:/i,
+  pointAt: "review_handover",
+  what: "What a referred friend gets, per service",
+  implementedIn: "src/lib/clients/referral-setup.ts",
+};
+
 // ── Step 21: the ladder, the angles, the headlines, the plan ─────────────────
 
 const LADDER: CommandSpec = {
@@ -930,7 +956,7 @@ export const STEP_COMMANDS: Record<StepKey, readonly CommandSpec[]> = {
   page_candidates: [],
   offsite_target_list: [],
   hub_preview: [TEMPLATE, TEMPLATE_RESET, TEMPLATE_PICK],
-  referral_engine_preview: [TEMPLATE, TEMPLATE_RESET, TEMPLATE_PICK, REVIEW_LINK, REVIEW_PLATFORM, CHARGE, SERVICE_OFFER, DEFAULT_OFFER],
+  referral_engine_preview: [TEMPLATE, TEMPLATE_RESET, TEMPLATE_PICK, REVIEW_LINK, REVIEW_PLATFORM, CHARGE, SERVICE_OFFER, REFERRER_OFFER, DEFAULT_OFFER, DEFAULT_REWARD],
   concierge_preview: [MASCOT, MASCOT_CONCEPTS, MASCOT_PICK, MASCOT_SKIP, MASCOT_CORNER, MASCOT_KEEP],
   site_replica: [TEMPLATE, TEMPLATE_RESET, TEMPLATE_PICK],
   review_card_pdf: [REVIEW_LINK, REVIEW_PLATFORM],
@@ -971,7 +997,7 @@ export const STEP_COMMANDS: Record<StepKey, readonly CommandSpec[]> = {
   subdomain_live: [],
   first_page: [],
   cards_printed: [],
-  review_handover: [REVIEW_LINK, REVIEW_PLATFORM, CHARGE, SERVICE_OFFER, DEFAULT_OFFER],
+  review_handover: [REVIEW_LINK, REVIEW_PLATFORM, CHARGE, SERVICE_OFFER, REFERRER_OFFER, DEFAULT_OFFER, DEFAULT_REWARD],
   concierge_live: [],
   tracking_installed: [],
   self_report_field: [],

@@ -50,20 +50,24 @@ import {
   AGENT_NAME,
   CONNECTING_LINE,
   CONNECTING_MS,
+  INVITE_REWARD_LINE,
   REVIEW_SCRIPT,
   fillBusiness,
   fillOffer,
+  fillReward,
   stepAfter,
 } from "@/lib/hub/review-script";
 import {
+  DEFAULT_INVITE_MODE,
   INVITE_CHANNELS,
   INVITE_TEMPLATES,
+  claimUrl,
   composeInvite,
   fillInvite,
   inviteCode,
   templateByKey,
   type InviteChannel,
-  type SendMode,
+  type InviteMode,
 } from "@/lib/hub/referral-invite";
 import { analyse, mergeMarks } from "@/lib/hub/readability";
 
@@ -84,13 +88,30 @@ export interface ReviewDestination {
  * honour at the desk.
  */
 export interface ReferralConfig {
-  /** One deal per service, as set on the onboarding call. */
-  offers: ReadonlyArray<{ serviceLabel: string; offerText: string }>;
+  /** One deal per service, as set on the onboarding call. Two sided since 2026-10-05. */
+  offers: ReadonlyArray<{
+    serviceLabel: string;
+    /** What the referred friend gets. */
+    offerText: string;
+    /** What she gets, when the clinic rewards her at all. */
+    referrerOfferText?: string | null;
+  }>;
   /** Used when she names a service that is not on the list, or names nothing recognisable. */
   defaultOffer: string | null;
+  /** Her reward, when the service she named carries none of its own. */
+  defaultReferrerOffer?: string | null;
   /** The clinic's number, so the text she sends has them on the thread. */
   clinicPhone: string | null;
-  sendMode: SendMode;
+  /** The host the claim link is built on. Null falls back to this app's origin. */
+  reviewsHost?: string | null;
+  /**
+   * Which of the two shapes this clinic runs.
+   *
+   * ‼️ IT CHANGES ONLY WHO PUTS THE LINK IN FRONT OF THE FRIEND, never what the patient is asked.
+   * Both record the same row and mint the same link, which is what makes the two comparable on
+   * the same clinic without re-teaching the front desk.
+   */
+  mode?: InviteMode;
 }
 
 interface Props {
@@ -199,7 +220,11 @@ export function VirtualAgentClient({
     };
   }, []);
 
-  const assembled = useMemo(() => assemblePlain(answers), [answers]);
+  // ‼️ `lead: true` IS WHAT MAKES THIS THE v5 ASSEMBLY, and it is passed here rather than inferred
+  // inside assemblePlain so that "which flow is this" stays a decision somebody wrote down. v1
+  // calls the same function with no options and is untouched. See the lead-line banner in
+  // review-assemble.ts for the two words of ours that this puts in her review and why.
+  const assembled = useMemo(() => assemblePlain(answers, { lead: true }), [answers]);
   const text = edited ?? assembled;
   const nothingTyped = isEmpty(answers);
   const reading = useMemo(() => analyse(text), [text]);
@@ -215,21 +240,50 @@ export function VirtualAgentClient({
    * to argue about with her friend at the counter, so absent beats wrong here exactly as it does
    * for destination links.
    */
-  const offerText = useMemo(() => {
-    if (!referral) return null;
+  const resolvedOffer = useMemo(() => {
+    if (!referral) return { friend: null as string | null, referrer: null as string | null };
     const said = (answers.service ?? "").trim().toLowerCase();
     if (said) {
       const hit = referral.offers.find((o) => {
         const label = o.serviceLabel.trim().toLowerCase();
         return label.length > 0 && (said.includes(label) || label.includes(said));
       });
-      if (hit) return hit.offerText;
+      if (hit) {
+        return {
+          friend: hit.offerText,
+          // Her reward falls back to the clinic-wide one independently of the friend's, because a
+          // clinic commonly sets a per-service deal for the friend and one flat thank-you for her.
+          referrer: hit.referrerOfferText ?? referral.defaultReferrerOffer ?? null,
+        };
+      }
     }
-    return referral.defaultOffer;
+    return { friend: referral.defaultOffer, referrer: referral.defaultReferrerOffer ?? null };
   }, [referral, answers.service]);
 
-  /** Whether the referral half of the walk happens at all. */
+  const offerText = resolvedOffer.friend;
+  const referrerOffer = resolvedOffer.referrer;
+
+  /**
+   * Whether the referral half of the walk happens at all.
+   *
+   * ‼️ IT TURNS ON THE FRIEND'S DEAL AND NOT ON HERS. A clinic that rewards only the friend runs
+   * the full referral; a clinic that somehow set only her reward has nothing to put in the
+   * message, so there is nothing to ask. The friend's offer is the one the invite copy promises.
+   */
   const referralOn = Boolean(referral && offerText);
+
+  const inviteMode: InviteMode = referral?.mode ?? DEFAULT_INVITE_MODE;
+
+  /** Where the friend claims it. Minted from the code so the preview and the row agree. */
+  const link = useMemo(
+    () =>
+      claimUrl(
+        referral?.reviewsHost ?? null,
+        code,
+        typeof window === "undefined" ? "" : window.location.origin
+      ),
+    [referral?.reviewsHost, code]
+  );
 
   const later = useCallback((fn: () => void, ms: number) => {
     const t = setTimeout(fn, ms);
@@ -275,10 +329,17 @@ export function VirtualAgentClient({
         return;
       }
       // The invite's prompt is the one line that carries the deal. fillOffer runs after
-      // fillBusiness so neither substitution can reach into the other's output.
+      // fillBusiness so neither substitution can reach into the other's output, and her own
+      // reward is APPENDED rather than templated into the prompt, because a clinic that rewards
+      // only the friend must render no sentence about hers at all.
       const prompt =
         current.kind === "invite"
-          ? fillOffer(fillBusiness(current.prompt, businessName), offerText ?? "")
+          ? [
+              fillOffer(fillBusiness(current.prompt, businessName), offerText ?? ""),
+              referrerOffer ? fillReward(INVITE_REWARD_LINE, referrerOffer) : "",
+            ]
+              .filter(Boolean)
+              .join(" ")
           : fillBusiness(current.prompt, businessName);
       push("them", prompt);
       setAwaiting(
@@ -293,7 +354,7 @@ export function VirtualAgentClient({
                 : "text"
       );
     }, gap);
-  }, [stage, index, businessName, push, later, referralOn, offerText]);
+  }, [stage, index, businessName, push, later, referralOn, offerText, referrerOffer]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
@@ -411,10 +472,13 @@ export function VirtualAgentClient({
         friendName: friendName.trim() || "there",
         businessName,
         serviceLabel: (answers.service ?? "").trim(),
+        // ‼️ THE FRIEND'S DEAL ONLY. Hers is never in this message: a friend reading "and she gets
+        // 20% off for sending you this" is being told they are the mechanism of somebody else's
+        // discount. fillInvite has no token for it.
         offerText: offerText ?? "",
-        code,
+        link,
       }),
-    [templateKey, friendName, businessName, answers.service, offerText]
+    [templateKey, friendName, businessName, answers.service, offerText, link]
   );
 
   /**
@@ -429,7 +493,6 @@ export function VirtualAgentClient({
     setInviteError(null);
     const result = composeInvite({
       channel,
-      mode: referral?.sendMode,
       friendContact,
       clinicContact: referral?.clinicPhone ?? null,
       message: inviteMessage,
@@ -446,7 +509,26 @@ export function VirtualAgentClient({
     }
 
     setInviteSent(true);
-    void storeInvite(channel);
+    void storeInvite("text", channel);
+  }
+
+  /**
+   * The `internal` shape: record the referral and send nothing.
+   *
+   * ‼️ THE SECOND OF THE TWO OPTIONS, AND IT IS NOT A DEGRADED FIRST. Nothing leaves the building,
+   * so there is no message to a number nobody consented to give us and no sender to wire. What
+   * the clinic gets is a lead with her name on it and the same claim link to send however they
+   * already talk to people. The patient is told plainly that somebody will reach out, because a
+   * screen that says "sent" when nothing was sent is the one thing this path must not do.
+   */
+  function recordInvite() {
+    setInviteError(null);
+    if (!friendName.trim() && !friendContact.trim()) {
+      setInviteError("We need their name or their number to pass on.");
+      return;
+    }
+    setInviteSent(true);
+    void storeInvite("internal", null);
   }
 
   /**
@@ -495,7 +577,20 @@ export function VirtualAgentClient({
 
   /** She sent it, so carry on to the review questions. */
   function finishInvite() {
-    push("her", friendName.trim() ? `I sent it to ${friendName.trim()}.` : "Sent.");
+    // ‼️ IT MUST NOT SAY "SENT" IN internal MODE, because nothing was. The transcript is the only
+    // record she sees of what happened, and a chat that reports a message nobody sent is the
+    // same class of lie as the handover screen claiming somebody is looking up a file.
+    const who = friendName.trim();
+    push(
+      "her",
+      inviteMode === "internal"
+        ? who
+          ? `Please look after ${who}.`
+          : "Passed on."
+        : who
+          ? `I sent it to ${who}.`
+          : "Sent."
+    );
     setAwaiting("none");
     setIndex((i) => i + 1);
   }
@@ -537,7 +632,7 @@ export function VirtualAgentClient({
    * referral, which is our problem, not a reason to show her an error about a message she has
    * already sent.
    */
-  async function storeInvite(channel: InviteChannel) {
+  async function storeInvite(mode: InviteMode, channel: InviteChannel | null) {
     try {
       await fetch("/api/hub/reviews/invite", {
         method: "POST",
@@ -547,10 +642,14 @@ export function VirtualAgentClient({
           submissionId,
           serviceLabel: (answers.service ?? "").trim() || null,
           offerText,
+          // Snapshotted beside the friend's, so a later edit to the clinic's deals cannot change
+          // what either of them was promised.
+          referrerOfferText: referrerOffer,
           templateKey,
           code,
           friendName: friendName.trim() || null,
           friendContact: friendContact.trim() || null,
+          mode,
           channel,
         }),
       });
@@ -835,21 +934,36 @@ export function VirtualAgentClient({
                       </button>
                     </div>
 
-                    <div className="va-chips" role="group" aria-label="Message wording">
-                      {INVITE_TEMPLATES.map((t) => (
-                        <button
-                          key={t.key}
-                          type="button"
-                          className={t.key === templateKey ? "va-chip is-on" : "va-chip"}
-                          aria-pressed={t.key === templateKey}
-                          onClick={() => setTemplateKey(t.key)}
-                        >
-                          {t.label}
-                        </button>
-                      ))}
-                    </div>
+                    {/*
+                      ‼️ THE WORDING PICKER AND THE PREVIEW ARE `text` MODE ONLY. In `internal`
+                      mode there is no message, so showing her one to choose and read would be
+                      the screen describing something that will not happen.
+                    */}
+                    {inviteMode === "text" && (
+                      <>
+                        <div className="va-chips" role="group" aria-label="Message wording">
+                          {INVITE_TEMPLATES.map((t) => (
+                            <button
+                              key={t.key}
+                              type="button"
+                              className={t.key === templateKey ? "va-chip is-on" : "va-chip"}
+                              aria-pressed={t.key === templateKey}
+                              onClick={() => setTemplateKey(t.key)}
+                            >
+                              {t.label}
+                            </button>
+                          ))}
+                        </div>
 
-                    <p className="va-invite-preview">{inviteMessage}</p>
+                        <p className="va-invite-preview">{inviteMessage}</p>
+                      </>
+                    )}
+
+                    {inviteMode === "internal" && !inviteSent && (
+                      <p className="va-invite-note">
+                        {businessName} will reach out to them directly.
+                      </p>
+                    )}
 
                     {inviteError && (
                       <p className="va-invite-error" role="alert">
@@ -860,6 +974,10 @@ export function VirtualAgentClient({
                     {inviteSent ? (
                       <button type="button" className="va-send is-wide" onClick={finishInvite}>
                         Done, next question
+                      </button>
+                    ) : inviteMode === "internal" ? (
+                      <button type="button" className="va-send is-wide" onClick={recordInvite}>
+                        Pass their details on
                       </button>
                     ) : (
                       <div className="va-chips" role="group" aria-label="How to send it">

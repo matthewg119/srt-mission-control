@@ -7,8 +7,8 @@
 // a clinic excluding a service from referrals is a real row with a real reason. jsonb would have
 // meant read-modify-write on every edit from two boards at once.
 //
-// So `client_service_offers` is a table, and the CLINIC-WIDE fallback stays in the bag, because
-// that one genuinely is a single value.
+// So `client_service_offers` is a table, and the CLINIC-WIDE fallbacks stay in the bag, because
+// those genuinely are single values.
 //
 // ‼️ ABSENT BEATS WRONG, THE SAME RULE destinationsFor() FOLLOWS. A clinic with no deals on file
 // gets `null` from here, the two referral steps are skipped, and the patient walks the review
@@ -17,23 +17,24 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import type { HubClient } from "./resolve";
-import { DEFAULT_SEND_MODE, type SendMode } from "./referral-invite";
+import { DEFAULT_INVITE_MODE, readInviteMode, type InviteMode } from "./referral-invite";
 
 export interface ReferralServiceOffer {
   serviceLabel: string;
+  /** What the referred friend gets. */
   offerText: string;
+  /** What the patient who refers gets, when the clinic offers her anything. */
+  referrerOfferText: string | null;
 }
 
 export interface ReferralConfigData {
   offers: ReferralServiceOffer[];
   defaultOffer: string | null;
+  defaultReferrerOffer: string | null;
   clinicPhone: string | null;
-  sendMode: SendMode;
-}
-
-/** `clinic` is declared but refused by composeInvite until a sender exists. See SendMode. */
-function readSendMode(raw: unknown): SendMode {
-  return raw === "clinic" ? "clinic" : DEFAULT_SEND_MODE;
+  /** The host a claim link is built on. Null falls back to the app's own origin. */
+  reviewsHost: string | null;
+  mode: InviteMode;
 }
 
 function trimmed(raw: unknown): string | null {
@@ -55,7 +56,8 @@ export async function referralConfigFor(client: HubClient): Promise<ReferralConf
   const referral = (bag.referral_offer ?? {}) as Record<string, unknown>;
 
   const defaultOffer = trimmed(referral.default_offer);
-  const sendMode = readSendMode(referral.send_mode);
+  const defaultReferrerOffer = trimmed(referral.default_referrer_offer);
+  const mode = readInviteMode(referral.mode);
   // The number the patient's text is addressed to, so the clinic is on the thread. The clinic's
   // own record, never typed into this lane.
   const clinicPhone = trimmed(client.phone);
@@ -64,7 +66,7 @@ export async function referralConfigFor(client: HubClient): Promise<ReferralConf
   try {
     const { data, error } = await supabaseAdmin
       .from("client_service_offers")
-      .select("service_label, offer_text, excluded, sort_order")
+      .select("service_label, offer_text, referrer_offer_text, excluded, sort_order")
       .eq("client_id", client.id)
       .eq("excluded", false)
       .order("sort_order", { ascending: true });
@@ -75,10 +77,14 @@ export async function referralConfigFor(client: HubClient): Promise<ReferralConf
       console.error("[hub/referral-config] offers read failed:", error.message);
     } else {
       offers = (data ?? [])
-        .map((row) => ({
-          serviceLabel: trimmed((row as Record<string, unknown>).service_label) ?? "",
-          offerText: trimmed((row as Record<string, unknown>).offer_text) ?? "",
-        }))
+        .map((row) => {
+          const r = row as Record<string, unknown>;
+          return {
+            serviceLabel: trimmed(r.service_label) ?? "",
+            offerText: trimmed(r.offer_text) ?? "",
+            referrerOfferText: trimmed(r.referrer_offer_text),
+          };
+        })
         .filter((o) => o.serviceLabel && o.offerText);
     }
   } catch (e) {
@@ -87,5 +93,31 @@ export async function referralConfigFor(client: HubClient): Promise<ReferralConf
 
   if (offers.length === 0 && !defaultOffer) return null;
 
-  return { offers, defaultOffer, clinicPhone, sendMode };
+  // ‼️ READ SEPARATELY AND NEVER AS AN EMBED. clients and client_hosts point at each other since
+  // docs/2026-09-29-destinations.sql, so PostgREST refuses an unnamed embed between them with
+  // "more than one relationship was found" and resolve.ts turns that into a 5xx on every hub
+  // page. A plain select with eq() has no such problem. See the banner in project_launch_lane.
+  let reviewsHost: string | null = null;
+  try {
+    const { data } = await supabaseAdmin
+      .from("client_hosts")
+      .select("host, vercel_attached_at")
+      .eq("client_id", client.id)
+      .eq("kind", "reviews")
+      .limit(1);
+    const row = (data ?? [])[0] as Record<string, unknown> | undefined;
+    // Attached, not merely recorded. A hostname nothing serves is not somewhere to send a friend.
+    if (row?.vercel_attached_at) reviewsHost = trimmed(row.host);
+  } catch (e) {
+    console.error("[hub/referral-config] reviews host read threw:", (e as Error).message);
+  }
+
+  return {
+    offers,
+    defaultOffer,
+    defaultReferrerOffer,
+    clinicPhone,
+    reviewsHost,
+    mode: mode ?? DEFAULT_INVITE_MODE,
+  };
 }

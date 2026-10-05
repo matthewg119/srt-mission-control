@@ -220,7 +220,11 @@ export async function POST(
     touchedWorkflow = true;
   }
 
-  if (body.defaultOffer !== undefined || body.sendMode !== undefined) {
+  if (
+    body.defaultOffer !== undefined ||
+    body.defaultReferrerOffer !== undefined ||
+    body.inviteMode !== undefined
+  ) {
     const referral = { ...((workflow.referral_offer ?? {}) as Record<string, unknown>) };
 
     if (body.defaultOffer !== undefined) {
@@ -233,20 +237,27 @@ export async function POST(
       else referral.default_offer = value.slice(0, 600);
     }
 
-    if (body.sendMode !== undefined) {
-      const value = textOrNull(body.sendMode) ?? null;
-      if (value !== null && value !== "device" && value !== "clinic") {
+    if (body.defaultReferrerOffer !== undefined) {
+      const value = textOrNull(body.defaultReferrerOffer) ?? null;
+      // ‼️ CLEARING HERS DOES NOT TURN THE REFERRAL OFF. A clinic rewarding only the friend is
+      // an ordinary and complete configuration; the friend's offer is the one the invite copy
+      // promises, so it is the one that gates the question.
+      if (value === null) delete referral.default_referrer_offer;
+      else referral.default_referrer_offer = value.slice(0, 600);
+    }
+
+    if (body.inviteMode !== undefined) {
+      const value = textOrNull(body.inviteMode) ?? null;
+      if (value !== null && value !== "text" && value !== "internal") {
         return NextResponse.json(
-          { ok: false, error: 'Send mode must be "device" or "clinic".' },
+          { ok: false, error: 'The referral mode must be "text" or "internal".' },
           { status: 400 }
         );
       }
-      // ‼️ "clinic" IS STORABLE AND STILL REFUSED AT RENDER. composeInvite() returns
-      // "unavailable" for it until a sender, a per-clinic number and a signed BAA exist, so
-      // setting it here records an intention rather than switching anything on. Validating it
-      // away instead would mean the column could never be set in advance of the capability.
-      if (value === null) delete referral.send_mode;
-      else referral.send_mode = value;
+      // Both are fully built. "text" opens a message on the patient's own phone; "internal"
+      // sends nothing and hands the clinic a lead. Neither has SRT as the sender.
+      if (value === null) delete referral.mode;
+      else referral.mode = value;
     }
 
     if (Object.keys(referral).length === 0) delete workflow.referral_offer;

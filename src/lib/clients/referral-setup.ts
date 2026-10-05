@@ -23,13 +23,20 @@ const REFERRAL_STEPS = new Set(["review_handover", "referral_engine_preview"]);
 const CHARGE_PREFIX = /^\s*charge\s*:/i;
 const SERVICE_PREFIX = /^\s*service offer\s*:/i;
 const DEFAULT_PREFIX = /^\s*default offer\s*:/i;
+const REFERRER_PREFIX = /^\s*referrer offer\s*:/i;
+const REWARD_PREFIX = /^\s*default reward\s*:/i;
 
-export type ReferralCommandKind = "charge" | "service" | "default";
+export type ReferralCommandKind = "charge" | "service" | "default" | "referrer" | "reward";
 
+// ‼️ ORDER MATTERS HERE AND `service offer:` MUST NOT SHADOW `referrer offer:`. Both end in
+// "offer:", so a prefix table matched loosely would route one to the other. Each pattern is
+// anchored on its own full first word, which is what keeps them disjoint.
 const COMMAND_PREFIXES: ReadonlyArray<readonly [ReferralCommandKind, RegExp]> = [
   ["charge", CHARGE_PREFIX],
   ["service", SERVICE_PREFIX],
+  ["referrer", REFERRER_PREFIX],
   ["default", DEFAULT_PREFIX],
+  ["reward", REWARD_PREFIX],
 ];
 
 export type ReferralCommand =
@@ -145,6 +152,30 @@ export async function handleReferralThreadReply(input: {
     };
   }
 
+  if (cmd.kind === "reward") {
+    const reward = cmd.value;
+    if (!reward) {
+      return {
+        message:
+          ":warning: Nothing saved. `default reward:` takes what the PATIENT WHO REFERS gets, " +
+          "for example `default reward: 20% off your next session`.",
+      };
+    }
+    const failed = await mergeWorkflow(input.clientId, (bag) => {
+      const referral = { ...((bag.referral_offer ?? {}) as Record<string, unknown>) };
+      referral.default_referrer_offer = reward.slice(0, 600);
+      bag.referral_offer = referral;
+    });
+    if (failed) return { message: `:warning: Not saved: ${failed}` };
+    return {
+      message: [
+        `She gets *${reward}* for a referral, once the friend books.`,
+        "Shown to her as a thank you for the referral, never for the review.",
+        ...ignored,
+      ].join("\n"),
+    };
+  }
+
   if (cmd.kind === "default") {
     const offer = cmd.value;
     if (!offer) {
@@ -168,21 +199,25 @@ export async function handleReferralThreadReply(input: {
     };
   }
 
-  // ── service offer: <service> = <what their friend gets> ──
+  // ── service offer: / referrer offer: <service> = <what they get> ──
   //
-  // ‼️ `=` RATHER THAN A COMMA, BECAUSE THE OFFER CONTAINS COMMAS. "80% off the first month,
-  // then $299" is the shape of every real answer, so splitting on a comma would cut the deal in
-  // half and store the remainder as nothing.
+  // ‼️ `=` RATHER THAN A COMMA, BECAUSE THE OFFER CONTAINS COMMAS. "20% off the first visit,
+  // then $299" is the shape of a real answer, so splitting on a comma would cut the deal in half
+  // and store the remainder as nothing.
+  const forReferrer = cmd.kind === "referrer";
   const [rawService, ...rawOffer] = cmd.value.split("=");
   const service = (rawService ?? "").trim();
   const offer = rawOffer.join("=").trim();
 
   if (!service || !offer) {
+    const verb = forReferrer ? "referrer offer" : "service offer";
+    const example = forReferrer
+      ? "`referrer offer: Botox = 20% off your next session`"
+      : "`service offer: Botox = 20% off their first visit`";
     return {
       message:
-        ":warning: Nothing saved. It reads `service offer: <service> = <what their friend gets>`, " +
-        "for example `service offer: Botox = 80% off their first visit`. The `=` matters, because " +
-        "an offer usually has a comma in it.",
+        `:warning: Nothing saved. It reads \`${verb}: <service> = <what they get>\`, ` +
+        `for example ${example}. The \`=\` matters, because an offer usually has a comma in it.`,
     };
   }
 
@@ -217,11 +252,16 @@ export async function handleReferralThreadReply(input: {
   // ‼️ TYPING A DEAL FOR A SERVICE UN-EXCLUDES IT. Somebody naming an offer has decided the
   // service carries one, and leaving `excluded` true would store a deal the walk then refuses to
   // show, which is the most confusing state this table has.
+  // ‼️ ONE COLUMN OR THE OTHER, NEVER BOTH FROM ONE COMMAND. `service offer:` is the friend's
+  // deal and `referrer offer:` is hers; a command that wrote both would make it impossible to set
+  // one without restating the other.
+  const column = forReferrer ? "referrer_offer_text" : "offer_text";
+
   const { error } = hit
     ? await supabaseAdmin
         .from("client_service_offers")
         .update({
-          offer_text: offer.slice(0, 600),
+          [column]: offer.slice(0, 600),
           excluded: false,
           updated_at: new Date().toISOString(),
         })
@@ -229,7 +269,7 @@ export async function handleReferralThreadReply(input: {
     : await supabaseAdmin.from("client_service_offers").insert({
         client_id: input.clientId,
         service_label: service.slice(0, 200),
-        offer_text: offer.slice(0, 600),
+        [column]: offer.slice(0, 600),
         excluded: false,
         sort_order: nextOrder + 1,
       });

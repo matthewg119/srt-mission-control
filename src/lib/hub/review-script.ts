@@ -98,6 +98,28 @@ export function fillOffer(text: string, offer: string): string {
   return text.split(OFFER_TOKEN).join(offer);
 }
 
+/**
+ * What SHE gets, and the one sentence in this file that is about her rather than her friend.
+ *
+ * ‼️ "ONCE THEY BOOK" IS NOT SOFTENING, IT IS THE LEGAL POSITION IN FIVE WORDS. Matthew asked
+ * for a two-sided deal on 2026-10-05 ("refer a friend for 20% off on your next session and the
+ * friend gets 20% off also"), which puts the person writing a review inside the transaction for
+ * the first time. What keeps that an ordinary refer-a-friend programme is that her reward turns
+ * on an event she does not control and that has nothing to do with the review: the friend
+ * claiming. Offer it for the referral itself and it is still defensible; offer it for the review
+ * and it is an incentivised review with an undisclosed material connection.
+ *
+ * ‼️ RENDERED ONLY WHEN THE CLINIC ACTUALLY OFFERS HER SOMETHING. Plenty will only reward the
+ * friend. An empty reward must produce no sentence at all rather than a line with a hole in it.
+ */
+export const REWARD_TOKEN = "{reward}";
+
+export const INVITE_REWARD_LINE = "You get {reward} once they book.";
+
+export function fillReward(text: string, reward: string): string {
+  return text.split(REWARD_TOKEN).join(reward);
+}
+
 export type ScriptStep =
   /** The agent talking. Fixed copy, identical for every client. */
   | { kind: "say"; id: string; text: string }
@@ -163,14 +185,14 @@ export const REVIEW_SCRIPT: ScriptStep[] = [
     // says she might want a hand with it, and hands over the card. It is a real question with a
     // real answer and it is also the choreography.
     //
-    // ‼️ THE SCREEN ASKS FOR MORE THAN THE NAME, AND review-assemble.ts HAS THE ARGUMENT. A bare
-    // "Sarah" assembles into the review line `Sarah.`, and the alternative fix would have been to
-    // write "Sarah took care of me" around her answer, which is this tool writing review content.
-    // Keep these two prompts identical: the card is derived from this one.
+    // ‼️ A NAME IS THE RIGHT ANSWER, BECAUSE assembleLead() CONSUMES IT INTO A SENTENCE.
+    // "Got {service} with {provider}." is the opening line of the review, so "Sarah" lands
+    // mid-sentence instead of becoming the bullet `Sarah.` Keep this prompt identical to
+    // REVIEW_QUESTIONS_V5's: the printed card is derived from this one.
     kind: "ask",
     id: "q_provider",
     key: "provider",
-    prompt: "Who took care of you today, and how were they?",
+    prompt: "Who took care of you today?",
   },
 
   { kind: "stars", id: "q_stars", prompt: "How would you rate your visit?" },
@@ -185,9 +207,12 @@ export const REVIEW_SCRIPT: ScriptStep[] = [
     onNo: null,
   },
   {
+    // ‼️ THE PROMPT NAMES THE FRIEND'S DEAL ONLY. Hers, when she has one, is appended from
+    // INVITE_REWARD_LINE by the component, because a clinic that rewards only the friend must not
+    // be made to render half a sentence about a reward that does not exist.
     kind: "invite",
     id: "invite",
-    prompt: "Who would you recommend us to? We will send them {offer}.",
+    prompt: "Who would you recommend us to? They get {offer}.",
   },
 
   {

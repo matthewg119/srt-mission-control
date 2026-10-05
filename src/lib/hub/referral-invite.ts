@@ -1,5 +1,5 @@
-// The referral invite: who she would send our way, what they are offered, and how the message
-// leaves the building.
+// The referral invite: who she would send our way, what both of them get, and how the friend is
+// reached.
 //
 // ‼️ THE OFFER IS CONSIDERATION FOR A REFERRAL AND NEVER FOR A REVIEW, AND EVERY RULE BELOW IS
 // DOWNSTREAM OF THAT SENTENCE.
@@ -9,30 +9,35 @@
 // it is built on". That question and that flag are untouched by this file and still mean exactly
 // what they meant, because this is a different thing:
 //
-//   - the code goes to THE FRIEND, who has not written anything and is not being asked to
-//   - it is shown and sent BEFORE she has typed a word of her review
-//   - it is not conditional on her posting anything, and a No to the recommend question takes
-//     nothing away from her: she reaches the same review questions, box, copy button and links
+//   - both codes are earned by NAMING A FRIEND, not by writing or posting anything
+//   - they are shown and recorded BEFORE she has typed a word of her review
+//   - a No to the recommend question takes nothing away: she reaches the same review questions,
+//     the same editable box, the same copy button and the same destination links
 //   - no string in this file, or in review-script.ts, mentions a review near the offer
 //
-// scripts/_probe-referral-invite.ts asserts the last one against this file's source, because it
-// is the one that a well-meaning copy edit would break first.
+// scripts/_probe-review-gating.ts asserts the last one against this file's source, because it is
+// the one that a well-meaning copy edit would break first.
 //
-// ‼️ WE DO NOT SEND THE MESSAGE. SHE DOES, FROM HER OWN PHONE, AND THAT IS NOT TIMIDITY.
-// Mission Control has no SMS sender wired to this lane at all: the LoopMessage, iMessage and
+// ‼️ SHE NOW GETS A REWARD TOO (2026-10-05), WHICH IS A REAL CHANGE TO THE RISK AND IS MATTHEW'S
+// CALL. "refer a friend for 20% off on your next session and the friend gets 20% off also."
+// Until now only the friend was offered anything, which kept the person writing the review
+// entirely outside the transaction. The mitigation that keeps this an ordinary refer-a-friend
+// programme rather than a paid review: HER reward is earned when the FRIEND claims, which is an
+// event she does not control and that has nothing to do with whether she posts. The copy says so,
+// and nothing anywhere offers her a thing for the review itself.
+//
+// ‼️ WE DO NOT SEND THE MESSAGE. SHE DOES, FROM HER OWN PHONE, OR NOBODY DOES AND THE CLINIC
+// FOLLOWS UP. Mission Control has no SMS sender wired to this lane: the LoopMessage, iMessage and
 // SalesTwin senders are other applications with their own numbers and their own consent stories.
 // Beyond that, the friend never gave anybody their number, so a text sent from our servers on the
-// clinic's behalf is the clinic's TCPA exposure, created by our button. A composed message opened
-// on her device has neither problem, needs no vendor, and is the version the front desk can walk
-// her through while she is standing there. `sendMode` is the seam for changing that later, under
-// a signed BAA and a real consent record, and its clinic arm is deliberately not implemented.
+// clinic's behalf is the clinic's TCPA exposure, created by our button. The two modes below are
+// the two honest shapes that has: her thumb, or a human at the clinic.
 //
 // ‼️ THE FRIEND'S DETAILS DO NOT GO IN review_tool_submissions. That table was built with no
 // column for a name, an email or a phone and its migration says "the absence of the column is the
 // enforcement". A friend's contact is PII belonging to a THIRD PARTY who is not even the person
-// using the tool, so it would be the worst possible thing to put there. It goes to
-// referral_invites, which points AT a submission rather than being pointed at from one, so the
-// submissions table gains nothing.
+// using the tool. It goes to referral_invites, which points AT a submission rather than being
+// pointed at from one, so the submissions table gains nothing.
 
 import { guard } from "@/lib/copy-guard";
 
@@ -53,22 +58,31 @@ export function inviteExpiry(from: Date = new Date()): Date {
 }
 
 /**
- * Where the message is composed.
+ * The two shapes the referral can take, which is the choice Matthew asked to see both of.
  *
- * `device` opens it on her phone, already written, with the clinic and the friend both on it. She
- * presses send, so the clinic is in the thread from the first message and the friend has a real
- * person's number to reply to.
+ * `text`     She sends it. The invite step opens a message already written on her own phone,
+ *            with the clinic as a second recipient where the clinic has a number on file, so the
+ *            clinic is on the thread from the first message and the friend has a real person to
+ *            reply to. Her thumb is the send button.
  *
- * `clinic` would send it from the clinic's own number, server side. It is declared so the seam is
- * visible and typed, and `composeInvite` refuses it. Turning it on needs a sender, a number per
- * clinic, an opt-out path, and the BAA and consent items on the onboarding sheet.
+ * `internal` Nobody sends anything. The referral is recorded, she is told the clinic will reach
+ *            out, and a human at the clinic works the lead. No message leaves the building, so
+ *            there is no consent question at all.
+ *
+ * ‼️ BOTH WRITE THE SAME ROW AND BOTH MINT THE SAME CLAIM LINK. The difference is only who puts
+ * the link in front of the friend. That is what lets a clinic switch between them without
+ * changing anything a patient sees up to that point, and what makes the comparison fair.
  */
-export type SendMode = "device" | "clinic";
+export type InviteMode = "text" | "internal";
 
-export const DEFAULT_SEND_MODE: SendMode = "device";
+export const DEFAULT_INVITE_MODE: InviteMode = "text";
+
+export function readInviteMode(raw: unknown): InviteMode {
+  return raw === "internal" ? "internal" : DEFAULT_INVITE_MODE;
+}
 
 /**
- * How it opens.
+ * How a `text` invite opens.
  *
  * ‼️ ONLY `sms` IS ACTUALLY THREE-WAY, AND THE LABELS MUST NOT PRETEND OTHERWISE. A WhatsApp
  * deep link (wa.me) takes exactly ONE recipient and cannot open a group, so that option is her
@@ -110,7 +124,7 @@ export const INVITE_TOKENS = {
   business: "{business}",
   service: "{service}",
   offer: "{offer}",
-  code: "{code}",
+  link: "{link}",
   days: "{days}",
 } as const;
 
@@ -129,6 +143,12 @@ export interface InviteTemplate {
  * handed over rather than recommended. So no "we" that means the clinic, no marketing line, and
  * the clinic is referred to by name.
  *
+ * ‼️ EACH ONE ENDS IN A LINK AND NOT IN A CODE. Matthew, 2026-10-05: "lets just make sure we send
+ * a link with a form they can complete so the customer receives the lead." A code read off a
+ * phone screen and quoted at a desk needs the friend to turn up before the clinic knows they
+ * exist; a form means the clinic has the lead the moment the friend fills it in, whether or not
+ * they ever walk in. The code still exists and still expires, it just travels inside the URL.
+ *
  * ‼️ AND NOT ONE OF THEM MENTIONS A REVIEW. Checked by the probe. The friend is being offered
  * something for coming in, which is an ordinary refer-a-friend deal; the moment the message ties
  * the offer to the review she is about to write, it becomes an incentivised review with an
@@ -141,16 +161,14 @@ export const INVITE_TEMPLATES: readonly InviteTemplate[] = [
     body: guard(
       "invite warm",
       "Hi {friend}, I just had {service} done at {business} and I really liked it. " +
-        "They are giving you {offer} if you want to try them. Use {code} within {days} days."
+        "They are giving you {offer} if you want to try them. " +
+        "Here is the link, it is good for {days} days: {link}"
     ),
   },
   {
     key: "short",
     label: guard("invite short label", "Short"),
-    body: guard(
-      "invite short",
-      "{friend}, you should try {business}. {offer} with code {code}, good for {days} days."
-    ),
+    body: guard("invite short", "{friend}, you should try {business}. {offer}: {link}"),
   },
   {
     key: "intro",
@@ -158,7 +176,7 @@ export const INVITE_TEMPLATES: readonly InviteTemplate[] = [
     body: guard(
       "invite intro",
       "{friend}, meet {business}. I had {service} done with them and it was great. " +
-        "They are giving you {offer}, code {code}, good for {days} days. " +
+        "They are giving you {offer}. Fill this in and they will look after you: {link}. " +
         "I will let you two take it from here."
     ),
   },
@@ -172,16 +190,22 @@ export interface InviteFacts {
   friendName: string;
   businessName: string;
   serviceLabel: string;
+  /** What the FRIEND gets. Never her own reward: that is not the friend's business. */
   offerText: string;
-  code: string;
+  /** Where the friend claims it. See claimUrl(). */
+  link: string;
 }
 
 /**
- * Fill a template. One place, so the message she previews and the message that opens cannot differ.
+ * Fill a template. One place, so the message she previews and the message that opens cannot
+ * differ.
+ *
+ * ‼️ HER OWN REWARD IS NOT A TOKEN HERE, DELIBERATELY. The message goes to the friend, and a
+ * friend reading "and she gets 20% off for sending you this" is being told they are the
+ * mechanism of somebody else's discount. She is told what she gets, on screen, by the walk.
  *
  * A missing fact becomes an empty string rather than the token, because a patient must never see
- * the literal "{offer}" in a message about to go to her friend. The caller is responsible for
- * having an offer; `offerForService` is what guarantees one.
+ * the literal "{offer}" in a message about to go to her friend.
  */
 export function fillInvite(body: string, facts: InviteFacts): string {
   return body
@@ -193,21 +217,21 @@ export function fillInvite(body: string, facts: InviteFacts): string {
     .join(facts.serviceLabel.trim())
     .split(INVITE_TOKENS.offer)
     .join(facts.offerText.trim())
-    .split(INVITE_TOKENS.code)
-    .join(facts.code.trim())
+    .split(INVITE_TOKENS.link)
+    .join(facts.link.trim())
     .split(INVITE_TOKENS.days)
     .join(String(INVITE_TTL_DAYS))
-    .replace(/\s+/g, " ")
+    .replace(/[ \t]+/g, " ")
     .trim();
 }
 
 /**
- * The code the friend quotes at the desk.
+ * The code the friend's link carries.
  *
- * ‼️ NOT A SECRET AND NOT A TOKEN. It is read aloud over a phone and typed by a receptionist, so
- * the alphabet drops every character that is ambiguous out loud or in handwriting: no O or 0, no
- * I, L or 1, no S or 5, no B or 8. It identifies a deal, not a person, and it carries no
- * authority: the row in referral_invites is what records who it was for and when it dies.
+ * ‼️ NOT A SECRET AND NOT A BEARER TOKEN. It names one deal on one clinic, and the claim form it
+ * opens asks the friend who they are rather than assuming. The alphabet drops every character
+ * that is ambiguous out loud or in handwriting, because somebody will read one over a phone: no
+ * O or 0, no I, L or 1, no S or 5, no B or 8.
  */
 const CODE_ALPHABET = "ACDEFGHJKMNPQRTUVWXY234679";
 const CODE_LENGTH = 6;
@@ -220,9 +244,28 @@ export function inviteCode(random: () => number = Math.random): string {
   return out;
 }
 
-/** A code as typed by a human: upper-cased, spaces and hyphens dropped. */
+/** A code as typed or pasted by a human: upper-cased, everything else dropped. */
 export function normaliseCode(raw: string): string {
   return raw.toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+/** The shape of a claim path, shared by the link builder and the hub allowlist. */
+export const CLAIM_PATH_PREFIX = "/r/";
+
+/**
+ * Where the friend claims the offer.
+ *
+ * ‼️ ON THE CLINIC'S OWN REVIEWS HOST, NOT ON mission.srtagency.com. The patient is texting this
+ * to somebody she knows and vouching for the clinic; a link to an agency domain reads as a
+ * forwarded advert and is the single easiest thing for the friend to distrust. The host is the
+ * one their QR cards already resolve to.
+ *
+ * Falls back to the app's own origin when the clinic has no reviews host attached, because a
+ * referral that produces an unopenable link is worse than an off-brand one.
+ */
+export function claimUrl(host: string | null, code: string, fallbackOrigin: string): string {
+  const base = host ? `https://${host}` : fallbackOrigin.replace(/\/+$/, "");
+  return `${base}${CLAIM_PATH_PREFIX}${normaliseCode(code)}`;
 }
 
 /**
@@ -240,7 +283,6 @@ export function dialable(raw: string): string {
 
 export interface ComposeInput {
   channel: InviteChannel;
-  mode?: SendMode;
   /** The friend's number. Required for sms and whatsapp, ignored by copy. */
   friendContact: string;
   /** The clinic's number, so the thread is three-way. Absent means her and the friend only. */
@@ -253,26 +295,17 @@ export type ComposeResult =
   | { kind: "open"; href: string; threeWay: boolean }
   /** Nothing to open. Put the text on the clipboard. */
   | { kind: "clipboard"; text: string }
-  /** The caller asked for something this build does not do. */
+  /** The caller asked for something this build cannot do. */
   | { kind: "unavailable"; reason: string };
 
 /**
- * Build the thing the invite button does.
+ * Build the thing the invite button does in `text` mode.
  *
  * ‼️ IT RETURNS AN HREF AND NEVER PERFORMS A SEND. There is no fetch in this module and there must
  * not be one. The only way a message leaves is her own messages app, with her finger on the
- * button, which is what makes the clinic the sender of record rather than us.
+ * button, which is what makes her the sender of record rather than us.
  */
 export function composeInvite(input: ComposeInput): ComposeResult {
-  const mode = input.mode ?? DEFAULT_SEND_MODE;
-  if (mode === "clinic") {
-    // Declared, typed, and refused. See SendMode.
-    return {
-      kind: "unavailable",
-      reason: "Sending from the clinic's own number is not switched on for this clinic yet.",
-    };
-  }
-
   const body = input.message.trim();
   if (!body) return { kind: "unavailable", reason: "There is no message to send." };
 
@@ -309,11 +342,20 @@ export interface ReferralInvite {
   clientId: string;
   submissionId: string | null;
   serviceLabel: string | null;
-  /** The deal as it stood when she was shown it, so a later edit cannot change what was promised. */
-  offerSnapshot: { serviceLabel: string | null; offerText: string; templateKey: string };
+  /**
+   * Both deals as they stood when she was shown them, so a later edit to the clinic's offers
+   * cannot change what either person was promised.
+   */
+  offerSnapshot: {
+    serviceLabel: string | null;
+    offerText: string;
+    referrerOfferText: string | null;
+    templateKey: string;
+  };
   code: string;
   friendName: string | null;
   friendContact: string | null;
-  channel: InviteChannel;
+  mode: InviteMode;
+  channel: InviteChannel | null;
   expiresAt: string;
 }

@@ -245,7 +245,7 @@ export default async function ClientDetailPage({
   // board that 500s because one panel's migration is pending would be the worse failure.
   const { data: serviceOfferData } = await supabaseAdmin
     .from("client_service_offers")
-    .select("service_label, price_label, offer_text, excluded")
+    .select("service_label, price_label, offer_text, referrer_offer_text, excluded")
     .eq("client_id", id)
     .order("sort_order", { ascending: true });
 
@@ -255,6 +255,8 @@ export default async function ClientDetailPage({
       serviceLabel: typeof r.service_label === "string" ? r.service_label : "",
       priceLabel: typeof r.price_label === "string" ? r.price_label : null,
       offerText: typeof r.offer_text === "string" ? r.offer_text : null,
+      referrerOfferText:
+        typeof r.referrer_offer_text === "string" ? r.referrer_offer_text : null,
       excluded: r.excluded === true,
     };
   });
@@ -283,7 +285,11 @@ export default async function ClientDetailPage({
         ? reviewWorkflowBag.private_feedback_to
         : null,
     defaultOffer: typeof referralOfferBag.default_offer === "string" ? referralOfferBag.default_offer : null,
-    sendMode: typeof referralOfferBag.send_mode === "string" ? referralOfferBag.send_mode : null,
+    defaultReferrerOffer:
+      typeof referralOfferBag.default_referrer_offer === "string"
+        ? referralOfferBag.default_referrer_offer
+        : null,
+    inviteMode: typeof referralOfferBag.mode === "string" ? referralOfferBag.mode : null,
     serviceOffers: serviceOfferRows,
   };
 

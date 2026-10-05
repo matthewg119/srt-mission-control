@@ -37,7 +37,11 @@ import path from "node:path";
 import { REVIEW_SCRIPT, GATE_IDS, NON_REVIEW_IDS } from "../src/lib/hub/review-script";
 import {
   ALL_REVIEW_QUESTIONS,
+  LEAD_KEYS,
+  LEAD_SERVICE_ONLY,
+  LEAD_WITH_PROVIDER,
   assembleLabelled,
+  assembleLead,
   assemblePlain,
   isEmpty,
   type ReviewAnswers,
@@ -405,6 +409,87 @@ for (const [label, src] of [["the walk", scriptSrc], ["the invite copy", inviteS
     !tied,
     `${label} never ties the offer to leaving a review`,
     tied ? "an offer in exchange for a review is the one thing this lane may not say" : undefined
+  );
+}
+
+// ── 10c. THE LEAD LINE: TWO WORDS OF OURS, AND A FENCE AROUND THEM. ──────
+//
+// ‼️ THIS IS THE ONLY SRT-AUTHORED TEXT INSIDE WHAT SHE COPIES, SO IT IS THE ONE PLACE THE
+// Rytr FACT PATTERN COULD ACTUALLY REACH. assemblePlain's docstring used to promise her copied
+// review was "one hundred percent her own words, with no SRT-authored text in it at all"; v5
+// spends that promise on "Got" and "with". What makes two function words defensible where a
+// generated sentence would not be is that they add NO MEANING: they state two facts she typed,
+// in the order she typed them, and she reads and can edit the result before copying it.
+//
+// The fence is a word list. The day somebody writes "Had an amazing {service} with the wonderful
+// {provider}", this fails, and that is the whole reason it exists.
+{
+  const TEMPLATES = [LEAD_WITH_PROVIDER, LEAD_SERVICE_ONLY];
+
+  // Judgement words. An adjective or an adverb in here is us describing her visit for her.
+  const BANNED = [
+    "amazing", "wonderful", "great", "best", "love", "loved", "lovely", "incredible",
+    "fantastic", "perfect", "excellent", "highly", "recommend", "happy", "thrilled",
+    "beautiful", "natural", "painless", "professional", "friendly", "caring", "kind",
+    "definitely", "absolutely", "really", "very", "so ", "such ",
+  ];
+  for (const template of TEMPLATES) {
+    const hit = BANNED.filter((w) => template.toLowerCase().includes(w));
+    check(
+      hit.length === 0,
+      `the lead template "${template}" carries no judgement of its own`,
+      hit.length ? `found: ${hit.join(", ")}` : "connective words around facts she typed"
+    );
+    // Short enough that it cannot be hiding a sentence. Both are under forty characters of
+    // scaffolding once the tokens are removed.
+    const scaffold = template.replace(/\{[a-z]+\}/g, "").trim();
+    check(
+      scaffold.length <= 20,
+      `and "${template}" is scaffolding rather than prose`,
+      `${scaffold.length} characters of ours: "${scaffold}"`
+    );
+  }
+
+  // It states facts she typed, in her words, and adds nothing when she typed nothing.
+  check(assembleLead({}) === null, "no service means no lead line at all");
+  check(
+    assembleLead({ provider: "Sarah" }) === null,
+    "and her provider alone does not manufacture one"
+  );
+  check(
+    assembleLead({ service: "lip filler" }) === "Got lip filler.",
+    "a service alone names the service and stops"
+  );
+  check(
+    assembleLead({ service: "lip filler", provider: "Sarah" }) === "Got lip filler with Sarah.",
+    "and both together read as one sentence"
+  );
+  // Her own punctuation is not doubled up by the template's full stop.
+  check(
+    assembleLead({ service: "Botox." }) === "Got Botox.",
+    "a trailing full stop of hers is not doubled"
+  );
+
+  // ‼️ CONSUMED, NOT DUPLICATED. Without this a v5 review would open with the lead line and
+  // then repeat the service and the provider as the next two bullets.
+  const v5 = { service: "lip filler", provider: "Sarah", liked: "it looks natural" } as ReviewAnswers;
+  const plain = assemblePlain(v5, { lead: true });
+  check(
+    plain === [`Got lip filler with Sarah.`, `It looks natural.`].join(LF),
+    "the lead line replaces those two bullets rather than adding to them",
+    JSON.stringify(plain)
+  );
+  check(
+    LEAD_KEYS.every((k) => ALL_REVIEW_QUESTIONS.some((q) => q.key === k)),
+    "and every key it consumes is a real question"
+  );
+
+  // ‼️ OPT IN, SO STORED ROWS AND v1 ARE UNTOUCHED. This is the check that protects reviews
+  // already written: the default call must assemble exactly as it did before v5 existed.
+  check(
+    assemblePlain(v5) === [`Lip filler.`, `It looks natural.`, `Sarah.`].join(LF),
+    "without the flag it assembles the old way, byte for byte",
+    JSON.stringify(assemblePlain(v5))
   );
 }
 

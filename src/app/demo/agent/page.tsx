@@ -126,14 +126,57 @@ const MEDSPA_CLIENT: HubClient = {
  */
 const DEMO_REFERRAL = {
   offers: [
-    { serviceLabel: "Botox", offerText: "80% off their first visit, then $299 a month" },
-    { serviceLabel: "Lip filler", offerText: "50% off their first syringe" },
-    { serviceLabel: "Hydrafacial", offerText: "their first facial free" },
+    {
+      serviceLabel: "Botox",
+      offerText: "20% off their first visit",
+      referrerOfferText: "20% off your next session",
+    },
+    {
+      serviceLabel: "Lip filler",
+      offerText: "20% off their first syringe",
+      referrerOfferText: "20% off your next session",
+    },
+    {
+      serviceLabel: "Hydrafacial",
+      offerText: "their first facial free",
+      referrerOfferText: "20% off your next session",
+    },
   ],
-  defaultOffer: "80% off their first visit, then $299 a month",
+  defaultOffer: "20% off their first visit",
+  defaultReferrerOffer: "20% off your next session",
   clinicPhone: DEMO_CLIENT.phone,
-  sendMode: "device" as const,
+  // No reviews host on a client that does not exist, so claimUrl falls back to this origin and
+  // the link in the previewed message is openable from the demo.
+  reviewsHost: null,
 };
+
+/**
+ * The two shapes of the referral, so both can be walked and compared.
+ *
+ * ‼️ THE ONLY DIFFERENCE IS WHO PUTS THE LINK IN FRONT OF THE FRIEND. Everything before the
+ * invite step is identical, which is the point: a clinic can be switched between them without
+ * re-teaching the front desk anything, and the comparison is therefore about the one thing that
+ * actually differs.
+ */
+const MODES = [
+  {
+    key: "text",
+    label: "she texts them",
+    note: "The invite opens a group text on her phone with the clinic on it. Her thumb sends it.",
+  },
+  {
+    key: "internal",
+    label: "the clinic follows up",
+    note: "Nothing is sent. The referral is recorded and a human at the clinic works the lead.",
+  },
+] as const;
+
+type DemoMode = (typeof MODES)[number]["key"];
+
+function readMode(raw: string | string[] | undefined): DemoMode {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return MODES.some((m) => m.key === value) ? (value as DemoMode) : "text";
+}
 
 /** Which fake clinic the demo is wearing. Narrowed, never interpolated. */
 const CLIENTS = [
@@ -158,12 +201,13 @@ const ENGINES = [
 export default function AgentDemo({
   searchParams,
 }: {
-  searchParams: { engine?: string; look?: string; client?: string };
+  searchParams: { engine?: string; look?: string; client?: string; mode?: string };
 }) {
   const engine = readEngine(searchParams.engine);
   const look = readLook(searchParams.look);
   const clientKey = readClient(searchParams.client);
   const client = (CLIENTS.find((c) => c.key === clientKey) ?? CLIENTS[0]).client;
+  const mode = readMode(searchParams.mode);
 
   return (
     <div
@@ -174,14 +218,14 @@ export default function AgentDemo({
       // makes a theme look different from everywhere else.
       style={{ ...skinStyle(client.skin), ...themeStyle(client.theme) }}
     >
-      <Ribbon engine={engine} clientKey={clientKey} />
+      <Ribbon engine={engine} clientKey={clientKey} mode={mode} />
       <div className="hub-wrap">
         {/* `referral` passed as a literal, so nothing is queried. See DEMO_REFERRAL. */}
         <ReferralEngine
           client={client}
           engine={engine}
           look={look}
-          referral={{ ...DEMO_REFERRAL, clinicPhone: client.phone }}
+          referral={{ ...DEMO_REFERRAL, clinicPhone: client.phone, mode }}
         />
       </div>
     </div>
@@ -189,8 +233,9 @@ export default function AgentDemo({
 }
 
 /** Dark, amber, and unmistakably not part of the page. Same treatment as the other ribbons. */
-function Ribbon({ engine, clientKey }: { engine: string; clientKey: string }) {
+function Ribbon({ engine, clientKey, mode }: { engine: string; clientKey: string; mode: string }) {
   const current = ENGINES.find((e) => e.key === engine);
+  const currentMode = MODES.find((m) => m.key === mode);
   return (
     <div
       style={{
@@ -215,7 +260,7 @@ function Ribbon({ engine, clientKey }: { engine: string; clientKey: string }) {
         {ENGINES.map((choice) => (
           <a
             key={choice.key}
-            href={`/demo/agent?client=${clientKey}&engine=${choice.key}`}
+            href={`/demo/agent?client=${clientKey}&engine=${choice.key}&mode=${mode}`}
             style={{
               color: engine === choice.key ? "#F5A623" : "rgba(255,255,255,0.75)",
               fontWeight: engine === choice.key ? 700 : 400,
@@ -227,11 +272,28 @@ function Ribbon({ engine, clientKey }: { engine: string; clientKey: string }) {
         ))}
       </span>
       <span style={{ display: "flex", gap: "10px", alignItems: "baseline" }}>
+        <span style={{ opacity: 0.6 }}>referral:</span>
+        {MODES.map((choice) => (
+          <a
+            key={choice.key}
+            href={`/demo/agent?client=${clientKey}&engine=${engine}&mode=${choice.key}`}
+            style={{
+              color: mode === choice.key ? "#F5A623" : "rgba(255,255,255,0.75)",
+              fontWeight: mode === choice.key ? 700 : 400,
+              textDecoration: mode === choice.key ? "none" : "underline",
+            }}
+          >
+            {choice.label}
+          </a>
+        ))}
+      </span>
+      {currentMode ? <span style={{ opacity: 0.55 }}>{currentMode.note}</span> : null}
+      <span style={{ display: "flex", gap: "10px", alignItems: "baseline" }}>
         <span style={{ opacity: 0.6 }}>skin:</span>
         {CLIENTS.map((choice) => (
           <a
             key={choice.key}
-            href={`/demo/agent?client=${choice.key}&engine=${engine}`}
+            href={`/demo/agent?client=${choice.key}&engine=${engine}&mode=${mode}`}
             style={{
               color: clientKey === choice.key ? "#F5A623" : "rgba(255,255,255,0.75)",
               fontWeight: clientKey === choice.key ? 700 : 400,

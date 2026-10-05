@@ -63,15 +63,18 @@ export interface ReviewWorkflowView {
   frontDeskCount: number | null;
   /** `review_workflow.private_feedback_to`. Who hears what a patient will not post. */
   privateFeedbackTo: string | null;
-  /** `review_workflow.referral_offer.default_offer`. */
+  /** `review_workflow.referral_offer.default_offer`. What the FRIEND gets. */
   defaultOffer: string | null;
-  /** `review_workflow.referral_offer.send_mode`. */
-  sendMode: string | null;
+  /** `review_workflow.referral_offer.default_referrer_offer`. What SHE gets. */
+  defaultReferrerOffer: string | null;
+  /** `review_workflow.referral_offer.mode`: "text" or "internal". */
+  inviteMode: string | null;
   /** `client_service_offers` rows, in sort order. */
   serviceOffers: Array<{
     serviceLabel: string;
     priceLabel: string | null;
     offerText: string | null;
+    referrerOfferText: string | null;
     excluded: boolean;
   }>;
 }
@@ -80,7 +83,10 @@ export interface ReviewWorkflowView {
 interface OfferRow {
   serviceLabel: string;
   priceLabel: string;
+  /** What the friend gets. */
   offerText: string;
+  /** What the patient who refers gets. */
+  referrerOfferText: string;
   excluded: boolean;
 }
 
@@ -113,19 +119,25 @@ export function ReviewWorkflowForm({
   );
   const [privateFeedbackTo, setPrivateFeedbackTo] = useState(view.privateFeedbackTo ?? "");
   const [defaultOffer, setDefaultOffer] = useState(view.defaultOffer ?? "");
-  const [sendMode, setSendMode] = useState(view.sendMode ?? "device");
+  const [defaultReferrerOffer, setDefaultReferrerOffer] = useState(
+    view.defaultReferrerOffer ?? ""
+  );
+  const [inviteMode, setInviteMode] = useState(view.inviteMode ?? "text");
   const [fillAll, setFillAll] = useState("");
+  const [fillAllReferrer, setFillAllReferrer] = useState("");
   const [offers, setOffers] = useState<OfferRow[]>(() => [
     ...view.serviceOffers.map((o) => ({
       serviceLabel: o.serviceLabel,
       priceLabel: o.priceLabel ?? "",
       offerText: o.offerText ?? "",
+      referrerOfferText: o.referrerOfferText ?? "",
       excluded: o.excluded,
     })),
     ...Array.from({ length: SPARE_ROWS }, () => ({
       serviceLabel: "",
       priceLabel: "",
       offerText: "",
+      referrerOfferText: "",
       excluded: false,
     })),
   ]);
@@ -142,11 +154,18 @@ export function ReviewWorkflowForm({
    * becomes something nobody dares press on a half-finished grid.
    */
   function applyToAll() {
-    const value = fillAll.trim();
-    if (!value) return;
+    const friend = fillAll.trim();
+    const referrer = fillAllReferrer.trim();
+    if (!friend && !referrer) return;
     setOffers((prev) =>
       prev.map((row) =>
-        row.serviceLabel.trim() && !row.excluded ? { ...row, offerText: value } : row
+        row.serviceLabel.trim() && !row.excluded
+          ? {
+              ...row,
+              offerText: friend || row.offerText,
+              referrerOfferText: referrer || row.referrerOfferText,
+            }
+          : row
       )
     );
   }
@@ -182,7 +201,8 @@ export function ReviewWorkflowForm({
           frontDeskCount,
           privateFeedbackTo,
           defaultOffer,
-          sendMode,
+          defaultReferrerOffer,
+          inviteMode,
         }),
       });
       const json = (await res.json()) as { ok: boolean; error?: string };
@@ -411,21 +431,21 @@ export function ReviewWorkflowForm({
 
           <div>
             <label className={LABEL} htmlFor="rw-send">
-              Who sends the text
+              How the friend is reached
             </label>
             <select
               id="rw-send"
               className={INPUT}
-              value={sendMode}
-              onChange={(e) => setSendMode(e.target.value)}
+              value={inviteMode}
+              onChange={(e) => setInviteMode(e.target.value)}
             >
-              <option value="device">The patient, from her own phone</option>
-              <option value="clinic">The clinic&apos;s number (not built)</option>
+              <option value="text">She texts them, clinic on the thread</option>
+              <option value="internal">The clinic follows up, nothing is sent</option>
             </select>
             <p className="mt-1 text-[11px] text-[rgba(255,255,255,0.45)]">
-              {sendMode === "clinic"
-                ? "Recorded as an intention and nothing more. Sending from the clinic needs a number, a sender and a signed BAA, so the walk still opens the message on her phone."
-                : "She picks the friend and presses send, so the clinic is on the thread from the first message and nobody is texted who never gave us their number."}
+              {inviteMode === "internal"
+                ? "Nothing leaves the building. The referral is recorded, she is told you will reach out, and the lead shows up here. No consent question at all."
+                : "The invite opens a group text already written on her phone with this clinic on it. Her thumb is the send button, so nobody is texted who never gave us their number."}
             </p>
           </div>
         </div>
@@ -455,17 +475,32 @@ export function ReviewWorkflowForm({
             <input
               className={INPUT}
               value={fillAll}
-              placeholder="Set every service to the same deal"
+              placeholder="Every friend gets..."
               onChange={(e) => setFillAll(e.target.value)}
+            />
+            <input
+              className={INPUT}
+              value={fillAllReferrer}
+              placeholder="...and she gets"
+              onChange={(e) => setFillAllReferrer(e.target.value)}
             />
             <button
               type="button"
               className="shrink-0 rounded border border-white/15 px-2 py-1.5 text-[11px] text-white/70 hover:border-white/30"
               onClick={applyToAll}
-              disabled={!fillAll.trim()}
+              disabled={!fillAll.trim() && !fillAllReferrer.trim()}
             >
               Apply to all
             </button>
+          </div>
+
+          {/* A header row, because four free-text boxes side by side are unreadable without one. */}
+          <div className="mb-1 flex gap-2 text-[10px] uppercase tracking-widest text-[rgba(255,255,255,0.3)]">
+            <span className="flex-1">Service</span>
+            <span className="w-[6rem] shrink-0">Price</span>
+            <span className="flex-1">Their friend gets</span>
+            <span className="flex-1">She gets</span>
+            <span className="w-[4.5rem] shrink-0" />
           </div>
 
           <div className="space-y-1">
@@ -490,7 +525,14 @@ export function ReviewWorkflowForm({
                   disabled={row.excluded}
                   onChange={(e) => editRow(i, { offerText: e.target.value })}
                 />
-                <label className="flex shrink-0 items-center gap-1 text-[10px] text-[rgba(255,255,255,0.45)]">
+                <input
+                  className={INPUT}
+                  value={row.referrerOfferText}
+                  placeholder="Optional"
+                  disabled={row.excluded}
+                  onChange={(e) => editRow(i, { referrerOfferText: e.target.value })}
+                />
+                <label className="flex w-[4.5rem] shrink-0 items-center gap-1 text-[10px] text-[rgba(255,255,255,0.45)]">
                   <input
                     type="checkbox"
                     checked={row.excluded}
@@ -508,28 +550,52 @@ export function ReviewWorkflowForm({
             onClick={() =>
               setOffers((prev) => [
                 ...prev,
-                { serviceLabel: "", priceLabel: "", offerText: "", excluded: false },
+                {
+                  serviceLabel: "",
+                  priceLabel: "",
+                  offerText: "",
+                  referrerOfferText: "",
+                  excluded: false,
+                },
               ])
             }
           >
             Add a service
           </button>
 
-          <div className="mt-3">
-            <label className={LABEL} htmlFor="rw-default-offer">
-              Default, when a patient names a service that is not listed
-            </label>
-            <input
-              id="rw-default-offer"
-              className={INPUT}
-              value={defaultOffer}
-              placeholder="What their friend gets"
-              onChange={(e) => setDefaultOffer(e.target.value)}
-            />
-            <p className="mt-1 text-[11px] text-[rgba(255,255,255,0.45)]">
-              Their words are matched against the service names above. Anything unmatched falls
-              back to this, and with neither there is no referral question.
-            </p>
+          <div className="mt-3 grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className={LABEL} htmlFor="rw-default-offer">
+                Default: what their friend gets
+              </label>
+              <input
+                id="rw-default-offer"
+                className={INPUT}
+                value={defaultOffer}
+                placeholder="When the service is not listed above"
+                onChange={(e) => setDefaultOffer(e.target.value)}
+              />
+              <p className="mt-1 text-[11px] text-[rgba(255,255,255,0.45)]">
+                Her words are matched against the service names above. Anything unmatched falls
+                back to this, and with neither there is no referral question at all.
+              </p>
+            </div>
+            <div>
+              <label className={LABEL} htmlFor="rw-default-reward">
+                Default: what she gets
+              </label>
+              <input
+                id="rw-default-reward"
+                className={INPUT}
+                value={defaultReferrerOffer}
+                placeholder="Optional"
+                onChange={(e) => setDefaultReferrerOffer(e.target.value)}
+              />
+              <p className="mt-1 text-[11px] text-[rgba(255,255,255,0.45)]">
+                Shown to her as &ldquo;once they book&rdquo;, never as a reward for the review.
+                Leave it blank to reward only the friend.
+              </p>
+            </div>
           </div>
         </div>
       </div>

@@ -900,6 +900,62 @@ body:has(.hub-root) {
   color: var(--va-ink);
 }
 
+/* `internal` mode says what will happen instead of previewing a message that will not be sent. */
+.va-invite-note {
+  margin: 0;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  color: var(--va-mut);
+}
+
+/* ── The claim form at /r/{code} ───────────────────────────────────────────── */
+/* ‼️ NOT A .va-* RULE AND NOT INSIDE THE PANEL. This is an ordinary hub page that a friend opens
+   from a link, so it uses the page's own --hub-* tokens like every other body. The agent's panel
+   grammar does not apply here and _probe-virtual-agent-grammar.ts does not read these. */
+
+/* The deal, set as the one thing on the page worth reading. */
+.rev-offer {
+  margin: 0 0 1.25rem;
+  font-size: 1.25rem;
+  line-height: 1.45;
+  font-weight: 600;
+  color: var(--hub-fg);
+  background: var(--hub-accent-soft);
+  border-radius: var(--hub-radius);
+  padding: 1rem 1.1rem;
+}
+
+.rev-claim {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  max-width: 26rem;
+}
+
+.rev-claim-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.rev-claim-field > span {
+  font-size: 0.8125rem;
+  color: var(--hub-muted);
+}
+.rev-claim-field input {
+  font: inherit;
+  /* 16px on the control itself, or iOS zooms the page on focus. */
+  font-size: 16px;
+  color: var(--hub-fg);
+  background: var(--hub-card);
+  border: 1px solid var(--hub-rule);
+  border-radius: var(--hub-radius);
+  padding: 0.6rem 0.75rem;
+}
+
+.rev-claim-done h2 {
+  margin: 0 0 0.4rem;
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    HER WORDS, AND THE RAIL BESIDE THEM (v2)
    ───────────────────────────────────────────────────────────────────────────

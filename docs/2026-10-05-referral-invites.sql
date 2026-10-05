@@ -49,6 +49,8 @@ create table if not exists public.client_service_offers (
   service_label text        not null,
   price_label   text,
   offer_text    text,
+  -- What the PATIENT WHO REFERS gets, added the same day the two-sided model was decided.
+  referrer_offer_text text,
   excluded      boolean     not null default false,
   sort_order    integer     not null default 0,
   created_at    timestamptz not null default now(),
@@ -107,8 +109,18 @@ create table if not exists public.referral_invites (
   code           text        not null,
   friend_name    text,
   friend_contact text,
-  channel        text        not null,
+  -- 'text' (she sent it from her phone) or 'internal' (nobody sent anything; the clinic follows
+  -- up). Both write this row and both mint the same claim link.
+  mode           text        not null default 'text',
+  -- Null when mode is 'internal': there was no message, so there was no channel.
+  channel        text,
   sent_at        timestamptz,
+  -- What the FRIEND typed into the claim form, which is where the clinic's lead comes from. Kept
+  -- apart from friend_name/friend_contact above, which are what the PATIENT said about them: a
+  -- referral where the two disagree is a real and useful thing for the clinic to see.
+  claimed_name    text,
+  claimed_contact text,
+  claimed_service text,
   claimed_at     timestamptz,
   expires_at     timestamptz not null,
   created_at     timestamptz not null default now()
@@ -217,3 +229,49 @@ comment on column public.clients.review_workflow is
    be talked out of. The referral offer is consideration for a REFERRAL: it goes to the friend, it
    is shown before she has written a word, and it is not conditional on her posting anything.
    scripts/_probe-review-gating.ts fails the build if any copy ties the two together.';
+
+-- ‼️ ADDITIVE RE-RUN SAFETY. The block above only runs on a database that has never seen this
+-- file. These four were added to the same file after it was written and before it was applied, so
+-- a database that got the earlier version still needs them.
+alter table public.client_service_offers
+  add column if not exists referrer_offer_text text;
+
+alter table public.referral_invites
+  add column if not exists mode            text not null default 'text',
+  add column if not exists claimed_name    text,
+  add column if not exists claimed_contact text,
+  add column if not exists claimed_service text;
+
+-- The code is the lookup key for the claim form, and the form is opened by somebody holding a
+-- link rather than a session, so it is read by code alone within one client's host.
+create index if not exists referral_invites_claim_idx
+  on public.referral_invites (code, expires_at desc);
+
+comment on column public.client_service_offers.referrer_offer_text is
+  'What the PATIENT WHO REFERS gets. Matthew, 2026-10-05: "refer a friend for 20% off on your
+   next session and the friend gets 20% off also."
+
+   ‼️ EARNED WHEN THE FRIEND CLAIMS, NEVER WHEN SHE WRITES A REVIEW, and that distinction is
+   the whole legal position of this column. A reward for referring is an ordinary refer-a-friend
+   programme. A reward for leaving a review is an incentivised review with an undisclosed
+   material connection, which is what the FTC endorsement rules reach and what
+   clients.review_incentive_flag exists to flag and talk a clinic out of. No copy anywhere may
+   connect the two; scripts/_probe-review-gating.ts fails the build if any does.';
+
+comment on column public.referral_invites.mode is
+  'Who put the link in front of the friend.
+
+   "text"     she did, from her own phone, with the clinic on the thread where the clinic has a
+              number on file. Her thumb is the send button, so she is the sender of record.
+   "internal" nobody did. The referral was recorded, she was told the clinic would reach out, and
+              a human at the clinic works it. No message left the building.
+
+   Both mint the same claim link and write the same row. SRT is not the sender in either, which
+   is why there is no provider, no number of ours and no outbound call anywhere in this lane.';
+
+comment on column public.referral_invites.claimed_name is
+  'What the FRIEND typed into the claim form at /r/{code}.
+
+   ‼️ SEPARATE FROM friend_name, WHICH IS WHAT THE PATIENT SAID. A referral where the two
+   disagree is not a fault to be reconciled: it is the clinic finding out that "Jamie" is Jamie''s
+   partner, or that the number was mistyped, and both are worth seeing.';

@@ -167,22 +167,19 @@ export const REVIEW_QUESTIONS_V4: ReviewQuestion[] = [
 /**
  * The v5 addition (2026-10-05), asked at the counter with the front desk beside her.
  *
- * ‼️ THE QUESTION ASKS FOR A SENTENCE AND NOT JUST A NAME, AND THAT IS NOT A COPY PREFERENCE.
- * "Who took care of you today?" is answered "Sarah". assembleBullet() does the only
- * transformation this tool is allowed to do, which is trim, collapse, capitalise, add a full
- * stop, so a bare name becomes the review line `Sarah.` That is a broken sentence in the middle
- * of a public review, and the fix must NOT be to have the tool write "Sarah took care of me"
- * around it: inserting our words into her review is the one thing this whole file exists to
- * refuse. So the QUESTION changes instead, and she answers "Sarah, she was great", which is a
- * sentence she wrote.
+ * ‼️ IT ASKS FOR A NAME AGAIN, BECAUSE THE LEAD LINE MADE THAT SAFE. For half a day this read
+ * "Who took care of you today, and how were they?", purely to stop a one-word answer assembling
+ * into the review line `Sarah.` That is a two-part question at a desk where somebody is reading
+ * it out loud, and it existed to work around the assembler rather than to ask anything better.
  *
- * The front desk still asks "who took care of you?" out loud, which is the choreography Matthew
- * wants and the reason she is handed the card at that moment. The screen asks for a little more.
+ * assembleLead() consumes this key into "Got {service} with {provider}.", so a bare name is now
+ * the RIGHT answer and the question is the one the front desk actually says. An answer that is a
+ * sentence still works: "Sarah, she was great" gives "Got lip filler with Sarah, she was great."
  */
 export const REVIEW_QUESTIONS_V5: ReviewQuestion[] = [
   {
     key: "provider",
-    prompt: "Who took care of you today, and how were they?",
+    prompt: "Who took care of you today?",
     label: "Who took care of me",
   },
 ];
@@ -229,6 +226,82 @@ export function readQuestionSetVersion(raw: unknown): string {
 }
 
 export type ReviewAnswers = Partial<Record<ReviewQuestion["key"], string>>;
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// THE LEAD LINE (v5, 2026-10-05), AND THE RULE IT BENDS
+//
+// ‼️ THIS IS SRT-AUTHORED TEXT INSIDE WHAT SHE COPIES, AND NOTHING ELSE IN THIS FILE IS.
+// assemblePlain's own docstring says the labels are kept out so that "what gets posted to Google
+// is one hundred percent her own words, with no SRT-authored text in it at all". Two words of
+// ours now travel with it: "Got" and "with". Matthew's call, 2026-10-05, and the reasoning is
+// his: the reviews worth having name the treatment, which is the whole pitch in the cold email
+// ("Got Botox here, looks so natural"), and a patient at a counter answers "who took care of
+// you?" with one word.
+//
+// ‼️ IT ALSO FIXES A REAL DEFECT RATHER THAN ONLY ADDING A FEATURE. Without it, `provider` had to
+// be its own bullet, so "Sarah" assembled into the review line `Sarah.` To avoid that the
+// question had to ask "and how were they?", which is a two-part question at a desk where the
+// front desk is reading it out loud. The template lets the question be the one the front desk
+// actually asks.
+//
+// ‼️ WHAT THE TEMPLATE MAY CONTAIN IS FENCED, AND THE FENCE IS THE DEFENCE. Connective words
+// around facts she typed, and nothing else. No adjective, no adverb, no sentiment, no claim about
+// a result, no business name, no superlative. "Got {service} with {provider}." states two things
+// she stated. "Had an amazing {service} with the wonderful {provider}" would be us writing her
+// review, which is the Rytr fact pattern and is what FTC 16 CFR Part 465 reaches.
+// scripts/_probe-review-gating.ts holds that fence against a word list.
+//
+// ‼️ AND SHE SEES IT BEFORE IT GOES ANYWHERE. The lead line lands in the same editable box as the
+// rest, above the same attestation and the same copy button, so the last hand on the text is
+// hers. That is the mitigation that makes two function words defensible where a generated
+// sentence would not be.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+/** Both halves of the lead line. A full stop belongs to the template, not to her fragment. */
+export const LEAD_WITH_PROVIDER = "Got {service} with {provider}.";
+export const LEAD_SERVICE_ONLY = "Got {service}.";
+
+/**
+ * The keys the lead line consumes, so they are not also emitted as their own bullets.
+ *
+ * ‼️ CONSUMED, NOT DUPLICATED. Without this, a v5 review would open "Got lip filler with Sarah."
+ * and then repeat "Lip filler." and "Sarah." as the next two lines.
+ */
+export const LEAD_KEYS: ReadonlyArray<ReviewQuestion["key"]> = ["service", "provider"];
+
+/**
+ * Her words, prepared to sit INSIDE a sentence rather than to be one.
+ *
+ * Differs from assembleBullet in exactly two ways, both because of where it lands: it does NOT
+ * capitalise (the word is mid-sentence) and it strips a trailing full stop rather than adding one
+ * (the template owns the punctuation). Everything else is the same single transformation: trim
+ * and collapse whitespace. No spelling correction, no grammar, no reordering, no words added.
+ *
+ * ‼️ IT CANNOT RESCUE A SENTENCE-SHAPED ANSWER, AND IT MUST NOT TRY. A patient who answers "I got
+ * lip filler" produces "Got I got lip filler with Sarah." That is a wart, it is visible in the
+ * editable box, and she can fix it in one tap. The alternative is this function detecting and
+ * rewriting her phrasing, which is the line the whole file refuses to cross for a cosmetic win.
+ */
+export function assembleFragment(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const collapsed = raw.replace(/\s+/g, " ").trim().replace(/[.]+$/, "").trim();
+  return collapsed || null;
+}
+
+/**
+ * The opening line of a v5 review, or null when there is no service to name.
+ *
+ * No service means no lead line at all and her answers assemble exactly as they did before, which
+ * is also why v1 and every stored v3 row are untouched by this: they have no `service` key.
+ */
+export function assembleLead(answers: ReviewAnswers): string | null {
+  const service = assembleFragment(answers.service);
+  if (!service) return null;
+  const provider = assembleFragment(answers.provider);
+  return provider
+    ? LEAD_WITH_PROVIDER.replace("{service}", service).replace("{provider}", provider)
+    : LEAD_SERVICE_ONLY.replace("{service}", service);
+}
 
 /**
  * The entire transformation, and nothing else.
@@ -289,9 +362,20 @@ export function assembleLabelled(answers: ReviewAnswers): LabelledBullet[] {
  * means what gets posted to Google is one hundred percent her own words, with no
  * SRT-authored text in it at all.
  */
-export function assemblePlain(answers: ReviewAnswers): string {
+export function assemblePlain(answers: ReviewAnswers, opts?: { lead?: boolean }): string {
   const lines: string[] = [];
+
+  // ‼️ OPT IN, AND THE DEFAULT IS THE OLD BEHAVIOUR BYTE FOR BYTE. Only the v5 walk passes
+  // `lead`. v1 calls this with no options, so the four-question chat is untouched, and so is any
+  // future reader that assembles a stored row: a v3 or v4 row read back comes out exactly what
+  // its author saw and approved. The flag lives at the call site rather than being inferred from
+  // the presence of a key, so "which flow was this" is a decision somebody wrote down.
+  const lead = opts?.lead ? assembleLead(answers) : null;
+  if (lead) lines.push(lead);
+
   for (const question of ALL_REVIEW_QUESTIONS) {
+    // The lead line already said these two. Skipped only when it actually rendered.
+    if (lead && LEAD_KEYS.includes(question.key)) continue;
     const text = assembleBullet(answers[question.key]);
     if (text) lines.push(text);
   }

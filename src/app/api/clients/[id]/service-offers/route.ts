@@ -34,6 +34,8 @@ interface IncomingRow {
   serviceLabel?: unknown;
   priceLabel?: unknown;
   offerText?: unknown;
+  /** What the patient who refers gets. Optional: plenty of clinics reward only the friend. */
+  referrerOfferText?: unknown;
   excluded?: unknown;
 }
 
@@ -80,6 +82,7 @@ export async function POST(
     service_label: string;
     price_label: string | null;
     offer_text: string | null;
+    referrer_offer_text: string | null;
     excluded: boolean;
     sort_order: number;
   }> = [];
@@ -99,6 +102,7 @@ export async function POST(
       service_label: serviceLabel,
       price_label: text(raw?.priceLabel, MAX_LABEL),
       offer_text: text(raw?.offerText, MAX_OFFER),
+      referrer_offer_text: text(raw?.referrerOfferText, MAX_OFFER),
       excluded: raw?.excluded === true,
       sort_order: rows.length,
     });

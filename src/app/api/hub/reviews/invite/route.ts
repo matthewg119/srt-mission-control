@@ -33,6 +33,7 @@ import {
   INVITE_CHANNELS,
   inviteExpiry,
   normaliseCode,
+  readInviteMode,
   templateByKey,
   type InviteChannel,
 } from "@/lib/hub/referral-invite";
@@ -52,10 +53,15 @@ function text(raw: unknown, max: number): string | null {
   return trimmed ? trimmed.slice(0, max) : null;
 }
 
-/** Anything unrecognised becomes the text channel. The value lands in a not-null column. */
-function readChannel(raw: unknown): InviteChannel {
+/**
+ * The channel, or null.
+ *
+ * ‼️ NULL IS CORRECT FOR `internal` MODE AND NOT A MISSING VALUE. Nothing was sent, so there was
+ * no channel, and defaulting it to "sms" would record a text message that never existed.
+ */
+function readChannel(raw: unknown): InviteChannel | null {
   const hit = INVITE_CHANNELS.find((c) => c.key === raw);
-  return hit ? hit.key : "sms";
+  return hit ? hit.key : null;
 }
 
 export async function POST(req: Request): Promise<NextResponse> {
@@ -84,6 +90,8 @@ export async function POST(req: Request): Promise<NextResponse> {
     code?: unknown;
     friendName?: unknown;
     friendContact?: unknown;
+    referrerOfferText?: unknown;
+    mode?: unknown;
     channel?: unknown;
   };
   try {
@@ -119,6 +127,8 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   const serviceLabel = text(body.serviceLabel, MAX_FIELD);
   const templateKey = templateByKey(text(body.templateKey, 40) ?? "").key;
+  const mode = readInviteMode(body.mode);
+  const referrerOfferText = text(body.referrerOfferText, MAX_OFFER);
 
   const { data, error } = await supabaseAdmin
     .from("referral_invites")
@@ -128,14 +138,19 @@ export async function POST(req: Request): Promise<NextResponse> {
       // writes her review, so at this point there is usually no submission row yet.
       submission_id: text(body.submissionId, 64),
       service_label: serviceLabel,
-      offer_snapshot: { serviceLabel, offerText, templateKey },
+      // BOTH deals, frozen. A later edit to the clinic's offers must not be able to change what
+      // either person was promised: the friend has a text message quoting one of them.
+      offer_snapshot: { serviceLabel, offerText, referrerOfferText, templateKey },
       code,
       friend_name: text(body.friendName, MAX_FIELD),
       friend_contact: text(body.friendContact, MAX_FIELD),
+      mode,
       channel: readChannel(body.channel),
-      // Recorded because she opened a composed message, not because anything was delivered. We
-      // are not the sender and cannot know whether she pressed send.
-      sent_at: new Date().toISOString(),
+      // ‼️ ONLY SET WHEN A MESSAGE WAS ACTUALLY OPENED. In `internal` mode nothing was sent, so
+      // this stays null rather than recording a delivery that did not happen. Even in `text`
+      // mode it means "she got as far as her keyboard": we are not the sender and cannot know
+      // whether she pressed send.
+      sent_at: mode === "text" ? new Date().toISOString() : null,
       expires_at: inviteExpiry().toISOString(),
     })
     .select("id")

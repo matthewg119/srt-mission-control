@@ -1475,18 +1475,25 @@ eq(
 // row written last month comes back byte for byte what its author saw and approved. Reorder the
 // spread and stored reviews silently re-assemble into an order nobody agreed to.
 {
-  const { ALL_REVIEW_QUESTIONS, REVIEW_QUESTIONS, REVIEW_QUESTIONS_V4 } =
+  const { ALL_REVIEW_QUESTIONS, REVIEW_QUESTIONS, REVIEW_QUESTIONS_V4, REVIEW_QUESTIONS_V5 } =
     require("../src/lib/hub/review-assemble") as typeof import("../src/lib/hub/review-assemble");
 
+  // ‼️ ONE EQUALITY OVER EVERY SET, RATHER THAN A SLICE PER SET, AND THAT IS A TIGHTENING.
+  //
+  // This used to be two slice comparisons, v3 then "the rest is v4". Appending v5 on 2026-10-05
+  // broke the second one, which is exactly what it was for: it noticed. But "the rest" would have
+  // gone on silently accepting a v6 appended inside v5's slice, so the replacement pins the WHOLE
+  // concatenation in order. Every future set has to be added here by name, which is one line and
+  // is the point.
   ok(
-    "ALL_REVIEW_QUESTIONS opens with the v3 set, in order",
-    JSON.stringify(ALL_REVIEW_QUESTIONS.slice(0, REVIEW_QUESTIONS.length)) ===
-      JSON.stringify(REVIEW_QUESTIONS)
+    "ALL_REVIEW_QUESTIONS is exactly v3 then v4 then v5, in order",
+    JSON.stringify(ALL_REVIEW_QUESTIONS) ===
+      JSON.stringify([...REVIEW_QUESTIONS, ...REVIEW_QUESTIONS_V4, ...REVIEW_QUESTIONS_V5])
   );
   ok(
-    "and closes with the v4 set, in order",
-    JSON.stringify(ALL_REVIEW_QUESTIONS.slice(REVIEW_QUESTIONS.length)) ===
-      JSON.stringify(REVIEW_QUESTIONS_V4)
+    "and it opens with the v3 set, so a v3 row re-assembles byte for byte",
+    JSON.stringify(ALL_REVIEW_QUESTIONS.slice(0, REVIEW_QUESTIONS.length)) ===
+      JSON.stringify(REVIEW_QUESTIONS)
   );
   ok(
     "no key appears in both sets",

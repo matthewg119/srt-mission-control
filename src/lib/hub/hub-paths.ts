@@ -48,6 +48,23 @@ export const HUB_SLUG = /^\/[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$/;
 export const HUB_ANSWER = /^\/answers(?:\/[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?)?$/;
 
 /**
+ * The referral claim form: /r/{CODE}, and nothing else under /r.
+ *
+ * ‼️ TWO SEGMENTS WITH A LITERAL FIRST ONE, EXACTLY THE SHAPE HUB_ANSWER IS ALLOWED TO BE, and
+ * for the same reason: the first segment is the fixed word `r`, so nothing under /api, /dashboard,
+ * /hub or /_next can match and neither can /r/../anything. The second segment is a referral code
+ * and is therefore MUCH narrower than a slug: upper-case letters and digits only, 4 to 12 of
+ * them. No dot, no hyphen, no slash, no lower case.
+ *
+ * ‼️ A PUBLIC FORM ON EVERY CLIENT HOSTNAME IS A REAL SURFACE, so what it can do is the thing to
+ * check rather than this pattern. The page behind it resolves the code WITHIN the host's own
+ * client, so a code from one clinic cannot be claimed on another's domain, and the form takes a
+ * name and a number and writes them to the one row that code names. It reads nothing else and it
+ * is not a session.
+ */
+export const HUB_CLAIM = /^\/r\/[A-Z0-9]{4,12}$/;
+
+/**
  * The only API routes reachable on a client-controlled hostname.
  *
  * ‼️ NAMES, NOT A PREFIX, AND IT STAYS THAT WAY. Turning this into a startsWith on "/api/hub/"
@@ -64,6 +81,7 @@ export const HUB_ANSWER = /^\/answers(?:\/[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?)?
 export const HUB_API: ReadonlySet<string> = new Set([
   "/api/hub/reviews/submit",
   "/api/hub/reviews/invite",
+  "/api/hub/reviews/claim",
 ]);
 
 /**
@@ -75,7 +93,13 @@ export const HUB_API: ReadonlySet<string> = new Set([
  * see externalPathDecision() below, which is the whole decision and the thing to call.
  */
 export function isHubShape(path: string): boolean {
-  return path === "/" || HUB_FILES.has(path) || HUB_SLUG.test(path) || HUB_ANSWER.test(path);
+  return (
+    path === "/" ||
+    HUB_FILES.has(path) ||
+    HUB_SLUG.test(path) ||
+    HUB_ANSWER.test(path) ||
+    HUB_CLAIM.test(path)
+  );
 }
 
 /**

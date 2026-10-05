@@ -23,21 +23,26 @@ import fs from "node:fs";
 import path from "node:path";
 
 import {
-  DEFAULT_SEND_MODE,
+  DEFAULT_INVITE_MODE,
   INVITE_CHANNELS,
   INVITE_TEMPLATES,
   INVITE_TTL_DAYS,
+  claimUrl,
   composeInvite,
   dialable,
   fillInvite,
   inviteCode,
   inviteExpiry,
   normaliseCode,
+  readInviteMode,
   templateByKey,
 } from "../src/lib/hub/referral-invite";
+import { HUB_API, HUB_CLAIM, externalPathDecision } from "../src/lib/hub/hub-paths";
 
 const MODULE = "src/lib/hub/referral-invite.ts";
 const ROUTE = "src/app/api/hub/reviews/invite/route.ts";
+const CLAIM_ROUTE = "src/app/api/hub/reviews/claim/route.ts";
+const CLAIM_PAGE = "src/app/hub/[host]/r/[code]/page.tsx";
 const CLIENT = "src/app/hub/[host]/reviews/virtual-agent-client.tsx";
 
 let failures = 0;
@@ -77,27 +82,27 @@ for (const forbidden of ["fetch(", "twilio", "loopmessage", "ringcentral", "send
   );
 }
 
+// ── 1b. THE TWO MODES, AND NEITHER OF THEM IS US SENDING. ──────────────────
+//
+// ‼️ THE WHOLE POINT OF OFFERING TWO IS THAT THE PATIENT'S WALK IS IDENTICAL UP TO THE INVITE.
+// `text` is her thumb; `internal` is a human at the clinic. There is deliberately no third mode
+// in which a server sends anything, and `readInviteMode` collapses every unrecognised value onto
+// the safe one rather than inventing a state the UI has no arm for.
 check(
-  DEFAULT_SEND_MODE === "device",
-  "the default send mode is her device, not the clinic's number",
-  `DEFAULT_SEND_MODE is "${DEFAULT_SEND_MODE}"`
+  DEFAULT_INVITE_MODE === "text",
+  "the default mode is her own phone",
+  `DEFAULT_INVITE_MODE is "${DEFAULT_INVITE_MODE}"`
 );
+check(readInviteMode("internal") === "internal", "internal is readable off a stored value");
+check(readInviteMode("clinic") === "text", "and an unknown mode falls back, never through");
+check(readInviteMode(undefined) === "text", "as does a missing one");
 
-// `clinic` is declared so the seam is typed, and refused so it cannot be half-built.
-{
-  const result = composeInvite({
-    channel: "sms",
-    mode: "clinic",
-    friendContact: "+15555550111",
-    clinicContact: "+15555550142",
-    message: "hello",
-  });
-  check(
-    result.kind === "unavailable",
-    "asking to send from the clinic's own number is refused, not silently downgraded",
-    `got "${result.kind}"`
-  );
-}
+// ‼️ NO MODE NAMES A SENDER OF OURS. The failure to guard against is somebody adding a third mode
+// that posts to a provider, which would make every sentence in this file's header false.
+check(
+  !/"clinic"|'clinic'/.test(moduleSrc.replace(/clinicContact|clinicPhone/g, "")),
+  "no mode sends from a number of the clinic's or ours"
+);
 
 // ── 2. ONLY THE TEXT CHANNEL CLAIMS TO BE THREE-WAY. ────────────────────────
 //
@@ -211,8 +216,8 @@ check(dialable("555.555.0111") === "5555550111", "and a local number keeps no pu
     friendName: "Jamie",
     businessName: "Med Spa 123",
     serviceLabel: "lip filler",
-    offerText: "80% off their first visit",
-    code: "ACDEFG",
+    offerText: "20% off their first visit",
+    link: "https://reviews.medspa123.com/r/ACDEFG",
   };
   for (const template of INVITE_TEMPLATES) {
     const filled = fillInvite(template.body, facts);
@@ -223,9 +228,15 @@ check(dialable("555.555.0111") === "5555550111", "and a local number keeps no pu
       leftover ? `found: ${leftover.join(", ")}` : filled.slice(0, 72)
     );
     check(
-      filled.includes(facts.code) && filled.includes(facts.offerText),
-      `and carries the code and the offer`,
+      filled.includes(facts.link) && filled.includes(facts.offerText),
+      `and carries the claim link and the offer`,
       undefined
+    );
+    // ‼️ HER OWN REWARD IS NEVER IN THE FRIEND'S MESSAGE. A friend reading "and she gets 20% off
+    // for sending you this" is being told they are the mechanism of somebody else's discount.
+    check(
+      !/you(r)? (next|own)|she gets|they get .*for sending/i.test(filled),
+      `and says nothing about what SHE gets`
     );
   }
   check(INVITE_TEMPLATES.length >= 3, "there are at least three wordings to choose from");
@@ -305,6 +316,73 @@ check(
     !/twilio|loopmessage|wa\.me|sms:/i.test(clientSrc),
     "and builds no message href of its own",
     "composeInvite owns every link, so there is one place the three-way rule lives"
+  );
+}
+
+// ── 9. THE CLAIM FORM IS A PUBLIC PAGE ON EVERY CLIENT HOSTNAME. ───────────
+//
+// ‼️ THIS IS THE RISKIEST THING THE FEATURE ADDS, so it gets the most checks. /r/{CODE} is
+// reachable on every domain any client has ever pointed at us, with no session, by anybody. What
+// keeps it safe is not the URL pattern but what the code can do once resolved: nothing but name
+// one row belonging to the host's own client.
+{
+  const claimRouteSrc = stripComments(read(CLAIM_ROUTE));
+  const claimPageSrc = stripComments(read(CLAIM_PAGE));
+
+  // The shape. Narrower than a slug: upper case and digits only, so no dot, hyphen or traversal.
+  check(HUB_CLAIM.test("/r/ACDEFG"), "a claim code path is allowed");
+  for (const bad of ["/r/", "/r/ab", "/r/acdefg", "/r/AC.DEF", "/r/AC/DEF", "/r/../etc", "/r/ACDEFGHIJKLMN"]) {
+    check(!HUB_CLAIM.test(bad), `and ${bad} is not`);
+  }
+  check(externalPathDecision("/r/ACDEFG") === "rewrite", "it is rewritten into the host's own subtree");
+
+  // ‼️ BARE /r REWRITES AND THAT IS CORRECT, NOT A HOLE. It is one lowercase segment, so
+  // HUB_SLUG matches it and it becomes a lookup for a published page with the slug "r", which
+  // 404s. This is the same reasoning externalPathDecision's own header spells out for
+  // `/dashboard`: what protects a one-segment path is the rewrite into the host's subtree, not a
+  // denylist. Asserting "refuse" here would have been asserting a behaviour the design does not
+  // have, which is how a probe ends up documenting a rule nobody implemented.
+  check(externalPathDecision("/r") === "rewrite", "bare /r is a page-slug lookup, never the form");
+  check(
+    externalPathDecision("/r/ACDEFG/extra") === "refuse",
+    "and a third segment under it is refused"
+  );
+
+  // ‼️ SCOPED TO THE RESOLVED CLIENT IN BOTH PLACES. A global lookup on `code` alone would turn
+  // six readable characters into a cross-tenant handle, which is the one way this page could
+  // leak between clinics.
+  for (const [label, src] of [["the claim page", claimPageSrc], ["the claim route", claimRouteSrc]] as const) {
+    check(
+      /\.eq\("client_id", client(Id)?\.?i?d?"?\)?/.test(src) || /eq\("client_id"/.test(src),
+      `${label} scopes the code to the resolved client`
+    );
+    check(/eq\("code"/.test(src), `${label} looks the code up by code`);
+    check(!/x-forwarded-for/i.test(src), `${label} never reads x-forwarded-for`);
+    check(!/claude|anthropic/i.test(src), `${label} has no model in it`);
+  }
+
+  check(
+    /x-hub-host/.test(claimRouteSrc) && /resolved\.kind !== "reviews"/.test(claimRouteSrc),
+    "the claim route takes its client from the host header and refuses a non-reviews host"
+  );
+  check(HUB_API.has("/api/hub/reviews/claim"), "and the route is on the hub allowlist by name");
+
+  // ‼️ ONE ANSWER FOR EVERY REFUSAL. Unknown, expired, wrong clinic and already claimed must be
+  // indistinguishable, or six characters become enumerable with feedback.
+  check(
+    /This link is not open any more\./.test(claimRouteSrc),
+    "every refusal gives the same reason"
+  );
+  check(
+    /\.is\("claimed_at", null\)/.test(claimRouteSrc),
+    "and a second claim cannot overwrite the first person's details"
+  );
+
+  // The page must not show the patient's name to the friend: she was never asked whether it could
+  // be put on a web page for them.
+  check(
+    !/friend_name|offer_snapshot[\s\S]{0,120}referrer/.test(claimPageSrc),
+    "the claim page shows the friend neither the referrer's name nor her reward"
   );
 }
 
