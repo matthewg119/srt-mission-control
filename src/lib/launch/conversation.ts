@@ -13,12 +13,22 @@
 // wording. Same posture as classifyHost(), HUB_SLUG and externalPathDecision(): deny by default,
 // and widening it is an edit somebody has to make on purpose.
 //
-// ‼️ TWO THINGS ARE DELIBERATELY ABSENT FROM THE UNION AND MUST STAY ABSENT.
-//   - buying a domain. domain.ts rule 3: never called by a runner, a cron or a retry, only by a
-//     person pressing a button that showed them the price. It is the only code here that spends
-//     money and a conversation is exactly the surface that should not be able to.
-//   - publishing a page. publishPage() is the one publisher and needs an explicit yes.
-// Adding either to ACTION_KINDS is not a feature, it is the removal of a control.
+// ‼️ BUYING A DOMAIN IS DELIBERATELY ABSENT FROM THE UNION AND MUST STAY ABSENT.
+// domain.ts rule 3: never called by a runner, a cron or a retry, only by a person pressing a button
+// that showed them the price. It is the only code here that spends money, and a conversation is
+// exactly the surface that should not be able to.
+//
+// ‼️ PUBLISHING WAS ALSO ABSENT UNTIL 2026-10-05 AND IS NOW HERE, ON MATTHEW'S EXPLICIT
+// INSTRUCTION, after the trade-off was put to him in those words. He wants the whole onboarding
+// driven from this chat and nothing else. What that removed is the SURFACE restriction, and only
+// that. Every rail publishing has is inside publishPage() and is untouched:
+//   - the Day-0 wall still refuses while clients.day_0_archived_at is null,
+//   - the quality gate still refuses, and there is still no waiver on this surface,
+//   - with more than one destination wired it still REFUSES rather than choosing, and the choice
+//     comes back as a question he answers.
+// So a publish started by typing is the same publish, with the same three ways to be told no. What
+// is gone is "a conversation cannot start one". Do not quietly re-add a fourth rail here to
+// compensate: the rails live in publishPage, one copy, for both lanes.
 
 import { callClaudeJSON, callClaudeText, type ClaudeModel } from "@/lib/claude-calls";
 import { hasBannedDash } from "@/lib/copy-guard";
@@ -37,6 +47,13 @@ import { searchDomains } from "./domain";
 import { dnsFacts } from "./dns-facts";
 import { slackLaneSummary } from "@/lib/clients/lane-summary";
 import { publishingFacts } from "./publishing-facts";
+import {
+  LAUNCH_PAGE_ACTIONS,
+  isLaunchPageAction,
+  launchPagesState,
+  pageRunText,
+  runLaunchPagesAction,
+} from "./pages";
 
 const TURN_MODEL: ClaudeModel = "claude-sonnet-4-6";
 
@@ -77,9 +94,38 @@ export const ACTION_KINDS = [
   // DNS, and make it answer worse about everything to answer better about one thing. As an action
   // the model asks for the one it needs, which is the same shape search_domains and check_dns use.
   "read_document",
+  // ‼️ READ ONLY. Where the page run stands: what is planned, which pages still want a headline or
+  // a skeleton, how many have a body, and what the next stage is. It belongs as an action rather
+  // than always-on context for the reason read_document does: it is several reads and a model-free
+  // gate check, and most turns are not about pages.
+  "read_pages",
+  // ‼️ ONE ACTION WITH A `stage`, NOT FOURTEEN FLAT ENTRIES, AND THE REASON IS THE ORDER.
+  // The stages run plan, approve, headlines, a pick each, skeletons, research, draft, and the whole
+  // difficulty of this lane is that they cannot be done out of order: `plan approve` stopped
+  // drafting on 2026-09-14 precisely so every decision lands before a page is written. A single
+  // action whose argument is an ordered list teaches that order; fourteen siblings in a prompt
+  // teach nothing and invite the model to reach for the last one. The server refuses an
+  // out-of-order stage anyway, off the same readBatch the Slack thread refuses on.
+  "run_pages",
+  // ‼️ ITS OWN KIND RATHER THAN A run_pages STAGE, BECAUSE IT USED TO BE FORBIDDEN HERE.
+  // See the note at the top of this file. Giving it a name of its own keeps it visible in the
+  // prompt, in the results and in this list, instead of hiding the one genuinely irreversible
+  // thing in the lane inside a generic verb.
+  "publish_page",
+  "unpublish_page",
 ] as const;
 
 export type ActionKind = (typeof ACTION_KINDS)[number];
+
+/**
+ * The stages `run_pages` accepts: every page action except the two that publish.
+ *
+ * Derived from the action layer rather than retyped, so a stage added there is offered here and a
+ * stage renamed there cannot go stale here.
+ */
+const PAGE_RUN_STAGES: readonly string[] = LAUNCH_PAGE_ACTIONS.filter(
+  (a) => a !== "publish" && a !== "unpublish"
+);
 
 export interface LaunchAction {
   kind: ActionKind;
@@ -92,6 +138,25 @@ export interface LaunchAction {
   domains?: string[];
   /** hand_prompt, and read_document: which document to open. */
   which?: string;
+  /** run_pages: which stage of the page run. One of PAGE_RUN_STAGES. */
+  stage?: string;
+  /** run_pages: which planned page, by the rank the plan shows. */
+  rank?: number;
+  /** run_pages stage=headline_pick: which of the three candidates, 1 to 3. */
+  pick?: number;
+  /** run_pages stage=ladder_pick: the rung, 5 (furthest from buying) to 1. */
+  rung?: number;
+  /** run_pages: a title, a CTA sentence, or the pasted research answer. */
+  text?: string;
+  /** keywords_select and keywords_unselect: phrases exactly as the pool spells them. */
+  phrases?: string[];
+  /** strategy_set: the pillar phrase, and the supports under it. */
+  pillar?: string;
+  supports?: string[];
+  /** keywords_add: the cluster the new phrases join. */
+  category?: string;
+  /** publish_page: which page, by the rank the plan shows. */
+  destinationId?: string;
 }
 
 export interface ActionResult {
@@ -129,7 +194,7 @@ export interface BoardContext {
  * and says why, and a key outside the set is refused by executeAction rather than trusted.
  */
 export async function boardContext(clientId: string): Promise<BoardContext> {
-  const [board, docs, offer, dns, slack, publishing] = await Promise.all([
+  const [board, docs, offer, dns, slack, publishing, pageRun] = await Promise.all([
     launchBoard(clientId),
     foundationStatus(clientId),
     currentOffer(clientId),
@@ -143,6 +208,11 @@ export async function boardContext(clientId: string): Promise<BoardContext> {
     // the client being asked about. See lib/clients/lane-summary.ts for why the import is allowed.
     slackLaneSummary(clientId).catch(() => null),
     publishingFacts(clientId).catch(() => null),
+    // ‼️ ON EVERY TURN, BECAUSE "0 pages" AND "nothing has started" ARE DIFFERENT FACTS.
+    // publishingFacts counts client_pages, which is empty until drafting, so seven rows waiting in
+    // page_plan were invisible and the chat answered "no page run has started yet" over them.
+    // Measured on SRT, 2026-10-05. See pageRunText's own header.
+    pageRunText(clientId).catch(() => null),
   ]);
 
   const byKey = new Map(board.map((e) => [e.step.key, e]));
@@ -184,6 +254,8 @@ export async function boardContext(clientId: string): Promise<BoardContext> {
       "",
       publishing ? publishing.text : "PUBLISHING: could not be read just now. Say so rather than guessing.",
       "",
+      pageRun ?? "THE PAGE RUN: could not be read just now. Say so rather than guessing.",
+      "",
       slack?.present
         ? slack.text
         : "THE SLACK BOARD: this client is not on it. Only the steps above exist for them.",
@@ -218,9 +290,14 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "WHAT YOU MAY DO:",
     "- Return a plan of actions. The server executes them; you do not.",
     "- You may only name a step from the list of steps you may act on. Never invent a step key.",
-    "- You may NOT buy a domain and you may NOT publish a page. There is no action for either,",
-    "  because both spend something that cannot be taken back. Tell him to press the button.",
-    "- Never change keywords and never touch the concierge without him saying yes in words.",
+    "- You may NOT buy a domain. There is no action for it, because it spends money that cannot be",
+    "  taken back. Tell him to press the button on the board.",
+    "- You MAY publish, with publish_page. It still goes through publishPage(), so the Day-0 wall,",
+    "  the quality gate and the destination question all still apply and you cannot talk past any",
+    "  of them. Never publish unless he asked for it in this turn or the one before.",
+    "- You may change keywords and the strategy map, but ONLY when he says so in words. Never as a",
+    "  tidy-up, never as a side effect of a question, and never a phrase he did not name.",
+    "- Never touch the concierge without him saying yes in words.",
     `- If you are less than ${Math.round(ACT_THRESHOLD * 100)} percent sure, return no actions and ask instead.`,
     "- ‼️ THAT BAR DOES NOT APPLY TO complete_step, read_document, check_dns, search_domains or",
     "  read_offer. Those either prove themselves or change nothing: a tick runs the step's verifier",
@@ -291,6 +368,27 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     '- Use the hand_prompt action with which="avatar_chain" when the four documents are not in hand.',
     "- Page copy ALWAYS goes through a research prompt first. Never draft it from nothing.",
     "",
+    "THE PAGE RUN, WHICH IS HOW A KEYWORD BECOMES A LIVE PAGE:",
+    "- ‼️ THE ORDER IS THE WHOLE DIFFICULTY AND IT CANNOT BE SHORTCUT. Approving the plan STOPPED",
+    "  drafting on 2026-09-14, on purpose, so that every decision lands before a word is written:",
+    "    plan_new -> plan_approve -> headlines_write -> headline_pick (one per page)",
+    "    -> skeletons_write -> research_prompt -> research_file -> draft_wave -> publish_page",
+    "  client_pages rows, the only thing publishable, appear at draft_wave and not before.",
+    "- Run ONE stage per turn and say what came back. Do not chain the whole run in one plan: each",
+    "  stage is a decision he may want to look at, and several of them are model calls.",
+    "- headline_pick needs rank and pick. Every page needs its own pick before skeletons_write.",
+    "- research_prompt hands back a prompt. He runs it elsewhere and pastes the answer, and you file",
+    "  that with research_file and text. You never do the research yourself.",
+    "- draft_wave writes one pass and tells you how many are left. If any are left, say so and offer",
+    "  to run it again. That is the design, not a failure: a page with a body is never rewritten.",
+    "- Before the plan exists, the strategy map is what to talk about: one pillar and six supports,",
+    "  listed under PUBLISHING. Changing them with strategy_set changes every page that follows, so",
+    "  re-propose the plan after.",
+    "- ‼️ THE PAGES ARE NOT THE PLAN'S TITLES. plan_new writes a working title per page off the",
+    "  keyword. If he says he does not recognise a title, that is the title being new, not the",
+    "  keyword being wrong: read_pages shows which keyword each page aims at, and the keywords came",
+    "  from his own picks. Check before agreeing something was invented.",
+    "",
     "THE ACTIONS:",
     "  propose_vocabulary   read the documents and propose the words. No arguments.",
     "  confirm_vocabulary   only after he has seen a proposal and agreed.",
@@ -308,6 +406,31 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "  check_dns            resolve the records and report what is actually live. No arguments.",
     "                       Free and read only. Use it whenever he asks whether DNS is working,",
     "                       rather than reading the stored status back at him.",
+    "  read_pages           where the page run stands: every planned page, the keyword it aims at,",
+    "                       and what each one still needs. Free and read only. Use it before",
+    "                       answering anything about the pages, and before publishing.",
+    "  run_pages            needs stage, one of the stages listed above. Also takes rank and pick",
+    "                       (headline_pick), rank (plan_drop, plan_swap, plan_edit, plan_cta),",
+    "                       text (plan_edit, plan_cta, research_file), rung (ladder_pick),",
+    "                       phrases (keywords_add, keywords_drop, keywords_select,",
+    "                       keywords_unselect), category (keywords_add), and pillar plus supports",
+    "                       (strategy_set).",
+    "",
+    "THE FOUR KEYWORD VERBS, WHICH ARE FOUR DIFFERENT DECISIONS. Do not use one for another:",
+    "  keywords_add         MINTS phrases that do not exist yet, approves them and puts them in the",
+    "                       page pool. Needs a category, which you propose from the ones already in",
+    "                       use and he confirms. A phrase that is a marketing line rather than a",
+    "                       search is stored as a hook and can never be a page's keyword.",
+    "  keywords_drop        out of both pools AND remembered as unwanted, so a later expansion will",
+    "                       not propose it again. This is what he means by remove.",
+    "  keywords_select      puts an EXISTING approved phrase into the page pool. It cannot create",
+    "                       one: a phrase that is not already in the pool is refused by name.",
+    "  keywords_unselect    out of the page pool only. Still approved, still measured at Day 0.",
+    "  publish_page         needs rank. Goes through publishPage(), so it can be refused three ways:",
+    "                       Day 0 not archived, the quality gate, or more than one destination wired",
+    "                       and none chosen. The last one is a QUESTION: it comes back with the list,",
+    "                       you show him both and he picks, then you pass destinationId.",
+    "  unpublish_page       needs rank. Taking a page down is never gated: it is the remedy.",
     "",
     ctx.text,
     "",
@@ -536,6 +659,112 @@ ${body}`,
     return { kind, ok: true, detail: lines.join(". ") };
   }
 
+  if (kind === "read_pages") {
+    const state = await launchPagesState(clientId);
+    if ("error" in state) return { kind, ok: false, detail: state.error };
+
+    if (!state.plan.length) {
+      return {
+        kind,
+        ok: true,
+        detail: state.ready
+          ? "No pages planned yet. run_pages stage=plan_new proposes one pillar and six supports off the selected keywords."
+          : `No pages planned, and nothing can be planned yet. Waiting on: ${state.missing.join("; ")}.`,
+      };
+    }
+
+    const rows = state.plan.map((p) => {
+      const marks = [
+        p.headline ? "headline" : null,
+        p.hasOutline ? "skeleton" : null,
+        p.hasBody ? "body" : null,
+        p.pageStatus === "published" ? "LIVE" : null,
+      ].filter(Boolean);
+      return `  ${p.rank}. [${p.role}] ${p.headline ?? p.workingTitle} <- ${p.targetKeyword} (${p.status}${marks.length ? ", " + marks.join(", ") : ""})`;
+    });
+
+    return {
+      kind,
+      ok: true,
+      detail: [
+        `${state.stageText} ${state.proposed} proposed, ${state.approved} approved, ${state.drafted} with a body, ${state.outstanding} still to draft.`,
+        ...rows,
+        state.needHeadline.length ? `still need a headline: ${state.needHeadline.join(", ")}` : "",
+        state.needSkeleton.length ? `still need a skeleton: ${state.needSkeleton.join(", ")}` : "",
+        state.day0ArchivedAt ? "" : "Day 0 is not archived, so publishing will refuse. Drafting is not gated.",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    };
+  }
+
+  if (kind === "run_pages") {
+    const stage = (action.stage ?? "").trim();
+    // ‼️ NARROWED, NOT CAST, for the reason the step key is: the string came out of a model.
+    if (!isLaunchPageAction(stage) || !PAGE_RUN_STAGES.includes(stage)) {
+      return {
+        kind,
+        ok: false,
+        detail: `"${stage}" is not a stage of the page run. The stages are: ${PAGE_RUN_STAGES.join(", ")}.`,
+      };
+    }
+
+    const res = await runLaunchPagesAction({
+      clientId,
+      action: stage,
+      actor,
+      rank: action.rank ?? null,
+      pick: action.pick ?? null,
+      stage: action.rung ?? null,
+      text: action.text ?? null,
+      phrases: action.phrases ?? null,
+      category: action.category ?? null,
+      pillar: action.pillar ?? null,
+      supports: action.supports ?? null,
+    });
+
+    // ‼️ THE REFUSAL IS PASSED THROUGH WORD FOR WORD, same rule as a step refusal. These name work
+    // that is owed in the order it is owed, and rewording them is how this surface starts
+    // disagreeing with the engine it is a surface for.
+    return res.ok
+      ? { kind: `${kind}:${stage}`, ok: true, detail: res.message, ...(res.prompt ? { prompt: res.prompt } : {}) }
+      : { kind: `${kind}:${stage}`, ok: false, detail: res.error };
+  }
+
+  if (kind === "publish_page" || kind === "unpublish_page") {
+    const state = await launchPagesState(clientId);
+    if ("error" in state) return { kind, ok: false, detail: state.error };
+
+    // Addressed by RANK, which is what the plan shows him, and resolved to a page id here so the
+    // model never carries one. A rank with no drafted page is a refusal, not a guess.
+    const row = state.plan.find((p) => p.rank === action.rank);
+    if (!row) {
+      return { kind, ok: false, detail: `There is no page ${action.rank} in the plan. There are ${state.plan.length}.` };
+    }
+    if (!row.pageId) {
+      return { kind, ok: false, detail: `Page ${row.rank} has no body yet, so there is nothing to publish.` };
+    }
+
+    const res = await runLaunchPagesAction({
+      clientId,
+      action: kind === "publish_page" ? "publish" : "unpublish",
+      actor,
+      pageId: row.pageId,
+      destinationId: action.destinationId ?? null,
+    });
+
+    if (!res.ok) {
+      // The destination refusal is a QUESTION, so it carries the list he picks from. The other two
+      // are rails and say what is wrong.
+      const choices =
+        res.refusal?.blockedBy === "destination"
+          ? ` Choose one and say which: ${res.refusal.choices.map((c) => `${c.label} (${c.id})`).join(", ")}.`
+          : "";
+      return { kind, ok: false, detail: `${res.error}${choices}` };
+    }
+    return { kind, ok: true, detail: [res.message, res.pageUrl ? `Live at ${res.pageUrl}` : ""].filter(Boolean).join(" ") };
+  }
+
   return { kind, ok: false, detail: `${kind} is not an action this lane has.` };
 }
 
@@ -746,7 +975,19 @@ export async function runTurn(args: {
   // ‼️ `skip_step` IS STILL GATED, AND THE DIFFERENCE IS THE WHOLE POINT. A skip has no verifier:
   // it is an assertion that something does not apply, recorded with a reason and nothing to check
   // it against. That is exactly the shape of claim a 90 percent confidence bar exists for.
-  const SELF_PROVING: ReadonlySet<string> = new Set(["complete_step", "read_document", "check_dns", "search_domains", "read_offer"]);
+  //
+  // ‼️ `read_pages` IS ON THE LIST AND `run_pages` IS NOT, WHICH IS THE SAME LINE AS ABOVE.
+  // Reading where the page run stands changes nothing. Running a stage writes rows, spends a model
+  // call, and in the case of publish_page puts words on the internet under a client's name, so all
+  // of those stay behind the bar: if it is not sure he asked for it, it should ask.
+  const SELF_PROVING: ReadonlySet<string> = new Set([
+    "complete_step",
+    "read_document",
+    "check_dns",
+    "search_domains",
+    "read_offer",
+    "read_pages",
+  ]);
   const proposed = plan.actions ?? [];
   const risky = proposed.filter((a) => !SELF_PROVING.has(a.kind));
   const heldBack = plan.confidence < ACT_THRESHOLD && risky.length > 0;

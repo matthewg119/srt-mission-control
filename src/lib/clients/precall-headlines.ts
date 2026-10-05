@@ -49,8 +49,13 @@ export interface PickedAngle {
 /** Matthew asked for thirty three every time this runs. */
 export const PRE_CALL_HEADLINES = 33;
 
-/** One pillar and six supports. Must match PRE_CALL_SUPPORTS + 1 in page-plan.ts. */
-export const PRE_CALL_PAGES = 7;
+/**
+ * One pillar and ten supports. Must match PRE_CALL_SUPPORTS + 1 in page-plan.ts.
+ *
+ * Raised from 7 on 2026-10-05 with that constant. _probe-launch-pages.ts reads both out of the
+ * source and fails when they disagree, so this is no longer kept in step by a comment alone.
+ */
+export const PRE_CALL_PAGES = 11;
 
 /**
  * The fewest emotional rows this buyer needs before headlines may be written for them.

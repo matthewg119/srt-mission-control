@@ -544,7 +544,7 @@ Keywords: 200+ ways the offer is said, approved by me
 | [Done] reads | no table |
 | Dataset fields | 1 needed, 3 wanted |
 | Feeds | `client_keywords.selected_at` → 21 `pre_call_pages`; `keyword_serp_reads.keyword_id` → 21 `pre_call_pages` |
-| Downstream | steps 13 `custom_question_set`, 14 `page_candidates`, 21 `pre_call_pages` declare they wait on this; `client_keywords` is selected in 7 other file(s), e.g. `src/lib/clients/anchor-ladder.ts`, `src/lib/clients/archive.ts`, `src/lib/clients/keyword-cards.ts`; `keyword_clusters` is selected in 2 other file(s), e.g. `src/lib/clients/keyword-strategy.ts`, `src/lib/clients/serp-cards.ts` |
+| Downstream | steps 13 `custom_question_set`, 14 `page_candidates`, 21 `pre_call_pages` declare they wait on this; `client_keywords` is selected in 9 other file(s), e.g. `src/lib/clients/anchor-ladder.ts`, `src/lib/clients/archive.ts`, `src/lib/clients/keyword-cards.ts`; `keyword_clusters` is selected in 2 other file(s), e.g. `src/lib/clients/keyword-strategy.ts`, `src/lib/clients/serp-cards.ts` |
 
 **[Done] refuses on:**
 

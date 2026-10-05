@@ -50,13 +50,18 @@ export type KeywordOrigin = "harvest" | "research" | "expansion" | "measured" | 
 export const KEYWORD_FLOOR = 200;
 
 /**
- * One pillar plus six supports. The verifier refuses a set that cannot fill them.
+ * One pillar plus ten supports. The verifier refuses a set that cannot fill them.
  *
- * Was 9 (one pillar plus eight supports) until 2026-09-13, when Matthew set the onboarding batch
- * at 1 pillar + 6 supports. Kept in step with PRE_CALL_SUPPORTS in `page-plan.ts`: this is the
- * number of DISTINCT relevant keywords the plan needs, so it is 1 + PRE_CALL_SUPPORTS.
+ * Was 9 (one pillar plus eight supports) until 2026-09-13, then 7, and 11 from 2026-10-05 when
+ * Matthew set the onboarding batch at eleven pages. Kept in step with PRE_CALL_SUPPORTS in
+ * `page-plan.ts`: this is the number of DISTINCT relevant keywords the plan needs, so it is
+ * 1 + PRE_CALL_SUPPORTS.
+ *
+ * ‼️ HARD-CODED RATHER THAN IMPORTED, to keep the keyword set free of a dependency on the planner,
+ * and _probe-launch-pages.ts reads both numbers out of the source and fails when they disagree.
+ * The comment is no longer the only thing keeping them in step.
  */
-export const PLAN_KEYWORDS_NEEDED = 7;
+export const PLAN_KEYWORDS_NEEDED = 11;
 
 /** How many queries the card prints. The CSV carries every row. */
 export const CARD_TOP = 40;

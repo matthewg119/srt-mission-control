@@ -77,7 +77,16 @@ async function refreshCard(clientId: string): Promise<void> {
 // What the plan is worded from
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function frameContext(
+/**
+ * The gate: everything a page has to be worded from, or the list of what is missing.
+ *
+ * ‼️ EXPORTED FOR THE LAUNCH LANE, WHICH HAS NO THREAD TO TYPE `plan new` INTO.
+ * src/lib/launch/pages.ts needs this same check, and a second copy of it would be a second answer
+ * to "is this client ready to plan pages" — the drift the two-lane split exists to avoid.
+ * Nothing about the Slack path changes: it still posts nothing and still hands `missing` back for
+ * the caller to word.
+ */
+export async function frameContext(
   clientId: string
 ): Promise<{ ok: true; ctx: Omit<FrameContext, "keywords">; anchorKey: string } | { ok: false; missing: string[] }> {
   const { loadOffer, isLocked } = await import("./offers");
@@ -316,7 +325,7 @@ async function orderPlan(clientId: string): Promise<void> {
  * Approved and claimed rows are kept; only proposed pre-call rows are replaced. Studio rows (no
  * role) are never touched.
  */
-async function proposePreCallPlan(
+export async function proposePreCallPlan(
   clientId: string,
   ctx: Omit<FrameContext, "keywords">
 ): Promise<{ ok: true; note: string } | { ok: false; error: string }> {
@@ -484,7 +493,13 @@ async function proposePreCallPlan(
               `snapshotted, ${snapshot.keptCount} kept in place, ${snapshot.replacedCount} replaced. Nothing was lost.`,
           ]
         : []),
-      "Read the card below, then `plan approve` and all of them are drafted in full.",
+      // ‼️ IT USED TO SAY `plan approve` DRAFTED ALL OF THEM, AND THAT STOPPED BEING TRUE ON
+      // 2026-09-14. Approving is the START of the batch now: a headline for each page, then a
+      // skeleton, then one research pass, then the drafting. The sentence was left behind by that
+      // change and promised seven finished pages one press away, which is the one thing the
+      // reordering exists to prevent anybody expecting.
+      "Read the card below, then `plan approve` locks them in and the batch begins: a headline each, " +
+        "a skeleton each, then one research pass for all of them.",
     ].join("\n"),
   };
 }

@@ -88,15 +88,15 @@ check("an emotional paste is a command", isHeadlineCommand("emotional:\nwhy does
 check("a bare `emotional:` is not", !isHeadlineCommand("emotional:"));
 
 // ── 4. The numbers agree with each other ────────────────────────────────────
-console.log("\n4. seven means seven, everywhere");
+console.log("\n4. the batch size means the same thing everywhere");
 
 check(`the set is ${PRE_CALL_HEADLINES}`, PRE_CALL_HEADLINES === 33, String(PRE_CALL_HEADLINES));
-check(`the build is ${PRE_CALL_PAGES} pages`, PRE_CALL_PAGES === 7, String(PRE_CALL_PAGES));
+check(`the build is ${PRE_CALL_PAGES} pages`, PRE_CALL_PAGES === 11, String(PRE_CALL_PAGES));
 // ‼️ THE TWO CONSTANTS LIVE IN DIFFERENT FILES AND MUST AGREE. page-plan.ts sizes the plan and
-// precall-headlines.ts sizes the pick, so a change to one and not the other means a person keeps seven
-// headlines and gets six pages, with the seventh silently dropped.
+// precall-headlines.ts sizes the pick, so a change to one and not the other means a person keeps N
+// headlines and gets fewer pages, with the extras silently dropped. Raised 7 -> 11 on 2026-10-05.
 check(
-  "one pillar plus the supports is the same seven",
+  "one pillar plus the supports is the same eleven",
   PRE_CALL_SUPPORTS + 1 === PRE_CALL_PAGES,
   `${PRE_CALL_SUPPORTS} + 1 vs ${PRE_CALL_PAGES}`
 );
