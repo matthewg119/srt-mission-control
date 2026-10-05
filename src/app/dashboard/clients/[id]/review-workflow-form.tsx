@@ -52,7 +52,40 @@ export interface ReviewWorkflowView {
   reviewsHost: string | null;
   /** Internal preview, login required. Null when CLIENT_LINK_SECRET is unset. */
   previewUrl: string | null;
+
+  // ── The in-clinic referral (v5, 2026-10-05) ───────────────────────────────
+  //
+  // ‼️ READ OFF THE SAME BAG AS THE URLs ABOVE, except serviceOffers, which is its own table.
+  // See src/lib/hub/referral-config.ts for why those two live in different places.
+  /** `review_workflow.charge_timing`. Decides when the front desk hands the card over. */
+  chargeTiming: string | null;
+  /** `review_workflow.front_desk_count`. How many cards to print and how many people to train. */
+  frontDeskCount: number | null;
+  /** `review_workflow.private_feedback_to`. Who hears what a patient will not post. */
+  privateFeedbackTo: string | null;
+  /** `review_workflow.referral_offer.default_offer`. */
+  defaultOffer: string | null;
+  /** `review_workflow.referral_offer.send_mode`. */
+  sendMode: string | null;
+  /** `client_service_offers` rows, in sort order. */
+  serviceOffers: Array<{
+    serviceLabel: string;
+    priceLabel: string | null;
+    offerText: string | null;
+    excluded: boolean;
+  }>;
 }
+
+/** A grid row in the form. Blank rows are rendered to type into and dropped on save. */
+interface OfferRow {
+  serviceLabel: string;
+  priceLabel: string;
+  offerText: string;
+  excluded: boolean;
+}
+
+/** Enough empty rows that a clinic can add services without hunting for an add button. */
+const SPARE_ROWS = 3;
 
 const INPUT =
   "w-full rounded border border-white/10 bg-transparent px-2 py-1.5 text-[12px] text-white/85 placeholder:text-[rgba(255,255,255,0.25)] focus:border-white/30 focus:outline-none";
@@ -72,6 +105,51 @@ export function ReviewWorkflowForm({
 
   const [mode, setMode] = useState<string>(view.mode ?? "");
   const [ownerName, setOwnerName] = useState(view.ownerName ?? "");
+
+  // ── The referral ───────────────────────────────────────────────────────────
+  const [chargeTiming, setChargeTiming] = useState(view.chargeTiming ?? "");
+  const [frontDeskCount, setFrontDeskCount] = useState(
+    view.frontDeskCount == null ? "" : String(view.frontDeskCount)
+  );
+  const [privateFeedbackTo, setPrivateFeedbackTo] = useState(view.privateFeedbackTo ?? "");
+  const [defaultOffer, setDefaultOffer] = useState(view.defaultOffer ?? "");
+  const [sendMode, setSendMode] = useState(view.sendMode ?? "device");
+  const [fillAll, setFillAll] = useState("");
+  const [offers, setOffers] = useState<OfferRow[]>(() => [
+    ...view.serviceOffers.map((o) => ({
+      serviceLabel: o.serviceLabel,
+      priceLabel: o.priceLabel ?? "",
+      offerText: o.offerText ?? "",
+      excluded: o.excluded,
+    })),
+    ...Array.from({ length: SPARE_ROWS }, () => ({
+      serviceLabel: "",
+      priceLabel: "",
+      offerText: "",
+      excluded: false,
+    })),
+  ]);
+
+  function editRow(i: number, patch: Partial<OfferRow>) {
+    setOffers((prev) => prev.map((row, n) => (n === i ? { ...row, ...patch } : row)));
+  }
+
+  /**
+   * Put one deal on every named service.
+   *
+   * ‼️ IT SKIPS THE EXCLUDED ONES, which is the whole reason the column exists. A clinic that has
+   * said "never discount this" must not have that undone by the convenience button, or the button
+   * becomes something nobody dares press on a half-finished grid.
+   */
+  function applyToAll() {
+    const value = fillAll.trim();
+    if (!value) return;
+    setOffers((prev) =>
+      prev.map((row) =>
+        row.serviceLabel.trim() && !row.excluded ? { ...row, offerText: value } : row
+      )
+    );
+  }
 
   // One entry per platform, keyed by the review_workflow field it writes.
   const [urls, setUrls] = useState<Record<string, string>>(() => {
@@ -96,13 +174,38 @@ export function ReviewWorkflowForm({
       const res = await fetch(`/api/clients/${clientId}/review-workflow`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode, ownerName, ...urls }),
+        body: JSON.stringify({
+          mode,
+          ownerName,
+          ...urls,
+          chargeTiming,
+          frontDeskCount,
+          privateFeedbackTo,
+          defaultOffer,
+          sendMode,
+        }),
       });
       const json = (await res.json()) as { ok: boolean; error?: string };
       if (!json.ok) {
         setError(json.error ?? "Save failed.");
         return;
       }
+
+      // ‼️ TWO ROUTES, ONE BUTTON, AND THE GRID GOES SECOND ON PURPOSE. The bag write above is a
+      // merge and cannot lose anything; the grid write is a replace. Doing the safe one first
+      // means a failure on the second leaves the settings saved and the grid as it was, which is
+      // a state the panel can describe accurately instead of guessing at.
+      const offerRes = await fetch(`/api/clients/${clientId}/service-offers`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rows: offers }),
+      });
+      const offerJson = (await offerRes.json()) as { ok: boolean; error?: string };
+      if (!offerJson.ok) {
+        setError(`Settings saved. The services grid did not: ${offerJson.error ?? "unknown error"}`);
+        return;
+      }
+
       setNotice("Saved.");
       router.refresh();
     } catch (e) {
@@ -246,6 +349,189 @@ export function ReviewWorkflowForm({
             business.
           </span>
         </p>
+      </div>
+
+      {/*
+        ── The in-clinic referral (v5, 2026-10-05) ────────────────────────────
+
+        ‼️ id="referral-offer" SO A STEP CARD CAN LINK STRAIGHT AT IT, the same precedent as
+        id="theme" and id="review-destination" above.
+
+        ‼️ WITH NOTHING FILLED IN HERE THE PATIENT IS NEVER ASKED TO REFER ANYBODY, and the panel
+        says so rather than leaving it to be discovered. referralConfigFor() returns null when
+        there is no default and no row, and the walk skips the recommend question and the invite
+        outright, because a clinic that has not agreed a deal must not be made to promise one.
+      */}
+      <div id="referral-offer" className="rounded border border-white/10 p-3">
+        <p className={LABEL}>The referral at the counter</p>
+        <p className="mb-3 text-[11px] text-[rgba(255,255,255,0.45)]">
+          {offers.some((o) => o.serviceLabel.trim() && o.offerText.trim() && !o.excluded) ||
+          defaultOffer.trim()
+            ? "Patients are asked whether they would recommend this clinic, and a Yes offers to text a friend. A No costs them nothing: they reach the same review either way."
+            : "Nothing is set, so patients are NOT asked to refer anybody. Fill in a deal below, or the default, and the question appears."}
+        </p>
+
+        <div className="grid gap-4 sm:grid-cols-3">
+          <div>
+            <label className={LABEL} htmlFor="rw-charge">
+              When do they charge
+            </label>
+            <select
+              id="rw-charge"
+              className={INPUT}
+              value={chargeTiming}
+              onChange={(e) => setChargeTiming(e.target.value)}
+            >
+              <option value="">Not asked yet</option>
+              <option value="after">After the appointment</option>
+              <option value="before">Before the appointment</option>
+              <option value="both">Both, it varies</option>
+            </select>
+            <p className="mt-1 text-[11px] text-[rgba(255,255,255,0.45)]">
+              Decides when the front desk hands the card over.
+            </p>
+          </div>
+
+          <div>
+            <label className={LABEL} htmlFor="rw-desk">
+              Front desk headcount
+            </label>
+            <input
+              id="rw-desk"
+              className={INPUT}
+              value={frontDeskCount}
+              inputMode="numeric"
+              placeholder="A whole number"
+              onChange={(e) => setFrontDeskCount(e.target.value)}
+            />
+            <p className="mt-1 text-[11px] text-[rgba(255,255,255,0.45)]">
+              How many cards to print and how many people to train.
+            </p>
+          </div>
+
+          <div>
+            <label className={LABEL} htmlFor="rw-send">
+              Who sends the text
+            </label>
+            <select
+              id="rw-send"
+              className={INPUT}
+              value={sendMode}
+              onChange={(e) => setSendMode(e.target.value)}
+            >
+              <option value="device">The patient, from her own phone</option>
+              <option value="clinic">The clinic&apos;s number (not built)</option>
+            </select>
+            <p className="mt-1 text-[11px] text-[rgba(255,255,255,0.45)]">
+              {sendMode === "clinic"
+                ? "Recorded as an intention and nothing more. Sending from the clinic needs a number, a sender and a signed BAA, so the walk still opens the message on her phone."
+                : "She picks the friend and presses send, so the clinic is on the thread from the first message and nobody is texted who never gave us their number."}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4">
+          <label className={LABEL} htmlFor="rw-feedback">
+            Who hears private feedback
+          </label>
+          <input
+            id="rw-feedback"
+            className={INPUT}
+            value={privateFeedbackTo}
+            placeholder="A name or an email"
+            onChange={(e) => setPrivateFeedbackTo(e.target.value)}
+          />
+        </div>
+
+        {/*
+          ‼️ ONE GRID FOR SERVICES, PRICES AND DEALS, which is the same decision the printed setup
+          sheet makes: on a call these are one pass down one list, and asking twice is how a ten
+          minute call becomes twenty.
+        */}
+        <div className="mt-4">
+          <p className={LABEL}>What a referred friend gets, per service</p>
+
+          <div className="mb-2 flex gap-2">
+            <input
+              className={INPUT}
+              value={fillAll}
+              placeholder="Set every service to the same deal"
+              onChange={(e) => setFillAll(e.target.value)}
+            />
+            <button
+              type="button"
+              className="shrink-0 rounded border border-white/15 px-2 py-1.5 text-[11px] text-white/70 hover:border-white/30"
+              onClick={applyToAll}
+              disabled={!fillAll.trim()}
+            >
+              Apply to all
+            </button>
+          </div>
+
+          <div className="space-y-1">
+            {offers.map((row, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <input
+                  className={INPUT}
+                  value={row.serviceLabel}
+                  placeholder="Service"
+                  onChange={(e) => editRow(i, { serviceLabel: e.target.value })}
+                />
+                <input
+                  className={`${INPUT} max-w-[6rem]`}
+                  value={row.priceLabel}
+                  placeholder="Price"
+                  onChange={(e) => editRow(i, { priceLabel: e.target.value })}
+                />
+                <input
+                  className={INPUT}
+                  value={row.offerText}
+                  placeholder="What their friend gets"
+                  disabled={row.excluded}
+                  onChange={(e) => editRow(i, { offerText: e.target.value })}
+                />
+                <label className="flex shrink-0 items-center gap-1 text-[10px] text-[rgba(255,255,255,0.45)]">
+                  <input
+                    type="checkbox"
+                    checked={row.excluded}
+                    onChange={(e) => editRow(i, { excluded: e.target.checked })}
+                  />
+                  no offer
+                </label>
+              </div>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            className="mt-2 text-[11px] text-white/50 underline hover:text-white/80"
+            onClick={() =>
+              setOffers((prev) => [
+                ...prev,
+                { serviceLabel: "", priceLabel: "", offerText: "", excluded: false },
+              ])
+            }
+          >
+            Add a service
+          </button>
+
+          <div className="mt-3">
+            <label className={LABEL} htmlFor="rw-default-offer">
+              Default, when a patient names a service that is not listed
+            </label>
+            <input
+              id="rw-default-offer"
+              className={INPUT}
+              value={defaultOffer}
+              placeholder="What their friend gets"
+              onChange={(e) => setDefaultOffer(e.target.value)}
+            />
+            <p className="mt-1 text-[11px] text-[rgba(255,255,255,0.45)]">
+              Their words are matched against the service names above. Anything unmatched falls
+              back to this, and with neither there is no referral question.
+            </p>
+          </div>
+        </div>
       </div>
 
       {/*

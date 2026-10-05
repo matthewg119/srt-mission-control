@@ -236,6 +236,29 @@ export default async function ClientDetailPage({
   const reviewsHostRow = (hostRows ?? []).find(
     (r) => r.kind === "reviews" && Boolean(r.vercel_attached_at)
   );
+
+  const referralOfferBag = (reviewWorkflowBag.referral_offer ?? {}) as Record<string, unknown>;
+
+  // ‼️ A FAILED READ IS AN EMPTY GRID, NOT A BROKEN BOARD. PostgREST answers 42P01 until
+  // docs/2026-10-05-referral-invites.sql is run, and this panel is one of nineteen on a page that
+  // has to render either way. The save route says plainly when the table is missing; a client
+  // board that 500s because one panel's migration is pending would be the worse failure.
+  const { data: serviceOfferData } = await supabaseAdmin
+    .from("client_service_offers")
+    .select("service_label, price_label, offer_text, excluded")
+    .eq("client_id", id)
+    .order("sort_order", { ascending: true });
+
+  const serviceOfferRows = (serviceOfferData ?? []).map((row) => {
+    const r = row as Record<string, unknown>;
+    return {
+      serviceLabel: typeof r.service_label === "string" ? r.service_label : "",
+      priceLabel: typeof r.price_label === "string" ? r.price_label : null,
+      offerText: typeof r.offer_text === "string" ? r.offer_text : null,
+      excluded: r.excluded === true,
+    };
+  });
+
   const reviewWorkflowView: ReviewWorkflowView = {
     mode: (client.review_request_mode as ReviewWorkflowView["mode"]) ?? null,
     ownerName: (client.review_owner_name as string | null) ?? null,
@@ -247,6 +270,21 @@ export default async function ClientDetailPage({
     bookingSoftware: (client.booking_software as string | null) ?? null,
     reviewsHost: (reviewsHostRow?.host as string | undefined) ?? null,
     previewUrl: `/dashboard/clients/${id}/preview?kind=reviews`,
+
+    // ── The in-clinic referral (v5, 2026-10-05) ───────────────────────────────
+    //
+    // Five single values off the same bag, plus one table. See referral-config.ts for why the
+    // per-service deals are rows: the panel edits them one at a time and "excluded" is a state.
+    chargeTiming: typeof reviewWorkflowBag.charge_timing === "string" ? reviewWorkflowBag.charge_timing : null,
+    frontDeskCount:
+      typeof reviewWorkflowBag.front_desk_count === "number" ? reviewWorkflowBag.front_desk_count : null,
+    privateFeedbackTo:
+      typeof reviewWorkflowBag.private_feedback_to === "string"
+        ? reviewWorkflowBag.private_feedback_to
+        : null,
+    defaultOffer: typeof referralOfferBag.default_offer === "string" ? referralOfferBag.default_offer : null,
+    sendMode: typeof referralOfferBag.send_mode === "string" ? referralOfferBag.send_mode : null,
+    serviceOffers: serviceOfferRows,
   };
 
   // What unlocks delivery step 21. `clients.select("*")` already carries the four columns, so

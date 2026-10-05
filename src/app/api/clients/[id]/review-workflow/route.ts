@@ -174,6 +174,86 @@ export async function POST(
     touchedWorkflow = true;
   }
 
+  // ── The in-clinic referral settings (v5, 2026-10-05) ──────────────────────
+  //
+  // ‼️ MORE KEYS IN THE SAME BAG, AND NO MIGRATION, which is the same call
+  // docs/2026-09-24-review-question-set-v4.sql opens with. These are single values read by
+  // referralConfigFor(); the PER-SERVICE deals are rows in client_service_offers, because the
+  // panel edits them one at a time and "excluded from referrals" is a real state.
+  //
+  // The merge above is what makes this safe: `workflow` is already a spread of the stored bag, so
+  // writing one key here cannot drop the client's ten intake answers or their six destination URLs.
+  const CHARGE = ["before", "after", "both"] as const;
+  if (body.chargeTiming !== undefined) {
+    const value = textOrNull(body.chargeTiming) ?? null;
+    if (value !== null && !(CHARGE as readonly string[]).includes(value)) {
+      return NextResponse.json(
+        { ok: false, error: `Charge timing must be one of: ${CHARGE.join(", ")}.` },
+        { status: 400 }
+      );
+    }
+    if (value === null) delete workflow.charge_timing;
+    else workflow.charge_timing = value;
+    touchedWorkflow = true;
+  }
+
+  if (body.frontDeskCount !== undefined) {
+    const raw = textOrNull(body.frontDeskCount) ?? null;
+    // An integer or nothing. It decides how many cards to print and how many people to train, so
+    // "a few" stored as text would be a number somebody later tries to multiply.
+    const n = raw === null ? null : Number.parseInt(raw, 10);
+    if (n !== null && (!Number.isInteger(n) || n < 0 || n > 99)) {
+      return NextResponse.json(
+        { ok: false, error: "Front desk headcount must be a whole number." },
+        { status: 400 }
+      );
+    }
+    if (n === null) delete workflow.front_desk_count;
+    else workflow.front_desk_count = n;
+    touchedWorkflow = true;
+  }
+
+  if (body.privateFeedbackTo !== undefined) {
+    const value = textOrNull(body.privateFeedbackTo) ?? null;
+    if (value === null) delete workflow.private_feedback_to;
+    else workflow.private_feedback_to = value.slice(0, 200);
+    touchedWorkflow = true;
+  }
+
+  if (body.defaultOffer !== undefined || body.sendMode !== undefined) {
+    const referral = { ...((workflow.referral_offer ?? {}) as Record<string, unknown>) };
+
+    if (body.defaultOffer !== undefined) {
+      const value = textOrNull(body.defaultOffer) ?? null;
+      // ‼️ CLEARING THIS CAN TURN THE REFERRAL QUESTIONS OFF, AND THAT IS THE DESIGNED BEHAVIOUR.
+      // With no default and no per-service rows, referralConfigFor() returns null and the walk
+      // skips the recommend question and the invite entirely, rather than promising a patient
+      // something the front desk has never heard of.
+      if (value === null) delete referral.default_offer;
+      else referral.default_offer = value.slice(0, 600);
+    }
+
+    if (body.sendMode !== undefined) {
+      const value = textOrNull(body.sendMode) ?? null;
+      if (value !== null && value !== "device" && value !== "clinic") {
+        return NextResponse.json(
+          { ok: false, error: 'Send mode must be "device" or "clinic".' },
+          { status: 400 }
+        );
+      }
+      // ‼️ "clinic" IS STORABLE AND STILL REFUSED AT RENDER. composeInvite() returns
+      // "unavailable" for it until a sender, a per-clinic number and a signed BAA exist, so
+      // setting it here records an intention rather than switching anything on. Validating it
+      // away instead would mean the column could never be set in advance of the capability.
+      if (value === null) delete referral.send_mode;
+      else referral.send_mode = value;
+    }
+
+    if (Object.keys(referral).length === 0) delete workflow.referral_offer;
+    else workflow.referral_offer = referral;
+    touchedWorkflow = true;
+  }
+
   if (touchedWorkflow) patch.review_workflow = workflow;
 
   if (Object.keys(patch).length === 1) {

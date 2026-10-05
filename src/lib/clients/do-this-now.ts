@@ -306,6 +306,12 @@ export const STEP_ACTIONS: Record<StepKey, StepAction> = {
       "Name the person at the clinic who will actually ask patients for reviews. Not the owner unless the owner is the one doing it.",
       "Set the destination on the Review handover panel: `review link: <the Google review URL>`.",
       "Without that URL the Post on Google button never appears, and the customer is told to go and find the page herself.",
+      // ‼️ WITHOUT A DEAL THE PATIENT IS NEVER ASKED TO REFER ANYBODY, which is a silent state
+      // worth naming on the card. referralConfigFor() returns null with no row and no default,
+      // and the walk skips the recommend question and the invite rather than promising something
+      // the front desk has never heard of.
+      "Set the referral deals, or patients are never asked to refer a friend at all: `service offer: Botox = 80% off their first visit`, one line per service.",
+      "Then `default offer: <what their friend gets>` for anything not on the list, and `charge: after` so the card is handed over at the right moment.",
       "Show them the tool on their reviews subdomain from a phone, the way a patient will open it.",
       "Press Done once that person has the link and knows when requests go out.",
     ],

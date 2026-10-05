@@ -684,6 +684,41 @@ const REVIEW_PLATFORM: CommandSpec = {
   implementedIn: "src/lib/clients/review-link.ts",
 };
 
+// ── The in-clinic referral (v5, 2026-10-05) ──────────────────────────────────
+//
+// ‼️ THESE THREE EXIST SO THE CARD CAN SAY WHAT THE THREAD TAKES. Everything they write is also
+// on the Review handover panel under id="referral-offer"; the thread is here because the setup
+// happens on a call with the clinic and typing one line is faster than finding a panel.
+
+const CHARGE: CommandSpec = {
+  label: "charge: after",
+  test: /^\s*[`*_]*charge\s*:\s*(before|after|both)\s*[`*_]*\s*$/i,
+  unmistakable: /^\s*[`*_]*charge\s*:/i,
+  pointAt: "review_handover",
+  what: "When the front desk hands the card over",
+  implementedIn: "src/lib/clients/referral-setup.ts",
+};
+
+const SERVICE_OFFER: CommandSpec = {
+  // ‼️ THE SEPARATOR IS `=` AND NOT A COMMA, because every real answer has a comma in it
+  // ("80% off the first month, then $299"). A comma would cut the deal in half.
+  label: "service offer: Botox = 80% off their first visit",
+  test: /^\s*[`*_]*service\s+offer\s*:\s*[^=]+=\s*\S+/i,
+  unmistakable: /^\s*[`*_]*service\s+offer\s*:/i,
+  pointAt: "review_handover",
+  what: "What a referred friend gets, per service",
+  implementedIn: "src/lib/clients/referral-setup.ts",
+};
+
+const DEFAULT_OFFER: CommandSpec = {
+  label: "default offer: <what their friend gets>",
+  test: /^\s*[`*_]*default\s+offer\s*:\s*\S+/i,
+  unmistakable: /^\s*[`*_]*default\s+offer\s*:/i,
+  pointAt: "review_handover",
+  what: "What a referred friend gets, per service",
+  implementedIn: "src/lib/clients/referral-setup.ts",
+};
+
 // ── Step 21: the ladder, the angles, the headlines, the plan ─────────────────
 
 const LADDER: CommandSpec = {
@@ -895,7 +930,7 @@ export const STEP_COMMANDS: Record<StepKey, readonly CommandSpec[]> = {
   page_candidates: [],
   offsite_target_list: [],
   hub_preview: [TEMPLATE, TEMPLATE_RESET, TEMPLATE_PICK],
-  referral_engine_preview: [TEMPLATE, TEMPLATE_RESET, TEMPLATE_PICK, REVIEW_LINK, REVIEW_PLATFORM],
+  referral_engine_preview: [TEMPLATE, TEMPLATE_RESET, TEMPLATE_PICK, REVIEW_LINK, REVIEW_PLATFORM, CHARGE, SERVICE_OFFER, DEFAULT_OFFER],
   concierge_preview: [MASCOT, MASCOT_CONCEPTS, MASCOT_PICK, MASCOT_SKIP, MASCOT_CORNER, MASCOT_KEEP],
   site_replica: [TEMPLATE, TEMPLATE_RESET, TEMPLATE_PICK],
   review_card_pdf: [REVIEW_LINK, REVIEW_PLATFORM],
@@ -936,7 +971,7 @@ export const STEP_COMMANDS: Record<StepKey, readonly CommandSpec[]> = {
   subdomain_live: [],
   first_page: [],
   cards_printed: [],
-  review_handover: [REVIEW_LINK, REVIEW_PLATFORM],
+  review_handover: [REVIEW_LINK, REVIEW_PLATFORM, CHARGE, SERVICE_OFFER, DEFAULT_OFFER],
   concierge_live: [],
   tracking_installed: [],
   self_report_field: [],
