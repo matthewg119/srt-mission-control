@@ -54,3 +54,6 @@ supabase/.temp/
 # anything: the clients row carries a real name, email, phone and street address, and client_docs
 # carries their artifacts. Recoverable by hand is the point; committed to git is not.
 backups/
+
+# Generated setup sheets. Produced on demand by scripts/_onboarding-sheet.ts; never a committed artifact.
+onboarding-sheet*.pdf
