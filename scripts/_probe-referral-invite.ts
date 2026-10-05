@@ -253,25 +253,58 @@ check(dialable("555.555.0111") === "5555550111", "and a local number keeps no pu
 // the patient's would be: it belongs to somebody who is not using the tool and has agreed to
 // nothing. The direction of the foreign key is what keeps that true, so the grep is over the
 // whole of src/.
+//
+// ‼️ THE ALLOWLIST IS PER COLUMN SINCE 2026-10-05, WHICH IS STRICTER THAN THE SINGLE FILE IT
+// REPLACED AND NOT A RELAXATION OF IT. The claim route has to read friend_name back in order to
+// tell the clinic that what the patient said and what the friend typed disagree, so "exactly one
+// file in all of src/" stopped being true the moment the emails existed. Widening it to "these
+// two files" would have been the weak fix, because it would have let any future column be touched
+// anywhere on that list. Each column now names the files that may mention it, so a third reader
+// of a second-hand contact detail is still a failure.
 {
-  const hits: string[] = [];
+  const CONTACT_COLUMNS: ReadonlyArray<readonly [string, readonly string[]]> = [
+    // HEARSAY. A patient recited these at a counter about somebody who had agreed to nothing.
+    // Written by the invite route; read by the claim route only to quote back to the clinic.
+    // Nothing anywhere may send to them, which section 6b below is the check for.
+    ["friend_name", [ROUTE, CLAIM_ROUTE]],
+    ["friend_contact", [ROUTE, CLAIM_ROUTE]],
+    // GIVEN BY ITS OWNER. Written where it is typed, read where it is sent to.
+    ["referrer_email", [ROUTE, CLAIM_ROUTE]],
+    ["claimed_email", [CLAIM_ROUTE]],
+  ];
+
+  const found = new Map<string, string[]>();
   const walk = (dir: string): void => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(full);
       else if (/\.tsx?$/.test(entry.name)) {
         const src = stripComments(fs.readFileSync(full, "utf8"));
-        if (/friend_contact|friend_name/.test(src)) hits.push(full.split(path.sep).join("/"));
+        const rel = full.split(path.sep).join("/");
+        for (const [column] of CONTACT_COLUMNS) {
+          if (src.includes(column)) {
+            const list = found.get(column) ?? [];
+            list.push(rel);
+            found.set(column, list);
+          }
+        }
       }
     }
   };
   walk(path.join(process.cwd(), "src"));
-  const unexpected = hits.filter((f) => !f.endsWith(ROUTE));
-  check(
-    unexpected.length === 0,
-    "only the invite route names a friend's stored contact columns",
-    unexpected.length ? `also in: ${unexpected.join(", ")}` : `exactly one writer: ${ROUTE}`
-  );
+
+  for (const [column, allowed] of CONTACT_COLUMNS) {
+    const hits = found.get(column) ?? [];
+    const unexpected = hits.filter((f) => !allowed.some((a) => f.endsWith(a)));
+    check(
+      unexpected.length === 0,
+      `only ${allowed.length === 1 ? "one file mentions" : `${allowed.length} named files mention`} ${column}`,
+      unexpected.length
+        ? `also in: ${unexpected.join(", ")}`
+        : allowed.map((a) => a.split("/").pop()).join(", ")
+    );
+  }
+
   check(
     /from\("referral_invites"\)/.test(routeSrc),
     "and it writes them to referral_invites"
@@ -279,6 +312,47 @@ check(dialable("555.555.0111") === "5555550111", "and a local number keeps no pu
   check(
     !/from\("review_tool_submissions"\)[\s\S]{0,400}friend_/.test(routeSrc),
     "and never to review_tool_submissions"
+  );
+}
+
+// ── 6b. THE SENDER CANNOT REACH A SECOND-HAND CONTACT DETAIL AT ALL. ────────
+//
+// ‼️ THE EMAILS ARRIVED ON 2026-10-05 AND THIS IS WHAT STOPS THEM BECOMING THE THING THIS LANE
+// WAS BUILT TO AVOID. The patient's text comes off her own phone precisely because a message
+// from us to a number the friend never gave anybody is the clinic's TCPA exposure. An email is a
+// different channel with a different consent story, and the whole of that story is WHO TYPED THE
+// ADDRESS: the friend typed theirs on the clinic's own claim form, the patient typed hers at the
+// invite step. friend_contact is neither.
+//
+// So referral-emails.ts is handed facts and queries nothing. It cannot name the hearsay columns,
+// it holds no Supabase client, and it decides nothing about whether to send: the config gate is
+// in referral-config.ts and every flag in it defaults to false.
+{
+  const EMAILS = "src/lib/hub/referral-emails.ts";
+  const emailSrc = stripComments(fs.readFileSync(path.join(process.cwd(), EMAILS), "utf8"));
+
+  check(
+    !/friend_contact|friend_name/.test(emailSrc),
+    "the sender never names a contact detail the patient recited"
+  );
+  check(
+    !/supabaseAdmin|\.from\(/.test(emailSrc),
+    "and it reads no table of its own, so it cannot find one either"
+  );
+  // The master switch is a switch, not a suggestion. All four flags read `=== true`, so a bag
+  // with no referral_email object at all sends nothing.
+  const configSrc = stripComments(
+    fs.readFileSync(path.join(process.cwd(), "src/lib/hub/referral-config.ts"), "utf8")
+  );
+  for (const flag of ["enabled", "notify_clinic", "email_friend", "email_referrer"]) {
+    check(
+      new RegExp(`${flag}\\s*===\\s*true`).test(configSrc),
+      `${flag} is off unless it is exactly true`
+    );
+  }
+  check(
+    /if \(!config\.enabled/.test(emailSrc) || /if \(!facts\.config\.enabled/.test(emailSrc),
+    "and both entry points check the master switch first"
   );
 }
 

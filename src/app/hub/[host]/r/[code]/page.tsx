@@ -27,6 +27,7 @@ import { notFound } from "next/navigation";
 import { resolveHost } from "@/lib/hub/resolve";
 import { supabaseAdmin } from "@/lib/db";
 import { normaliseCode } from "@/lib/hub/referral-invite";
+import { referralEmailConfig } from "@/lib/hub/referral-config";
 import { ClaimForm } from "./claim-form";
 
 export const dynamic = "force-dynamic";
@@ -55,6 +56,7 @@ export default async function ClaimPage({ params }: Props) {
   if (!resolved || resolved.status !== "ok" || resolved.kind !== "reviews") notFound();
 
   const { client } = resolved;
+  const emailConfig = referralEmailConfig(client);
 
   let offer: string | null = null;
   let open = false;
@@ -114,7 +116,13 @@ export default async function ClaimPage({ params }: Props) {
       {open && offer ? (
         <>
           <p className="rev-offer">{offer}</p>
-          <ClaimForm code={code} businessName={client.displayName} />
+          {/* The email field exists only when this clinic actually sends the confirmation. See
+              the prop's own comment in claim-form.tsx. */}
+          <ClaimForm
+            code={code}
+            businessName={client.displayName}
+            askEmail={emailConfig.enabled && emailConfig.emailFriend}
+          />
         </>
       ) : null}
     </main>

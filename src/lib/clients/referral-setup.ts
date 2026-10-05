@@ -16,6 +16,7 @@
 // sends to her friend. Same rule as src/lib/hub/review-script.ts.
 
 import { supabaseAdmin } from "@/lib/db";
+import { allowedMailboxes, oneEmail } from "@/lib/hub/referral-config";
 
 /** Where these commands are accepted. The referral is settled at handover. */
 const REFERRAL_STEPS = new Set(["review_handover", "referral_engine_preview"]);
@@ -25,8 +26,15 @@ const SERVICE_PREFIX = /^\s*service offer\s*:/i;
 const DEFAULT_PREFIX = /^\s*default offer\s*:/i;
 const REFERRER_PREFIX = /^\s*referrer offer\s*:/i;
 const REWARD_PREFIX = /^\s*default reward\s*:/i;
+const EMAIL_PREFIX = /^\s*referral email\s*:/i;
 
-export type ReferralCommandKind = "charge" | "service" | "default" | "referrer" | "reward";
+export type ReferralCommandKind =
+  | "charge"
+  | "service"
+  | "default"
+  | "referrer"
+  | "reward"
+  | "email";
 
 // ‼️ ORDER MATTERS HERE AND `service offer:` MUST NOT SHADOW `referrer offer:`. Both end in
 // "offer:", so a prefix table matched loosely would route one to the other. Each pattern is
@@ -37,6 +45,10 @@ const COMMAND_PREFIXES: ReadonlyArray<readonly [ReferralCommandKind, RegExp]> = 
   ["referrer", REFERRER_PREFIX],
   ["default", DEFAULT_PREFIX],
   ["reward", REWARD_PREFIX],
+  // ‼️ ANCHORED ON `referral`, WHICH IS A DIFFERENT WORD FROM `referrer`. Both commands
+  // begin "refer", so a table matched loosely would route one to the other; each pattern owns
+  // its own full first word, which is what the comment above is about.
+  ["email", EMAIL_PREFIX],
 ];
 
 export type ReferralCommand =
@@ -197,6 +209,122 @@ export async function handleReferralThreadReply(input: {
         ...ignored,
       ].join("\n"),
     };
+  }
+
+  // ── referral email: on | off | friend on | patient off | notify X | reply X | from X ──
+  //
+  // ‼️ ONE PREFIX WITH A SMALL SUB-GRAMMAR, NOT SIX NEW COMMANDS. Matthew wants this set up on a
+  // call "anytime", and six near-identical prefixes competing for the same first word is how
+  // `service offer:` nearly shadowed `referrer offer:`. The first line still decides, and an
+  // unrecognised form saves NOTHING and prints the whole grammar back.
+  //
+  // ‼️ AND EVERY SWITCH IS OFF UNTIL IT IS TURNED ON HERE OR ON THE PANEL. A clinic that has not
+  // discussed email sends none of these, which is where every client starts.
+  if (cmd.kind === "email") {
+    const value = cmd.value.trim();
+    const lower = value.toLowerCase();
+    const GRAMMAR = [
+      "`referral email: on` or `off` for the whole lot",
+      "`referral email: friend on` to confirm it to the friend",
+      "`referral email: patient on` to tell her when her friend comes in",
+      "`referral email: notify someone@clinic.com` for where your notices go",
+      "`referral email: reply someone@clinic.com` so replies reach the clinic",
+      `\`referral email: from ${allowedMailboxes()[0]}\` to pick which of our mailboxes sends`,
+    ];
+    const refuse = (why: string): ReferralReply => ({
+      message: [`:warning: Nothing saved. ${why}`, "", ...GRAMMAR.map((g) => `- ${g}`)].join("\n"),
+    });
+
+    const setting = (
+      mutate: (settings: Record<string, unknown>) => void
+    ): Promise<string | null> =>
+      mergeWorkflow(input.clientId, (bag) => {
+        const settings = { ...((bag.referral_email ?? {}) as Record<string, unknown>) };
+        mutate(settings);
+        // An off switch is an ABSENT key rather than a stored `false`, so the bag never fills up
+        // with negatives and referralEmailConfig()'s `=== true` reads the same either way.
+        if (Object.keys(settings).length === 0) delete bag.referral_email;
+        else bag.referral_email = settings;
+      });
+
+    const TOGGLES: ReadonlyArray<readonly [string, string, string]> = [
+      ["on", "enabled", "Referral emails are *on* for this client."],
+      ["off", "enabled", "Referral emails are *off*. Nothing in this lane will send."],
+      ["friend on", "email_friend", "The friend gets a confirmation, at the address they type on the claim form."],
+      ["friend off", "email_friend", "The friend gets nothing, and the claim form stops asking for an email."],
+      ["patient on", "email_referrer", "She hears when her friend comes in, if she gave us her own email."],
+      ["patient off", "email_referrer", "She hears nothing when her friend comes in."],
+      ["clinic on", "notify_clinic", "You get an email for each referral and each claim."],
+      ["clinic off", "notify_clinic", "You get no referral emails. The lead will only be in the table."],
+    ];
+
+    const toggle = TOGGLES.find(([word]) => word === lower);
+    if (toggle) {
+      const [word, key, confirmation] = toggle;
+      const turningOn = word.endsWith("on");
+      const failed = await setting((settings) => {
+        if (turningOn) settings[key] = true;
+        else delete settings[key];
+      });
+      if (failed) return { message: `:warning: Not saved: ${failed}` };
+      const extra =
+        turningOn && key !== "enabled"
+          ? ["", "_Still needs `referral email: on` before anything actually sends._"]
+          : [];
+      return { message: [confirmation, ...extra, ...ignored].join("\n") };
+    }
+
+    const [verb, ...rest] = value.split(/\s+/);
+    const argument = rest.join(" ").trim();
+    const kind = (verb ?? "").toLowerCase();
+
+    if (kind === "notify" || kind === "reply") {
+      const address = oneEmail(argument);
+      if (!address) return refuse(`"${argument || value}" is not an email address.`);
+      const failed = await setting((settings) => {
+        if (kind === "notify") {
+          settings.notify_to = address;
+          // Typing an address plainly means "send them there", so the switch goes on with it.
+          // The panel keeps them separate; a call does not have room for two steps.
+          settings.notify_clinic = true;
+        } else {
+          settings.reply_to = address;
+        }
+      });
+      if (failed) return { message: `:warning: Not saved: ${failed}` };
+      return {
+        message: [
+          kind === "notify"
+            ? `Your referral notices go to *${address}*, and they are switched on.`
+            : `Replies to a referral email will reach *${address}*.`,
+          ...ignored,
+        ].join("\n"),
+      };
+    }
+
+    if (kind === "from") {
+      const wanted = argument.toLowerCase();
+      if (!allowedMailboxes().includes(wanted)) {
+        return refuse(
+          `We cannot send from ${wanted || "nothing"}. ` +
+            `Microsoft only lets us send as our own mailboxes: ${allowedMailboxes().join(", ")}.`
+        );
+      }
+      const failed = await setting((settings) => {
+        settings.from_mailbox = wanted;
+      });
+      if (failed) return { message: `:warning: Not saved: ${failed}` };
+      return {
+        message: [
+          `Referral emails will come from *${wanted}*.`,
+          "The clinic cannot be the sender itself without its own sending domain, so use " +
+            "`referral email: reply ...` to decide where an answer lands.",
+          ...ignored,
+        ].join("\n"),
+      };
+    }
+
+    return refuse(`\`referral email: ${value}\` is not one of the forms.`);
   }
 
   // ── service offer: / referrer offer: <service> = <what they get> ──

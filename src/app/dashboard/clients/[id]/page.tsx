@@ -52,6 +52,7 @@ import { readSkin } from "@/lib/hub/skin";
 import { listOnboardingDocs } from "@/lib/clients/onboarding-docs";
 import { stepByKey } from "@/lib/clients/delivery-checklist";
 import { hostsFor, vercelConfig } from "@/lib/hub/vercel-domains";
+import { allowedMailboxes } from "@/lib/hub/referral-config";
 
 /**
  * Tokens a human types on the board. Everything else on a draft is derived from the
@@ -238,6 +239,7 @@ export default async function ClientDetailPage({
   );
 
   const referralOfferBag = (reviewWorkflowBag.referral_offer ?? {}) as Record<string, unknown>;
+  const referralEmailBag = (reviewWorkflowBag.referral_email ?? {}) as Record<string, unknown>;
 
   // ‼️ A FAILED READ IS AN EMPTY GRID, NOT A BROKEN BOARD. PostgREST answers 42P01 until
   // docs/2026-10-05-referral-invites.sql is run, and this panel is one of nineteen on a page that
@@ -290,6 +292,23 @@ export default async function ClientDetailPage({
         ? referralOfferBag.default_referrer_offer
         : null,
     inviteMode: typeof referralOfferBag.mode === "string" ? referralOfferBag.mode : null,
+
+    // ── The referral emails (2026-10-05) ─────────────────────────────────
+    //
+    // ‼️ READ WITH `=== true`, NOT FOR TRUTHINESS, which is the same comparison
+    // referralEmailConfig() makes on the serving side. A bag with no referral_email object at
+    // all has to come back as four falses, because every one of these is a thing we would
+    // otherwise start doing to a clinic's patients without being asked.
+    emailEnabled: referralEmailBag.enabled === true,
+    notifyClinic: referralEmailBag.notify_clinic === true,
+    emailFriend: referralEmailBag.email_friend === true,
+    emailReferrer: referralEmailBag.email_referrer === true,
+    notifyTo: typeof referralEmailBag.notify_to === "string" ? referralEmailBag.notify_to : null,
+    fromMailbox:
+      typeof referralEmailBag.from_mailbox === "string" ? referralEmailBag.from_mailbox : null,
+    replyTo: typeof referralEmailBag.reply_to === "string" ? referralEmailBag.reply_to : null,
+    mailboxOptions: allowedMailboxes(),
+    clientEmail: (client.email as string | null) ?? null,
     serviceOffers: serviceOfferRows,
   };
 

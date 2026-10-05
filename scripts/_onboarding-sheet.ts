@@ -35,6 +35,7 @@ const buffer =
         services: [],
         bookingSoftware: null,
         reviewPlatform: null,
+        clientEmail: null,
       })
     : await generateOnboardingSheet(arg);
 

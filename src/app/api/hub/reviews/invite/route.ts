@@ -31,12 +31,16 @@ import { supabaseAdmin } from "@/lib/db";
 import { resolveHost } from "@/lib/hub/resolve";
 import {
   INVITE_CHANNELS,
+  claimUrl,
   inviteExpiry,
   normaliseCode,
   readInviteMode,
   templateByKey,
   type InviteChannel,
 } from "@/lib/hub/referral-invite";
+import { oneEmail, referralEmailConfig } from "@/lib/hub/referral-config";
+import { emailReferralCreated } from "@/lib/hub/referral-emails";
+import { appUrl } from "@/lib/onboarding2/constants";
 
 export const dynamic = "force-dynamic";
 
@@ -93,6 +97,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     referrerOfferText?: unknown;
     mode?: unknown;
     channel?: unknown;
+    referrerEmail?: unknown;
   };
   try {
     body = await req.json();
@@ -144,6 +149,11 @@ export async function POST(req: Request): Promise<NextResponse> {
       code,
       friend_name: text(body.friendName, MAX_FIELD),
       friend_contact: text(body.friendContact, MAX_FIELD),
+      // ‼️ HER OWN ADDRESS, OPTIONAL, AND IT IS THE ONLY WAY SHE IS EVER WRITTEN TO. It buys one
+      // message, at the moment her friend claims, telling her the reward she has earned. No
+      // address means no message and nothing chases her for one: see
+      // src/lib/hub/referral-emails.ts for why that is the design rather than a gap.
+      referrer_email: oneEmail(body.referrerEmail),
       mode,
       channel: readChannel(body.channel),
       // ‼️ ONLY SET WHEN A MESSAGE WAS ACTUALLY OPENED. In `internal` mode nothing was sent, so
@@ -162,6 +172,31 @@ export async function POST(req: Request): Promise<NextResponse> {
     // attribution, which is not her problem to see.
     return NextResponse.json({ id: null });
   }
+
+  // ── The clinic hears about it ───────────────────────────────────────────────
+  //
+  // ‼️ AFTER THE ROW, AND IT CANNOT FAIL THIS REQUEST. emailReferralCreated() returns off its own
+  // catch, and the config gate means a clinic that has not switched this on sends nothing. This
+  // is the lead in `internal` mode: nobody messaged the friend, and before this the row sat in a
+  // table that nothing read.
+  //
+  // ‼️ AWAITED RATHER THAN LEFT HANGING, because an un-awaited promise in a serverless function
+  // is dropped the moment the response is returned and the instance freezes. The cost is one
+  // Graph call on her last step, which is the same shape /api/notify/funnel already accepts.
+  await emailReferralCreated({
+    clinicName: resolved.client.displayName,
+    config: referralEmailConfig(resolved.client),
+    friendName: text(body.friendName, MAX_FIELD),
+    friendContact: text(body.friendContact, MAX_FIELD),
+    serviceLabel,
+    friendOfferText: offerText,
+    referrerOfferText,
+    code,
+    mode,
+    // Rebuilt here from the host the request arrived on rather than taken from the body: a URL
+    // from a request body is a URL somebody else chose to put in an email we send.
+    claimUrl: claimUrl(hubHost, code, appUrl()),
+  });
 
   return NextResponse.json({ id: (data?.id as string | undefined) ?? null });
 }

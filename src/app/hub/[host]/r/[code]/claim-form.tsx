@@ -14,15 +14,33 @@
 
 import { useState } from "react";
 
-export function ClaimForm({ code, businessName }: { code: string; businessName: string }) {
+/** The browser's half of the check. The route's copy is the boundary; this one is a courtesy. */
+const EMAIL = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;.]{2,}$/;
+
+export function ClaimForm({
+  code,
+  businessName,
+  askEmail,
+}: {
+  code: string;
+  businessName: string;
+  /**
+   * ‼️ ONLY TRUE WHEN THE CLINIC ACTUALLY SENDS THE CONFIRMATION. A form that asks for an address
+   * nothing uses is a form asking for something it does not need, and this page is read by
+   * somebody doing the clinic a favour. When it is false there is no field and no column written.
+   */
+  askEmail: boolean;
+}) {
   const [name, setName] = useState("");
   const [contact, setContact] = useState("");
   const [service, setService] = useState("");
+  const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const canSend = name.trim().length > 0 && contact.trim().length > 0;
+  const emailOk = !askEmail || EMAIL.test(email.trim());
+  const canSend = name.trim().length > 0 && contact.trim().length > 0 && emailOk;
 
   async function submit() {
     setBusy(true);
@@ -36,6 +54,8 @@ export function ClaimForm({ code, businessName }: { code: string; businessName: 
           name: name.trim(),
           contact: contact.trim(),
           service: service.trim() || undefined,
+          // Absent rather than empty when the field was never shown, so the route stores null.
+          email: askEmail ? email.trim() : undefined,
         }),
       });
       const json = (await res.json()) as { ok?: boolean; error?: string };
@@ -86,6 +106,21 @@ export function ClaimForm({ code, businessName }: { code: string; businessName: 
         />
       </label>
 
+      {askEmail && (
+        <label className="rev-claim-field">
+          {/* Required, and the label says what it buys. An address asked for with no reason given
+              is the field people put nonsense into. */}
+          <span>Email, so we can send this to you</span>
+          <input
+            type="email"
+            value={email}
+            autoComplete="email"
+            inputMode="email"
+            onChange={(e) => setEmail(e.target.value)}
+          />
+        </label>
+      )}
+
       <label className="rev-claim-field">
         {/* Optional, and labelled optional. The clinic can ask on the phone; a required field
             here is one more reason to close the tab. */}
@@ -105,6 +140,7 @@ export function ClaimForm({ code, businessName }: { code: string; businessName: 
 
       <p className="rev-hint">
         {businessName} will use this to contact you about this offer. Nothing else.
+        {askEmail ? " Your confirmation is sent on their behalf by SRT, their agency." : ""}
       </p>
     </div>
   );

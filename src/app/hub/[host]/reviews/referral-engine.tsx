@@ -28,7 +28,7 @@
 import type { HubClient } from "@/lib/hub/resolve";
 import { HubLogo } from "@/components/hub/hub-bodies";
 import { REVIEW_PLATFORMS } from "@/lib/hub/review-destinations";
-import { referralConfigFor } from "@/lib/hub/referral-config";
+import { referralConfigFor, referralEmailConfig } from "@/lib/hub/referral-config";
 import {
   VirtualAgentClient,
   type ReferralConfig,
@@ -105,6 +105,7 @@ export async function ReferralEngine({
 }) {
   const destinations = destinationsFor(client);
   const referralConfig = referral === undefined ? await referralConfigFor(client) : referral;
+  const emailConfig = referralEmailConfig(client);
 
   // needsSpanish: the spec requires Spanish for the questions and requires it to be checked by a
   // native speaker, because a machine translation of a deliberately sentiment-neutral question can
@@ -144,6 +145,8 @@ export async function ReferralEngine({
           destinations={destinations}
           needsSpanish={needsSpanish}
           referral={referralConfig}
+          // Her own email box, only where the clinic actually sends her the message.
+          askReferrerEmail={emailConfig.enabled && emailConfig.emailReferrer}
         />
       </div>
     </>

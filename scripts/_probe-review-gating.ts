@@ -66,6 +66,7 @@ const CARD = "src/lib/clients/artifacts/review-card.ts";
 const LIVE_ROUTE = "src/app/hub/[host]/page.tsx";
 const CSS = "src/app/hub/[host]/hub.css";
 const INVITE = "src/lib/hub/referral-invite.ts";
+const EMAILS = "src/lib/hub/referral-emails.ts";
 
 /**
  * Where a two-space-indented function body ends, used to cut one named function out of a source
@@ -401,8 +402,20 @@ check(
 // preference: consideration for a referral is an ordinary refer-a-friend deal, consideration for
 // a review is an incentivised review with an undisclosed material connection. The invite copy and
 // the message templates are the two places a well-meaning edit would cross it.
+//
+// ‼️ THE EMAILS JOINED THIS FENCE ON 2026-10-05, AND THEY ARE THE RISKIEST MEMBER OF IT. Three of
+// them reach a member of the public, one of them tells a patient which reward she has earned, and
+// a single sentence of the shape "thanks for your review, here is your discount" would convert a
+// refer-a-friend programme into a paid endorsement in writing, in an email we sent, with a copy
+// in the recipient's inbox. The module's answer is to avoid the subject entirely: the check below
+// is the proximity rule, and EMAILS_SAY_NOTHING_OF_IT just under it is the stronger one.
 const inviteSrc = stripComments(read(INVITE));
-for (const [label, src] of [["the walk", scriptSrc], ["the invite copy", inviteSrc]] as const) {
+const emailSrc = stripComments(read(EMAILS));
+for (const [label, src] of [
+  ["the walk", scriptSrc],
+  ["the invite copy", inviteSrc],
+  ["the referral email copy", emailSrc],
+] as const) {
   // Same-line proximity only. Written with an explicit character class rather than a newline
   // escape, for the reason FN_END is built the way it is.
   const near = "[^\\r\\n]{0,80}";
@@ -413,6 +426,22 @@ for (const [label, src] of [["the walk", scriptSrc], ["the invite copy", inviteS
     !tied,
     `${label} never ties the offer to leaving a review`,
     tied ? "an offer in exchange for a review is the one thing this lane may not say" : undefined
+  );
+}
+
+// ‼️ AND THE EMAILS DO NOT RAISE THE SUBJECT AT ALL, which is stronger than the proximity rule
+// above and much easier to keep true. Eighty characters is a judgement about how close is too
+// close; "the word is not in the file" needs no judgement. The three outward-facing messages are
+// about a referral and a reward earned when somebody comes in, and none of that needs the word.
+{
+  const saysIt = /\breview/i.test(emailSrc);
+  check(
+    !saysIt,
+    "the referral email copy never mentions what she writes, anywhere",
+    saysIt
+      ? "her reward is earned when the friend comes in; mentioning the other thing is what the " +
+        "FTC endorsement rules reach"
+      : undefined
   );
 }
 

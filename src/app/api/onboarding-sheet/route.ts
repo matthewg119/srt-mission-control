@@ -79,6 +79,8 @@ export async function GET(req: Request): Promise<NextResponse> {
       services: [],
       bookingSoftware: null,
       reviewPlatform: null,
+      // Nothing is on file, because nothing was read. See the header.
+      clientEmail: null,
     });
     return fileResponse(sheet.sheetFilename(clinicParam), buffer);
   }

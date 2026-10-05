@@ -18,6 +18,7 @@
 import { supabaseAdmin } from "@/lib/db";
 import type { HubClient } from "./resolve";
 import { DEFAULT_INVITE_MODE, readInviteMode, type InviteMode } from "./referral-invite";
+import { connectedMailbox, outreachMailboxes } from "@/config/outreach-mailboxes";
 
 export interface ReferralServiceOffer {
   serviceLabel: string;
@@ -120,4 +121,93 @@ export async function referralConfigFor(client: HubClient): Promise<ReferralConf
     reviewsHost,
     mode: mode ?? DEFAULT_INVITE_MODE,
   };
+}
+
+// ── The email settings, added 2026-10-05 ────────────────────────────────────────────────────────
+//
+// ‼️ EVERY ONE OF THESE IS OFF UNTIL SOMEBODY TURNS IT ON, PER CLIENT. Matthew wants to set this
+// up during an onboarding call "anytime", so it is four booleans and three addresses in the same
+// `clients.review_workflow` bag the rest of the referral settings live in, written by the Review
+// handover panel and by the step-thread commands in src/lib/clients/referral-setup.ts. A default
+// of true anywhere here would mean a clinic that never discussed email starts sending it the
+// moment the deploy lands.
+//
+// ‼️ AND THE SENDER IS ALWAYS AN SRT MAILBOX. A clinic's own address is not reachable:
+// /users/{mailbox}/sendMail only works for mailboxes inside this tenant that the delegated token
+// holds Send-As on. `replyTo` is what puts the clinic on the other end of a reply, and the honest
+// description of this arrangement is "SRT sends, the clinic is the reply-to". A real
+// from-the-clinic send needs a separate sending domain and a per-client delegation record, which
+// is a build of its own and is NOT what this is.
+
+export interface ReferralEmailConfig {
+  /** Master switch. False means nothing in this lane sends anything, whatever else is set. */
+  enabled: boolean;
+  /** The clinic hears about a new referral, and again when the friend claims. */
+  notifyClinic: boolean;
+  /** The friend hears what she claimed, at the address SHE typed on the claim form. */
+  emailFriend: boolean;
+  /** The patient hears that her friend came in, at the address SHE typed at the invite step. */
+  emailReferrer: boolean;
+  /** Where the clinic's own notifications land. Falls back to the clients row's email. */
+  notifyTo: string | null;
+  /**
+   * The SRT mailbox the message leaves from, already validated against the tenant allowlist.
+   *
+   * ‼️ VALIDATED RATHER THAN TRUSTED, because Graph answers an address it has no Send-As grant on
+   * with an error at send time and nothing upstream would notice. An unrecognised value falls
+   * back to the connected mailbox instead of silently stopping every send for that client.
+   */
+  fromMailbox: string;
+  /** The clinic's address, so a reply reaches them rather than us. */
+  replyTo: string | null;
+}
+
+/**
+ * One address, or null. Deliberately strict: a stored value that is not an address is a send that
+ * fails at Graph, which is a silent outage rather than a visible fault.
+ */
+export function oneEmail(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const value = raw.trim().toLowerCase();
+  if (value.length < 6 || value.length > 254) return null;
+  // One @, something either side, a dot in the domain, and no whitespace. Not RFC 5322 and not
+  // trying to be: this rejects what a person typo'd, and Graph is the real judge of the rest.
+  if (!/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;.]{2,}$/.test(value)) return null;
+  return value;
+}
+
+export function referralEmailConfig(client: HubClient): ReferralEmailConfig {
+  const bag = (client.reviewWorkflow ?? {}) as Record<string, unknown>;
+  const settings = (bag.referral_email ?? {}) as Record<string, unknown>;
+
+  return {
+    enabled: settings.enabled === true,
+    notifyClinic: settings.notify_clinic === true,
+    emailFriend: settings.email_friend === true,
+    emailReferrer: settings.email_referrer === true,
+    // The clinic's own record is the fallback, so turning the notification on during a call does
+    // not also require finding out where it should go.
+    notifyTo: oneEmail(settings.notify_to) ?? oneEmail(client.email),
+    fromMailbox: allowedMailbox(settings.from_mailbox),
+    replyTo: oneEmail(settings.reply_to),
+  };
+}
+
+/** The mailboxes a client may be configured to send from: the outreach rotation, nothing else. */
+export function allowedMailboxes(): string[] {
+  const list = outreachMailboxes().map((m) => m.address);
+  const connected = connectedMailbox();
+  return list.includes(connected) ? list : [connected, ...list];
+}
+
+/**
+ * The stored mailbox if it is one we can actually send from, the connected account otherwise.
+ *
+ * ‼️ IT FALLS BACK RATHER THAN REFUSING, on purpose. A typo'd mailbox that stopped every send for
+ * that client would be an outage with no error anywhere: the panel validates on the way in, and
+ * this is the second line for a value that got in some other way.
+ */
+export function allowedMailbox(raw: unknown): string {
+  const wanted = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  return allowedMailboxes().includes(wanted) ? wanted : connectedMailbox();
 }

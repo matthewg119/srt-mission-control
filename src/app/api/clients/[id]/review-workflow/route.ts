@@ -35,6 +35,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { supabaseAdmin } from "@/lib/db";
 import { REVIEW_URL_KEYS, parseReviewUrl, platformFromUrl, platformByKey } from "@/lib/hub/review-destinations";
+import { allowedMailboxes, oneEmail } from "@/lib/hub/referral-config";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -262,6 +263,91 @@ export async function POST(
 
     if (Object.keys(referral).length === 0) delete workflow.referral_offer;
     else workflow.referral_offer = referral;
+    touchedWorkflow = true;
+  }
+
+  // ── The referral emails (2026-10-05) ──────────────────────────────────────
+  //
+  // ‼️ SEVEN KEYS IN A SECOND NESTED OBJECT, AND EVERY BOOLEAN IS OFF UNTIL SOMEBODY SETS IT.
+  // Matthew wants this configurable during an onboarding call "anytime", so it is editable here
+  // and from the step thread (src/lib/clients/referral-setup.ts) and nowhere else. A default of
+  // true on any of these would mean a clinic that never discussed email starts sending it.
+  //
+  // ‼️ AN ADDRESS IS VALIDATED OR REFUSED, NEVER STORED AS TYPED, for the same reason the review
+  // URLs above are: a fat-fingered notify_to is a lead that silently never arrives, and a
+  // fat-fingered from_mailbox is every send for this client failing at Graph with nothing
+  // upstream noticing. A blank clears, which is how a clinic turns one off.
+  const EMAIL_FLAGS = [
+    ["referralEmailEnabled", "enabled"],
+    ["referralNotifyClinic", "notify_clinic"],
+    ["referralEmailFriend", "email_friend"],
+    ["referralEmailReferrer", "email_referrer"],
+  ] as const;
+  const EMAIL_ADDRESSES = [
+    ["referralNotifyTo", "notify_to"],
+    ["referralReplyTo", "reply_to"],
+  ] as const;
+
+  const touchesEmail =
+    EMAIL_FLAGS.some(([key]) => body[key] !== undefined) ||
+    EMAIL_ADDRESSES.some(([key]) => body[key] !== undefined) ||
+    body.referralFromMailbox !== undefined;
+
+  if (touchesEmail) {
+    const settings = { ...((workflow.referral_email ?? {}) as Record<string, unknown>) };
+
+    for (const [key, column] of EMAIL_FLAGS) {
+      if (body[key] === undefined) continue;
+      // Absent or false both mean off, and off is stored as an absent key rather than `false`,
+      // so the bag never accumulates a row of negatives.
+      if (body[key] === true) settings[column] = true;
+      else delete settings[column];
+    }
+
+    for (const [key, column] of EMAIL_ADDRESSES) {
+      if (body[key] === undefined) continue;
+      const raw = textOrNull(body[key]);
+      // Both null and undefined mean cleared here. textOrNull separates "absent" from "blank"
+      // for the callers that care; this one does not, and the key is simply removed.
+      if (raw === null || raw === undefined) {
+        delete settings[column];
+        continue;
+      }
+      const address = oneEmail(raw);
+      if (!address) {
+        return NextResponse.json(
+          { ok: false, error: `"${raw}" is not an email address.` },
+          { status: 400 }
+        );
+      }
+      settings[column] = address;
+    }
+
+    if (body.referralFromMailbox !== undefined) {
+      const raw = textOrNull(body.referralFromMailbox);
+      if (raw === null || raw === undefined) {
+        // Cleared means "the connected account", which is what allowedMailbox() falls back to.
+        delete settings.from_mailbox;
+      } else {
+        const wanted = raw.trim().toLowerCase();
+        // ‼️ REFUSED HERE RATHER THAN SILENTLY CORRECTED. allowedMailbox() falls back when it
+        // reads an unknown value, because a stored typo must not stop every send; but a person
+        // typing one into this panel should be told, not quietly overridden.
+        if (!allowedMailboxes().includes(wanted)) {
+          return NextResponse.json(
+            {
+              ok: false,
+              error: `We cannot send from ${wanted}. One of: ${allowedMailboxes().join(", ")}.`,
+            },
+            { status: 400 }
+          );
+        }
+        settings.from_mailbox = wanted;
+      }
+    }
+
+    if (Object.keys(settings).length === 0) delete workflow.referral_email;
+    else workflow.referral_email = settings;
     touchedWorkflow = true;
   }
 

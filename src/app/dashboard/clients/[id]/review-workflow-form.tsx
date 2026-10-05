@@ -69,6 +69,29 @@ export interface ReviewWorkflowView {
   defaultReferrerOffer: string | null;
   /** `review_workflow.referral_offer.mode`: "text" or "internal". */
   inviteMode: string | null;
+  // ── The referral emails (2026-10-05) ───────────────────────────────────
+  //
+  // ‼️ ALL FOUR BOOLEANS ARE OFF UNTIL SOMEBODY HERE TURNS THEM ON. `review_workflow
+  // .referral_email`, same bag, same merge. Editable here and from the step thread, which is
+  // what makes "set it up on the call, anytime" true rather than a deploy away.
+  /** The master switch. Nothing in this lane sends for this client while it is false. */
+  emailEnabled: boolean;
+  /** The clinic hears when a referral is made, and again when it is claimed. */
+  notifyClinic: boolean;
+  /** The friend gets a confirmation. Also what makes the claim form ask for their address. */
+  emailFriend: boolean;
+  /** The patient hears that her friend came in and her reward is due. */
+  emailReferrer: boolean;
+  /** Where the clinic's own notices go. Blank falls back to the clients row's email. */
+  notifyTo: string | null;
+  /** Which SRT mailbox sends. One of `mailboxOptions`. */
+  fromMailbox: string | null;
+  /** The clinic's address, so a reply reaches them rather than us. */
+  replyTo: string | null;
+  /** The mailboxes we can actually send from, straight off the outreach rotation. */
+  mailboxOptions: string[];
+  /** The clients row's own email, shown as the fallback so nobody has to guess what it is. */
+  clientEmail: string | null;
   /** `client_service_offers` rows, in sort order. */
   serviceOffers: Array<{
     serviceLabel: string;
@@ -123,6 +146,13 @@ export function ReviewWorkflowForm({
     view.defaultReferrerOffer ?? ""
   );
   const [inviteMode, setInviteMode] = useState(view.inviteMode ?? "text");
+  const [emailEnabled, setEmailEnabled] = useState(view.emailEnabled);
+  const [notifyClinic, setNotifyClinic] = useState(view.notifyClinic);
+  const [emailFriend, setEmailFriend] = useState(view.emailFriend);
+  const [emailReferrer, setEmailReferrer] = useState(view.emailReferrer);
+  const [notifyTo, setNotifyTo] = useState(view.notifyTo ?? "");
+  const [fromMailbox, setFromMailbox] = useState(view.fromMailbox ?? "");
+  const [replyTo, setReplyTo] = useState(view.replyTo ?? "");
   const [fillAll, setFillAll] = useState("");
   const [fillAllReferrer, setFillAllReferrer] = useState("");
   const [offers, setOffers] = useState<OfferRow[]>(() => [
@@ -203,6 +233,13 @@ export function ReviewWorkflowForm({
           defaultOffer,
           defaultReferrerOffer,
           inviteMode,
+          referralEmailEnabled: emailEnabled,
+          referralNotifyClinic: notifyClinic,
+          referralEmailFriend: emailFriend,
+          referralEmailReferrer: emailReferrer,
+          referralNotifyTo: notifyTo,
+          referralFromMailbox: fromMailbox,
+          referralReplyTo: replyTo,
         }),
       });
       const json = (await res.json()) as { ok: boolean; error?: string };
@@ -461,6 +498,143 @@ export function ReviewWorkflowForm({
             placeholder="A name or an email"
             onChange={(e) => setPrivateFeedbackTo(e.target.value)}
           />
+        </div>
+
+        {/*
+          ── The emails (2026-10-05) ──────────────────────────────────────────
+
+          ‼️ EVERYTHING HERE IS OFF UNTIL IT IS SWITCHED ON, PER CLIENT, and the master switch is
+          first so it reads as the thing it is. A clinic that has not discussed email sends none
+          of these, which is the state every client is in until somebody sits on this panel.
+
+          ‼️ AND THE SENDER IS US, WHICH THE PANEL SAYS OUT LOUD RATHER THAN IMPLYING OTHERWISE.
+          Graph can only send from a mailbox inside our own tenant, so "from the clinic's
+          address" is not on offer here and must not look as though it is. The clinic's address
+          is the REPLY-TO, and the note under the picker says so.
+        */}
+        <div id="referral-email" className="mt-5 rounded border border-white/10 p-3">
+          <p className={LABEL}>The emails</p>
+
+          <label className="mt-2 flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={emailEnabled}
+              onChange={(e) => setEmailEnabled(e.target.checked)}
+            />
+            <span>
+              Send referral emails for this client
+              <span className="block text-xs text-white/50">
+                Off for every client until it is ticked here. Nothing below sends while it is off.
+              </span>
+            </span>
+          </label>
+
+          <div className={emailEnabled ? "mt-3 space-y-2" : "mt-3 space-y-2 opacity-40"}>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-1"
+                disabled={!emailEnabled}
+                checked={notifyClinic}
+                onChange={(e) => setNotifyClinic(e.target.checked)}
+              />
+              <span>
+                Tell the clinic about each referral, and again when it is claimed
+                <span className="block text-xs text-white/50">
+                  This is the lead when nobody texts anybody, so it is the one to leave on.
+                </span>
+              </span>
+            </label>
+
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-1"
+                disabled={!emailEnabled}
+                checked={emailFriend}
+                onChange={(e) => setEmailFriend(e.target.checked)}
+              />
+              <span>
+                Confirm it to the friend
+                <span className="block text-xs text-white/50">
+                  Also what makes the claim form ask for their email. With this off it does not,
+                  because a form should not collect an address nothing uses.
+                </span>
+              </span>
+            </label>
+
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-1"
+                disabled={!emailEnabled}
+                checked={emailReferrer}
+                onChange={(e) => setEmailReferrer(e.target.checked)}
+              />
+              <span>
+                Tell the patient when her friend comes in
+                <span className="block text-xs text-white/50">
+                  Only when she has earned something and only when she gave us her own address at
+                  the counter. Sent at the claim, never at the referral.
+                </span>
+              </span>
+            </label>
+          </div>
+
+          <div className="mt-3">
+            <label className={LABEL} htmlFor="rw-notify-to">
+              Where the clinic&apos;s notices go
+            </label>
+            <input
+              id="rw-notify-to"
+              className={INPUT}
+              type="email"
+              value={notifyTo}
+              placeholder={view.clientEmail ? `Blank uses ${view.clientEmail}` : "An email address"}
+              onChange={(e) => setNotifyTo(e.target.value)}
+            />
+          </div>
+
+          <div className="mt-3">
+            <label className={LABEL} htmlFor="rw-reply-to">
+              Reply-to: the clinic&apos;s own address
+            </label>
+            <input
+              id="rw-reply-to"
+              className={INPUT}
+              type="email"
+              value={replyTo}
+              placeholder="Where a patient's reply should land"
+              onChange={(e) => setReplyTo(e.target.value)}
+            />
+          </div>
+
+          <div className="mt-3">
+            <label className={LABEL} htmlFor="rw-from-mailbox">
+              Sent from
+            </label>
+            <select
+              id="rw-from-mailbox"
+              className={INPUT}
+              value={fromMailbox}
+              onChange={(e) => setFromMailbox(e.target.value)}
+            >
+              <option value="">
+                {view.mailboxOptions[0] ? `${view.mailboxOptions[0]} (default)` : "Default"}
+              </option>
+              {view.mailboxOptions.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-white/50">
+              One of our own mailboxes, because that is all Microsoft will send as. The clinic
+              cannot be the sender without its own sending domain, so it is the reply-to instead,
+              and every message to a patient or a friend says we sent it on their behalf.
+            </p>
+          </div>
         </div>
 
         {/*

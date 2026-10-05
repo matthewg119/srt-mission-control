@@ -745,6 +745,26 @@ const DEFAULT_REWARD: CommandSpec = {
   implementedIn: "src/lib/clients/referral-setup.ts",
 };
 
+/**
+ * The emails (2026-10-05).
+ *
+ * ‼️ ONE COMMAND WITH A SUB-GRAMMAR, NOT SIX. `on`, `off`, `friend on|off`, `patient on|off`,
+ * `clinic on|off`, `notify <address>`, `reply <address>` and `from <mailbox>` all arrive through
+ * this one prefix, and an unrecognised form saves nothing and prints the whole grammar back. Six
+ * near-identical prefixes competing for the same first word is how `service offer:` nearly
+ * shadowed `referrer offer:` above.
+ *
+ * ‼️ ANCHORED ON `referral`, WHICH IS NOT `referrer`. Both begin "refer".
+ */
+const REFERRAL_EMAIL: CommandSpec = {
+  label: "referral email: notify front-desk@clinic.com",
+  test: /^\s*[`*_]*referral\s+email\s*:\s*\S+/i,
+  unmistakable: /^\s*[`*_]*referral\s+email\s*:/i,
+  pointAt: "review_handover",
+  what: "Who hears about a referral by email",
+  implementedIn: "src/lib/clients/referral-setup.ts",
+};
+
 // ── Step 21: the ladder, the angles, the headlines, the plan ─────────────────
 
 const LADDER: CommandSpec = {
@@ -956,7 +976,7 @@ export const STEP_COMMANDS: Record<StepKey, readonly CommandSpec[]> = {
   page_candidates: [],
   offsite_target_list: [],
   hub_preview: [TEMPLATE, TEMPLATE_RESET, TEMPLATE_PICK],
-  referral_engine_preview: [TEMPLATE, TEMPLATE_RESET, TEMPLATE_PICK, REVIEW_LINK, REVIEW_PLATFORM, CHARGE, SERVICE_OFFER, REFERRER_OFFER, DEFAULT_OFFER, DEFAULT_REWARD],
+  referral_engine_preview: [TEMPLATE, TEMPLATE_RESET, TEMPLATE_PICK, REVIEW_LINK, REVIEW_PLATFORM, CHARGE, SERVICE_OFFER, REFERRER_OFFER, DEFAULT_OFFER, DEFAULT_REWARD, REFERRAL_EMAIL],
   concierge_preview: [MASCOT, MASCOT_CONCEPTS, MASCOT_PICK, MASCOT_SKIP, MASCOT_CORNER, MASCOT_KEEP],
   site_replica: [TEMPLATE, TEMPLATE_RESET, TEMPLATE_PICK],
   review_card_pdf: [REVIEW_LINK, REVIEW_PLATFORM],
@@ -997,7 +1017,7 @@ export const STEP_COMMANDS: Record<StepKey, readonly CommandSpec[]> = {
   subdomain_live: [],
   first_page: [],
   cards_printed: [],
-  review_handover: [REVIEW_LINK, REVIEW_PLATFORM, CHARGE, SERVICE_OFFER, REFERRER_OFFER, DEFAULT_OFFER, DEFAULT_REWARD],
+  review_handover: [REVIEW_LINK, REVIEW_PLATFORM, CHARGE, SERVICE_OFFER, REFERRER_OFFER, DEFAULT_OFFER, DEFAULT_REWARD, REFERRAL_EMAIL],
   concierge_live: [],
   tracking_installed: [],
   self_report_field: [],

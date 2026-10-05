@@ -4206,6 +4206,7 @@ import * as visionT from "../src/lib/hub/skin-vision";
     services: [],
     bookingSoftware: null,
     reviewPlatform: null,
+    clientEmail: null,
   });
   const blankText = pdfText(blank);
 
@@ -4234,11 +4235,21 @@ import * as visionT from "../src/lib/hub/skin-vision";
       services: ["Botox", "Dermal filler", "Hydrafacial"],
       bookingSoftware: "Boulevard",
       reviewPlatform: "Google",
+      clientEmail: "front@acmemedspa.com",
     })
   );
   ok("prefilled services are printed", prefilled.includes("Hydrafacial"));
   ok("a booking system on file is named", prefilled.includes("Boulevard"));
   ok("the review destination on file is named", prefilled.includes("Google"));
+  // ‼️ PRINTED AS "On file:" AND NOT AS THE ANSWER. clients.email is intake step 1's canonical
+  // NAP address, which is not necessarily an inbox anybody watches for leads, so the call has to
+  // confirm or replace it rather than find the line already filled in.
+  ok("an email on file is offered rather than assumed", prefilled.includes("On file: front@acmemedspa.com"));
+  ok("and a blank sheet offers none", !blankText.includes("On file:"));
+  // Both addresses are asked for, and both have a writer: the panel and `referral email:`.
+  ok("the sheet asks where referrals are emailed", blankText.includes("emailed to"));
+  ok("and where a reply should land", blankText.includes("replies to one of those"));
+  ok("section 5 covers email, not only texts", blankText.includes("automated texts or emails"));
 
   // ── The clamp, which the route and the chat tool both stand on ──
   eq("a short name is tidied and kept", clampClinicName("  Med  Spa 123 "), "Med Spa 123");

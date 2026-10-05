@@ -277,6 +277,15 @@ export interface OnboardingSheetInput {
   /** Whatever is already on file, so the call does not ask for it twice. */
   bookingSoftware: string | null;
   reviewPlatform: string | null;
+  /**
+   * `clients.email`, shown against the referral inbox question.
+   *
+   * ‼️ IT IS A PREFILL AND NOT AN ANSWER. Intake step 1 collects this as the business's
+   * canonical NAP address, which is what every directory is then made to match; it is not
+   * necessarily an inbox anybody watches for leads. So it is printed as "On file: x" next to the
+   * question rather than instead of it, and the call confirms or replaces it.
+   */
+  clientEmail: string | null;
 }
 
 export function renderOnboardingSheet(input: OnboardingSheetInput): Buffer {
@@ -365,6 +374,15 @@ export function renderOnboardingSheet(input: OnboardingSheetInput): Buffer {
   });
   field(cur, "Who should receive private feedback a patient does not want posted?");
   field(cur, "Which number should a patient's referral text come from?");
+  // ‼️ TWO ADDRESSES AND NOT ONE, because they are two different jobs and a clinic will give
+  // two different answers. The first is an inbox somebody watches; the second is where a patient
+  // or her friend lands when they hit reply, which is often the owner rather than the desk. Both
+  // are written by the Review handover panel and by `referral email:` in the step thread, so
+  // neither is a question with nowhere to put the answer.
+  field(cur, "Which inbox should new referrals be emailed to?", {
+    prefill: input.clientEmail ? `On file: ${input.clientEmail}` : null,
+  });
+  field(cur, "And if a patient replies to one of those emails, who should it reach?");
   doc.setFontSize(8);
   doc.setFont("helvetica", "italic");
   setColor(doc, "text", SOFT);
@@ -388,14 +406,14 @@ export function renderOnboardingSheet(input: OnboardingSheetInput): Buffer {
   section(
     cur,
     5,
-    "Before we switch on automated texts",
+    "Before we switch on automated texts or emails",
     "The QR card needs none of this: a patient uses her own phone and her answers are not tied to " +
-      "her name. This is for the point where you hand us patient phone numbers."
+      "her name. This is for the point where you hand us patient phone numbers or addresses."
   );
   checkbox(cur, "Business Associate Agreement signed");
-  checkbox(cur, "Your patient intake forms already cover texting patients");
+  checkbox(cur, "Your patient intake forms already cover texting and emailing patients");
   field(cur, "Who is your privacy contact?");
-  field(cur, "Which system will patient phone numbers come from?");
+  field(cur, "Which system will patient phone numbers and addresses come from?");
 
   // ── 6. Sign-off ──
   section(cur, 6, "Sign-off", "Cards get printed from this. A reprint costs a week.");
@@ -427,11 +445,12 @@ export async function generateOnboardingSheet(
   let services: string[] = [];
   let bookingSoftware: string | null = null;
   let reviewPlatform: string | null = null;
+  let clientEmail: string | null = null;
 
   try {
     const { data } = await supabaseAdmin
       .from("clients")
-      .select("dba_name, legal_name, services, booking_software, review_destination_primary")
+      .select("dba_name, legal_name, services, booking_software, review_destination_primary, email")
       .eq("id", clientId)
       .maybeSingle();
 
@@ -449,12 +468,20 @@ export async function generateOnboardingSheet(
       typeof row.review_destination_primary === "string" && row.review_destination_primary.trim()
         ? row.review_destination_primary.trim()
         : null;
+    clientEmail =
+      typeof row.email === "string" && row.email.trim() ? row.email.trim() : null;
     services = readServices(row.services);
   } catch (e) {
     console.error("[artifacts/onboarding-sheet] prefill read failed:", (e as Error).message);
   }
 
-  return renderOnboardingSheet({ clinicName, services, bookingSoftware, reviewPlatform });
+  return renderOnboardingSheet({
+    clinicName,
+    services,
+    bookingSoftware,
+    reviewPlatform,
+    clientEmail,
+  });
 }
 
 /**

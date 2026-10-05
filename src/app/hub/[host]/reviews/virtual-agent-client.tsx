@@ -123,6 +123,15 @@ interface Props {
   destinations: ReviewDestination[];
   needsSpanish: boolean;
   referral?: ReferralConfig | null;
+  /**
+   * Whether to offer her a box for her own email at the invite step.
+   *
+   * ‼️ ONLY TRUE WHEN THE CLINIC ACTUALLY SENDS HER THE MESSAGE, and the field is additionally
+   * hidden when she has no reward of her own, because the only thing that message says is which
+   * reward she has earned. Asking for an address that buys her nothing is the shape of a form
+   * collecting an address because it can.
+   */
+  askReferrerEmail?: boolean;
 }
 
 const BUBBLE_GAP_MS = { min: 400, max: 900 } as const;
@@ -154,6 +163,7 @@ export function VirtualAgentClient({
   destinations,
   needsSpanish,
   referral = null,
+  askReferrerEmail = false,
 }: Props) {
   const [answers, setAnswers] = useState<ReviewAnswers>({});
   const [edited, setEdited] = useState<string | null>(null);
@@ -187,6 +197,16 @@ export function VirtualAgentClient({
   // and they go to referral_invites, never to review_tool_submissions.
   const [friendName, setFriendName] = useState("");
   const [friendContact, setFriendContact] = useState("");
+  /**
+   * HER OWN address, and it is the only reason she is ever written to.
+   *
+   * ‼️ IT IS IN THIS BAG AND NOT IN `answers`, LIKE HER FRIEND'S DETAILS AND FOR THE SAME REASON.
+   * Nothing here is a ReviewQuestion key, so it is not assignable to ReviewAnswers, not iterable
+   * by assembleLabelled or assemblePlain, not storable by the submit route's answers loop and not
+   * reachable from the clipboard. It goes to referral_invites.referrer_email and the submit route
+   * never sees it, which is what keeps review_tool_submissions free of anything identifying.
+   */
+  const [referrerEmail, setReferrerEmail] = useState("");
   const [templateKey, setTemplateKey] = useState(INVITE_TEMPLATES[0].key);
   const [inviteSent, setInviteSent] = useState(false);
   /**
@@ -670,6 +690,8 @@ export function VirtualAgentClient({
           code,
           friendName: friendName.trim() || null,
           friendContact: friendContact.trim() || null,
+          // Hers, when she gave one. The route validates it and stores null for anything else.
+          referrerEmail: referrerEmail.trim() || null,
           mode,
           channel,
         }),
@@ -1000,6 +1022,23 @@ export function VirtualAgentClient({
                       <button type="button" className="va-skip" onClick={() => void pickContact()}>
                         Or pick from contacts
                       </button>
+                      {/*
+                        ‼️ HERS, OPTIONAL, AND LAST. It is below her friend's details because her
+                        friend's details are what the step is for; hers buys one message when that
+                        friend comes in. The placeholder says so, and leaving it blank costs her
+                        nothing: no address means no message and nothing ever asks again.
+                      */}
+                      {askReferrerEmail && referrerOffer && (
+                        <input
+                          type="email"
+                          value={referrerEmail}
+                          onChange={(e) => setReferrerEmail(e.target.value)}
+                          placeholder="Your email, to hear when they book (optional)"
+                          aria-label="Your own email, optional"
+                          autoComplete="email"
+                          inputMode="email"
+                        />
+                      )}
                     </div>
                     )}
 
