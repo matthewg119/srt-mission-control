@@ -47,12 +47,16 @@ import {
   type ReviewAnswers,
 } from "../src/lib/hub/review-assemble";
 
-// ‼️ A LIST, NOT A CONSTANT. Both files open on the same stars, both assemble the same way, and
-// every check below that reads "the client" reads both.
-const CLIENTS = [
-  "src/app/hub/[host]/reviews/referral-engine-client.tsx",
-  "src/app/hub/[host]/reviews/virtual-agent-client.tsx",
-] as const;
+// ‼️ STILL A LIST THOUGH IT HOLDS ONE FILE, AND THAT IS DELIBERATE.
+//
+// It held two until 2026-10-05: v1 and the Virtual Agent were both renderings of this regulated
+// surface, and the point of the list was that "a second file is a second copy" of every rule
+// below. v1 was deleted when Matthew picked one design, so there is one rendering again.
+//
+// Collapsing this back to a constant would save a line and lose the mechanism. The next time
+// somebody builds a second chat to compare, the only thing standing between that and an
+// unchecked copy of a review surface is how easy it is to add it here.
+const CLIENTS = ["src/app/hub/[host]/reviews/virtual-agent-client.tsx"] as const;
 const V2 = "src/app/hub/[host]/reviews/virtual-agent-client.tsx";
 const TOOL = "src/app/hub/[host]/reviews/referral-engine.tsx";
 const SUBMIT = "src/app/api/hub/reviews/submit/route.ts";
@@ -457,17 +461,21 @@ for (const [label, src] of [["the walk", scriptSrc], ["the invite copy", inviteS
     "and her provider alone does not manufacture one"
   );
   check(
-    assembleLead({ service: "lip filler" }) === "Got lip filler.",
-    "a service alone names the service and stops"
+    assembleLead({ service: "lip filler" }) === "Got lip filler today.",
+    "a service alone names the service and stops",
+    assembleLead({ service: "lip filler" }) ?? "null"
   );
   check(
-    assembleLead({ service: "lip filler", provider: "Sarah" }) === "Got lip filler with Sarah.",
-    "and both together read as one sentence"
+    assembleLead({ service: "lip filler", provider: "Sarah" }) ===
+      "Got lip filler with Sarah today.",
+    "and both together read as one sentence",
+    assembleLead({ service: "lip filler", provider: "Sarah" }) ?? "null"
   );
   // Her own punctuation is not doubled up by the template's full stop.
   check(
-    assembleLead({ service: "Botox." }) === "Got Botox.",
-    "a trailing full stop of hers is not doubled"
+    assembleLead({ service: "Botox." }) === "Got Botox today.",
+    "a trailing full stop of hers is not doubled",
+    assembleLead({ service: "Botox." }) ?? "null"
   );
 
   // ‼️ CONSUMED, NOT DUPLICATED. Without this a v5 review would open with the lead line and
@@ -475,10 +483,13 @@ for (const [label, src] of [["the walk", scriptSrc], ["the invite copy", inviteS
   const v5 = { service: "lip filler", provider: "Sarah", liked: "it looks natural" } as ReviewAnswers;
   const plain = assemblePlain(v5, { lead: true });
   check(
-    plain === [`Got lip filler with Sarah.`, `It looks natural.`].join(LF),
+    plain === "Got lip filler with Sarah today. It looks natural.",
     "the lead line replaces those two bullets rather than adding to them",
     JSON.stringify(plain)
   );
+  // ‼️ ONE PARAGRAPH, NOT A COLUMN. v5 joins with a space; a stack of one-line sentences reads
+  // as a filled-in form next to reviews people actually typed.
+  check(!plain.includes(LF), "and a v5 review is one paragraph");
   check(
     LEAD_KEYS.every((k) => ALL_REVIEW_QUESTIONS.some((q) => q.key === k)),
     "and every key it consumes is a real question"
@@ -490,6 +501,10 @@ for (const [label, src] of [["the walk", scriptSrc], ["the invite copy", inviteS
     assemblePlain(v5) === [`Lip filler.`, `It looks natural.`, `Sarah.`].join(LF),
     "without the flag it assembles the old way, byte for byte",
     JSON.stringify(assemblePlain(v5))
+  );
+  check(
+    assemblePlain(v5).includes(LF),
+    "and still one line per answer, which is what stored v3 and v4 rows were written as"
   );
 }
 

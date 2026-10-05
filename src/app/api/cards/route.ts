@@ -82,6 +82,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     REVIEW_PLATFORMS.map((p) => p.name)
   );
   const finish = oneOf(body.finish, ["call", "self"]);
+  const daypart = oneOf(body.daypart, ["Mornings", "Afternoons"]);
   const freeWebsite = body.freeWebsite === true;
 
   const leadName = [firstName, lastName].filter(Boolean).join(" ");
@@ -93,6 +94,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const headline =
     (finish === "call" ? "CARDS, booking a call: " : "CARDS, self-serve: ") +
     `${leadName} · ${site || (saidNoWebsite ? "NO WEBSITE" : "?")} · ${revenue || "revenue ?"}` +
+    (daypart ? ` · prefers ${daypart.toLowerCase()}` : "") +
     (freeWebsite ? " · ⚠️ WANTS THE FREE WEBSITE (4h)" : "") +
     (platform ? ` · reviews to ${platform}` : "");
 
@@ -108,6 +110,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     detailLines: [
       `Finishing by: ${finish === "call" ? "the setup call" : "setting it up themselves"}`,
       revenue ? `Yearly revenue: ${revenue}` : "",
+      // A PREFERENCE and not a booking. The calendar is what books anybody; this is what they
+      // said suits them, which is worth knowing if they never pick a slot.
+      daypart ? `Prefers ${daypart.toLowerCase()} for the call` : "",
       saidNoWebsite ? "Website: they do not have one" : site ? `Website: ${site}` : "",
       freeWebsite ? "Free website: YES, options owed within 4 hours" : "",
       platform ? `Reviews should go to: ${platform}` : "",

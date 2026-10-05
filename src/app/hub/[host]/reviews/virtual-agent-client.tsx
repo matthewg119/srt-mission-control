@@ -51,6 +51,7 @@ import {
   CONNECTING_LINE,
   CONNECTING_MS,
   INVITE_REWARD_LINE,
+  QUESTION_COUNT_WORD,
   REVIEW_SCRIPT,
   fillBusiness,
   fillOffer,
@@ -116,6 +117,8 @@ export interface ReferralConfig {
 
 interface Props {
   businessName: string;
+  /** "Miami, FL". Rendered under the clinic's name on the opening card; omitted when unknown. */
+  location?: string | null;
   clientId: string;
   destinations: ReviewDestination[];
   needsSpanish: boolean;
@@ -146,6 +149,7 @@ interface Bubble {
 
 export function VirtualAgentClient({
   businessName,
+  location = null,
   clientId,
   destinations,
   needsSpanish,
@@ -712,28 +716,65 @@ export function VirtualAgentClient({
         simply covers it rather than the page having to render two ways.
         The COPY is untouched and is not themable (Runner v3 5g).
       */}
-      <header className="hub-head">
-        <p className="hub-eyebrow">{businessName}</p>
-        <h1>Leave us a review</h1>
-        <p className="hub-lede">
-          About ninety seconds. Answer whichever you like and skip the rest. Nothing is posted
-          unless you post it yourself.
-        </p>
+      {/*
+        The clinic's identity, and it STAYS RENDERED BEHIND THE PANEL. It is the one thing that
+        makes reviews.{domain} look like the same business as learn.{domain}; the panel simply
+        covers it rather than the page having to render two ways.
+
+        ‼️ REDESIGNED 2026-10-05 TO MATTHEW'S MOCKUP, and the COPY is still not themable
+        (Runner v3 5g). What changed is the furniture: a monogram, the clinic's town, a serif
+        headline and two lines saying what this costs her and what it does not do. The old version
+        was an eyebrow, a heading and a bare Start button, which he called horrible and which was
+        giving a patient no reason at all to tap.
+      */}
+      <header className="rev-open-id">
+        <span className="rev-open-mark" aria-hidden="true">
+          {businessName.trim().charAt(0).toUpperCase()}
+        </span>
+        <span className="rev-open-who">
+          <span className="rev-open-name">{businessName}</span>
+          {location ? <span className="rev-open-where">{location}</span> : null}
+        </span>
       </header>
 
       {!revealed && stage === "intro" && (
-        <>
+        <div className="rev-open">
           {/*
             ‼️ THE STARS USED TO BE ON THIS SCREEN AND THEY MOVED INTO THE WALK (2026-10-05).
             Matthew's order asks what she had and who did it before it asks her to score anything,
             and the front desk hands the card over on the provider question, so the first thing on
-            screen can no longer be a rating. The block itself is unchanged and now lives in the
-            composer; see the `stars` arm below.
+            screen can no longer be a rating.
 
-            What is left here is the handover and nothing else. It needs a tap of its own because
-            the panel's five second connect has to start from a deliberate action rather than from
-            the page loading, or she spends it looking at a spinner she did not ask for.
+            What is left is the handover. It needs a tap of its own because the panel's five
+            second connect has to start from a deliberate action rather than from the page
+            loading, or she spends it looking at a spinner she did not ask for.
           */}
+          <p className="rev-open-eyebrow">Thank you for visiting</p>
+          <h1 className="rev-open-title">Leave us a review</h1>
+          <p className="rev-open-lede">
+            Answer whichever questions you like and skip the rest. Nothing is posted unless you
+            post it yourself.
+          </p>
+
+          <ul className="rev-open-facts">
+            <li>
+              <svg viewBox="0 0 24 24" aria-hidden="true" width="15" height="15" fill="none"
+                stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 7v5l3 2" />
+              </svg>
+              <span>About ninety seconds</span>
+            </li>
+            <li>
+              <svg viewBox="0 0 24 24" aria-hidden="true" width="15" height="15" fill="none"
+                stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="4" y="10" width="16" height="10" rx="2" />
+                <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+              </svg>
+              <span>You decide what gets shared</span>
+            </li>
+          </ul>
+
           {needsSpanish && (
             // Rendered rather than hidden, because a Spanish-speaking customer being handed
             // English questions is a real thing to notice, and the spec forbids inventing the
@@ -744,7 +785,16 @@ export function VirtualAgentClient({
           <button type="button" className="rev-primary" onClick={leaveIntro}>
             Start
           </button>
-        </>
+
+          {/*
+            ‼️ THE COUNT IS DERIVED, NOT TYPED, and onboarding2 carries the scar that explains
+            why: its intro said "Six questions" while the array held seven, which is a small lie
+            told at the exact moment somebody has just agreed to something. CARD_QUESTIONS is the
+            same list the printed card prints, so the number on screen and the number on the card
+            cannot disagree either.
+          */}
+          <p className="rev-open-count">{QUESTION_COUNT_WORD} short questions</p>
+        </div>
       )}
 
       {chatting && (
@@ -1001,11 +1051,21 @@ export function VirtualAgentClient({
                 ) : awaiting === "text" ? (
                   <div className="va-composer">
                     <div className="va-bar">
+                      {/*
+                        ‼️ THE PLACEHOLDER IS GREY TEXT AND NEVER A VALUE. `placeholder` cannot be
+                        submitted, does not survive a tap, and leaves an empty answer empty. The
+                        moment it became `value` or a defaultValue she could simply press Send on,
+                        this tool would be handing her review content she did not write.
+                      */}
                       <textarea
                         rows={2}
                         value={composed}
                         onChange={(e) => setComposed(e.target.value)}
-                        placeholder="Type your answer"
+                        placeholder={
+                          step.kind === "ask" && step.placeholder
+                            ? step.placeholder
+                            : "Type your answer"
+                        }
                         aria-label={step.kind === "ask" ? step.prompt : "Your answer"}
                       />
                       <button
@@ -1022,9 +1082,16 @@ export function VirtualAgentClient({
                       A COMMAND, not an answer. Nothing it does puts a word into what gets copied.
                       "Answer whichever you like and skip the rest" was free when four boxes sat
                       on one screen and has to be built once the questions arrive one at a time.
+
+                      ‼️ THE LABEL IS PER QUESTION SINCE 2026-10-05 AND STILL STORES NOTHING. "I was
+                      not concerned about anything" is Matthew's wording and it is a real answer to
+                      the question, so it reads as one; what it DOES is identical to the generic
+                      skip, which is commit("") and therefore no bullet at all. A skip whose label
+                      is a sentence must never start storing that sentence, or the button becomes
+                      us writing her review with a nicer tap target.
                     */}
                     <button type="button" className="va-skip" onClick={() => commit("")}>
-                      Skip this one
+                      {step.kind === "ask" && step.skipLabel ? step.skipLabel : "Skip this one"}
                     </button>
                   </div>
                 ) : null}

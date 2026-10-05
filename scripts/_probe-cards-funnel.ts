@@ -71,10 +71,24 @@ check(
   /finish === "self"/.test(clientSrc) && /CARDS_PLATFORM_STEP/.test(clientSrc),
   "the client appends it only when the finish is self-serve"
 );
-check(
-  !/finish === "call"[\s\S]{0,200}CARDS_PLATFORM_STEP/.test(clientSrc),
-  "and never on the call branch"
-);
+// ‼️ ASSERT THE PUSH, NOT THE PROXIMITY. This read "no CARDS_PLATFORM_STEP within 200
+// characters of the call branch", which broke the moment the call branch gained its own
+// daypart line directly above it. Distance in a file is not the rule; what the rule is, is that
+// the platform step is pushed under exactly one condition and it is the self one.
+{
+  const push = clientSrc.match(/if \(finish === "(\w+)"\) out\.push\(CARDS_PLATFORM_STEP\);/);
+  check(
+    push?.[1] === "self",
+    "and the platform step is pushed only on the self branch",
+    push ? `pushed under finish === "${push[1]}"` : "no push found at all"
+  );
+  const daypart = clientSrc.match(/if \(finish === "(\w+)"\) out\.push\(DAYPART_STEP\);/);
+  check(
+    daypart?.[1] === "call",
+    "and the daypart question only on the call branch",
+    daypart ? `pushed under finish === "${daypart[1]}"` : "no push found at all"
+  );
+}
 // The last step of the main script is the fork, so nothing scripted follows a booking.
 check(
   CARDS_SCRIPT[CARDS_SCRIPT.length - 1].kind === "fork",

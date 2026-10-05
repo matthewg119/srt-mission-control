@@ -124,7 +124,29 @@ export type ScriptStep =
   /** The agent talking. Fixed copy, identical for every client. */
   | { kind: "say"; id: string; text: string }
   /** A question whose answer is hers, and becomes one line of the review. */
-  | { kind: "ask"; id: string; key: ReviewQuestion["key"]; prompt: string }
+  /**
+   * A question whose answer is hers, and becomes one line of the review.
+   *
+   * `placeholder` is grey text in the box she types into. Matthew, 2026-10-05: she needs to see
+   * that she can start typing, and roughly what a usable answer looks like.
+   *
+   * ‼️ IT IS A PLACEHOLDER AND NEVER A DEFAULT VALUE, which is the whole difference between a
+   * prompt and a draft. It is not in the box, it cannot be submitted, and an empty answer stays
+   * empty. The moment it became prefilled text she could simply send, this tool would be
+   * generating review content she did not write, which is the Rytr fact pattern.
+   *
+   * `skipLabel` replaces the generic "Skip this one" where a specific phrasing is kinder. "I was
+   * not concerned about anything" is a real answer to the question and it stores NOTHING, which
+   * is exactly what the generic skip already did; it just reads like a person wrote it.
+   */
+  | {
+      kind: "ask";
+      id: string;
+      key: ReviewQuestion["key"];
+      prompt: string;
+      placeholder?: string;
+      skipLabel?: string;
+    }
   /**
    * A yes/no question. Its answer is a branch and is never stored.
    *
@@ -177,7 +199,15 @@ export const REVIEW_SCRIPT: ScriptStep[] = [
     id: "greeting",
     text: "Hi, I am the Virtual Agent for {business}. A few short questions about your visit, and you can skip any of them.",
   },
-  { kind: "ask", id: "q_service", key: "service", prompt: "What service did you get done with us?" },
+  {
+    kind: "ask",
+    id: "q_service",
+    key: "service",
+    prompt: "What service did you get done with us?",
+    // ‼️ A NOUN, BECAUSE assembleLead() PUTS IT MID-SENTENCE. "Got lip filler with Sarah today."
+    // The placeholder is where she learns that, and it is cheaper than a rule in the assembler.
+    placeholder: "Lip filler",
+  },
 
   { kind: "say", id: "ack_service", text: "Thank you." },
   {
@@ -193,6 +223,8 @@ export const REVIEW_SCRIPT: ScriptStep[] = [
     id: "q_provider",
     key: "provider",
     prompt: "Who took care of you today?",
+    placeholder: "Sarah",
+    skipLabel: "I would rather not say",
   },
 
   { kind: "stars", id: "q_stars", prompt: "How would you rate your visit?" },
@@ -232,6 +264,10 @@ export const REVIEW_SCRIPT: ScriptStep[] = [
     id: "q_liked",
     key: "liked",
     prompt: "What did you like about our experience the most?",
+    // Matthew's own example, and it does two jobs: it shows the sentence SHAPE ("I loved...") so
+    // her answer reads on from the lead line, and it shows the level of detail that makes a
+    // review quotable. It is grey text she types over, never a draft she can send.
+    placeholder: "I loved how natural it looks, nobody could tell",
   },
 
   { kind: "say", id: "ack_liked", text: "Good to hear." },
@@ -242,6 +278,8 @@ export const REVIEW_SCRIPT: ScriptStep[] = [
     // Asked of everybody, not only of somebody who scored low. A question about what could be
     // better that is only put to unhappy customers is a sorting mechanism.
     prompt: "What did you not like about our experience? It helps us improve.",
+    placeholder: "Honestly nothing, the wait was short",
+    skipLabel: "Nothing I can think of",
   },
 
   { kind: "say", id: "ack_improve", text: "That is useful, and it is the part we act on." },
@@ -254,7 +292,14 @@ export const REVIEW_SCRIPT: ScriptStep[] = [
     onYes: "q_expectations",
     onNo: null,
   },
-  { kind: "ask", id: "q_expectations", key: "expectations", prompt: "What were they?" },
+  {
+    kind: "ask",
+    id: "q_expectations",
+    key: "expectations",
+    prompt: "What were they?",
+    placeholder: "I expected it to take a few visits",
+    skipLabel: "Nothing specific",
+  },
 
   {
     kind: "gate",
@@ -265,7 +310,17 @@ export const REVIEW_SCRIPT: ScriptStep[] = [
     onYes: "q_concerns",
     onNo: null,
   },
-  { kind: "ask", id: "q_concerns", key: "concerns", prompt: "Tell us about it." },
+  {
+    kind: "ask",
+    id: "q_concerns",
+    key: "concerns",
+    prompt: "Tell us about it.",
+    placeholder: "I was worried it would look overdone",
+    // ‼️ THE SKIP THAT MATTHEW ASKED FOR BY NAME, and it stores nothing, exactly as the
+    // generic skip did. She has already said Yes to the gate by the time she is here, so the
+    // honest escape is one that lets her change her mind without typing an apology.
+    skipLabel: "I was not concerned about anything",
+  },
 
   {
     kind: "gate",
@@ -276,7 +331,14 @@ export const REVIEW_SCRIPT: ScriptStep[] = [
     onYes: "q_fears",
     onNo: null,
   },
-  { kind: "ask", id: "q_fears", key: "fears", prompt: "Tell us about it." },
+  {
+    kind: "ask",
+    id: "q_fears",
+    key: "fears",
+    prompt: "Tell us about it.",
+    placeholder: "I was afraid it would hurt",
+    skipLabel: "I was not afraid of anything",
+  },
 
   { kind: "say", id: "closing", text: "That is everything. Here are your own words, back." },
 ];
@@ -334,6 +396,26 @@ export const CARD_QUESTIONS: string[] = (() => {
   }
   return out;
 })();
+
+/**
+ * How many questions the opening card promises, as a word.
+ *
+ * ‼️ DERIVED FROM CARD_QUESTIONS, NEVER TYPED, AND onboarding2 CARRIES THE SCAR. Its intro read
+ * "Six questions" while the array held seven, which its own comment calls "a small lie told at the
+ * exact moment somebody has just signed something". The same number is printed on card stock, so
+ * a hand-kept copy would also be the screen and the card disagreeing.
+ *
+ * Spelled out rather than rendered as a digit because it sits in a sentence on a page a patient
+ * reads, and falls back to the digit past twelve rather than inventing more words than the design
+ * will ever need.
+ */
+const NUMBER_WORDS = [
+  "Zero", "One", "Two", "Three", "Four", "Five", "Six",
+  "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve",
+];
+
+export const QUESTION_COUNT_WORD: string =
+  NUMBER_WORDS[CARD_QUESTIONS.length] ?? String(CARD_QUESTIONS.length);
 
 /**
  * The step after `index`, given how a gate or the recommend question at `index` was answered.

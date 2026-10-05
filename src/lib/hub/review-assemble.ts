@@ -257,9 +257,17 @@ export type ReviewAnswers = Partial<Record<ReviewQuestion["key"], string>>;
 // sentence would not be.
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
 
-/** Both halves of the lead line. A full stop belongs to the template, not to her fragment. */
-export const LEAD_WITH_PROVIDER = "Got {service} with {provider}.";
-export const LEAD_SERVICE_ONLY = "Got {service}.";
+/**
+ * Both halves of the lead line. A full stop belongs to the template, not to her fragment.
+ *
+ * ‼️ "today" IS A FACT AND NOT A FLOURISH, which is the only reason it is allowed in here. She
+ * is answering this at the counter on the day of the visit, so it is true by construction. It
+ * earns its place because it is what makes the line read as somebody talking rather than as a
+ * form: "Got lip filler with Sarah today" is a sentence, "Got lip filler with Sarah" is a label.
+ * Nothing else may be added on that argument: every other candidate is an adjective.
+ */
+export const LEAD_WITH_PROVIDER = "Got {service} with {provider} today.";
+export const LEAD_SERVICE_ONLY = "Got {service} today.";
 
 /**
  * The keys the lead line consumes, so they are not also emitted as their own bullets.
@@ -379,7 +387,16 @@ export function assemblePlain(answers: ReviewAnswers, opts?: { lead?: boolean })
     const text = assembleBullet(answers[question.key]);
     if (text) lines.push(text);
   }
-  return lines.join("\n");
+  // ‼️ v5 IS ONE PARAGRAPH AND v3/v4 ARE STILL ONE LINE EACH. Matthew, 2026-10-05, wrote out what
+  // he wanted it to look like and it was prose: "Got lip filler with sarah today I loved how
+  // natural it looks, nobody could tell. I was worried It would look overdone." A column of
+  // sentences on separate lines reads as a form somebody filled in, which is exactly how it looks
+  // on a Google profile beside reviews people actually typed.
+  //
+  // Tied to the SAME flag as the lead line rather than to a second option, because they are one
+  // decision: v5 produces a paragraph, and everything before it produces the lines its author
+  // already saw and approved.
+  return lines.join(opts?.lead ? " " : "\n");
 }
 
 /** Nothing typed in any of the four. */

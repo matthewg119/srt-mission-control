@@ -1,70 +1,39 @@
 // The reviews host, server side. Resolves the destinations and hands them to the client
 // component; no interactivity and no state here.
+//
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// ‼️ THERE IS ONE DESIGN NOW. v1 AND THE THREE "LOOKS" WERE DELETED ON 2026-10-05.
+//
+// This file used to carry two axes of choice. `look` picked one of three CSS skins over the v1
+// chat's markup, and `engine` picked between v1 (the four-question chat with a microphone) and
+// `panel` (the Virtual Agent). Both existed to be compared and then collapsed, and both said so
+// in this file: "When he picks, the winner becomes DEFAULT_LOOK and the other two rulesets can
+// go", and "Delete it once the new one has run long enough to trust, and delete the probe's
+// second CLIENTS entry with it."
+//
+// Matthew picked on 2026-10-05: the refined opening card, the Virtual Agent walk, every client,
+// no alternates. "dont let any other option c page persist existing we need to get rid of
+// absolutely all of those old pages."
+//
+// ‼️ WHAT THAT BOUGHT, BEYOND TIDINESS. A second rendering of a REGULATED surface is a second
+// place for the anti-gating rules to be got wrong, and scripts/_probe-review-gating.ts had to
+// read both files and assert the five star expressions matched byte for byte across them. One
+// file means one place a rating can route, one place a Yes can leak into a review, and one place
+// to read before changing any of it.
+//
+// ‼️ AND THE ROLLBACK IS GIT, NOT A SECOND CODE PATH. Keeping a dead flow alive as insurance is
+// how a surface nobody tests stays reachable by a query string.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
 
 import type { HubClient } from "@/lib/hub/resolve";
 import { HubLogo } from "@/components/hub/hub-bodies";
 import { REVIEW_PLATFORMS } from "@/lib/hub/review-destinations";
 import { referralConfigFor } from "@/lib/hub/referral-config";
-import { ReferralEngineClient, type ChatLook, type ReviewDestination } from "./referral-engine-client";
-import { VirtualAgentClient, type ReferralConfig } from "./virtual-agent-client";
-
-/**
- * The three chat looks, and the one everybody gets.
- *
- * PREVIEW ONLY. Matthew asked for three variations of the chat to choose between. They are
- * three CSS skins over identical markup in hub.css, and the choice is passed down from the
- * internal design preview, which requires a session. A client host has no way to set it and
- * always renders DEFAULT_LOOK, which is why that one has to look finished on its own.
- *
- * When he picks, the winner becomes DEFAULT_LOOK and the other two rulesets can go. There is
- * deliberately no column for this: it is one taste decision made once, not a per-client
- * dataset, and a column would outlive the decision it exists for.
- */
-const LOOKS = ["a", "b", "c"] as const;
-const DEFAULT_LOOK: ChatLook = "a";
-
-/** Anything unrecognised is the default. The value reaches a class name, so it is validated
- *  here rather than interpolated, the same rule readSkin() follows for `hub-tpl-${x}`. */
-export function readLook(raw: string | string[] | undefined): ChatLook {
-  const value = Array.isArray(raw) ? raw[0] : raw;
-  return (LOOKS as readonly string[]).includes(value ?? "") ? (value as ChatLook) : DEFAULT_LOOK;
-}
-
-/**
- * Which review flow to render, and the one every customer gets.
- *
- * ‼️ CUT OVER TO `panel` ON 2026-09-24 (Matthew, having walked all three). This is the live
- * default now: a customer on reviews.{domain} gets the Virtual Agent and the six questions.
- * The printed QR card follows on its own, because CARD_QUESTIONS in review-script.ts is derived
- * from the walk rather than kept by hand.
- *
- * ‼️ `full` IS GONE, AND IT WAS REJECTED FOR THE REASON IT WAS BUILT TO TEST. Full screen deleted
- * the masthead and the client's mark, and put the notes step, the reading rail, the attestation,
- * the destination links and the private note inside a fixed scrolling column. The panel closes
- * when the walk ends and hands her a normal page, which is where all of that belongs.
- *
- * ‼️ `v1` STAYS SELECTABLE IN THE PREVIEWS AND IS NOT THE DEFAULT ANY MORE. It is the flow that
- * was live until today, so it is the rollback: if the Virtual Agent turns out to cost completions,
- * changing one word below puts the old one back with no other edit. Delete it once the new one has
- * run long enough to trust, and delete the probe's second CLIENTS entry with it.
- *
- * ‼️ A SEPARATE AXIS FROM `look`, DELIBERATELY. `look` picks one of three CSS skins over the v1
- * chat's markup; this picks which chat exists at all. Folding them into one parameter would hand
- * the v2 client a value that names a ruleset written for a component it is not.
- *
- * ‼️ THE LIVE ROUTE STILL NEVER CALLS readEngine. hub/[host]/page.tsx renders <ReferralEngine
- * client={...} /> with no engine, so what reviews.{domain} serves is decided HERE and not by a
- * query string a visitor can type. Only the previews pass one.
- */
-const ENGINES = ["v1", "panel"] as const;
-export type ReviewEngine = (typeof ENGINES)[number];
-const DEFAULT_ENGINE: ReviewEngine = "panel";
-
-/** Anything unrecognised is the default. Same rule as readLook: the value reaches a class name. */
-export function readEngine(raw: string | string[] | undefined): ReviewEngine {
-  const value = Array.isArray(raw) ? raw[0] : raw;
-  return (ENGINES as readonly string[]).includes(value ?? "") ? (value as ReviewEngine) : DEFAULT_ENGINE;
-}
+import {
+  VirtualAgentClient,
+  type ReferralConfig,
+  type ReviewDestination,
+} from "./virtual-agent-client";
 
 /**
  * ‼️ THE SIX PLATFORMS MOVED TO src/lib/hub/review-destinations.ts ON 2026-09-08, AND THE
@@ -118,8 +87,8 @@ function destinationsFor(client: HubClient): ReviewDestination[] {
 /**
  * ‼️ ASYNC SINCE v5 (2026-10-05), WHICH COSTS THE CALLERS NOTHING. The referral config is a read
  * of client_service_offers, and an async server component renders as ordinary JSX, so the live
- * route and the two previews did not change. What they DID gain is the referral steps, which is
- * the point: the dashboard preview is where Matthew walks it before a client ever does.
+ * route and the previews did not change. What they DID gain is the referral steps, which is the
+ * point: the dashboard preview is where Matthew walks it before a client ever does.
  *
  * ‼️ AND `referral` IS AN OVERRIDE, NOT A CACHE. Pass it and nothing is queried. That is how
  * /demo/agent keeps the promise in its own header that nothing it does reaches a database, while
@@ -129,36 +98,24 @@ function destinationsFor(client: HubClient): ReviewDestination[] {
  */
 export async function ReferralEngine({
   client,
-  look,
-  engine = DEFAULT_ENGINE,
   referral,
 }: {
   client: HubClient;
-  look?: ChatLook;
-  engine?: ReviewEngine;
   referral?: ReferralConfig | null;
 }) {
   const destinations = destinationsFor(client);
   const referralConfig = referral === undefined ? await referralConfigFor(client) : referral;
-  // The three props below mean the same thing to both clients and are commented once, here,
-  // rather than twice in two argument lists that would then drift.
-  //
+
   // needsSpanish: the spec requires Spanish for the questions and requires it to be checked by a
   // native speaker, because a machine translation of a deliberately sentiment-neutral question can
   // land as a leading one, which is the one thing this tool cannot afford. So Spanish is NOT
   // generated here. English renders until reviewed copy exists.
   //
-  // language: the RAW value as well, and not a duplicate of the flag. needsSpanish is true for
-  // "both", so using it to pick the DICTATION language would set es-ES recognition for a bilingual
-  // client and garble every English speaker who taps the microphone. Rendering a Spanish note and
-  // listening in Spanish are different decisions.
-  //
-  // ‼️ ONLY v1 IS HANDED IT. The Virtual Agent has no microphone (removed 2026-09-24, Matthew:
-  // the keyboard is enough), so there is no dictation language for it to get wrong. It still
-  // renders the Spanish note, because who is being handed English questions is a separate fact
-  // from what a recogniser would have listened in.
+  // ‼️ THE DICTATION LANGUAGE WENT WITH v1. That distinction existed because the old chat had a
+  // microphone, and `language: "both"` would have set es-ES recognition for a bilingual clinic and
+  // garbled every English speaker who tapped it. There is no recogniser in this lane any more, so
+  // there is nothing left to get wrong and only the note remains.
   const needsSpanish = client.language === "es" || client.language === "both";
-  const language = client.language ?? null;
 
   return (
     <>
@@ -172,24 +129,16 @@ export async function ReferralEngine({
         what a customer notices and nobody testing a single page ever does.
       */}
       <HubLogo client={client} />
-      {engine === "v1" ? (
-        <ReferralEngineClient
-          businessName={client.displayName}
-          clientId={client.id}
-          destinations={destinations}
-          needsSpanish={needsSpanish}
-          language={language}
-          look={look ?? DEFAULT_LOOK}
-        />
-      ) : (
-        <VirtualAgentClient
-          businessName={client.displayName}
-          clientId={client.id}
-          destinations={destinations}
-          needsSpanish={needsSpanish}
-          referral={referralConfig}
-        />
-      )}
+      <VirtualAgentClient
+        businessName={client.displayName}
+        // "Miami, FL" where both are on file, one of them where only one is, and omitted
+        // entirely otherwise. Never a half-rendered ", FL".
+        location={[client.city, client.state].filter(Boolean).join(", ") || null}
+        clientId={client.id}
+        destinations={destinations}
+        needsSpanish={needsSpanish}
+        referral={referralConfig}
+      />
     </>
   );
 }

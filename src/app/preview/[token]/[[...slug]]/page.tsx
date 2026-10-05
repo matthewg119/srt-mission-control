@@ -51,7 +51,7 @@ import { HubShell } from "@/components/hub/hub-shell";
 import { ConciergeEmbed } from "@/lib/concierge/embed";
 import { themeStyle } from "@/lib/hub/theme";
 import { skinStyle, hubRootClass } from "@/lib/hub/skin";
-import { ReferralEngine, readEngine, readLook } from "@/app/hub/[host]/reviews/referral-engine";
+import { ReferralEngine } from "@/app/hub/[host]/reviews/referral-engine";
 import { GHOST_BELOW, GHOST_NOTICE, GHOST_PAGES, ghostAnswerPage } from "@/lib/hub/ghost-content";
 import { universeFontClass } from "@/components/hub/universe-fonts";
 import { UniverseBand, UniverseTop } from "@/components/hub/universe-chrome";
@@ -109,7 +109,6 @@ export default async function TokenPreview({ params, searchParams }: Props) {
     domain: string | null;
   });
 
-  const engine = readEngine(searchParams.engine);
   const kind =
     searchParams.kind === "reviews"
       ? "reviews"
@@ -338,11 +337,11 @@ export default async function TokenPreview({ params, searchParams }: Props) {
       // Skin first, theme second. Same order as the live layout; see src/lib/hub/skin.ts.
       style={{ ...skinStyle(client.skin), ...themeStyle(client.theme) }}
     >
-      <PreviewRibbon host={host} slug={slug} engine={kind === "reviews" ? engine : null} />
+      <PreviewRibbon host={host} slug={slug} />
       <UniverseTop universe={kind === "reviews" ? null : client.skin?.universe} name={client.displayName} where={[client.city, client.state].filter(Boolean).join(", ") || null} pages={-1} />
       <div className="hub-wrap">
         {kind === "reviews" ? (
-          <ReferralEngine client={client} engine={engine} look={readLook(searchParams.look)} />
+          <ReferralEngine client={client} />
         ) : slug ? (
           <PreviewAnswer clientId={verified.clientId} destination={subdomainDestination(client.id, host)} slug={slug} client={client} />
         ) : (

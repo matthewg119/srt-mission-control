@@ -53,8 +53,15 @@ const BRAND: RGB = [0, 112, 95];
 
 /** How many blank service rows a sheet carries when we do not know the list yet. */
 const BLANK_SERVICE_ROWS = 9;
-/** How many blank provider lines. Two per line, so this is six names. */
-const BLANK_PROVIDER_ROWS = 3;
+/**
+ * How many blank provider lines. Two per line.
+ *
+ * ‼️ CUT FROM THREE ROWS TO ONE ON 2026-10-05. Matthew looked at the printed sheet and said
+ * section 3 "looks like a lot", and he was right: six empty ruled lines for a question most
+ * clinics answer with two names read as a form that expected more than they had. One row holds
+ * the common case and the section stops taking a third of the page.
+ */
+const BLANK_PROVIDER_ROWS = 1;
 
 interface Cursor {
   doc: jsPDF;
@@ -301,7 +308,8 @@ export function renderOnboardingSheet(input: OnboardingSheetInput): Buffer {
     cur,
     3,
     "Who works on patients",
-    'The tool asks "who took care of you today?", so these are the names patients will type.'
+    'The tool asks "who took care of you today?", so these are the names patients will type. ' +
+      "Add more on the back if you need to."
   );
   for (let i = 0; i < BLANK_PROVIDER_ROWS; i += 1) {
     fieldPair(cur, i === 0 ? "Provider" : "", i === 0 ? "Provider" : "");

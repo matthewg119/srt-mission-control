@@ -60,6 +60,7 @@ export type CardStep =
   | { kind: "fork"; id: string; prompt: string };
 
 export type CardKey =
+  | "daypart"
   | "firstName"
   | "lastName"
   | "email"
@@ -162,10 +163,9 @@ export const CARDS_SCRIPT: readonly CardStep[] = [
   {
     kind: "fork",
     id: "finish",
-    prompt: guard(
-      "cards fork",
-      "Last step, and it is your choice which one."
-    ),
+    // ‼️ IT NO LONGER SAYS "your choice", because one of the two is closed. Copy that offers a
+    // choice beside a disabled button is the funnel contradicting its own screen.
+    prompt: guard("cards fork", "Last step. Let us get you on the setup call."),
   },
 ];
 
@@ -186,14 +186,22 @@ export const CARDS_FORK = {
       "Ten to fifteen minutes, in front of a computer. We walk you through what is already " +
         "built, set which platform your reviews go to, and write your referral offers together."
     ),
+    available: true,
   },
   self: {
     key: "self",
-    label: guard("cards fork self", "Set it up myself now"),
-    note: guard(
-      "cards fork self note",
-      "One question, and we will email you the rest. You can always book the call later."
-    ),
+    label: guard("cards fork self", "Set it up myself"),
+    // ‼️ SHOWN, DISABLED, AND LABELLED "Not available". Matthew, 2026-10-05, wants the self-serve
+    // route closed so every clinic lands on the call, and wants the option visible so the choice
+    // feels like one.
+    //
+    // ‼️ THE HONEST VERSION OF THAT IS A GREYED-OUT BUTTON THAT SAYS SO, AND THAT IS WHAT THIS IS.
+    // A live-looking button that silently fails, or a path that collects answers and then drops
+    // them, would be a different thing entirely: it would waste a clinic's time and they would
+    // find out afterwards. "Not available" is a roadmap item shown in the open; it costs nobody a
+    // minute and it is true.
+    note: guard("cards fork self note", "Not available yet. The call is the only way in for now."),
+    available: false,
   },
 } as const;
 
@@ -218,11 +226,30 @@ export const CARDS_PLATFORM_STEP: Extract<CardStep, { kind: "chips" }> = {
   options: REVIEW_PLATFORMS.map((p) => guard(`cards platform ${p.key}`, p.name)),
 };
 
+/**
+ * When they would rather be called.
+ *
+ * ‼️ THE SAME SHAPE AS THE CONCIERGE'S REFERRAL WALK (src/lib/concierge/referral-script.ts), which
+ * is what Matthew means by "the exact same flow". Two chips, stored as a VALUE and never as the
+ * label, because the label is copy and may be edited while the stored value is read by code.
+ *
+ * ‼️ IT DOES NOT PROMISE A TIME. The chips record a preference that reaches the Slack card; the
+ * calendar is still what books anybody. A funnel that says "great, Tuesday at 10" without
+ * touching a calendar is the one lie this flow could tell that somebody turns up for.
+ */
+export const DAYPART_STEP: Extract<CardStep, { kind: "chips" }> = {
+  kind: "chips",
+  id: "q_daypart",
+  key: "daypart",
+  prompt: guard("cards daypart", "When suits you better for the call?"),
+  options: [guard("cards daypart am", "Mornings"), guard("cards daypart pm", "Afternoons")],
+};
+
 /** What is said once there is nothing left to ask, per branch. */
 export const CARDS_CLOSE = {
   call: guard(
     "cards close call",
-    "Booked. You will get a confirmation email, and your cards are on their way."
+    "Perfect. Pick a time that works and we will see you then. Your cards are on their way."
   ),
   self: guard(
     "cards close self",

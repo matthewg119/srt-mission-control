@@ -233,6 +233,15 @@
 }
 .cd-choice:hover { background: rgba(255, 255, 255, 0.03); }
 .cd-choice:disabled { opacity: 0.5; cursor: not-allowed; }
+/* ‼️ VISIBLY CLOSED, not quietly inert. It reads as an option that exists and is not open yet,
+   which is what it is; styling it identically to the live one would be the page implying a
+   choice the code refuses. */
+.cd-choice.is-closed {
+  opacity: 0.45;
+  cursor: not-allowed;
+  border-style: dashed;
+}
+.cd-choice.is-closed:hover { background: transparent; }
 .cd-choice-label {
   font-weight: 700;
 }

@@ -1445,9 +1445,11 @@ eq(
     /function assembleLabelled/.test(src) && /function assemblePlain/.test(src)
   );
 
-  // ‼️ BOTH CLIENTS. v2 is a second rendering of the same regulated surface, and a check that
-  // reads only v1 is a check somebody can walk around by writing a new file.
-  for (const file of ["referral-engine-client.tsx", "virtual-agent-client.tsx"]) {
+  // ‼️ ONE CLIENT SINCE 2026-10-05. This read both while v1 and the Virtual Agent were being
+  // compared; v1 was deleted when Matthew picked. The loop stays a loop for the reason the
+  // gating probe's CLIENTS list stays a list: a second rendering of this surface must be one
+  // array entry away from being checked, not a rewrite.
+  for (const file of ["virtual-agent-client.tsx"]) {
     const client = fs.readFileSync(
       path.join(__dirname, "..", "src", "app", "hub", "[host]", "reviews", file),
       "utf8"

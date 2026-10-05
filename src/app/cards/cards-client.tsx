@@ -25,6 +25,7 @@ import {
   CARDS_FREE_SITE,
   CARDS_PLATFORM_STEP,
   CARDS_SCRIPT,
+  DAYPART_STEP,
   NO_WEBSITE,
   type CardKey,
   type CardStep,
@@ -105,6 +106,11 @@ export function CardsClient() {
    */
   const steps = useMemo<CardStep[]>(() => {
     const out = [...CARDS_SCRIPT];
+    // ‼️ THE CALL BRANCH ASKS WHEN, THE SELF BRANCH ASKS WHICH PLATFORM, AND NEITHER EVER ASKS
+    // BOTH. The daypart question is the same shape the concierge's referral walk uses, which is
+    // what Matthew means by "the exact same flow": two chips, a preference recorded on the lead,
+    // and the calendar still doing the actual booking.
+    if (finish === "call") out.push(DAYPART_STEP);
     if (finish === "self") out.push(CARDS_PLATFORM_STEP);
     return out;
   }, [finish]);
@@ -231,17 +237,17 @@ export function CardsClient() {
    * link; the platform question is never appended, because the platform is decided on the call
    * with somebody who can explain the trade. Picking self-serve appends exactly one question.
    */
-  async function choose(which: CardsFinish) {
+  function choose(which: CardsFinish) {
+    // ‼️ THE CLOSED BRANCH CANNOT BE CHOSEN AT ALL, not merely discouraged. Its button is
+    // disabled and this is the second guard, because a disabled button is a rendering detail and
+    // this function is the decision.
+    if (!CARDS_FORK[which].available) return;
     push("her", CARDS_FORK[which].label);
     setFinish(which);
     setAwaiting("none");
-    if (which === "self") {
-      // The platform step is appended by `steps`; advancing walks into it. The lead is sent once
-      // that answer is in, by the effect below.
-      setIndex((i) => i + 1);
-      return;
-    }
-    await send("call", null);
+    // Both branches now walk into one more question, appended by `steps`. The lead is sent once
+    // that answer is in, by the effect below.
+    setIndex((i) => i + 1);
   }
 
   /** Send the lead. Called once, from the branch that completes the walk. */
@@ -256,6 +262,7 @@ export function CardsClient() {
           ...answers,
           finish: which,
           platform,
+          daypart: answers.daypart ?? null,
           freeWebsite: freeSite === true,
           sourcePage: typeof window === "undefined" ? "" : window.location.pathname,
         }),
@@ -279,17 +286,17 @@ export function CardsClient() {
     }
   }
 
-  // The self-serve tail completes when the platform answer lands.
+  // Either tail completes when its one answer lands and the walk runs out of steps.
   useEffect(() => {
-    if (finish !== "self") return;
-    if (!answers.platform) return;
-    if (awaiting === "done" || busy) return;
+    if (!finish) return;
     if (step) return; // still walking
-    void send("self", answers.platform);
-    // `send` is stable enough for this: it closes over state that is settled by the time the
-    // walk has run out of steps.
+    if (awaiting === "done" || busy) return;
+    const tail = finish === "call" ? answers.daypart : answers.platform;
+    if (!tail) return;
+    void send(finish, finish === "self" ? answers.platform ?? null : null);
+    // `send` closes over state that is settled by the time the walk has run out of steps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [finish, answers.platform, step]);
+  }, [finish, answers.platform, answers.daypart, step]);
 
   const canSend = composed.trim().length > 0;
 
@@ -395,18 +402,25 @@ export function CardsClient() {
 
       {awaiting === "fork" && (
         <div className="cd-fork">
-          {(["call", "self"] as const).map((key) => (
-            <button
-              key={key}
-              type="button"
-              className={key === "call" ? "cd-choice is-primary" : "cd-choice"}
-              disabled={busy}
-              onClick={() => void choose(key)}
-            >
-              <span className="cd-choice-label">{CARDS_FORK[key].label}</span>
-              <span className="cd-choice-note">{CARDS_FORK[key].note}</span>
-            </button>
-          ))}
+          {(["call", "self"] as const).map((key) => {
+            const open = CARDS_FORK[key].available;
+            return (
+              <button
+                key={key}
+                type="button"
+                className={`cd-choice${key === "call" ? " is-primary" : ""}${open ? "" : " is-closed"}`}
+                // ‼️ DISABLED AND SAYING SO, rather than live-looking and failing. See the note on
+                // CARDS_FORK.self: a greyed-out option a clinic can read is a roadmap item; a
+                // button that swallows a minute of their time and then dies is something else.
+                disabled={busy || !open}
+                aria-disabled={!open}
+                onClick={() => choose(key)}
+              >
+                <span className="cd-choice-label">{CARDS_FORK[key].label}</span>
+                <span className="cd-choice-note">{CARDS_FORK[key].note}</span>
+              </button>
+            );
+          })}
         </div>
       )}
 
