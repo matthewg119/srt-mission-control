@@ -1,0 +1,249 @@
+/* /cards, and nothing else.
+ *
+ * ‼️ ITS OWN STYLESHEET WITH ITS OWN `cd-` PREFIX, SHARING NOTHING WITH hub.css. The hub's
+ * tokens belong to a page rendered on a CLIENT's domain and carrying a CLIENT's accent; this is
+ * SRT's own funnel on SRT's own host. Reaching for --hub-* here would mean a page whose colours
+ * depend on a client record it has no client for, and _probe-virtual-agent-grammar.ts polices the
+ * other direction of exactly that boundary.
+ *
+ * ‼️ AND NOT TAILWIND, unlike the dashboard. This file is ~120 lines of layout for one funnel; a
+ * utility soup in the markup would make the chat bubbles unreadable in review, which is the one
+ * thing about this page somebody will actually argue about.
+ */
+
+.cd-page {
+  --cd-bg: #0b0b0c;
+  --cd-panel: #141416;
+  --cd-ink: #f4f4f5;
+  --cd-mut: rgba(244, 244, 245, 0.55);
+  --cd-line: rgba(255, 255, 255, 0.1);
+  --cd-accent: #00c9a7;
+  --cd-on-accent: #07211c;
+  --cd-them: #1d1d20;
+  --cd-me: #00c9a7;
+
+  min-height: 100vh;
+  margin: 0;
+  padding: 2.5rem 1.25rem 4rem;
+  background: var(--cd-bg);
+  color: var(--cd-ink);
+  font: 16px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.cd-masthead {
+  max-width: 34rem;
+  margin: 0 auto 1.5rem;
+}
+.cd-eyebrow {
+  margin: 0 0 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--cd-accent);
+}
+.cd-masthead h1 {
+  margin: 0 0 0.5rem;
+  font-size: 1.6rem;
+  line-height: 1.2;
+}
+.cd-lede {
+  margin: 0;
+  color: var(--cd-mut);
+}
+
+.cd-shell {
+  max-width: 34rem;
+  margin: 0 auto;
+  background: var(--cd-panel);
+  border: 1px solid var(--cd-line);
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.cd-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--cd-line);
+}
+.cd-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--cd-accent);
+}
+.cd-title {
+  font-size: 0.8125rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.cd-msgs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem;
+  /* Tall enough that the walk does not jump as bubbles land, short enough to keep the composer
+     on screen on a phone. */
+  min-height: 15rem;
+  max-height: 24rem;
+  overflow-y: auto;
+}
+
+.cd-msg {
+  max-width: 85%;
+  padding: 0.6rem 0.8rem;
+  border-radius: 14px;
+  white-space: pre-wrap;
+}
+.cd-msg.is-them {
+  align-self: flex-start;
+  background: var(--cd-them);
+  border-bottom-left-radius: 4px;
+}
+.cd-msg.is-me {
+  align-self: flex-end;
+  background: var(--cd-me);
+  color: var(--cd-on-accent);
+  font-weight: 600;
+  border-bottom-right-radius: 4px;
+}
+
+/* Three dots. Never a sentence claiming something is thinking, because nothing is: the whole
+   script is in the bundle. Same rule the Virtual Agent's panel follows. */
+.cd-typing {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+.cd-typing span {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--cd-mut);
+  animation: cdBlink 1.2s infinite ease-in-out;
+}
+.cd-typing span:nth-child(2) { animation-delay: 0.15s; }
+.cd-typing span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes cdBlink {
+  0%, 80%, 100% { opacity: 0.25; }
+  40% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cd-typing span { animation: none; opacity: 0.5; }
+}
+
+.cd-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0 1rem 1rem;
+}
+.cd-bar {
+  display: flex;
+  gap: 0.5rem;
+}
+.cd-bar input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  /* 16px on the control itself, or iOS zooms the page on focus. */
+  font-size: 16px;
+  color: var(--cd-ink);
+  background: var(--cd-bg);
+  border: 1px solid var(--cd-line);
+  border-radius: 12px;
+  padding: 0.6rem 0.75rem;
+}
+.cd-bar button,
+.cd-primary {
+  font: inherit;
+  font-weight: 700;
+  color: var(--cd-on-accent);
+  background: var(--cd-accent);
+  border: none;
+  border-radius: 999px;
+  padding: 0.65rem 1.2rem;
+  cursor: pointer;
+  text-align: center;
+  text-decoration: none;
+}
+.cd-primary { display: block; }
+.cd-bar button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.cd-skip {
+  align-self: flex-start;
+  font: inherit;
+  font-size: 0.875rem;
+  color: var(--cd-mut);
+  background: transparent;
+  border: none;
+  padding: 0.25rem 0;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.cd-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0 1rem 1rem;
+}
+.cd-chips.is-pair { flex-direction: row; }
+.cd-chips button {
+  flex: 1 1 auto;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  color: var(--cd-accent);
+  background: transparent;
+  border: 1px solid var(--cd-accent);
+  border-radius: 12px;
+  padding: 0.65rem 1rem;
+  cursor: pointer;
+}
+.cd-chips.is-pair button { text-align: center; border-radius: 999px; }
+.cd-chips button:hover { background: rgba(0, 201, 167, 0.08); }
+
+/* The fork. Two cards rather than two chips, because each needs a sentence of its own: the
+   difference between them is what gets decided and by whom, which does not fit on a chip. */
+.cd-fork {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0 1rem 1rem;
+}
+.cd-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  text-align: left;
+  font: inherit;
+  color: var(--cd-ink);
+  background: transparent;
+  border: 1px solid var(--cd-line);
+  border-radius: 14px;
+  padding: 0.8rem 1rem;
+  cursor: pointer;
+}
+.cd-choice.is-primary {
+  border-color: var(--cd-accent);
+}
+.cd-choice:hover { background: rgba(255, 255, 255, 0.03); }
+.cd-choice:disabled { opacity: 0.5; cursor: not-allowed; }
+.cd-choice-label {
+  font-weight: 700;
+}
+.cd-choice-note {
+  font-size: 0.875rem;
+  color: var(--cd-mut);
+}
+
+.cd-error {
+  margin: 0;
+  padding: 0 1rem;
+  font-size: 0.875rem;
+  color: #f8a4a4;
+}
