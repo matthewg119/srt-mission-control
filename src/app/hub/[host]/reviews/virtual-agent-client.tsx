@@ -41,7 +41,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  QUESTION_SET_VERSION_V4,
+  QUESTION_SET_VERSION_V5,
   assemblePlain,
   isEmpty,
   type ReviewAnswers,
@@ -52,8 +52,19 @@ import {
   CONNECTING_MS,
   REVIEW_SCRIPT,
   fillBusiness,
+  fillOffer,
   stepAfter,
 } from "@/lib/hub/review-script";
+import {
+  INVITE_CHANNELS,
+  INVITE_TEMPLATES,
+  composeInvite,
+  fillInvite,
+  inviteCode,
+  templateByKey,
+  type InviteChannel,
+  type SendMode,
+} from "@/lib/hub/referral-invite";
 import { analyse, mergeMarks } from "@/lib/hub/readability";
 
 export interface ReviewDestination {
@@ -63,17 +74,48 @@ export interface ReviewDestination {
 }
 
 
+/**
+ * What the clinic has agreed to give a referred friend.
+ *
+ * ‼️ NULL MEANS THE RECOMMEND QUESTION AND THE INVITE ARE NOT ASKED AT ALL. A clinic with no deal
+ * on file must not be made to promise one: the invite step's copy says "we will send them X", so
+ * with no X the honest walk is the one without it. The driver skips both steps rather than
+ * rendering an empty promise, and a patient never sees a referral question the clinic cannot
+ * honour at the desk.
+ */
+export interface ReferralConfig {
+  /** One deal per service, as set on the onboarding call. */
+  offers: ReadonlyArray<{ serviceLabel: string; offerText: string }>;
+  /** Used when she names a service that is not on the list, or names nothing recognisable. */
+  defaultOffer: string | null;
+  /** The clinic's number, so the text she sends has them on the thread. */
+  clinicPhone: string | null;
+  sendMode: SendMode;
+}
+
 interface Props {
   businessName: string;
   clientId: string;
   destinations: ReviewDestination[];
   needsSpanish: boolean;
+  referral?: ReferralConfig | null;
 }
 
 const BUBBLE_GAP_MS = { min: 400, max: 900 } as const;
 
-type Stage = "stars" | "connecting" | "chat";
-type Awaiting = "none" | "text" | "gate";
+type Stage = "intro" | "connecting" | "chat";
+/**
+ * What the composer is waiting for.
+ *
+ * ‼️ `gate` AND `refer` ARE SEPARATE ARMS FOR A REASON THAT IS NOT COSMETIC. They render the same
+ * pair of chips, but a gate is answered by answerGate() and the recommend question by
+ * answerRefer(), and the gating probe reads answerGate() as a whole function and fails on
+ * `setAnswers`, `store(`, `destinations`, `rating`, `privateNote`, `rev-private` or
+ * `setRevealed` appearing anywhere inside it. Routing the referral through that one function
+ * would have meant widening it to touch referral state, which is exactly the widening the probe
+ * exists to catch.
+ */
+type Awaiting = "none" | "text" | "gate" | "stars" | "refer" | "invite";
 
 interface Bubble {
   id: number;
@@ -86,6 +128,7 @@ export function VirtualAgentClient({
   clientId,
   destinations,
   needsSpanish,
+  referral = null,
 }: Props) {
   const [answers, setAnswers] = useState<ReviewAnswers>({});
   const [edited, setEdited] = useState<string | null>(null);
@@ -110,8 +153,30 @@ export function VirtualAgentClient({
   const [privateNote, setPrivateNote] = useState("");
   const [attested, setAttested] = useState(false);
 
+  // ── The referral ───────────────────────────────────────────────────────────
+  //
+  // ‼️ A SEPARATE BAG FROM `answers`, AND THE SEPARATION IS THE DEFENCE. Nothing here is a
+  // ReviewQuestion key, so none of it is assignable to ReviewAnswers, iterable by
+  // assembleLabelled or assemblePlain, storable by the submit route's answers loop, or reachable
+  // from the clipboard. The friend's name and number in particular are a third party's details
+  // and they go to referral_invites, never to review_tool_submissions.
+  const [friendName, setFriendName] = useState("");
+  const [friendContact, setFriendContact] = useState("");
+  const [templateKey, setTemplateKey] = useState(INVITE_TEMPLATES[0].key);
+  const [inviteSent, setInviteSent] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  /**
+   * Minted once per visit, so the message she previews carries the code that gets stored.
+   *
+   * A lazy useState initialiser rather than a ref assigned during render: this component is
+   * server rendered before it hydrates, and a ref written in the render body would be computed
+   * on both sides from Math.random and disagree. useState's initialiser runs once per mount on
+   * the client, which is the only place the code is ever read.
+   */
+  const [code] = useState(() => inviteCode());
+
   // ── The walk ───────────────────────────────────────────────────────────────
-  const [stage, setStage] = useState<Stage>("stars");
+  const [stage, setStage] = useState<Stage>("intro");
   const [index, setIndex] = useState(0);
   const [awaiting, setAwaiting] = useState<Awaiting>("none");
   const [bubbles, setBubbles] = useState<Bubble[]>([]);
@@ -139,6 +204,33 @@ export function VirtualAgentClient({
   const nothingTyped = isEmpty(answers);
   const reading = useMemo(() => analyse(text), [text]);
 
+  /**
+   * The deal for the service she named.
+   *
+   * ‼️ MATCHED ON WHAT SHE TYPED, FALLING BACK TO THE CLINIC-WIDE DEAL, AND NEVER INVENTED. The
+   * match is deliberately loose in one direction only: her words have to CONTAIN the service
+   * label or the label has to contain her words, so "botox" finds "Botox" and "lip filler" finds
+   * "Lip filler". Anything it cannot place gets `defaultOffer`, and with no default there is no
+   * referral step at all. A wrong deal shown to a patient is a discount the front desk then has
+   * to argue about with her friend at the counter, so absent beats wrong here exactly as it does
+   * for destination links.
+   */
+  const offerText = useMemo(() => {
+    if (!referral) return null;
+    const said = (answers.service ?? "").trim().toLowerCase();
+    if (said) {
+      const hit = referral.offers.find((o) => {
+        const label = o.serviceLabel.trim().toLowerCase();
+        return label.length > 0 && (said.includes(label) || label.includes(said));
+      });
+      if (hit) return hit.offerText;
+    }
+    return referral.defaultOffer;
+  }, [referral, answers.service]);
+
+  /** Whether the referral half of the walk happens at all. */
+  const referralOn = Boolean(referral && offerText);
+
   const later = useCallback((fn: () => void, ms: number) => {
     const t = setTimeout(fn, ms);
     timers.current.push(t);
@@ -165,6 +257,14 @@ export function VirtualAgentClient({
     if (!current) return;
     played.current.add(index);
 
+    // ‼️ THE REFERRAL STEPS SKIP SILENTLY WHEN THERE IS NO DEAL ON FILE, with no bubble and no
+    // pause, so a clinic that has not set its offers up walks the review questions it has always
+    // walked. played.current already guards against this running twice. See ReferralConfig.
+    if ((current.kind === "refer" || current.kind === "invite") && !referralOn) {
+      setIndex((i) => i + 1);
+      return;
+    }
+
     setTyping(true);
     const gap = index === 0 ? BUBBLE_GAP_MS.min : BUBBLE_GAP_MS.max;
     later(() => {
@@ -174,10 +274,26 @@ export function VirtualAgentClient({
         setIndex((i) => i + 1);
         return;
       }
-      push("them", fillBusiness(current.prompt, businessName));
-      setAwaiting(current.kind === "gate" ? "gate" : "text");
+      // The invite's prompt is the one line that carries the deal. fillOffer runs after
+      // fillBusiness so neither substitution can reach into the other's output.
+      const prompt =
+        current.kind === "invite"
+          ? fillOffer(fillBusiness(current.prompt, businessName), offerText ?? "")
+          : fillBusiness(current.prompt, businessName);
+      push("them", prompt);
+      setAwaiting(
+        current.kind === "gate"
+          ? "gate"
+          : current.kind === "refer"
+            ? "refer"
+            : current.kind === "stars"
+              ? "stars"
+              : current.kind === "invite"
+                ? "invite"
+                : "text"
+      );
     }, gap);
-  }, [stage, index, businessName, push, later]);
+  }, [stage, index, businessName, push, later, referralOn, offerText]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
@@ -186,7 +302,7 @@ export function VirtualAgentClient({
   // Focus moves into the panel when it opens, and the page behind it stops scrolling. Without
   // both, a phone keyboard opening scrolls the page under the panel instead of the transcript.
   useEffect(() => {
-    if (stage === "stars" || revealed) return;
+    if (stage === "intro" || revealed) return;
     panelRef.current?.focus();
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -208,7 +324,7 @@ export function VirtualAgentClient({
    * There is no getUserMedia, no SpeechRecognition and no MediaRecorder in this file, so there is
    * nothing to prime, nothing to stop and nothing to delete afterwards.
    */
-  function leaveStars() {
+  function leaveIntro() {
     setStage("connecting");
     later(() => {
       if (aliveRef.current) setStage((s) => (s === "connecting" ? "chat" : s));
@@ -254,6 +370,136 @@ export function VirtualAgentClient({
     setIndex(stepAfter(index, saidYes));
   }
 
+  /**
+   * The stars, answered inside the walk.
+   *
+   * ‼️ IT ADVANCES AND NOTHING ELSE, which is the same promise answerGate() makes. The value is
+   * already in state by the time this runs (the row's own onClick put it there, unchanged from
+   * the five pinned expressions); this function does not read it, and must not. A branch here on
+   * what she tapped would be review gating with the branch moved one function along.
+   */
+  function leaveStars() {
+    if (!starsAnswered) return;
+    setAwaiting("none");
+    setIndex((i) => i + 1);
+  }
+
+  /**
+   * "Would you recommend this service to a friend?"
+   *
+   * ‼️ A No TAKES NOTHING AWAY. It skips the invite and lands on the review questions, which is
+   * where a Yes lands too once she is done inviting. She reaches the same editable box, the same
+   * attestation, the same copy button and the same destination links either way, and that is the
+   * whole reason this question is allowed to exist at all: review-assemble.ts banned it precisely
+   * because an NPS question in front of a review is normally the pre-screen that decides who is
+   * shown the public link. Here it decides who is offered a referral deal.
+   *
+   * ‼️ AND IT IS NOT answerGate(). Read the Awaiting docstring for why that matters to the probe.
+   */
+  function answerRefer(saidYes: boolean) {
+    const current = REVIEW_SCRIPT[index];
+    if (!current || current.kind !== "refer") return;
+    push("her", saidYes ? current.yes : current.no);
+    setAwaiting("none");
+    setIndex(stepAfter(index, saidYes));
+  }
+
+  /** The message she is about to send, previewed exactly as it will open. */
+  const inviteMessage = useMemo(
+    () =>
+      fillInvite(templateByKey(templateKey).body, {
+        friendName: friendName.trim() || "there",
+        businessName,
+        serviceLabel: (answers.service ?? "").trim(),
+        offerText: offerText ?? "",
+        code,
+      }),
+    [templateKey, friendName, businessName, answers.service, offerText]
+  );
+
+  /**
+   * Open the composed message on her phone, then move on.
+   *
+   * ‼️ NOTHING IS SENT FROM HERE. composeInvite returns an href or a clipboard payload; her own
+   * messages app does the sending and she has to press the button in it. There is no fetch in
+   * this function beyond recording that the invite happened, which is a write about the clinic's
+   * referral and not a message to anybody.
+   */
+  function openInvite(channel: InviteChannel) {
+    setInviteError(null);
+    const result = composeInvite({
+      channel,
+      mode: referral?.sendMode,
+      friendContact,
+      clinicContact: referral?.clinicPhone ?? null,
+      message: inviteMessage,
+    });
+
+    if (result.kind === "unavailable") {
+      setInviteError(result.reason);
+      return;
+    }
+    if (result.kind === "clipboard") {
+      void navigator.clipboard.writeText(result.text).catch(() => {});
+    } else {
+      window.open(result.href, "_self");
+    }
+
+    setInviteSent(true);
+    void storeInvite(channel);
+  }
+
+  /**
+   * Read one contact out of her phone's address book, where the browser offers to.
+   *
+   * ‼️ IT IS CHROME ON ANDROID AND NOWHERE ELSE, SO THE TYPED FIELDS ARE THE REAL PATH AND NOT
+   * THE FALLBACK. The Contact Picker API does not exist in Safari on iOS at all, which is most
+   * patients standing at a med spa counter. The picker is an accelerator when it happens to be
+   * there; the two inputs below are always rendered, because the front desk is beside her and
+   * reading a number out is faster than hunting for a permission prompt.
+   *
+   * ‼️ ONE CONTACT, NAME AND NUMBER, AND NOTHING IS UPLOADED BY THIS FUNCTION. It fills two text
+   * inputs she can see and correct. Her address book is not read anywhere else and no part of it
+   * is sent: only the one name and number she picked travel, and only when she opens the message.
+   */
+  async function pickContact() {
+    setInviteError(null);
+    const nav = navigator as Navigator & {
+      contacts?: {
+        select: (
+          props: string[],
+          opts?: { multiple?: boolean }
+        ) => Promise<Array<{ name?: string[]; tel?: string[] }>>;
+      };
+    };
+    if (!nav.contacts?.select) {
+      setInviteError("This phone will not let a website open contacts. Type their number instead.");
+      return;
+    }
+    try {
+      const picked = await nav.contacts.select(["name", "tel"], { multiple: false });
+      const one = picked[0];
+      if (!one) return;
+      if (one.name?.[0]) setFriendName(one.name[0]);
+      if (one.tel?.[0]) setFriendContact(one.tel[0]);
+    } catch {
+      // She cancelled, or the browser refused. Either way the inputs are already on screen.
+    }
+  }
+
+  /** Move past the invite without sending one. A command, not an answer. */
+  function skipInvite() {
+    setAwaiting("none");
+    setIndex((i) => i + 1);
+  }
+
+  /** She sent it, so carry on to the review questions. */
+  function finishInvite() {
+    push("her", friendName.trim() ? `I sent it to ${friendName.trim()}.` : "Sent.");
+    setAwaiting("none");
+    setIndex((i) => i + 1);
+  }
+
   async function store(postedDestination?: string) {
     try {
       const res = await fetch("/api/hub/reviews/submit", {
@@ -267,7 +513,7 @@ export function VirtualAgentClient({
           rating,
           privateNote: privateNote.trim() || undefined,
           attested,
-          questionSetVersion: QUESTION_SET_VERSION_V4,
+          questionSetVersion: QUESTION_SET_VERSION_V5,
         }),
       });
       const json = (await res.json()) as { id?: string };
@@ -275,6 +521,41 @@ export function VirtualAgentClient({
     } catch {
       // Storing is for SRT's benefit, not hers. A failed write must never block her from copying
       // her own words and posting them.
+    }
+  }
+
+  /**
+   * Record that an invite was opened.
+   *
+   * ‼️ A SEPARATE CALL TO A SEPARATE TABLE, NEVER FOLDED INTO store(). The friend's name and
+   * number must not travel in the same body as her review answers, because that body is what
+   * writes review_tool_submissions and the whole no-PII position on that table rests on there
+   * being nothing in the request for it to store.
+   *
+   * ‼️ AND IT FAILS SILENTLY, for the same reason store() does. She has already opened her
+   * messages app by the time this runs. A failed write here means SRT cannot attribute the
+   * referral, which is our problem, not a reason to show her an error about a message she has
+   * already sent.
+   */
+  async function storeInvite(channel: InviteChannel) {
+    try {
+      await fetch("/api/hub/reviews/invite", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          clientId,
+          submissionId,
+          serviceLabel: (answers.service ?? "").trim() || null,
+          offerText,
+          templateKey,
+          code,
+          friendName: friendName.trim() || null,
+          friendContact: friendContact.trim() || null,
+          channel,
+        }),
+      });
+    } catch {
+      // See above.
     }
   }
 
@@ -341,41 +622,19 @@ export function VirtualAgentClient({
         </p>
       </header>
 
-      {!revealed && stage === "stars" && (
+      {!revealed && stage === "intro" && (
         <>
           {/*
-            ‼️ THE STARS DECIDE NOTHING. Read the state declaration above before adding any
-            branch that reads the value. Every one of the five leads to the same questions, the
-            same box, the same links and the same private note. The row below carries the advance
-            so that moving on learns THAT she tapped and never WHICH.
+            ‼️ THE STARS USED TO BE ON THIS SCREEN AND THEY MOVED INTO THE WALK (2026-10-05).
+            Matthew's order asks what she had and who did it before it asks her to score anything,
+            and the front desk hands the card over on the provider question, so the first thing on
+            screen can no longer be a rating. The block itself is unchanged and now lives in the
+            composer; see the `stars` arm below.
 
-            ‼️ COPIED FROM referral-engine-client.tsx CHARACTER FOR CHARACTER. The probe asserts
-            all five expressions are present here, unchanged. Do not tidy it.
+            What is left here is the handover and nothing else. It needs a tap of its own because
+            the panel's five second connect has to start from a deliberate action rather than from
+            the page loading, or she spends it looking at a spinner she did not ask for.
           */}
-          <fieldset className="rev-stars">
-            <legend>How would you rate your experience?</legend>
-            <div
-              className="rev-stars-row"
-              role="radiogroup"
-              aria-label="Rating out of five"
-              onClick={() => setStarsAnswered(true)}
-            >
-              {[1, 2, 3, 4, 5].map((n) => (
-                <button
-                  key={n}
-                  type="button"
-                  role="radio"
-                  aria-checked={rating === n}
-                  aria-label={`${n} star${n === 1 ? "" : "s"}`}
-                  className={rating !== null && n <= rating ? "is-on" : undefined}
-                  onClick={() => setRating(n)}
-                >
-                  <span aria-hidden="true">★</span>
-                </button>
-              ))}
-            </div>
-          </fieldset>
-
           {needsSpanish && (
             // Rendered rather than hidden, because a Spanish-speaking customer being handed
             // English questions is a real thing to notice, and the spec forbids inventing the
@@ -383,13 +642,8 @@ export function VirtualAgentClient({
             <p className="rev-note">Estas preguntas aún no están disponibles en español.</p>
           )}
 
-          <button
-            type="button"
-            className="rev-primary"
-            onClick={leaveStars}
-            disabled={!starsAnswered}
-          >
-            Next
+          <button type="button" className="rev-primary" onClick={leaveIntro}>
+            Start
           </button>
         </>
       )}
@@ -484,6 +738,146 @@ export function VirtualAgentClient({
                     </button>
                     <button type="button" className="va-chip" onClick={() => answerGate(false)}>
                       {step.no}
+                    </button>
+                  </div>
+                ) : awaiting === "refer" && step.kind === "refer" ? (
+                  /*
+                    ‼️ THE SAME TWO CHIPS AS A GATE, AND A No COSTS HER NOTHING. It skips the
+                    invite and lands on the review questions, which is where a Yes lands too.
+                    There is no third path and no private box behind this one. See answerRefer().
+                  */
+                  <div className="va-chips is-pair">
+                    <button type="button" className="va-chip" onClick={() => answerRefer(true)}>
+                      {step.yes}
+                    </button>
+                    <button type="button" className="va-chip" onClick={() => answerRefer(false)}>
+                      {step.no}
+                    </button>
+                  </div>
+                ) : awaiting === "stars" ? (
+                  <div className="va-composer">
+                    {/*
+                      ‼️ THE STARS DECIDE NOTHING. Read the state declaration above before adding
+                      any branch that reads the value. Every one of the five leads to the same
+                      questions, the same box, the same links and the same private note. The row
+                      below carries the advance so that moving on learns THAT she tapped and never
+                      WHICH.
+
+                      ‼️ COPIED FROM referral-engine-client.tsx CHARACTER FOR CHARACTER. The probe
+                      asserts all five expressions are present here, unchanged. Do not tidy it.
+                      It moved into the composer on 2026-10-05 and not one character of it changed.
+                    */}
+                    <fieldset className="rev-stars">
+                      <legend>How would you rate your experience?</legend>
+                      <div
+                        className="rev-stars-row"
+                        role="radiogroup"
+                        aria-label="Rating out of five"
+                        onClick={() => setStarsAnswered(true)}
+                      >
+                        {[1, 2, 3, 4, 5].map((n) => (
+                          <button
+                            key={n}
+                            type="button"
+                            role="radio"
+                            aria-checked={rating === n}
+                            aria-label={`${n} star${n === 1 ? "" : "s"}`}
+                            className={rating !== null && n <= rating ? "is-on" : undefined}
+                            onClick={() => setRating(n)}
+                          >
+                            <span aria-hidden="true">★</span>
+                          </button>
+                        ))}
+                      </div>
+                    </fieldset>
+
+                    <button
+                      type="button"
+                      className="va-send is-wide"
+                      onClick={leaveStars}
+                      disabled={!starsAnswered}
+                    >
+                      Next
+                    </button>
+                  </div>
+                ) : awaiting === "invite" ? (
+                  /*
+                    The invite, and the only screen in this tool that collects somebody else's
+                    details.
+
+                    ‼️ NOTHING HERE IS SENT BY US. The buttons open her own messages app with the
+                    message already written. See composeInvite(): it returns an href and there is
+                    no sender in this lane.
+
+                    ‼️ THE MESSAGE IS SHOWN TO HER BEFORE IT OPENS, in full, in her own words'
+                    place. She is about to send it from her number to a friend, so she reads it
+                    first. A referral message that goes out of her phone without her having read
+                    it is us writing to her friends in her name.
+                  */
+                  <div className="va-composer va-invite">
+                    <div className="va-bar is-stack">
+                      <input
+                        type="text"
+                        value={friendName}
+                        onChange={(e) => setFriendName(e.target.value)}
+                        placeholder="Their first name"
+                        aria-label="Your friend's first name"
+                      />
+                      <input
+                        type="tel"
+                        value={friendContact}
+                        onChange={(e) => setFriendContact(e.target.value)}
+                        placeholder="Their mobile number"
+                        aria-label="Your friend's mobile number"
+                      />
+                      <button type="button" className="va-skip" onClick={() => void pickContact()}>
+                        Or pick from contacts
+                      </button>
+                    </div>
+
+                    <div className="va-chips" role="group" aria-label="Message wording">
+                      {INVITE_TEMPLATES.map((t) => (
+                        <button
+                          key={t.key}
+                          type="button"
+                          className={t.key === templateKey ? "va-chip is-on" : "va-chip"}
+                          aria-pressed={t.key === templateKey}
+                          onClick={() => setTemplateKey(t.key)}
+                        >
+                          {t.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <p className="va-invite-preview">{inviteMessage}</p>
+
+                    {inviteError && (
+                      <p className="va-invite-error" role="alert">
+                        {inviteError}
+                      </p>
+                    )}
+
+                    {inviteSent ? (
+                      <button type="button" className="va-send is-wide" onClick={finishInvite}>
+                        Done, next question
+                      </button>
+                    ) : (
+                      <div className="va-chips" role="group" aria-label="How to send it">
+                        {INVITE_CHANNELS.map((c) => (
+                          <button
+                            key={c.key}
+                            type="button"
+                            className="va-chip"
+                            onClick={() => openInvite(c.key)}
+                          >
+                            {c.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    <button type="button" className="va-skip" onClick={skipInvite}>
+                      Skip this one
                     </button>
                   </div>
                 ) : awaiting === "text" ? (

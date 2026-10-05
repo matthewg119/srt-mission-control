@@ -97,12 +97,26 @@ neutralisedByRewrite("/login", "becomes a page-slug lookup, never the login form
 neutralisedByRewrite("/api", "one segment, no slash: a page-slug lookup");
 
 console.log("\nFORWARDED WITH A HEADER");
-{
-  const d = externalPathDecision(HUB_API);
-  if (d === "forward_api") console.log(`  ok    ${HUB_API} is forwarded, not rewritten`);
+for (const name of HUB_API) {
+  const d = externalPathDecision(name);
+  if (d === "forward_api") console.log(`  ok    ${name} is forwarded, not rewritten`);
   else {
     failures += 1;
-    console.error(`  FAIL  ${HUB_API} decided "${d}"`);
+    console.error(`  FAIL  ${name} decided "${d}"`);
+  }
+}
+
+// ‼️ THE SET IS NAMES AND NOT A PREFIX, AND THIS IS WHAT HOLDS THAT LINE. HUB_API grew from one
+// string to two on 2026-10-05, and the failure to guard against is the next person "simplifying"
+// it into a startsWith, which would publish every present and future route under /api/hub/ on
+// every hostname a client's registrar points at us. A sibling that was never listed must refuse.
+{
+  const unlisted = "/api/hub/reviews/export";
+  const d = externalPathDecision(unlisted);
+  if (d === "refuse") console.log(`  ok    ${unlisted} is refused: the set is names, not a prefix`);
+  else {
+    failures += 1;
+    console.error(`  FAIL  ${unlisted} decided "${d}". HUB_API has become a prefix.`);
   }
 }
 

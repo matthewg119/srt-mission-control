@@ -58,20 +58,95 @@ const DEMO_CLIENT: HubClient = {
   city: "Austin",
   state: "TX",
   postalCode: null,
-  phone: null,
+  // A number, so the invite step can show what a genuinely three-way text looks like: the
+  // `sms:` href carries the clinic as a second recipient and the chip is allowed to say so.
+  // 555-01xx is the reserved fictional range, so it cannot ring anybody.
+  phone: "+15555550142",
   email: null,
   hours: null,
   language: "en",
   reviewDestinationPrimary: "google",
   // A destination has to be configured or the notes screen says "paste it into Google" with no
   // button, and the button is half of what there is to look at.
-  reviewWorkflow: { google_review_url: "https://example.com/demo-review-destination" },
+  //
+  // ‼️ THE KEY IS `google_url` AND IT WAS `google_review_url` UNTIL 2026-10-05, WHICH MEANT THIS
+  // PAGE HAD NEVER ONCE SHOWN THE BUTTON. REVIEW_PLATFORMS in review-destinations.ts owns the
+  // field names and `google_url` is what destinationsFor() looks for, so the old key matched
+  // nothing, the list came back empty and the demo rendered exactly the fallback hint the comment
+  // above says it was configured to avoid. Nothing errored, which is why it survived.
+  reviewWorkflow: { google_url: "https://example.com/demo-review-destination" },
   // No onAccent here: themeStyle() computes --hub-on-accent from the accent's luminance, which is
   // the whole reason a bright accent does not get unreadable white button text. Setting it by hand
   // would be this page disagreeing with every other one about the same colour.
   theme: { logoUrl: null, accent: "#00C9A7", accentSoft: "#e6f7f3", fontFamily: null },
   skin: null,
 };
+
+/**
+ * The same tool as a med spa would be sent it: white ground, light pink accent.
+ *
+ * ‼️ TWO LITERALS AND NOT TWO RENDERERS. Everything below `theme` is the same object shape the
+ * live route hands over, so this is the hub's own theming doing the work and not a stylesheet
+ * written for a demo. That is the whole value of it: what Matthew sends a prospect is what a
+ * client gets.
+ *
+ * ‼️ `--hub-on-accent` IS NOT SET AND MUST NOT BE. onAccent() derives it from the accent's WCAG
+ * luminance, so this pink gets near-black button text automatically. Hand-setting white here
+ * would be an unreadable button and this page disagreeing with every other one about one colour.
+ *
+ * `skin: null` is correct rather than lazy: the hub's default ground is already #ffffff, so
+ * "white and light pink" is exactly an accent and an accent-soft, with no template involved.
+ */
+const MEDSPA_CLIENT: HubClient = {
+  ...DEMO_CLIENT,
+  id: "demo-medspa-123-not-a-real-client",
+  displayName: "Med Spa 123",
+  legalName: "Med Spa 123 LLC",
+  city: "Miami",
+  state: "FL",
+  theme: { logoUrl: null, accent: "#d6809c", accentSoft: "#fdeef3", fontFamily: null },
+};
+
+/**
+ * The referral deals, handed over as a literal.
+ *
+ * ‼️ A LITERAL IS WHAT KEEPS THIS PAGE'S PROMISE THAT NOTHING IT DOES REACHES A DATABASE.
+ * <ReferralEngine> reads client_service_offers when `referral` is omitted; passing it means
+ * nothing is queried, which matters here because `id` is not a uuid and the real read would be a
+ * pointless round trip that logs an error.
+ *
+ * ‼️ THE FIGURES ARE EXAMPLES AND LIVE ONLY ON THIS PAGE. Every real clinic's deals are set on
+ * the onboarding call, one per service. Nothing in src/lib/ or src/config/ carries a percentage
+ * or a price for this feature, deliberately: a number in the bundle is a discount we invented
+ * turning up in a message a patient sends to her friend. See the header of review-script.ts.
+ *
+ * ‼️ AND IT IS NOT PRE-FILLED PATIENT ANSWERS. PREVIEW_DEMO_RULE in referral-engine-preview.ts
+ * forbids shipping sample answers, and these are not answers: they are clinic configuration,
+ * the same kind of thing as the destination URL above.
+ */
+const DEMO_REFERRAL = {
+  offers: [
+    { serviceLabel: "Botox", offerText: "80% off their first visit, then $299 a month" },
+    { serviceLabel: "Lip filler", offerText: "50% off their first syringe" },
+    { serviceLabel: "Hydrafacial", offerText: "their first facial free" },
+  ],
+  defaultOffer: "80% off their first visit, then $299 a month",
+  clinicPhone: DEMO_CLIENT.phone,
+  sendMode: "device" as const,
+};
+
+/** Which fake clinic the demo is wearing. Narrowed, never interpolated. */
+const CLIENTS = [
+  { key: "default", label: "Northlight (teal)", client: DEMO_CLIENT },
+  { key: "medspa123", label: "Med Spa 123 (pink)", client: MEDSPA_CLIENT },
+] as const;
+
+type DemoClientKey = (typeof CLIENTS)[number]["key"];
+
+function readClient(raw: string | string[] | undefined): DemoClientKey {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return CLIENTS.some((c) => c.key === value) ? (value as DemoClientKey) : "default";
+}
 
 // ‼️ `panel` IS THE LIVE FLOW NOW, and `v1` is kept here because a demo that can only show the
 // winner cannot show what changed. Full screen was walked on 2026-09-24 and rejected.
@@ -83,30 +158,38 @@ const ENGINES = [
 export default function AgentDemo({
   searchParams,
 }: {
-  searchParams: { engine?: string; look?: string };
+  searchParams: { engine?: string; look?: string; client?: string };
 }) {
   const engine = readEngine(searchParams.engine);
   const look = readLook(searchParams.look);
+  const clientKey = readClient(searchParams.client);
+  const client = (CLIENTS.find((c) => c.key === clientKey) ?? CLIENTS[0]).client;
 
   return (
     <div
-      className={hubRootClass(DEMO_CLIENT.skin)}
+      className={hubRootClass(client.skin)}
       lang="en"
       // Skin first, theme second. Same order as the live layout and the two previews; see
       // src/lib/hub/skin.ts. Copied rather than invented, so this page cannot be the one that
       // makes a theme look different from everywhere else.
-      style={{ ...skinStyle(DEMO_CLIENT.skin), ...themeStyle(DEMO_CLIENT.theme) }}
+      style={{ ...skinStyle(client.skin), ...themeStyle(client.theme) }}
     >
-      <Ribbon engine={engine} />
+      <Ribbon engine={engine} clientKey={clientKey} />
       <div className="hub-wrap">
-        <ReferralEngine client={DEMO_CLIENT} engine={engine} look={look} />
+        {/* `referral` passed as a literal, so nothing is queried. See DEMO_REFERRAL. */}
+        <ReferralEngine
+          client={client}
+          engine={engine}
+          look={look}
+          referral={{ ...DEMO_REFERRAL, clinicPhone: client.phone }}
+        />
       </div>
     </div>
   );
 }
 
 /** Dark, amber, and unmistakably not part of the page. Same treatment as the other ribbons. */
-function Ribbon({ engine }: { engine: string }) {
+function Ribbon({ engine, clientKey }: { engine: string; clientKey: string }) {
   const current = ENGINES.find((e) => e.key === engine);
   return (
     <div
@@ -132,11 +215,27 @@ function Ribbon({ engine }: { engine: string }) {
         {ENGINES.map((choice) => (
           <a
             key={choice.key}
-            href={`/demo/agent?engine=${choice.key}`}
+            href={`/demo/agent?client=${clientKey}&engine=${choice.key}`}
             style={{
               color: engine === choice.key ? "#F5A623" : "rgba(255,255,255,0.75)",
               fontWeight: engine === choice.key ? 700 : 400,
               textDecoration: engine === choice.key ? "none" : "underline",
+            }}
+          >
+            {choice.label}
+          </a>
+        ))}
+      </span>
+      <span style={{ display: "flex", gap: "10px", alignItems: "baseline" }}>
+        <span style={{ opacity: 0.6 }}>skin:</span>
+        {CLIENTS.map((choice) => (
+          <a
+            key={choice.key}
+            href={`/demo/agent?client=${choice.key}&engine=${engine}`}
+            style={{
+              color: clientKey === choice.key ? "#F5A623" : "rgba(255,255,255,0.75)",
+              fontWeight: clientKey === choice.key ? 700 : 400,
+              textDecoration: clientKey === choice.key ? "none" : "underline",
             }}
           >
             {choice.label}

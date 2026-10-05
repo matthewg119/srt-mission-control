@@ -852,6 +852,54 @@ body:has(.hub-root) {
   cursor: pointer;
 }
 
+/* ── The invite (v5, 2026-10-05) ───────────────────────────────────────────── */
+/* ‼️ --va-* TOKENS ONLY, LIKE EVERY RULE ABOVE. _probe-virtual-agent-grammar.ts fails any .va-*
+   rule in this file that reaches for a --hub-* token other than --hub-accent and
+   --hub-on-accent, and the whole point of the --va- layer is that the panel's chrome stays the
+   agent's while the chips and the send button carry the client's colour. */
+.va-invite { gap: 0.75rem; }
+
+/* The two contact fields stack, because they are one act of typing and a phone is narrow. */
+.va-bar.is-stack { flex-direction: column; align-items: stretch; }
+.va-bar.is-stack input {
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+  /* 16px on the control itself, or iOS zooms the whole panel on focus. Same as the textarea. */
+  font-size: 16px;
+  color: var(--va-ink);
+  background: var(--va-bg);
+  border: 1px solid var(--va-line);
+  border-radius: 12px;
+  padding: 0.6rem 0.75rem;
+}
+
+/* The chosen wording. A pressed state and nothing more: the chips pick copy, not a path. */
+.va-chip.is-on {
+  color: var(--va-on-accent);
+  background: var(--va-accent);
+}
+
+/* ‼️ SHE READS THE MESSAGE BEFORE IT OPENS, SO IT IS SET AS A MESSAGE AND NOT AS FINE PRINT.
+   It goes out of her phone, from her number, to somebody she knows. Styling it small or grey
+   would be the tool hoping she does not check it. */
+.va-invite-preview {
+  margin: 0;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  color: var(--va-ink);
+  background: var(--va-card);
+  border: 1px solid var(--va-line);
+  border-radius: 12px;
+  padding: 0.7rem 0.85rem;
+}
+
+.va-invite-error {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--va-ink);
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    HER WORDS, AND THE RAIL BESIDE THEM (v2)
    ───────────────────────────────────────────────────────────────────────────

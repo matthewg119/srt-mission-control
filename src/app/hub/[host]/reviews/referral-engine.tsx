@@ -4,8 +4,9 @@
 import type { HubClient } from "@/lib/hub/resolve";
 import { HubLogo } from "@/components/hub/hub-bodies";
 import { REVIEW_PLATFORMS } from "@/lib/hub/review-destinations";
+import { referralConfigFor } from "@/lib/hub/referral-config";
 import { ReferralEngineClient, type ChatLook, type ReviewDestination } from "./referral-engine-client";
-import { VirtualAgentClient } from "./virtual-agent-client";
+import { VirtualAgentClient, type ReferralConfig } from "./virtual-agent-client";
 
 /**
  * The three chat looks, and the one everybody gets.
@@ -114,16 +115,31 @@ function destinationsFor(client: HubClient): ReviewDestination[] {
   }));
 }
 
-export function ReferralEngine({
+/**
+ * ‼️ ASYNC SINCE v5 (2026-10-05), WHICH COSTS THE CALLERS NOTHING. The referral config is a read
+ * of client_service_offers, and an async server component renders as ordinary JSX, so the live
+ * route and the two previews did not change. What they DID gain is the referral steps, which is
+ * the point: the dashboard preview is where Matthew walks it before a client ever does.
+ *
+ * ‼️ AND `referral` IS AN OVERRIDE, NOT A CACHE. Pass it and nothing is queried. That is how
+ * /demo/agent keeps the promise in its own header that nothing it does reaches a database, while
+ * still showing the invite step: it hands over a literal. Omit it and the client's real deals are
+ * read. Passing `null` explicitly means "no referral on this render", which is the honest state
+ * for a client with no deals on file.
+ */
+export async function ReferralEngine({
   client,
   look,
   engine = DEFAULT_ENGINE,
+  referral,
 }: {
   client: HubClient;
   look?: ChatLook;
   engine?: ReviewEngine;
+  referral?: ReferralConfig | null;
 }) {
   const destinations = destinationsFor(client);
+  const referralConfig = referral === undefined ? await referralConfigFor(client) : referral;
   // The three props below mean the same thing to both clients and are commented once, here,
   // rather than twice in two argument lists that would then drift.
   //
@@ -171,6 +187,7 @@ export function ReferralEngine({
           clientId={client.id}
           destinations={destinations}
           needsSpanish={needsSpanish}
+          referral={referralConfig}
         />
       )}
     </>

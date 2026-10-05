@@ -34,7 +34,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { REVIEW_SCRIPT, GATE_IDS } from "../src/lib/hub/review-script";
+import { REVIEW_SCRIPT, GATE_IDS, NON_REVIEW_IDS } from "../src/lib/hub/review-script";
 import {
   ALL_REVIEW_QUESTIONS,
   assembleLabelled,
@@ -57,6 +57,16 @@ const SCRIPT = "src/lib/hub/review-script.ts";
 const CARD = "src/lib/clients/artifacts/review-card.ts";
 const LIVE_ROUTE = "src/app/hub/[host]/page.tsx";
 const CSS = "src/app/hub/[host]/hub.css";
+const INVITE = "src/lib/hub/referral-invite.ts";
+
+/**
+ * Where a two-space-indented function body ends, used to cut one named function out of a source
+ * file. Built from a char code rather than written as an escape so that no editor, formatter or
+ * `core.autocrlf` checkout can turn it into something else: see stripComments below, where
+ * exactly that cost three checks.
+ */
+const LF = String.fromCharCode(10);
+const FN_END = `${LF}  }${LF}`;
 
 let failures = 0;
 
@@ -284,6 +294,119 @@ check(
   !/\bas\s+(unknown\s+as\s+)?ReviewAnswers\b/.test(v2Src),
   "and nothing in the v2 client casts its way into ReviewAnswers"
 );
+
+// ── 10b. THE REFERRAL (v5, 2026-10-05) ROUTES THE REFERRAL AND NOTHING ELSE. ─
+//
+// ‼️ THIS IS THE SECTION THAT LICENSES THE WHOLE FEATURE, SO READ IT BEFORE CHANGING IT.
+// review-assemble.ts used to say "NOT ASKED, EVER: ... whether she would recommend", and the
+// reason was sound: an NPS question in front of a review is the industry's standard pre-screen,
+// where a promoter is shown the Google link and a detractor is shown a private form. Matthew
+// reversed the wording on 2026-10-05. What may NOT be reversed is the rule underneath it, and
+// these checks are the difference between the two.
+//
+// A Yes gets a referral deal. A No gets the identical review: same questions, same editable box,
+// same copy button, same destination links, same private note. The moment that stops being true
+// this file fails, and it fails for the same reason check 1 exists.
+
+// Structural, exactly as for a gate: an id that is also an assembled key is how a friend's phone
+// number or the word "Yes" ends up in a public review, because assemblePlain() iterates keys.
+check(
+  NON_REVIEW_IDS.length >= 3,
+  "the walk has its stars, recommend and invite steps",
+  `${NON_REVIEW_IDS.length} found: ${NON_REVIEW_IDS.join(", ")}`
+);
+check(
+  NON_REVIEW_IDS.every((id) => !bulletKeys.has(id)),
+  "no stars, recommend or invite id is also an assembled question key",
+  NON_REVIEW_IDS.filter((id) => bulletKeys.has(id)).join(", ") || undefined
+);
+
+// Behaviourally. A visitor who tapped the stars, said Yes and named a friend has typed nothing,
+// and every reader downstream has to agree about that.
+const referOnly = Object.fromEntries(
+  NON_REVIEW_IDS.map((id) => [id, "Yes"])
+) as unknown as ReviewAnswers;
+check(assemblePlain(referOnly) === "", "the stars, a Yes and an invite copy nothing");
+check(assembleLabelled(referOnly).length === 0, "and produce no bullet on screen");
+check(isEmpty(referOnly), "and read as nothing typed, so no review row is stored at all");
+
+// The recommend question routes FORWARD or not at all, the same shape a gate is held to.
+for (const [i, step] of REVIEW_SCRIPT.entries()) {
+  if (step.kind !== "refer") continue;
+  const at = REVIEW_SCRIPT.findIndex((s) => s.id === step.onYes);
+  check(
+    at === i + 1,
+    `${step.id} routes Yes to the very next step`,
+    at === i + 1 ? undefined : `onYes "${step.onYes}" is at ${at}, the question is at ${i}`
+  );
+  check(
+    step.onNo === null,
+    `${step.id} routes No forward and nowhere else`,
+    "a No with a destination of its own is the pre-screen this question is only allowed to exist without"
+  );
+}
+
+// ‼️ AND A No MUST STILL REACH THE REVIEW. The step a No lands on has to be part of the review
+// walk, not the end of it: if the recommend question were last, or if its No skipped past the
+// remaining questions, then saying "no" would cost her the review she came to write and saying
+// "yes" would be the price of being heard. That is the pre-screen inverted, and it is the one
+// arrangement of these steps that the positional rules above would otherwise permit.
+for (const [i, step] of REVIEW_SCRIPT.entries()) {
+  if (step.kind !== "refer") continue;
+  const after = REVIEW_SCRIPT.slice(i + 2);
+  const asksLeft = after.filter((s) => s.kind === "ask").length;
+  check(
+    asksLeft > 0,
+    `a No to ${step.id} still reaches the review questions`,
+    asksLeft > 0
+      ? `${asksLeft} question(s) follow it either way`
+      : "a No would end the walk, which makes the review the reward for saying yes"
+  );
+}
+
+// The handler, cut out by name like answerGate(). It advances and records a referral; it must not
+// reveal, must not store a review, must not touch her answers and must not read the stars.
+const referFnStart = v2Src.indexOf("function answerRefer(");
+check(referFnStart > 0, "the v2 client answers the recommend question in one named function");
+const referFn =
+  referFnStart < 0 ? "" : v2Src.slice(referFnStart, v2Src.indexOf(FN_END, referFnStart));
+const REFER_FORBIDDEN = ["rev-private", "privateNote", "setRevealed", "destinations", "rating", "store(", "setAnswers"];
+const referFound = REFER_FORBIDDEN.filter((t) => referFn.includes(t));
+check(
+  referFound.length === 0,
+  "and it reveals nothing, stores no review and answers nothing",
+  referFound.length ? `found: ${referFound.join(", ")}` : undefined
+);
+
+// ‼️ THE FRIEND'S CONTACT NEVER TRAVELS IN THE REVIEW REQUEST. Two routes and two tables is the
+// whole reason review_tool_submissions can still say it holds nothing that identifies anybody.
+// The submit route's body is what writes that table, so the names must not appear in it.
+const CONTACT_FIELDS = ["friendName", "friendContact", "friend_name", "friend_contact"];
+const inSubmit = CONTACT_FIELDS.filter((f) => submitSrc.includes(f));
+check(
+  inSubmit.length === 0,
+  "the review submit route has no notion of a friend's name or contact",
+  inSubmit.length ? `found in ${SUBMIT}: ${inSubmit.join(", ")}` : undefined
+);
+
+// ‼️ AND THE OFFER IS NEVER DESCRIBED AS BEING FOR A REVIEW. This is the FTC line, not a copy
+// preference: consideration for a referral is an ordinary refer-a-friend deal, consideration for
+// a review is an incentivised review with an undisclosed material connection. The invite copy and
+// the message templates are the two places a well-meaning edit would cross it.
+const inviteSrc = stripComments(read(INVITE));
+for (const [label, src] of [["the walk", scriptSrc], ["the invite copy", inviteSrc]] as const) {
+  // Same-line proximity only. Written with an explicit character class rather than a newline
+  // escape, for the reason FN_END is built the way it is.
+  const near = "[^\\r\\n]{0,80}";
+  const tied =
+    new RegExp(`review${near}(discount|offer|%|code)`, "i").test(src) ||
+    new RegExp(`(discount|offer|code)${near}review`, "i").test(src);
+  check(
+    !tied,
+    `${label} never ties the offer to leaving a review`,
+    tied ? "an offer in exchange for a review is the one thing this lane may not say" : undefined
+  );
+}
 
 // ── 11. The agent says its lines. It does not compose them. ────────────────
 //

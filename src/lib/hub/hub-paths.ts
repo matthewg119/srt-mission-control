@@ -48,13 +48,23 @@ export const HUB_SLUG = /^\/[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$/;
 export const HUB_ANSWER = /^\/answers(?:\/[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?)?$/;
 
 /**
- * The only API route reachable on a client-controlled hostname.
+ * The only API routes reachable on a client-controlled hostname.
  *
- * ‼️ A NAME, NOT A PREFIX, AND IT STAYS THAT WAY. Turning this into a startsWith on "/api/hub/"
+ * ‼️ NAMES, NOT A PREFIX, AND IT STAYS THAT WAY. Turning this into a startsWith on "/api/hub/"
  * would publish every present and future route under that folder on every hostname a client's
  * registrar points at us. The hit log deliberately lives outside that folder for the same reason.
+ *
+ * ‼️ IT BECAME A SET OF TWO ON 2026-10-05 AND THAT IS NOT A RELAXATION. The referral invite is a
+ * second write the customer-facing walk has to make, and the alternative to listing it here was
+ * folding it into the submit route, which would have put a friend's phone number in the same
+ * request body that writes review_tool_submissions. Keeping them two routes is what keeps them
+ * two tables. Every addition to this set is a new public surface on dozens of domains we do not
+ * control, so add one only when the customer-facing walk genuinely cannot work without it.
  */
-export const HUB_API = "/api/hub/reviews/submit";
+export const HUB_API: ReadonlySet<string> = new Set([
+  "/api/hub/reviews/submit",
+  "/api/hub/reviews/invite",
+]);
 
 /**
  * Does this path SHAPE look like a hub page?
@@ -106,7 +116,7 @@ export function externalPathDecision(path: string): ExternalPathDecision {
   // The AI Referral Engine's submit endpoint. The host travels as a request header rather than
   // in the path: an API route has no full-route cache to key, so there is nothing for a header
   // to leak across.
-  if (path === HUB_API) return "forward_api";
+  if (HUB_API.has(path)) return "forward_api";
 
   return isHubShape(path) ? "rewrite" : "refuse";
 }

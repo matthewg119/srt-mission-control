@@ -51,7 +51,20 @@ export interface ReviewQuestion {
     | "improve"
     | "expectations"
     | "concerns"
-    | "fears";
+    | "fears"
+    // v5 (2026-10-05). The in-clinic walk. Also a sentence she typed.
+    //
+    // ‼️ `provider` IS A STAFF NAME IN A PUBLIC REVIEW AND THAT IS A REVERSAL. The comment on
+    // REVIEW_QUESTIONS below says "NOT ASKED, EVER: who treated her", because Google forbids a
+    // merchant soliciting specific review content and names staff names as an example. Matthew
+    // decided on 2026-10-05 that it is asked and that it reaches the review text. Recorded as
+    // his decision; the exposure sits on the clinic's Google profile, not on this tool's FTC
+    // position, which is about GENERATED content and is untouched by it.
+    //
+    // ‼️ IT IS NOT PATIENT PII. The name is a member of the clinic's staff, so
+    // review_tool_submissions still holds nothing that identifies HER, which is what that
+    // table's no-column rule has always been about.
+    | "provider";
   /** What she is asked. */
   prompt: string;
   /** The label shown beside her sentence ON SCREEN only. Never copied. */
@@ -152,19 +165,57 @@ export const REVIEW_QUESTIONS_V4: ReviewQuestion[] = [
 ];
 
 /**
- * Assembly order for BOTH sets, and the reason nothing migrates.
+ * The v5 addition (2026-10-05), asked at the counter with the front desk beside her.
+ *
+ * ‼️ THE QUESTION ASKS FOR A SENTENCE AND NOT JUST A NAME, AND THAT IS NOT A COPY PREFERENCE.
+ * "Who took care of you today?" is answered "Sarah". assembleBullet() does the only
+ * transformation this tool is allowed to do, which is trim, collapse, capitalise, add a full
+ * stop, so a bare name becomes the review line `Sarah.` That is a broken sentence in the middle
+ * of a public review, and the fix must NOT be to have the tool write "Sarah took care of me"
+ * around it: inserting our words into her review is the one thing this whole file exists to
+ * refuse. So the QUESTION changes instead, and she answers "Sarah, she was great", which is a
+ * sentence she wrote.
+ *
+ * The front desk still asks "who took care of you?" out loud, which is the choreography Matthew
+ * wants and the reason she is handed the card at that moment. The screen asks for a little more.
+ */
+export const REVIEW_QUESTIONS_V5: ReviewQuestion[] = [
+  {
+    key: "provider",
+    prompt: "Who took care of you today, and how were they?",
+    label: "Who took care of me",
+  },
+];
+
+/**
+ * Assembly order for ALL sets, and the reason nothing migrates.
  *
  * ‼️ THE ORDER OF THIS SPREAD IS LOAD BEARING AND IS PINNED BY A TEST. assembleLabelled and
  * assemblePlain iterate it, so it decides the order of the sentences she copies. No stored row has
  * ever held one v3 key and one v4 key, so a v3 row comes out byte for byte what it produced before
  * v4 existed. Reordering this would re-assemble stored reviews in an order the customer who wrote
  * them never saw, which is a thing she cannot be asked to check.
+ *
+ * ‼️ v5 IS APPENDED, NEVER INSERTED, AND THE READ ORDER WAS THE DECIDING ARGUMENT. `provider`
+ * would read most naturally second, right after the service, but putting it there would mean
+ * splitting the v4 spread in half around it, and the next person to add a question would have a
+ * four-part expression to reason about instead of a list. Appended, every stored v3 and v4 row
+ * comes out byte for byte unchanged (they hold no `provider` value, so they contribute no extra
+ * bullet), and a v5 review ends by naming the person who did the work, which is a good last line
+ * rather than a compromise.
  */
-export const ALL_REVIEW_QUESTIONS: ReviewQuestion[] = [...REVIEW_QUESTIONS, ...REVIEW_QUESTIONS_V4];
+export const ALL_REVIEW_QUESTIONS: ReviewQuestion[] = [
+  ...REVIEW_QUESTIONS,
+  ...REVIEW_QUESTIONS_V4,
+  ...REVIEW_QUESTIONS_V5,
+];
 
 
 /** The stamp a v4 row carries. v3 rows keep QUESTION_SET_VERSION above and nothing rewrites them. */
 export const QUESTION_SET_VERSION_V4 = "v4";
+
+/** The stamp a v5 row carries. Nothing rewrites a v3 or a v4 row. */
+export const QUESTION_SET_VERSION_V5 = "v5";
 
 /**
  * Which set was walked, read off the request body.
@@ -173,6 +224,7 @@ export const QUESTION_SET_VERSION_V4 = "v4";
  * not-null text column, so it is narrowed here rather than trusted.
  */
 export function readQuestionSetVersion(raw: unknown): string {
+  if (raw === QUESTION_SET_VERSION_V5) return QUESTION_SET_VERSION_V5;
   return raw === QUESTION_SET_VERSION_V4 ? QUESTION_SET_VERSION_V4 : QUESTION_SET_VERSION;
 }
 
