@@ -156,7 +156,7 @@ check(
 // compiles perfectly and then refuses forever at runtime.
 
 const listed = [...mod.matchAll(/^\s*"([a-z_]+)",$/gm)].map((m) => m[1]);
-check(listed.length >= 19, `the action list was found and holds ${listed.length} entries`);
+check(listed.length >= 21, `the action list was found and holds ${listed.length} entries`);
 for (const action of listed) {
   check(mod.includes(`case "${action}"`), `${action} has a branch in runLaunchPagesAction`);
 }
@@ -231,6 +231,19 @@ check(
   /no pillar is picked yet/.test(facts),
   "with no pillar it says there is no map rather than offering the keyword list as one",
   "a person picks the pillar; it is never chosen from the scores"
+);
+
+// ‼️ THE FOUR KEYWORD VERBS ARE FOUR DIFFERENT DECISIONS AND THE CHAT MUST BE TOLD WHICH IS WHICH.
+// keywords_select cannot mint, keywords_add can, drop is remembered and unselect is not. The chat
+// answered "I cannot add keywords directly" on 2026-10-05 because minting genuinely did not exist;
+// the opposite failure, reaching for drop when he meant unselect, is silent and permanent.
+check(
+  /mintKeywords/.test(mod) && /dropKeywordIds/.test(mod),
+  "the lane can mint a keyword and drop one"
+);
+check(
+  /keywords_add/.test(chat) && /keywords_drop/.test(chat) && /keywords_select/.test(chat) && /keywords_unselect/.test(chat),
+  "the prompt names all four keyword verbs, so one is not used for another"
 );
 
 console.log("");

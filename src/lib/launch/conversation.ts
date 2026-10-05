@@ -153,6 +153,8 @@ export interface LaunchAction {
   /** strategy_set: the pillar phrase, and the supports under it. */
   pillar?: string;
   supports?: string[];
+  /** keywords_add: the cluster the new phrases join. */
+  category?: string;
   /** publish_page: which page, by the rank the plan shows. */
   destinationId?: string;
 }
@@ -410,8 +412,20 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "  run_pages            needs stage, one of the stages listed above. Also takes rank and pick",
     "                       (headline_pick), rank (plan_drop, plan_swap, plan_edit, plan_cta),",
     "                       text (plan_edit, plan_cta, research_file), rung (ladder_pick),",
-    "                       phrases (keywords_select, keywords_unselect), and pillar plus supports",
+    "                       phrases (keywords_add, keywords_drop, keywords_select,",
+    "                       keywords_unselect), category (keywords_add), and pillar plus supports",
     "                       (strategy_set).",
+    "",
+    "THE FOUR KEYWORD VERBS, WHICH ARE FOUR DIFFERENT DECISIONS. Do not use one for another:",
+    "  keywords_add         MINTS phrases that do not exist yet, approves them and puts them in the",
+    "                       page pool. Needs a category, which you propose from the ones already in",
+    "                       use and he confirms. A phrase that is a marketing line rather than a",
+    "                       search is stored as a hook and can never be a page's keyword.",
+    "  keywords_drop        out of both pools AND remembered as unwanted, so a later expansion will",
+    "                       not propose it again. This is what he means by remove.",
+    "  keywords_select      puts an EXISTING approved phrase into the page pool. It cannot create",
+    "                       one: a phrase that is not already in the pool is refused by name.",
+    "  keywords_unselect    out of the page pool only. Still approved, still measured at Day 0.",
     "  publish_page         needs rank. Goes through publishPage(), so it can be refused three ways:",
     "                       Day 0 not archived, the quality gate, or more than one destination wired",
     "                       and none chosen. The last one is a QUESTION: it comes back with the list,",
@@ -704,6 +718,7 @@ ${body}`,
       stage: action.rung ?? null,
       text: action.text ?? null,
       phrases: action.phrases ?? null,
+      category: action.category ?? null,
       pillar: action.pillar ?? null,
       supports: action.supports ?? null,
     });

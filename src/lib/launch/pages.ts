@@ -279,6 +279,8 @@ export async function pageRunText(clientId: string): Promise<string> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const LAUNCH_PAGE_ACTIONS = [
+  "keywords_add",
+  "keywords_drop",
   "keywords_select",
   "keywords_unselect",
   "strategy_set",
@@ -340,6 +342,8 @@ export interface LaunchPagesInput {
   /** strategy_set: the one pillar phrase, and the supports under it. */
   pillar?: string | null;
   supports?: string[] | null;
+  /** keywords_add: the cluster the new phrases join. Given, never guessed. */
+  category?: string | null;
 }
 
 /**
@@ -414,6 +418,59 @@ export async function runLaunchPagesAction(input: LaunchPagesInput): Promise<Lau
     // living in keyword-decisions.ts and _probe-dead-wires.ts greps that file before believing the
     // declaration. A second writer in this lane would make the generated docs wrong about the one
     // column that decides what every page is built from.
+    // ‼️ THE ONE THAT MINTS. Everything else on this list PICKS from phrases that already exist;
+    // this is the only door that creates one, and until 2026-10-05 the lane had none, so the chat
+    // correctly told him it could not add a keyword. The shared filter still decides what may join.
+    case "keywords_add": {
+      const { mintKeywords } = await import("@/lib/clients/keyword-mint");
+      const res = await mintKeywords({
+        clientId,
+        phrases: input.phrases ?? [],
+        // Hand-added keywords land in their own named cluster, so they stay visibly distinct from
+        // the harvested ones. Matthew's rule, 2026-10-05.
+        category: input.category ?? "",
+        by: actor,
+      });
+      if (!res.ok) return { ok: false, error: res.error };
+
+      const r = res.report;
+      return {
+        ok: true,
+        message: [
+          r.added.length ? `Added ${r.added.length}: ${r.added.join("; ")}.` : "",
+          r.restored.length ? `Brought back ${r.restored.length}: ${r.restored.join("; ")}.` : "",
+          r.already.length ? `Already in the set: ${r.already.join("; ")}.` : "",
+          r.hooks.length
+            ? `Stored as hooks, which can never be a page's keyword: ${r.hooks.join("; ")}.`
+            : "",
+          r.refused.length
+            ? `Refused: ${r.refused.map((f) => `${f.phrase} (${f.why})`).join("; ")}.`
+            : "",
+          `${r.selected} are now approved and in the page pool.`,
+          "Re-propose the plan to build pages off them.",
+        ]
+          .filter(Boolean)
+          .join(" "),
+      };
+    }
+
+    // ‼️ DROPPED, NOT DELETED, AND NOT THE SAME AS UNSELECTING. A drop is remembered so a later
+    // expansion cannot propose the phrase back; unselecting leaves it approved and measurable and
+    // only takes it out of the page pool. Matthew picked drop as what "remove" means here.
+    case "keywords_drop": {
+      const got = await resolvePhrases(clientId, input.phrases ?? []);
+      if (!got.ok) return { ok: false, error: got.error };
+      const { dropKeywordIds } = await import("@/lib/clients/keyword-mint");
+      const res = await dropKeywordIds({ clientId, ids: got.rows.map((r) => r.id), by: actor });
+      if (!res.ok) return { ok: false, error: res.error };
+      return {
+        ok: true,
+        message:
+          `Dropped ${res.dropped}: ${got.rows.map((r) => r.phrase).join("; ")}. ` +
+          "They are remembered as unwanted, so a later expansion will not propose them again.",
+      };
+    }
+
     case "keywords_select": {
       const got = await resolvePhrases(clientId, input.phrases ?? []);
       if (!got.ok) return { ok: false, error: got.error };
