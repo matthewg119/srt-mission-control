@@ -40,11 +40,19 @@ import {
 } from "@/config/launch-steps";
 import { launchBoard, setLaunchStep, isResolved } from "./steps";
 import { refusalText, verdictDetail } from "./verify";
-import { foundationStatus, FOUNDATION_LABELS, type FoundationKind } from "./documents";
+import {
+  foundationStatus,
+  ingestFoundationDocument,
+  isFoundationKind,
+  FOUNDATION_KINDS,
+  FOUNDATION_LABELS,
+  type FoundationKind,
+} from "./documents";
 import { proposeVocabulary, confirmVocabulary } from "./vocabulary";
 import { proposeOfferFromDocument, confirmOffer, currentOffer } from "./offer";
 import { searchDomains } from "./domain";
 import { dnsFacts } from "./dns-facts";
+import { kindBelongsToOffer } from "@/lib/clients/audience-documents";
 import { slackLaneSummary } from "@/lib/clients/lane-summary";
 import { publishingFacts } from "./publishing-facts";
 import {
@@ -113,6 +121,11 @@ export const ACTION_KINDS = [
   // thing in the lane inside a generic verb.
   "publish_page",
   "unpublish_page",
+  // ‼️ IT EXISTS BECAUSE THIS CHAT PROMISED IT AND COULD NOT DO IT (2026-10-05). It told Matthew
+  // "paste the full output back and I will file it", he ran hours of deep research and pasted a
+  // 50k-character report, and there was no action for it: the only door was a file upload on a
+  // board he had asked to stop using. A promise a surface cannot keep is worse than a refusal.
+  "file_document",
 ] as const;
 
 export type ActionKind = (typeof ACTION_KINDS)[number];
@@ -363,9 +376,26 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "  the full name into a registrar creates learn.example.com.example.com, and it is the single",
     "  most common way this goes wrong.",
     "",
+    "‼️ THE CONTEXT BELOW BEATS ANYTHING EARLIER IN THIS CONVERSATION, INCLUDING YOUR OWN WORDS:",
+    "- Everything under THE BOARD, PUBLISHING and THE PAGE RUN was read from the database seconds",
+    "  ago. A list you wrote in an earlier turn was not. It may have been a proposal he never",
+    "  accepted, or something you got wrong, and nothing you say becomes true by being said.",
+    "- ‼️ THIS HAPPENED ON 2026-10-05. You described an eleven-page plan in prose, he liked it, and",
+    "  several turns later you wrote a research prompt listing THOSE pages. The real plan was in",
+    "  front of you and four of the eleven were different. He would have commissioned research for",
+    "  pages that do not exist.",
+    "- So before naming any page, keyword or count: read it out of the context block. If what you",
+    "  said before disagrees, the context is right and say so plainly in one line.",
+    "",
     "THE PROMPT MECHANIC, WHICH MATTERS MORE THAN ANYTHING ELSE YOU DO:",
     "- You do not do research. You hand him a prompt he runs in a separate session and pastes back.",
-    '- Use the hand_prompt action with which="avatar_chain" when the four documents are not in hand.',
+    '- Use the hand_prompt action with which="avatar_chain" ONLY when a foundation document is',
+    "  missing. The context says which are present. All four present means that chain is hours of",
+    "  work to reproduce what is already on file, and the server now refuses it.",
+    "- ‼️ NEVER WRITE THE PAGE RESEARCH PROMPT YOURSELF. run_pages stage=research_prompt is the only",
+    "  place it comes from: it is built from the approved pages, their picked headlines and their",
+    "  skeletons, so a hand-written one is aimed at whatever you happened to remember. If it refuses,",
+    "  it names the stage that is missing. Say that and run that stage instead.",
     "- Page copy ALWAYS goes through a research prompt first. Never draft it from nothing.",
     "",
     "THE PAGE RUN, WHICH IS HOW A KEYWORD BECOMES A LIVE PAGE:",
@@ -431,6 +461,14 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "                       and none chosen. The last one is a QUESTION: it comes back with the list,",
     "                       you show him both and he picks, then you pass destinationId.",
     "  unpublish_page       needs rank. Taking a page down is never gated: it is the remedy.",
+    "  file_document        needs which (deep_research, avatar_sheet, short_offer,",
+    "                       necessary_beliefs) and text: a document he has pasted. It supersedes the",
+    "                       one on file and lands in the evidence library every later page cites.",
+    "                       ‼️ USE IT THE MOMENT HE PASTES ONE. A long paste that is obviously a",
+    "                       research report, an avatar sheet or an offer document is him answering a",
+    "                       prompt you handed him, and saying 'thanks, I have filed that' without",
+    "                       this action is a lie about work he just did. If you cannot tell which",
+    "                       kind it is, ask in one line rather than filing it as the wrong one.",
     "",
     ctx.text,
     "",
@@ -589,7 +627,30 @@ async function executeAction(
   }
 
   if (kind === "hand_prompt") {
-    const prompt = await buildHandoffPrompt(clientId, action.which ?? "");
+    const which = action.which ?? "";
+
+    // ‼️ THE AVATAR CHAIN IS REFUSED ONCE THE FOUR DOCUMENTS ARE ON FILE, AND IT IS A CODE CHECK
+    // RATHER THAN A PROMPT LINE BECAUSE THE PROMPT ALREADY SAID IT. On 2026-10-05, with all four
+    // documents live on SRT, this handed Matthew the seven-message avatar chain: hours of research
+    // to reproduce 60k characters the client library already held, and the prompt's own rule is
+    // "never send him to redo work the context shows finished". Whether the documents exist is a
+    // fact in the database, so it is settled here instead of being asked for nicely.
+    if (/avatar/i.test(which)) {
+      const docs = await foundationStatus(clientId).catch(() => null);
+      const have = (docs ?? []).filter((d) => d.present).map((d) => d.kind);
+      if (have.length === 4) {
+        return {
+          kind,
+          ok: false,
+          detail:
+            `All four foundation documents are already on file (${have.join(", ")}), so the avatar chain ` +
+            "would be redoing them. Use read_document to quote one. If a document is genuinely out of " +
+            "date, say which and replace that one rather than running the whole chain again.",
+        };
+      }
+    }
+
+    const prompt = await buildHandoffPrompt(clientId, which);
     if (!prompt.ok) return { kind, ok: false, detail: prompt.error };
     return { kind, ok: true, detail: prompt.label, prompt: prompt.text };
   }
@@ -657,6 +718,78 @@ ${body}`,
     });
 
     return { kind, ok: true, detail: lines.join(". ") };
+  }
+
+  if (kind === "file_document") {
+    const which = (action.which ?? "").trim();
+    if (!isFoundationKind(which)) {
+      return {
+        kind,
+        ok: false,
+        detail: `"${which}" is not a foundation document. They are: ${FOUNDATION_KINDS.join(", ")}.`,
+      };
+    }
+
+    const text = (action.text ?? "").trim();
+    if (text.length < 200) {
+      return {
+        kind,
+        ok: false,
+        detail: `That is ${text.length} characters. Under 200 is a paste that went wrong, not a document.`,
+      };
+    }
+
+    // ‼️ THE ADDRESS IS RESOLVED HERE AND NEVER TAKEN FROM THE MODEL, the same rule the upload
+    // route states: audience_documents is keyed on (audience, offer, kind), so an id carried
+    // through a conversation would let one client's document be filed against another's audience.
+    const { data: audience } = await supabaseAdmin
+      .from("client_audiences")
+      .select("id")
+      .eq("client_id", clientId)
+      .eq("is_primary", true)
+      .maybeSingle();
+    if (!audience) {
+      return { kind, ok: false, detail: "This client has no audience yet, and a document is filed against one." };
+    }
+
+    let offerId: string | null = null;
+    if (kindBelongsToOffer(which)) {
+      const { data: offer } = await supabaseAdmin
+        .from("client_offers")
+        .select("id")
+        .eq("client_id", clientId)
+        .eq("is_primary", true)
+        .maybeSingle();
+      if (!offer) {
+        return { kind, ok: false, detail: `The ${which.replace(/_/g, " ")} hangs off an offer, and this client has none.` };
+      }
+      offerId = offer.id as string;
+    }
+
+    // Wrapped as a .md file rather than given a second ingest path. extractFileText reads markdown
+    // directly and does no model transcription, so the bytes arrive exactly as he pasted them, and
+    // every rule the upload has (the 200-character floor, the second write into page_sources that
+    // makes it evidence) applies without being restated here.
+    const res = await ingestFoundationDocument({
+      clientId,
+      audienceId: audience.id as string,
+      offerId,
+      kind: which,
+      filename: `${which}-pasted.md`,
+      contentType: "text/markdown",
+      bytes: Buffer.from(text, "utf8"),
+      by: actor,
+    });
+
+    return res.ok
+      ? {
+          kind,
+          ok: true,
+          detail:
+            `Filed the ${which.replace(/_/g, " ")}, ${res.chars} characters. It supersedes the previous one and ` +
+            "is in the evidence library every later page cites.",
+        }
+      : { kind, ok: false, detail: res.error ?? "The document was not filed." };
   }
 
   if (kind === "read_pages") {

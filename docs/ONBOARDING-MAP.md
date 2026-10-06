@@ -415,7 +415,7 @@ One offer proposed from what they told us at intake
 | [Done] reads | no table |
 | Dataset fields | none: the proposal is written from what intake already said, so nothing has to be collected for it. What it LOSES, the proposal's own reasoning before offer_locked overwrites it, is a missing history row rather than a missing field |
 | Feeds | nothing: the proposal is superseded by offer_locked, and its own STEP_NEEDS entry records that what it loses is a missing history row rather than a field |
-| Downstream | `client_offers` is selected in 4 other file(s), e.g. `src/app/api/launch/[id]/documents/route.ts`, `src/lib/clients/archive.ts`, `src/lib/launch/offer.ts`; `clients` is selected in 109 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
+| Downstream | `client_offers` is selected in 5 other file(s), e.g. `src/app/api/launch/[id]/documents/route.ts`, `src/lib/clients/archive.ts`, `src/lib/launch/conversation.ts`; `clients` is selected in 109 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
 
 **[Done] refuses on:**
 
