@@ -18,11 +18,18 @@
 import { NextResponse } from "next/server";
 
 import { endOfLocalDay, fetchSlots, safeTimeZone } from "@/lib/calendly";
+import { CARDS_CALENDLY_KIND } from "@/config/onboarding-cards";
 
 export const dynamic = "force-dynamic";
 
-/** The call. `install` falls back to NEXT_PUBLIC_CALENDLY_URL, which is the one that is set. */
-const KIND = "install" as const;
+/**
+ * The setup call, named once in the config this funnel shares with /api/cards.
+ *
+ * ‼️ IT USED TO SAY "install" AND THAT IS WHY THIS ROUTE HAD NEVER RETURNED A SLOT. See
+ * CARDS_CALENDLY_KIND for the measurement: the install uuid is set in no environment, so every call
+ * to this route answered { slots: [], reason: "unconfigured" } and the picker never drew.
+ */
+const KIND = CARDS_CALENDLY_KIND;
 
 /** Two, because the whole point is a choice rather than a grid. */
 const OFFER = 2;

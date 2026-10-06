@@ -18,7 +18,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { ingestLead, pageFromRequest } from "@/lib/lead-intake";
 import { validEmail, validName } from "@/lib/medspa/validate";
 import { bookingPageUrl, calendlyEmbedUrl } from "@/lib/calendly";
-import { CARDS_SOURCE, NO_WEBSITE, REVENUE_BANDS } from "@/config/onboarding-cards";
+import { CARDS_CALENDLY_KIND, CARDS_SOURCE, NO_WEBSITE, REVENUE_BANDS } from "@/config/onboarding-cards";
 import { REVIEW_PLATFORMS } from "@/lib/hub/review-destinations";
 
 export const dynamic = "force-dynamic";
@@ -153,7 +153,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // ours, so the calendar opens with both filled in.
   const booking =
     finish === "call"
-      ? calendlyEmbedUrl(bookingPageUrl("install"), { name: leadName, email })
+      ? calendlyEmbedUrl(bookingPageUrl(CARDS_CALENDLY_KIND), { name: leadName, email })
       : null;
 
   // ‼️ THE CONTACT ID GOES BACK SO THE BOOKING CAN FIND ITS OWN THREAD. /api/cards/booked

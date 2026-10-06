@@ -361,3 +361,26 @@ export const CARDS_SLOTS = {
   ),
   booking: guard("cards slots booking", "Good. Confirm it here and you are done."),
 } as const;
+
+/**
+ * Which Calendly event type this funnel's setup call IS.
+ *
+ * ‼️ IT IS HERE, SHARED, BECAUSE THE PICKER AND THE FALLBACK EMBED MUST NAME THE SAME EVENT. Two
+ * routes decide what /cards books: /api/cards/slots reads availability, and /api/cards mints the
+ * whole-calendar URL for when there is none. Those naming different event types is a funnel that
+ * offers two openings on one calendar and then books people onto another, and nothing would fail
+ * loudly enough to notice.
+ *
+ * ‼️ IT WAS "install" UNTIL 2026-10-06 AND THAT MADE THE PICKER DEAD CODE. eventTypeUri("install")
+ * resolves CALENDLY_INSTALL_UUID, which is set in no environment: not production, not preview, not
+ * .env.local. So fetchSlots returned { slots: null, reason: "unconfigured" } on every call ever
+ * made, every visitor got the "nothing is open in that window" fallback, and the two-slot shortcut
+ * had never once rendered. scripts/_probe-calendly.ts says in capitals not to set that variable,
+ * because install "belongs to the post-sale lane and is not wired here" -- so the event to name is
+ * the one that exists. CALENDLY_15MIN_UUID and NEXT_PUBLIC_CALENDLY_15MIN_URL are both set.
+ *
+ * A plain string literal, deliberately, and not EventKind imported from @/lib/calendly: this module
+ * is imported by the browser bundle and the type is structural anyway. TypeScript still checks it
+ * at both call sites.
+ */
+export const CARDS_CALENDLY_KIND = "15min" as const;

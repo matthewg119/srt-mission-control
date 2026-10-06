@@ -18,6 +18,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { calendlyEmbedUrl } from "@/lib/calendly";
 import { validEmail, validName } from "@/lib/medspa/validate";
 import {
   CARDS_CLOSE,
@@ -447,15 +448,36 @@ export function CardsClient() {
    * already chosen and the name and email are already in the boxes, so the last screen is a
    * button. A slot taken in the meantime fails on Calendly's side, which is the only side that
    * can know.
+   *
+   * ‼️ SHAPED BY calendlyEmbedUrl AND NOT BY HAND, AND THAT IS A FIX RATHER THAN A TIDY-UP. Until
+   * 2026-10-06 this built the query string itself, with name and email and nothing else, which
+   * meant no `embed_type=Inline`. That parameter is the one its helper's header is in capitals
+   * about: it "IS WHAT MAKES CALENDLY POST event_scheduled TO THE PARENT WINDOW, AND WITHOUT IT A
+   * BOOKING SILENTLY DEAD-ENDS". So taking either of the two offered times booked the call
+   * perfectly and told nobody: the listener below never fired, /api/cards/booked was never called,
+   * and the #hot-leads thread never heard about it. Only the no-slots fallback notified anybody,
+   * because that URL comes from /api/cards, which went through this helper all along. The helper
+   * exists precisely so a third caller does not rediscover this the hard way, and this was the
+   * third caller.
+   *
+   * Prefill cannot move to the server: /api/cards/slots is public and deliberately holds no name,
+   * no email and no lead id, so the only place that knows who is booking is here.
    */
   function takeSlot(slot: Slot) {
     const name = [answers.firstName, answers.lastName].filter(Boolean).join(" ");
-    const sep = slot.schedulingUrl.includes("?") ? "&" : "?";
-    const prefill =
-      `${sep}name=${encodeURIComponent(name)}` +
-      `&email=${encodeURIComponent(answers.email ?? "")}`;
+    const embed = calendlyEmbedUrl(slot.schedulingUrl, { name, email: answers.email ?? null });
+
+    // A slot URL Calendly minted parses, so this is belt and braces. If it ever does not, the
+    // whole-calendar URL from /api/cards is already in state and the copy says what happened,
+    // rather than mounting a frame with `null` in its src.
+    if (!embed) {
+      push("them", CARDS_SLOTS.none);
+      setAwaiting("done");
+      return;
+    }
+
     pendingSlot.current = slot;
-    setBookingUrl(`${slot.schedulingUrl}${prefill}`);
+    setBookingUrl(embed);
     push("her", slot.label);
     push("them", CARDS_SLOTS.booking);
     setAwaiting("done");
