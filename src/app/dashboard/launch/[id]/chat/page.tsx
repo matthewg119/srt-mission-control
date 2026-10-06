@@ -80,13 +80,15 @@ export default async function LaunchChatPage({ params, searchParams }: Props) {
   // the reason is not fashion: the input is the only control on the screen, so its position must
   // not depend on how much has been said.
   //
-  // `h-[100dvh]` and not `h-screen`, because on a phone `vh` includes the browser chrome that
+  // `h-full` and not `h-[100dvh]`: this sits under the dashboard header, so the viewport height is
+  // NOT the height available, and the difference is exactly the amount the composer was pushed off
+  // the bottom. dashboard-shell.tsx stops padding and scrolling this route so `h-full` is honest.
   // slides away, which puts the composer under the address bar on exactly the devices where it
   // matters most. The middle pane carries `min-h-0`, which is the flexbox rule people forget: a
   // flex child defaults to `min-height: auto` and refuses to shrink below its content, so without
   // it the messages push the composer off the bottom instead of scrolling.
   return (
-    <div className="flex h-[100dvh]">
+    <div className="flex h-full">
       {/* ‼️ THE RAIL IS PER CLIENT AND THE CLIENT IS IN THE URL. See history.tsx for why that is the
           line that matters: many threads on one client is fine, two clients in one thread is not. */}
       <ThreadHistory clientId={clientId} threads={threads} currentId={conversationId} />
