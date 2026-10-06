@@ -61,6 +61,7 @@ export type CardStep =
 
 export type CardKey =
   | "daypart"
+  | "callDay"
   | "firstName"
   | "lastName"
   | "email"
@@ -87,18 +88,16 @@ export const NO_WEBSITE = "__none__";
 
 export const CARDS_SCRIPT: readonly CardStep[] = [
   {
-    kind: "say",
-    id: "open",
-    text: guard(
-      "cards open",
-      "Good to hear from you. A few quick things and your cards are on their way."
-    ),
-  },
-  {
+    // ‼️ THE GREETING STEP IS GONE AND ITS SENTENCE IS THE FIRST QUESTION. Matthew,
+    // 2026-10-06: the chat should open with "Lets get you started, what is your first name?"
+    // rather than "Good to hear from you. A few quick things and your cards are on their way."
+    // He is right about the order of business: they have just tapped a button that said claim
+    // your cards, so a bubble telling them their cards are on the way is answering a question
+    // nobody asked, and it costs the first screen of the conversation.
     kind: "ask",
     id: "q_first",
     key: "firstName",
-    prompt: guard("cards first", "What is your first name?"),
+    prompt: guard("cards first", "Let us get you started. What is your first name?"),
     placeholder: guard("cards first hint", "First name"),
     validate: "name",
   },
@@ -275,3 +274,71 @@ export const CARDS_FREE_SITE = {
 
 /** The step ids, for the probe. A walk whose ids drift is a walk whose analytics drift. */
 export const CARDS_IDS: readonly string[] = CARDS_SCRIPT.map((s) => s.id);
+
+/**
+ * The opening card, before the chat.
+ *
+ * ‼️ THE SAME SHAPE AS THE REVIEW WALK'S CARD, AND THAT IS THE POINT. Matthew, 2026-10-06,
+ * comparing the two: "for #4 i say we make it the same as number 1 2 and 3 for the initial start
+ * button... but we just change the copy to the cta we have". A clinic sees the review walk in the
+ * sales conversation and this the week after, so two different front doors is two products.
+ *
+ * ‼️ AND THE BUTTON NAMES THE THING THEY GET, NOT THE THING WE WANT. "Claim your QR card now" is
+ * his wording. The old page opened straight into a chat with no statement of what it was for,
+ * which is the one thing a clinic arriving from an email a week later needs.
+ */
+export const CARDS_HERO = {
+  eyebrow: guard("cards hero eyebrow", "Your cards are ready"),
+  title: guard("cards hero title", "Get 10 free custom QR review sheets for your front desk"),
+  lede: guard(
+    "cards hero lede",
+    "A few quick questions so we can print yours and get them in the post."
+  ),
+  facts: [
+    guard("cards hero fact 1", "About two minutes"),
+    guard("cards hero fact 2", "Nothing to pay, now or later, for the cards"),
+  ],
+  cta: guard("cards hero cta", "Claim your QR card now"),
+} as const;
+
+/**
+ * Which day the setup call lands on.
+ *
+ * ‼️ THE OPTIONS ARE COMPUTED AT RENDER TIME AND ARE NOT IN THIS FILE. They are three real dates
+ * in the VISITOR's own timezone, so "Today" has to mean their today. A static list here would be
+ * three labels that drift from the calendar behind them within a day.
+ *
+ * ‼️ AND IT ASKS FOR FIFTEEN MINUTES, WHICH IS WHAT THE CALL ACTUALLY IS. CARDS_FORK's note says
+ * ten to fifteen; asking for "a few minutes" and then booking an hour is how a no-show happens.
+ */
+export const DAY_STEP = {
+  id: "q_day",
+  key: "callDay" as const,
+  prompt: guard(
+    "cards day",
+    "When in the next 3 days do you have 15 minutes to get your referral engine fully set up?"
+  ),
+} as const;
+
+/**
+ * The two times offered before the calendar is.
+ *
+ * ‼️ TWO REAL OPENINGS, NOT A PROMISE. Every slot here comes back from Calendly's own availability
+ * with its own booking URL, so tapping one books that exact time and cannot offer something that
+ * has gone. DAYPART_STEP's header warns against a funnel that says "great, Tuesday at 10" without
+ * touching a calendar; this touches the calendar, which is what makes the shortcut honest.
+ *
+ * ‼️ THE CALENDAR IS STILL THERE, BEHIND ONE TAP. Matthew: "there we can add a button that says
+ * 'I want another time' only then we can give them the calendar." Two choices and an escape beats
+ * a grid of thirty, and nobody is trapped by the two.
+ */
+export const CARDS_SLOTS = {
+  prompt: guard("cards slots", "Here are the two closest openings. Which works?"),
+  another: guard("cards slots another", "I want another time"),
+  /** When availability cannot be read, or that half-day is full. The calendar is the fallback. */
+  none: guard(
+    "cards slots none",
+    "Nothing is open in that window. Here is the full calendar instead."
+  ),
+  booking: guard("cards slots booking", "Good. Confirm it here and you are done."),
+} as const;

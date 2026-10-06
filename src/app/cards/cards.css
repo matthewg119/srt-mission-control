@@ -272,3 +272,71 @@
   font-size: 0.875rem;
   color: #f8a4a4;
 }
+
+/* ── The opening card (2026-10-06) ───────────────────────────────────────────
+
+   ‼️ THE SAME SHAPE AS THE REVIEW WALK'S CARD, IN THIS PAGE'S OWN PALETTE. Matthew asked for the
+   two front doors to match: eyebrow, headline, lede, two assurance rows, one big button. What it
+   must NOT do is copy the hub's light tint, because this page is dark and a pale box dropped into
+   it would read as a different product rather than the same one.
+
+   It occupies the same 34rem the chat shell does, so tapping the button swaps one box for another
+   of identical width rather than resizing the page under somebody's thumb. */
+.cd-open {
+  max-width: 34rem;
+  margin: 0 auto;
+  padding: 1.75rem 1.5rem 1.5rem;
+  background: var(--cd-panel);
+  border: 1px solid var(--cd-line);
+  border-radius: 16px;
+}
+
+.cd-open-eyebrow {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--cd-accent);
+}
+
+.cd-open-title {
+  margin: 0 0 0.6rem;
+  font-size: 1.6rem;
+  line-height: 1.2;
+  font-weight: 700;
+  color: var(--cd-ink);
+}
+
+.cd-open-lede {
+  margin: 0 0 1.1rem;
+  color: var(--cd-mut);
+}
+
+.cd-open-facts {
+  margin: 0 0 1.4rem;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  font-size: 0.9375rem;
+  color: var(--cd-mut);
+}
+/* A dot rather than an icon font: one character, no asset, and it cannot fail to load. */
+.cd-open-facts li::before {
+  content: "\2022";
+  color: var(--cd-accent);
+  font-weight: 700;
+  margin-right: 0.55rem;
+}
+
+.cd-open-cta {
+  width: 100%;
+  padding: 0.85rem 1.2rem;
+  font-size: 1rem;
+}
+
+/* The two openings stack, because a time is read left to right and two of them side by side on a
+   phone wrap into something that looks like four. */
+.cd-chips.is-stack { flex-direction: column; }

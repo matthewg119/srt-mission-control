@@ -465,14 +465,25 @@ body:has(.hub-root) {
    inherited --hub-bg would be a near-black rectangle on a white clinic page and a white one on a
    dark page, which is two products. A floating light card reads as an agent on both. */
 
-.va-shell { position: fixed; inset: 0; z-index: 60; }
+/* ‼️ THE HUB'S PANEL IS INLINE, IN THE FRAME, SINCE 2026-10-06, AND IT USED TO BE A FIXED
+   OVERLAY WITH A SCRIM. Matthew, looking at the demo: "a popup comes up when we click start,
+   I wanted the chatbox to be in the same box as the initial one."
 
-.va-scrim {
-  position: absolute;
-  inset: 0;
-  background: rgba(8, 12, 16, 0.45);
-  backdrop-filter: blur(2px);
-}
+   He is right, and the reason is the same one that made the panel phone-width the day before.
+   The opening card is a tinted 26rem box under the clinic's mark; clicking Start greyed that box
+   out and floated a WHITE card over it, so the first interaction in the product threw away the
+   clinic's own colour and replaced one container with another. Two boxes, one of which cancels
+   the other. Now the chat takes the place of the card inside the same frame, at the same width,
+   and the mark and the clinic's name stay above it exactly where they were.
+
+   ‼️ THE WIDGET SHELL (.va-float, src/app/w/[slug]) IS UNAFFECTED AND MUST STAY FIXED. That one
+   really is an agent floating over somebody else's website, which is the whole product. Only the
+   hub's own page, where we own the layout, renders inline. */
+.va-shell { position: static; }
+
+/* Kept as a no-op element rather than deleted, so the markup stays one shape across both shells
+   and nothing has to branch on which one is rendering. */
+.va-scrim { display: none; }
 
 .va-panel {
   /* The eight shared tokens. Same names in src/app/w/[slug]/route.ts, own values. */
@@ -518,25 +529,24 @@ body:has(.hub-root) {
    a bottom-right card IS the whole screen. On a desktop the same markup became a small widget
    adrift in a metre of empty page, so the two experiences were not the same product and the
    desktop one is what a clinic owner judges it by. One width, one position, both. */
+/* In the frame, filling it, at the frame's own width. `position: relative` rather than absolute
+   because there is no longer anything to be absolute INSIDE: the shell is static now.
+
+   The height is a clamp and not a viewport calculation, because this box sits in normal page flow
+   under the masthead. 32rem is tall enough for three exchanges without the page growing a
+   scrollbar on a laptop, and the bubble list scrolls inside it. */
 .va-shell .va-panel {
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  width: min(var(--rev-frame-w), calc(100vw - 2rem));
-  height: min(40rem, calc(100vh - 2rem));
+  position: relative;
+  width: 100%;
+  height: clamp(28rem, 62vh, 34rem);
 }
 
-
-/* On a phone both shells are the screen. A 28rem card floating inside a 375px viewport is a card
-   with no room for a keyboard under it. */
+/* On a phone the frame is already the screen's width, so the panel just needs the height to be
+   worth having. The border radius stays: it is inside the page now, not covering it. */
 @media (max-width: 40rem) {
   .va-shell .va-panel {
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    border-radius: 0;
+    height: clamp(26rem, 68vh, 32rem);
   }
-  .va-shell .va-scrim { display: none; }
 }
 
 .va-head {

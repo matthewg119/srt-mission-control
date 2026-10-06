@@ -250,7 +250,7 @@ export function VirtualAgentClient({
   const timers = useRef<Array<ReturnType<typeof setTimeout>>>([]);
   const played = useRef<Set<number>>(new Set());
   const endRef = useRef<HTMLDivElement | null>(null);
-  const panelRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     aliveRef.current = true;
@@ -401,16 +401,16 @@ export function VirtualAgentClient({
     endRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
   }, [bubbles, typing]);
 
-  // Focus moves into the panel when it opens, and the page behind it stops scrolling. Without
-  // both, a phone keyboard opening scrolls the page under the panel instead of the transcript.
+  // Focus moves into the panel when it opens, so a screen reader and a keyboard both land on the
+  // conversation rather than back at the top of the page.
+  //
+  // ‼️ THE BODY SCROLL LOCK WENT WITH THE OVERLAY ON 2026-10-06. It existed because the panel was
+  // fixed over the page and a phone keyboard would otherwise scroll the page UNDER it. The panel
+  // is in the frame now, in normal flow, so locking the body stops somebody scrolling the very
+  // page the panel is part of.
   useEffect(() => {
     if (stage === "intro" || revealed) return;
-    panelRef.current?.focus();
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = previous;
-    };
+    panelRef.current?.focus({ preventScroll: true });
   }, [stage, revealed]);
 
   /**
@@ -850,10 +850,14 @@ export function VirtualAgentClient({
         */
         <div className="va-shell">
           <div className="va-scrim" aria-hidden="true" />
-          <div
+          {/*
+            ‼️ A REGION AND NOT A DIALOG SINCE 2026-10-06. `role="dialog" aria-modal="true"` was
+            correct while this floated over a scrim: it told a screen reader the rest of the page
+            was inert, which it was. Inline in the frame nothing is inert, and a modal that does
+            not trap is a lie to exactly the people who depend on the answer.
+          */}
+          <section
             className="va-panel"
-            role="dialog"
-            aria-modal="true"
             aria-label={AGENT_NAME}
             tabIndex={-1}
             ref={panelRef}
@@ -1204,7 +1208,7 @@ export function VirtualAgentClient({
                 ) : null}
               </>
             )}
-          </div>
+          </section>
         </div>
       )}
 

@@ -58,7 +58,27 @@ function sheetUrl(arg: { client: string } | { clinic: string }): string {
     "client" in arg
       ? `client=${encodeURIComponent(arg.client)}`
       : `clinic=${encodeURIComponent(arg.clinic)}`;
-  return `${appUrl()}/api/onboarding-sheet?${q}`;
+  return `${toolOrigin()}/api/onboarding-sheet?${q}`;
+}
+
+/**
+ * Which host a link handed to a person should point at.
+ *
+ * ‼️ NEXT_PUBLIC_APP_URL IS PRODUCTION IN EVERY ENVIRONMENT, INCLUDING PREVIEW, so appUrl() alone
+ * makes the assistant hand out a production link while it is running on a preview. Measured
+ * 2026-10-05: Matthew asked for a setup sheet on a preview, got a mission.srtagency.com link, and
+ * it 404'd because the route only exists on this branch. Nothing errored; the link simply went
+ * somewhere else.
+ *
+ * Same class as the step-card rebuild trap, where a local rebuild published localhost links into
+ * a real Slack thread. The rule both share: a URL built for somebody else to click must be built
+ * from the host actually serving it, never from a constant.
+ */
+function toolOrigin(): string {
+  if (process.env.VERCEL_ENV === "preview" && process.env.VERCEL_URL) {
+    return `https://${process.env.VERCEL_URL}`;
+  }
+  return appUrl();
 }
 
 /** Every tool takes the same `client` argument, so one description explains it once. */

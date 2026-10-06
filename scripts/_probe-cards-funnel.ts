@@ -82,11 +82,23 @@ check(
     "and the platform step is pushed only on the self branch",
     push ? `pushed under finish === "${push[1]}"` : "no push found at all"
   );
-  const daypart = clientSrc.match(/if \(finish === "(\w+)"\) out\.push\(DAYPART_STEP\);/);
+  // ‼️ READ AS A BLOCK SINCE 2026-10-06, BECAUSE THE CALL BRANCH IS ONE NOW. It gained the day
+  // question in front of the daypart one, so the single-line form this used to match is gone. The
+  // RULE is unchanged and is still the one the header states: these two are pushed under the call
+  // branch and nowhere else. Matching the block rather than the line is what keeps the rule
+  // enforced instead of merely re-stated.
+  const callBlock = clientSrc.match(/if \(finish === "call"\) \{([\s\S]*?)\n    \}/);
+  const callBody = callBlock?.[1] ?? "";
   check(
-    daypart?.[1] === "call",
-    "and the daypart question only on the call branch",
-    daypart ? `pushed under finish === "${daypart[1]}"` : "no push found at all"
+    callBody.includes("DAYPART_STEP") && callBody.includes("DAY_STEP"),
+    "and the day and daypart questions only on the call branch",
+    callBlock ? "both inside the call branch" : "no call branch block found at all"
+  );
+  // And the other half of the exclusivity: the call branch never reaches the platform question.
+  check(
+    !callBody.includes("CARDS_PLATFORM_STEP"),
+    "and the call branch never asks which platform",
+    "booking the call means the platform is decided live, with somebody who can explain the trade"
   );
 }
 // The last step of the main script is the fork, so nothing scripted follows a booking.

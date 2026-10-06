@@ -23,9 +23,12 @@ import {
   CARDS_CLOSE,
   CARDS_FORK,
   CARDS_FREE_SITE,
+  CARDS_HERO,
   CARDS_PLATFORM_STEP,
   CARDS_SCRIPT,
+  CARDS_SLOTS,
   DAYPART_STEP,
+  DAY_STEP,
   NO_WEBSITE,
   type CardKey,
   type CardStep,
@@ -34,7 +37,30 @@ import {
 
 const GAP_MS = { min: 420, max: 820 } as const;
 
-type Awaiting = "none" | "text" | "chips" | "consent" | "fork" | "freesite" | "done";
+type Awaiting = "none" | "text" | "chips" | "consent" | "fork" | "freesite" | "slots" | "done";
+
+/** One offering from Calendly's own availability, with the URL that books that exact time. */
+interface Slot {
+  startTime: string;
+  schedulingUrl: string;
+  label: string;
+}
+
+/**
+ * The next three days, in the VISITOR's own zone, labelled the way a person says them.
+ *
+ * ‼️ THE OFFSET TRAVELS AND THE LABEL DOES NOT. The server resolves the day from the integer
+ * against the same zone, so nothing depends on two machines agreeing about what a date string
+ * means. See the header of /api/cards/slots.
+ */
+function nextDays(now: Date = new Date()): Array<{ label: string; offset: number }> {
+  const weekday = new Intl.DateTimeFormat("en-US", { weekday: "long" });
+  return [0, 1, 2].map((offset) => {
+    const d = new Date(now.getTime() + offset * 86_400_000);
+    const label = offset === 0 ? "Today" : offset === 1 ? "Tomorrow" : weekday.format(d);
+    return { label, offset };
+  });
+}
 
 interface Bubble {
   id: number;
@@ -73,6 +99,12 @@ export function CardsClient() {
   const [busy, setBusy] = useState(false);
   const [bookingUrl, setBookingUrl] = useState<string | null>(null);
   const [booked, setBooked] = useState(false);
+  // ‼️ THE CHAT DOES NOT START UNTIL THE CARD IS TAPPED. Matthew, 2026-10-06: this page
+  // should open the way the review walk does, on a card that says what they are getting, with the
+  // chat taking its place in the same box.
+  const [started, setStarted] = useState(false);
+  const [slots, setSlots] = useState<Slot[] | null>(null);
+  const days = useMemo(() => nextDays(), []);
 
   const bubbleId = useRef(0);
   const played = useRef<Set<string>>(new Set());
@@ -111,15 +143,28 @@ export function CardsClient() {
     // BOTH. The daypart question is the same shape the concierge's referral walk uses, which is
     // what Matthew means by "the exact same flow": two chips, a preference recorded on the lead,
     // and the calendar still doing the actual booking.
-    if (finish === "call") out.push(DAYPART_STEP);
+    if (finish === "call") {
+      // ‼️ WHICH DAY, THEN WHICH HALF OF IT, THEN TWO REAL TIMES. Matthew's order, and it
+      // narrows the way a person actually decides: a grid of thirty openings is a decision, two
+      // openings on a day they already named is a tap.
+      out.push({
+        kind: "chips",
+        id: DAY_STEP.id,
+        key: DAY_STEP.key,
+        prompt: DAY_STEP.prompt,
+        options: days.map((d) => d.label),
+      });
+      out.push(DAYPART_STEP);
+    }
     if (finish === "self") out.push(CARDS_PLATFORM_STEP);
     return out;
-  }, [finish]);
+  }, [finish, days]);
 
   const step = steps[index];
 
   // ── The driver ─────────────────────────────────────────────────────────────
   useEffect(() => {
+    if (!started) return;
     if (!step) return;
     if (played.current.has(step.id)) return;
     played.current.add(step.id);
@@ -143,7 +188,7 @@ export function CardsClient() {
               : "fork"
       );
     }, index === 0 ? GAP_MS.min : GAP_MS.max);
-  }, [step, index, push, later]);
+  }, [started, step, index, push, later]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
@@ -297,17 +342,95 @@ export function CardsClient() {
         return;
       }
       if (json.bookingUrl) setBookingUrl(json.bookingUrl);
+
+      // ‼️ THE SELF BRANCH ENDS HERE AND THE CALL BRANCH HAS ONE MORE BEAT. Only somebody
+      // booking a call needs a time, and only they named a day and a half-day to look one up with.
+      if (which !== "call") {
+        setTyping(true);
+        later(() => {
+          setTyping(false);
+          push("them", CARDS_CLOSE[which]);
+          setAwaiting("done");
+        }, GAP_MS.min);
+        return;
+      }
+
       setTyping(true);
-      later(() => {
-        setTyping(false);
-        push("them", CARDS_CLOSE[which]);
+      const found = await loadSlots();
+      setTyping(false);
+
+      if (found.length === 0) {
+        // Availability unreadable, or that half-day full. Either way the calendar is the answer
+        // and the copy says so rather than pretending we chose to skip the shortcut.
+        push("them", CARDS_SLOTS.none);
         setAwaiting("done");
-      }, GAP_MS.min);
+        return;
+      }
+
+      setSlots(found);
+      push("them", CARDS_SLOTS.prompt);
+      setAwaiting("slots");
     } catch {
       setSendError("That did not go through. Please reply to our email instead.");
     } finally {
       setBusy(false);
     }
+  }
+
+
+  /**
+   * Two real openings on the day and half-day they named, or none.
+   *
+   * ‼️ IT NEVER THROWS AND NEVER BLOCKS THE BOOKING. Calendly being slow or the token being
+   * unset both come back as an empty list, and an empty list means the full calendar. A clinic
+   * that has answered six questions must not lose the call because a shortcut failed.
+   */
+  const loadSlots = useCallback(async (): Promise<Slot[]> => {
+    const chosen = days.find((d) => d.label === answers.callDay);
+    try {
+      const res = await fetch("/api/cards/slots", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          dayOffset: chosen?.offset ?? 0,
+          daypart: answers.daypart ?? "",
+          // Their zone decides which day "Today" was and where noon falls.
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        }),
+      });
+      const json = (await res.json()) as { slots?: Slot[] };
+      return Array.isArray(json.slots) ? json.slots : [];
+    } catch {
+      return [];
+    }
+  }, [days, answers.callDay, answers.daypart]);
+
+  /**
+   * They took one of the two.
+   *
+   * ‼️ THE SLOT'S OWN URL, PREFILLED, AND CALENDLY STILL CONFIRMS IT. We cannot create the
+   * invitee from here: the API does not do it on this plan. What this buys is that the time is
+   * already chosen and the name and email are already in the boxes, so the last screen is a
+   * button. A slot taken in the meantime fails on Calendly's side, which is the only side that
+   * can know.
+   */
+  function takeSlot(slot: Slot) {
+    const name = [answers.firstName, answers.lastName].filter(Boolean).join(" ");
+    const sep = slot.schedulingUrl.includes("?") ? "&" : "?";
+    const prefill =
+      `${sep}name=${encodeURIComponent(name)}` +
+      `&email=${encodeURIComponent(answers.email ?? "")}`;
+    setBookingUrl(`${slot.schedulingUrl}${prefill}`);
+    push("her", slot.label);
+    push("them", CARDS_SLOTS.booking);
+    setAwaiting("done");
+  }
+
+  /** The escape from the two. Only now does the whole calendar appear. */
+  function wantAnotherTime() {
+    push("her", CARDS_SLOTS.another);
+    push("them", CARDS_CLOSE.call);
+    setAwaiting("done");
   }
 
   // Either tail completes when its one answer lands and the walk runs out of steps.
@@ -323,6 +446,28 @@ export function CardsClient() {
   }, [finish, answers.platform, answers.daypart, step]);
 
   const canSend = composed.trim().length > 0;
+
+  // ‼️ THE CARD IS THE WHOLE PAGE UNTIL IT IS TAPPED, AND THEN THE CHAT TAKES ITS PLACE IN THE
+  // SAME BOX. The review walk does exactly this and a clinic sees both; two different front doors
+  // would be two products. Nothing is queried and no lead exists until the first answer, so this
+  // card costs a visitor nothing.
+  if (!started) {
+    return (
+      <div className="cd-open">
+        <p className="cd-open-eyebrow">{CARDS_HERO.eyebrow}</p>
+        <h2 className="cd-open-title">{CARDS_HERO.title}</h2>
+        <p className="cd-open-lede">{CARDS_HERO.lede}</p>
+        <ul className="cd-open-facts">
+          {CARDS_HERO.facts.map((f) => (
+            <li key={f}>{f}</li>
+          ))}
+        </ul>
+        <button type="button" className="cd-primary cd-open-cta" onClick={() => setStarted(true)}>
+          {CARDS_HERO.cta}
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="cd-shell">
@@ -445,6 +590,23 @@ export function CardsClient() {
               </button>
             );
           })}
+        </div>
+      )}
+
+      {/*
+        ‼️ TWO OPENINGS AND AN ESCAPE. Both buttons carry a real Calendly time; the third is the
+        way out to the whole calendar, which is the only thing that was ever offered before.
+      */}
+      {awaiting === "slots" && slots && (
+        <div className="cd-chips is-stack">
+          {slots.map((s) => (
+            <button key={s.startTime} type="button" onClick={() => takeSlot(s)}>
+              {s.label}
+            </button>
+          ))}
+          <button type="button" className="cd-skip" onClick={wantAnotherTime}>
+            {CARDS_SLOTS.another}
+          </button>
         </div>
       )}
 
