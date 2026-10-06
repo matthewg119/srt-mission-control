@@ -740,7 +740,7 @@ AI Referral Engine preview live, themed to match
 | [Done] reads | no table |
 | Dataset fields | none: the AI Referral Engine mirrors listings that already exist and asks for no dataset field |
 | Feeds | nothing: it observes or hands over something outside this system, and records no artifact a later step draws from |
-| Downstream | `client_delivery_steps` is selected in 31 other file(s), e.g. `src/app/api/clients/[id]/time-log/route.ts`, `src/app/api/internal/board-kick/route.ts`, `src/app/api/internal/run-step/route.ts` |
+| Downstream | `client_delivery_steps` is selected in 32 other file(s), e.g. `src/app/api/clients/[id]/time-log/route.ts`, `src/app/api/internal/board-kick/route.ts`, `src/app/api/internal/run-step/route.ts` |
 
 **[Done] refuses on:**
 
@@ -774,7 +774,7 @@ AI Concierge preview live, ready to demo on the call
 | [Done] reads | `concierge_configs` |
 | Dataset fields | 1 needed, 2 wanted |
 | Feeds | nothing: everything it records is a dataset field, and dataset-spec.ts declares the step that fills each one |
-| Downstream | steps 19 `site_replica`, 21 `pre_call_pages` declare they wait on this; `client_delivery_steps` is selected in 31 other file(s), e.g. `src/app/api/clients/[id]/time-log/route.ts`, `src/app/api/internal/board-kick/route.ts`, `src/app/api/internal/run-step/route.ts`; `concierge_configs` is selected in 13 other file(s), e.g. `src/app/demo/concierge/page.tsx`, `src/lib/clients/concierge-addon.ts`, `src/lib/clients/concierge-audience.ts` |
+| Downstream | steps 19 `site_replica`, 21 `pre_call_pages` declare they wait on this; `client_delivery_steps` is selected in 32 other file(s), e.g. `src/app/api/clients/[id]/time-log/route.ts`, `src/app/api/internal/board-kick/route.ts`, `src/app/api/internal/run-step/route.ts`; `concierge_configs` is selected in 13 other file(s), e.g. `src/app/demo/concierge/page.tsx`, `src/lib/clients/concierge-addon.ts`, `src/lib/clients/concierge-audience.ts` |
 
 **[Done] refuses on:**
 
