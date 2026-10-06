@@ -489,6 +489,14 @@ export function CardsClient() {
   if (!started) {
     return (
       <div className="cd-open">
+        {/* The promise, then a rule, then what it actually is. Two blocks in one box rather than
+            a headline floating above a card, which is what this used to be. */}
+        <p className="cd-open-eyebrow">{CARDS_HERO.topEyebrow}</p>
+        <h1 className="cd-open-promise">{CARDS_HERO.topTitle}</h1>
+        <p className="cd-open-sub">{CARDS_HERO.topSub}</p>
+
+        <hr className="cd-open-rule" />
+
         <p className="cd-open-eyebrow">{CARDS_HERO.eyebrow}</p>
         <h2 className="cd-open-title">{CARDS_HERO.title}</h2>
         <p className="cd-open-lede">{CARDS_HERO.lede}</p>

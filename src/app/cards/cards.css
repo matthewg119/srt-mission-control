@@ -340,3 +340,26 @@
 /* The two openings stack, because a time is read left to right and two of them side by side on a
    phone wrap into something that looks like four. */
 .cd-chips.is-stack { flex-direction: column; }
+
+/* The promise block, above the rule. It is the page's h1 now that the masthead is gone, so it is
+   the biggest thing in the box and the only thing competing with the button for attention. */
+.cd-open-promise {
+  margin: 0 0 0.6rem;
+  font-size: 1.5rem;
+  line-height: 1.25;
+  font-weight: 700;
+  color: var(--cd-ink);
+}
+
+.cd-open-sub {
+  margin: 0;
+  color: var(--cd-mut);
+}
+
+/* A hairline, not a gap. Two blocks in one box need to read as two blocks, and whitespace alone
+   at this width reads as an accident. */
+.cd-open-rule {
+  margin: 1.4rem 0;
+  border: 0;
+  border-top: 1px solid var(--cd-line);
+}

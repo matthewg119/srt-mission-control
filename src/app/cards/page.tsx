@@ -23,15 +23,12 @@ export const dynamic = "force-dynamic";
 export default function CardsPage() {
   return (
     <main className="cd-page">
-      <header className="cd-masthead">
-        <p className="cd-eyebrow">AI Referral Engine</p>
-        <h1>Your review cards</h1>
-        <p className="cd-lede">
-          A couple of minutes. Then we print your batch and you can start handing them out at the
-          front desk.
-        </p>
-      </header>
-
+      {/*
+        ‼️ THE MASTHEAD MOVED INSIDE THE CARD ON 2026-10-06 AND IS NOT DUPLICATED HERE.
+        Matthew: "make it all inside." It used to be a page header that stayed on screen while the
+        chat ran underneath it, so a visitor three questions in was still being sold the headline.
+        CARDS_HERO carries it now and it leaves with the card.
+      */}
       <CardsClient />
     </main>
   );

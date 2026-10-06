@@ -887,12 +887,12 @@ body:has(.hub-root) {
 
 .rev-open .rev-primary { width: 100%; }
 
-/* ‼️ 1.15rem AND IT WAS 0.75rem. Matthew, 2026-10-06: "the seven short questions is still too
+/* ‼️ 1.5rem, AND IT WAS 0.75rem, THEN 1.15rem WHICH WAS STILL NOT ENOUGH. Matthew, 2026-10-06: "the seven short questions is still too
    close to the start button". It read as a label belonging to the button rather than a note under
    the card, which is the one piece of text on this screen that is allowed to be quiet. The gap is
    what makes it quiet. */
 .rev-open-count {
-  margin: 1.15rem 0 0;
+  margin: 1.5rem 0 0;
   text-align: center;
   font-size: 0.8125rem;
   color: var(--hub-faint);

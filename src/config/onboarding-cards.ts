@@ -288,17 +288,36 @@ export const CARDS_IDS: readonly string[] = CARDS_SCRIPT.map((s) => s.id);
  * which is the one thing a clinic arriving from an email a week later needs.
  */
 export const CARDS_HERO = {
-  eyebrow: guard("cards hero eyebrow", "Your cards are ready"),
-  title: guard("cards hero title", "Get 10 free custom QR review sheets for your front desk"),
+  // ── The promise, which used to be the page masthead OUTSIDE this box ───────────────
+  //
+  // ‼️ IT MOVED INSIDE ON 2026-10-06. Matthew: "dont let [the masthead] be outside of the
+  // section with text, make it all inside." It was a page header in cards/page.tsx that stayed
+  // rendered while the chat ran, so the screen was a headline floating above a box that had moved
+  // on without it. One box, one thing being said at a time.
+  topEyebrow: guard("cards hero top eyebrow", "AI Referral Engine"),
+  topTitle: guard(
+    "cards hero top title",
+    "Turn every checkout into a referral, a review, and a reason for AI to recommend you"
+  ),
+  topSub: guard("cards hero top sub", "It starts at your front desk with one scan."),
+
+  // ── What they actually get ──────────────────────────────────────────
+  //
+  // ‼️ THE OFFER IS NO LONGER TEN PRINTED SHEETS, AND THAT IS A REAL CHANGE OF PROMISE.
+  // Matthew's copy, 2026-10-06. The old card sold a batch of cards; this one sells the system the
+  // cards are the front of. The chat behind it is unchanged, which is the point: the questions
+  // were always about the business and never about a print run.
+  eyebrow: guard("cards hero eyebrow", "What you get"),
+  title: guard("cards hero title", "Your front desk QR system + the AI engine behind it"),
   lede: guard(
     "cards hero lede",
-    "A few quick questions so we can print yours and get them in the post."
+    "Answer a few questions about your business and we handle the build."
   ),
   facts: [
-    guard("cards hero fact 1", "About two minutes"),
-    guard("cards hero fact 2", "Nothing to pay, now or later, for the cards"),
+    guard("cards hero fact 1", "+1 referral, +1 review, every scan"),
+    guard("cards hero fact 2", "Content that gets you found on ChatGPT and Google"),
   ],
-  cta: guard("cards hero cta", "Claim your QR card now"),
+  cta: guard("cards hero cta", "Build my referral engine"),
 } as const;
 
 /**
