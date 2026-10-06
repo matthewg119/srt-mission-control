@@ -1126,6 +1126,78 @@ export async function loadHistory(conversationId: string, limit = 40): Promise<S
  * show, because a conversation that loses a turn to an exception loses the context that made the
  * turn make sense.
  */
+/**
+ * Write the reply again, this time with the results in hand.
+ *
+ * ‼️ IT PRESENTS AND IT NEVER RE-DECIDES. It returns prose, not a plan, so nothing it says can run
+ * anything. The raw results still render underneath, which is what keeps it honest: if this pass
+ * ever rewords a headline or invents a number, the real value is six inches below it on the screen.
+ *
+ * On any failure it returns the first pass unchanged. A turn that did the work and then could not
+ * describe it must still report what it did.
+ */
+async function narrate(
+  clientName: string,
+  message: string,
+  firstSay: string,
+  asks: string[],
+  results: ActionResult[]
+): Promise<string> {
+  const body = results
+    .map((r) => `--- ${r.kind} ${r.ok ? "(ok)" : "(REFUSED)"} ---\n${r.detail}`)
+    .join("\n\n");
+
+  try {
+    const text = await callClaudeText({
+      model: TURN_MODEL,
+      maxTokens: 4000,
+      temperature: 0.2,
+      system: [
+        `You are writing the message Matthew reads about ${clientName}. He owns the agency, he is`,
+        "terse and he is fast. The work below has ALREADY RUN. You are not deciding anything and you",
+        "are not proposing anything: you are laying out what came back so he can act on it.",
+        "",
+        "‼️ THE RESULTS ARE THE FACTS AND THEY ARE THE ONLY FACTS YOU HAVE.",
+        "- Quote every value out of them VERBATIM: headlines word for word, keywords exactly as",
+        "  spelled, counts, slugs, URLs, option numbers. Renumbering an option or tidying a headline",
+        "  means he picks one thing and gets another.",
+        "- NEVER add a number, a percentage, a date or a claim that is not in the results. If",
+        "  something is not there, it is not known, and saying so is a complete answer.",
+        "- A refusal is reported as what is owed, in the words the engine used. Do not soften it and",
+        "  do not guess at a workaround.",
+        "",
+        "HOW IT SHOULD LOOK:",
+        "- Markdown. Headings, numbered lists, and a table when several things are being compared.",
+        "- When a result lists pages with options under them, give each page its own short heading",
+        "  with its keyword, then its options as a numbered list. He is choosing from these, so they",
+        "  have to be readable one at a time, never run together in a paragraph.",
+        "- Length follows the data. A one line result gets one line. Do not pad and do not summarise",
+        "  away detail he asked to see.",
+        "- Finish with the single next thing to do, as one sentence.",
+        "- Never use an em dash or an en dash. Use a comma or a full stop. This is a hard rule.",
+        "- Do not say you will show him something later. It is on his screen now.",
+      ].join("\n"),
+      user: [
+        `HE ASKED: ${message}`,
+        "",
+        firstSay ? `WHAT YOU SAID BEFORE THE WORK RAN (rewrite it, do not repeat it):\n${firstSay}` : "",
+        asks.length ? `\nQUESTIONS STILL OPEN:\n${asks.map((a) => `- ${a}`).join("\n")}` : "",
+        "",
+        "WHAT CAME BACK:",
+        body,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    });
+
+    const clean = (text?.text ?? "").trim();
+    return clean.length ? clean : firstSay;
+  } catch (e) {
+    console.error("[launch/conversation] narration failed:", (e as Error).message);
+    return firstSay;
+  }
+}
+
 export async function runTurn(args: {
   clientId: string;
   clientName: string;
@@ -1244,10 +1316,25 @@ export async function runTurn(args: {
     }
   }
 
+  // ‼️ A SECOND PASS, BECAUSE THE FIRST ONE WRITES BEFORE IT CAN POSSIBLY KNOW THE ANSWER.
+  // The model returns a plan, the server runs it, and until 2026-10-06 that was the end: whatever
+  // it had guessed it would say was what Matthew read, with the real output rendered underneath as
+  // a raw chip. Asked for eleven pages and their headline options he got one unbroken paragraph of
+  // thirty-three candidates and said, correctly, "what kind of answer is this... I cant read it."
+  //
+  // So when actions ran, the reply is written AGAIN with their results in hand. This is the only
+  // place in the lane that makes two model calls for one turn, and the cost buys the thing a chat
+  // is for: an answer, laid out, rather than a promise followed by a data dump.
+  //
+  // ‼️ IT PRESENTS, IT NEVER RE-DECIDES. No actions come out of this pass, so nothing it says can
+  // execute anything, and the raw results still render below it. A pass that could act would be a
+  // second engine, which the header of this file forbids.
+  const finalSay = results.length ? await narrate(args.clientName, args.message, say, asks, results) : say;
+
   await supabaseAdmin.from("launch_messages").insert({
     conversation_id: args.conversationId,
     role: "assistant",
-    content: [say, ...asks.map((a) => `- ${a}`)].filter(Boolean).join("\n"),
+    content: [finalSay, ...asks.map((a) => `- ${a}`)].filter(Boolean).join("\n"),
     actions: results.length ? results : null,
     step_key: settled,
   });
@@ -1257,5 +1344,5 @@ export async function runTurn(args: {
     .update({ last_turn_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq("id", args.conversationId);
 
-  return { say, asks, results, heldBack };
+  return { say: finalSay, asks, results, heldBack };
 }
