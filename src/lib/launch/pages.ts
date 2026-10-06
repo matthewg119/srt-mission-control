@@ -668,6 +668,21 @@ export async function runLaunchPagesAction(input: LaunchPagesInput): Promise<Lau
         else failures.push(got.error);
       }
 
+      // ‼️ IT HANDS BACK THE OPTIONS, AND RETURNING ONLY A COUNT WAS A DEAD END (2026-10-06).
+      // Asked to show the headline options the chat ran this, got "Every page already had its three
+      // options", and stopped: a true sentence that answers nothing, in front of a person whose next
+      // move is to pick one. Whichever verb the model reaches for, the candidates come back with it.
+      const after = await optionsFor(clientId, batch.rows);
+      const lines = batch.rows.flatMap((row) => {
+        const opts = after.get(row.id) ?? [];
+        if (row.headline) return [`${row.rank}. ${row.targetKeyword} — picked: ${row.headline}`];
+        if (!opts.length) return [`${row.rank}. ${row.targetKeyword} — no options written`];
+        return [
+          `${row.rank}. ${row.targetKeyword}`,
+          ...opts.map((h, i) => `     option ${i + 1}: ${h}`),
+        ];
+      });
+
       return {
         ok: true,
         message: [
@@ -675,7 +690,11 @@ export async function runLaunchPagesAction(input: LaunchPagesInput): Promise<Lau
             ? `Wrote three options for ${written} page${written === 1 ? "" : "s"}.`
             : "Every page already had its three options.",
           ...failures.map((f) => `Not written: ${f}`),
-        ].join(" "),
+          "Show these to him verbatim and ask which he wants per page:",
+          ...lines,
+        ]
+          .filter(Boolean)
+          .join("\n"),
       };
     }
 

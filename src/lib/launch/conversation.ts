@@ -126,6 +126,17 @@ export const ACTION_KINDS = [
   // 50k-character report, and there was no action for it: the only door was a file upload on a
   // board he had asked to stop using. A promise a surface cannot keep is worse than a refusal.
   "file_document",
+  // ‼️ THE FILED TIER, FROM A SURFACE WITH NO FILE PICKER. Four launch steps are confirmed by
+  // evidence a person produces rather than state the app can observe, and the Day-0 wall is one of
+  // them. With one engine keyed, resolveRunLabel downgrades every requested photograph_2 to
+  // `measurement` and Day 0 is deliberately not stamped from it, so the filed tier is the only
+  // route through the wall that is not a waiver. It was reachable only by uploading on the board.
+  //
+  // ‼️ IT DOES NOT MAKE A TICK HONEST BY ITSELF, AND MUST NEVER BE DESCRIBED AS IF IT DID.
+  // Filing is evidence that an ARTIFACT exists. setLaunchStep still stamps day_0_source as
+  // 'manual_step', which day-zero.ts defines as an assertion that the archive happened rather than
+  // proof of it, and no artifact may call a manual_step stamp a photograph.
+  "file_evidence",
 ] as const;
 
 export type ActionKind = (typeof ACTION_KINDS)[number];
@@ -300,6 +311,16 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "- If something he says is malformed, correct it and say that you did. Never silently.",
     "- You may recommend and you may push back once. What he says is the default and wins.",
     "",
+    "‼️ HOW AN ACTION'S RESULT REACHES HIM, WHICH IS NOT HOW YOU MIGHT ASSUME:",
+    "- You return a plan. The server runs it AFTER you have written, and renders every result to him",
+    "  in full, directly under your message. You never see those results yourself.",
+    "- So NEVER write \"I will show you as soon as they come back\" or \"standing by for the output\".",
+    "  It is already on his screen by the time he reads your sentence, and promising it later makes",
+    "  him wait for something that has arrived. Measured twice on 2026-10-06, both times over a list",
+    "  of headline options that was sitting right below the promise.",
+    "- Write the sentence that is true once the result is there: what you ran, and what he does with",
+    "  it. \"Three options per page are below. Tell me which number for each.\"",
+    "",
     "WHAT YOU MAY DO:",
     "- Return a plan of actions. The server executes them; you do not.",
     "- You may only name a step from the list of steps you may act on. Never invent a step key.",
@@ -461,6 +482,13 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "                       and none chosen. The last one is a QUESTION: it comes back with the list,",
     "                       you show him both and he picks, then you pass destinationId.",
     "  unpublish_page       needs rank. Taking a page down is never gated: it is the remedy.",
+    "  file_evidence        needs stepKey and text: an artifact he has pasted, filed against a step",
+    "                       whose evidence is something a person produces (the Day-0 scan, GBP",
+    "                       access, GBP buildout, the review cards). It files the artifact; it does",
+    "                       NOT tick the step, and it does not make a tick more honest than it was.",
+    "                       ‼️ FOR DAY 0, SAY WHAT THE TICK THEN RECORDS: day_0_source becomes",
+    "                       manual_step, an assertion that the archive happened. With one engine",
+    "                       keyed a real photograph cannot be written at all, so never imply one was.",
     "  file_document        needs which (deep_research, avatar_sheet, short_offer,",
     "                       necessary_beliefs) and text: a document he has pasted. It supersedes the",
     "                       one on file and lands in the evidence library every later page cites.",
@@ -720,6 +748,71 @@ ${body}`,
     return { kind, ok: true, detail: lines.join(". ") };
   }
 
+  if (kind === "file_evidence") {
+    const stepKey = (action.stepKey ?? "").trim();
+    if (!isLaunchStepKey(stepKey)) {
+      return { kind, ok: false, detail: `${stepKey} is not a step on this board.` };
+    }
+
+    const text = (action.text ?? "").trim();
+    if (text.length < 120) {
+      return {
+        kind,
+        ok: false,
+        detail:
+          `That is ${text.length} characters. Evidence is the artifact itself, pasted: the scan, the ` +
+          "report, what was measured and when. A sentence saying it happened is not the artifact.",
+      };
+    }
+
+    // Same bucket, same row shape and same `source: 'board'` as the upload route, because this is
+    // the same filed tier arriving through a different door. doc-text.ts excludes 'generated' from
+    // the buyer evidence corpus, and claiming WE produced his scan would be backwards.
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const storageKey = `${clientId}/board/${stepKey}-${stamp}.md`;
+    const bytes = Buffer.from(text, "utf8");
+
+    const up = await supabaseAdmin.storage.from("onboarding").upload(storageKey, bytes, {
+      contentType: "text/markdown",
+      upsert: false,
+    });
+    if (up.error) return { kind, ok: false, detail: `The paste could not be stored: ${up.error.message}` };
+
+    const { error } = await supabaseAdmin.from("client_docs").insert({
+      client_id: clientId,
+      filename: `${stepKey}-${stamp}.md`,
+      content_type: "text/markdown",
+      size_bytes: bytes.byteLength,
+      storage_ref: storageKey,
+      // The bucket is private, so a stored URL would be a dead link. Minted on request instead.
+      web_url: null,
+      delivery_step_key: stepKey,
+      source: "board",
+      slack_file_id: null,
+      slack_thread_ts: null,
+      uploaded_by: actor,
+    });
+    if (error) {
+      return {
+        kind,
+        ok: false,
+        detail: /client_docs_source_check/.test(error.message)
+          ? "client_docs.source does not allow 'board' yet. Section 7 of docs/2026-09-30-launch-lane.sql has not been run against this database."
+          : error.message,
+      };
+    }
+
+    return {
+      kind,
+      ok: true,
+      detail:
+        `Filed ${bytes.byteLength} bytes against ${stepKey}. The step's verifier can read it back now. ` +
+        (stepKey === LAUNCH_DAY_ZERO_STEP_KEY
+          ? "Ticking the step stamps day_0_source as manual_step, which records an assertion that the archive happened. It is not a photograph and nothing may call it one."
+          : ""),
+    };
+  }
+
   if (kind === "file_document") {
     const which = (action.which ?? "").trim();
     if (!isFoundationKind(which)) {
@@ -806,14 +899,24 @@ ${body}`,
       };
     }
 
-    const rows = state.plan.map((p) => {
+    // ‼️ THE THREE CANDIDATES ARE PRINTED, AND LEAVING THEM OUT MADE THIS ACTION USELESS FOR THE ONE
+    // THING IT WAS BEING ASKED (2026-10-06). `show me the headline options for all 11 pages` ran
+    // read_pages, which held every option in launchPagesState and rendered only the page titles, so
+    // the chat answered the question it had not been asked and he could not pick. A reader that has
+    // the answer and does not say it is the same failure as not having it.
+    const rows = state.plan.flatMap((p) => {
       const marks = [
         p.headline ? "headline" : null,
         p.hasOutline ? "skeleton" : null,
         p.hasBody ? "body" : null,
         p.pageStatus === "published" ? "LIVE" : null,
       ].filter(Boolean);
-      return `  ${p.rank}. [${p.role}] ${p.headline ?? p.workingTitle} <- ${p.targetKeyword} (${p.status}${marks.length ? ", " + marks.join(", ") : ""})`;
+      const head = `  ${p.rank}. [${p.role}] ${p.headline ?? p.workingTitle} <- ${p.targetKeyword} (${p.status}${marks.length ? ", " + marks.join(", ") : ""})`;
+
+      // Only where the decision is still open. A page whose headline is picked needs the pick shown,
+      // not the three it was picked from.
+      if (p.headline || !p.headlineOptions.length) return [head];
+      return [head, ...p.headlineOptions.map((h, i) => `       option ${i + 1}: ${h}`)];
     });
 
     return {
@@ -822,7 +925,9 @@ ${body}`,
       detail: [
         `${state.stageText} ${state.proposed} proposed, ${state.approved} approved, ${state.drafted} with a body, ${state.outstanding} still to draft.`,
         ...rows,
-        state.needHeadline.length ? `still need a headline: ${state.needHeadline.join(", ")}` : "",
+        state.needHeadline.length
+          ? `still need a headline: ${state.needHeadline.join(", ")}. The three options for each are listed above: show them to him verbatim and ask which, then run_pages stage=headline_pick with rank and pick.`
+          : "",
         state.needSkeleton.length ? `still need a skeleton: ${state.needSkeleton.join(", ")}` : "",
         state.day0ArchivedAt ? "" : "Day 0 is not archived, so publishing will refuse. Drafting is not gated.",
       ]
@@ -1021,6 +1126,78 @@ export async function loadHistory(conversationId: string, limit = 40): Promise<S
  * show, because a conversation that loses a turn to an exception loses the context that made the
  * turn make sense.
  */
+/**
+ * Write the reply again, this time with the results in hand.
+ *
+ * ‼️ IT PRESENTS AND IT NEVER RE-DECIDES. It returns prose, not a plan, so nothing it says can run
+ * anything. The raw results still render underneath, which is what keeps it honest: if this pass
+ * ever rewords a headline or invents a number, the real value is six inches below it on the screen.
+ *
+ * On any failure it returns the first pass unchanged. A turn that did the work and then could not
+ * describe it must still report what it did.
+ */
+async function narrate(
+  clientName: string,
+  message: string,
+  firstSay: string,
+  asks: string[],
+  results: ActionResult[]
+): Promise<string> {
+  const body = results
+    .map((r) => `--- ${r.kind} ${r.ok ? "(ok)" : "(REFUSED)"} ---\n${r.detail}`)
+    .join("\n\n");
+
+  try {
+    const text = await callClaudeText({
+      model: TURN_MODEL,
+      maxTokens: 4000,
+      temperature: 0.2,
+      system: [
+        `You are writing the message Matthew reads about ${clientName}. He owns the agency, he is`,
+        "terse and he is fast. The work below has ALREADY RUN. You are not deciding anything and you",
+        "are not proposing anything: you are laying out what came back so he can act on it.",
+        "",
+        "‼️ THE RESULTS ARE THE FACTS AND THEY ARE THE ONLY FACTS YOU HAVE.",
+        "- Quote every value out of them VERBATIM: headlines word for word, keywords exactly as",
+        "  spelled, counts, slugs, URLs, option numbers. Renumbering an option or tidying a headline",
+        "  means he picks one thing and gets another.",
+        "- NEVER add a number, a percentage, a date or a claim that is not in the results. If",
+        "  something is not there, it is not known, and saying so is a complete answer.",
+        "- A refusal is reported as what is owed, in the words the engine used. Do not soften it and",
+        "  do not guess at a workaround.",
+        "",
+        "HOW IT SHOULD LOOK:",
+        "- Markdown. Headings, numbered lists, and a table when several things are being compared.",
+        "- When a result lists pages with options under them, give each page its own short heading",
+        "  with its keyword, then its options as a numbered list. He is choosing from these, so they",
+        "  have to be readable one at a time, never run together in a paragraph.",
+        "- Length follows the data. A one line result gets one line. Do not pad and do not summarise",
+        "  away detail he asked to see.",
+        "- Finish with the single next thing to do, as one sentence.",
+        "- Never use an em dash or an en dash. Use a comma or a full stop. This is a hard rule.",
+        "- Do not say you will show him something later. It is on his screen now.",
+      ].join("\n"),
+      user: [
+        `HE ASKED: ${message}`,
+        "",
+        firstSay ? `WHAT YOU SAID BEFORE THE WORK RAN (rewrite it, do not repeat it):\n${firstSay}` : "",
+        asks.length ? `\nQUESTIONS STILL OPEN:\n${asks.map((a) => `- ${a}`).join("\n")}` : "",
+        "",
+        "WHAT CAME BACK:",
+        body,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    });
+
+    const clean = (text?.text ?? "").trim();
+    return clean.length ? clean : firstSay;
+  } catch (e) {
+    console.error("[launch/conversation] narration failed:", (e as Error).message);
+    return firstSay;
+  }
+}
+
 export async function runTurn(args: {
   clientId: string;
   clientName: string;
@@ -1139,10 +1316,25 @@ export async function runTurn(args: {
     }
   }
 
+  // ‼️ A SECOND PASS, BECAUSE THE FIRST ONE WRITES BEFORE IT CAN POSSIBLY KNOW THE ANSWER.
+  // The model returns a plan, the server runs it, and until 2026-10-06 that was the end: whatever
+  // it had guessed it would say was what Matthew read, with the real output rendered underneath as
+  // a raw chip. Asked for eleven pages and their headline options he got one unbroken paragraph of
+  // thirty-three candidates and said, correctly, "what kind of answer is this... I cant read it."
+  //
+  // So when actions ran, the reply is written AGAIN with their results in hand. This is the only
+  // place in the lane that makes two model calls for one turn, and the cost buys the thing a chat
+  // is for: an answer, laid out, rather than a promise followed by a data dump.
+  //
+  // ‼️ IT PRESENTS, IT NEVER RE-DECIDES. No actions come out of this pass, so nothing it says can
+  // execute anything, and the raw results still render below it. A pass that could act would be a
+  // second engine, which the header of this file forbids.
+  const finalSay = results.length ? await narrate(args.clientName, args.message, say, asks, results) : say;
+
   await supabaseAdmin.from("launch_messages").insert({
     conversation_id: args.conversationId,
     role: "assistant",
-    content: [say, ...asks.map((a) => `- ${a}`)].filter(Boolean).join("\n"),
+    content: [finalSay, ...asks.map((a) => `- ${a}`)].filter(Boolean).join("\n"),
     actions: results.length ? results : null,
     step_key: settled,
   });
@@ -1152,5 +1344,5 @@ export async function runTurn(args: {
     .update({ last_turn_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq("id", args.conversationId);
 
-  return { say, asks, results, heldBack };
+  return { say: finalSay, asks, results, heldBack };
 }
