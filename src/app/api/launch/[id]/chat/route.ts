@@ -24,9 +24,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const actor = session.user.name ?? session.user.email ?? "the dashboard";
 
-  let body: { message?: string };
+  let body: { message?: string; conversationId?: string };
   try {
-    body = (await req.json()) as { message?: string };
+    body = (await req.json()) as { message?: string; conversationId?: string };
   } catch {
     return NextResponse.json({ error: "That was not JSON." }, { status: 400 });
   }
@@ -53,7 +53,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     );
   }
 
-  const conversationId = await ensureConversation(client.id as string);
+  // ‼️ THE ID FROM THE BODY IS A REQUEST, NOT AN INSTRUCTION. ensureConversation checks it against
+  // THIS client's own threads and falls back to the latest, so a thread id belonging to somebody
+  // else cannot put one client's history in front of another's board. The client itself still comes
+  // from the route and never from the body.
+  const conversationId = await ensureConversation(client.id as string, body.conversationId ?? null);
   if (!conversationId) {
     return NextResponse.json({ error: "The conversation could not be opened." }, { status: 500 });
   }

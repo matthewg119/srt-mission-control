@@ -30,6 +30,7 @@ const DOC_LABELS: Record<string, string> = {
 export function LaunchThread({
   clientId,
   clientName,
+  conversationId,
   history,
   missingDocs,
   settled,
@@ -37,6 +38,8 @@ export function LaunchThread({
 }: {
   clientId: string;
   clientName: string;
+  /** Which thread this is. Sent with every turn so a reply lands in the thread on screen. */
+  conversationId: string | null;
   history: StoredMessage[];
   missingDocs: string[];
   settled: number;
@@ -73,7 +76,7 @@ export function LaunchThread({
       const res = await fetch(`/api/launch/${clientId}/chat`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message, conversationId }),
       });
       const body = (await res.json()) as {
         ok?: boolean;
