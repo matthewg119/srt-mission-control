@@ -55,7 +55,22 @@ export function DashboardShell({ user, children }: DashboardShellProps) {
       <main className="flex flex-1 flex-col overflow-hidden">
         <Header user={user} onMenuClick={handleMenuClick} />
 
-        <div className={`flex-1 overflow-hidden ${pathname === "/dashboard" ? "" : "overflow-y-auto p-6"}`}>{children}</div>
+        {/* ‼️ A CHAT OWNS ITS OWN SCROLLING AND MUST NOT BE PADDED INTO A SCROLLING BOX.
+            The onboarding chat pins its composer to the bottom of a full-height column, which only
+            works if the column really is the height of what is left under the header. Inside
+            `overflow-y-auto p-6` it was neither: the padding pushed it down and the outer scroller
+            let it run past the fold, so the box you type into sat below the visible area and had to
+            be scrolled to. Matthew, 2026-10-06: "the bottom bar for the answers seems to be barely
+            visible." Same treatment /dashboard already gets, for the same reason. */}
+        <div
+          className={`flex-1 overflow-hidden ${
+            pathname === "/dashboard" || /^\/dashboard\/launch\/[^/]+\/chat$/.test(pathname)
+              ? ""
+              : "overflow-y-auto p-6"
+          }`}
+        >
+          {children}
+        </div>
       </main>
 
       {/* BrainHeart chat popup on all pages */}
