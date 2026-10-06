@@ -422,12 +422,26 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "THE PAGE RUN, WHICH IS HOW A KEYWORD BECOMES A LIVE PAGE:",
     "- ‼️ THE ORDER IS THE WHOLE DIFFICULTY AND IT CANNOT BE SHORTCUT. Approving the plan STOPPED",
     "  drafting on 2026-09-14, on purpose, so that every decision lands before a word is written:",
-    "    plan_new -> plan_approve -> headlines_write -> headline_pick (one per page)",
-    "    -> skeletons_write -> research_prompt -> research_file -> draft_wave -> publish_page",
+    "    plan_new -> plan_approve -> angles_write -> angle_pick (one per page)",
+    "    -> headlines_write -> headline_pick (one per page) -> skeletons_write",
+    "    -> tool_pick or plan_cta (how each page hands over)",
+    "    -> research_prompt -> research_file -> draft_wave -> publish_page",
     "  client_pages rows, the only thing publishable, appear at draft_wave and not before.",
+    "- ‼️ THE IDEA COMES BEFORE THE LINE, AND THAT IS WHAT THE ANGLE STAGE IS. An angle is what a",
+    "  page ARGUES: its idea, the story it runs on and the belief it installs. Until one is picked,",
+    "  a headline can only be a line about a phrase, and headlines_write now refuses while any page",
+    "  has no idea. Do not read that refusal as a bug and do not try to route around it.",
     "- Run ONE stage per turn and say what came back. Do not chain the whole run in one plan: each",
     "  stage is a decision he may want to look at, and several of them are model calls.",
-    "- headline_pick needs rank and pick. Every page needs its own pick before skeletons_write.",
+    "- angle_pick and headline_pick need rank and pick. He will often answer with a bare number:",
+    "  that is the OPTION for the page you just showed him, so send rank for that page and pick for",
+    "  his number. If several pages are open at once and the number is ambiguous, ask which page.",
+    "- He may build several pages at once, at different stages. That is supported: each page's stage",
+    "  is worked out from what it already has, so there is no order to keep them in.",
+    "- Every page hands over to something. plan_cta sets the sentence a page offers the house offer",
+    "  with. ONE page may be the tool page instead: tool_options lists what suits this client and",
+    "  tool_pick needs the rank of the page it goes on. There is one tool per client, never one per",
+    "  page, and a tool needs its skeleton written first because it renders inside that page.",
     "- research_prompt hands back a prompt. He runs it elsewhere and pastes the answer, and you file",
     "  that with research_file and text. You never do the research yourself.",
     "- draft_wave writes one pass and tells you how many are left. If any are left, say so and offer",
@@ -461,7 +475,8 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "                       and what each one still needs. Free and read only. Use it before",
     "                       answering anything about the pages, and before publishing.",
     "  run_pages            needs stage, one of the stages listed above. Also takes rank and pick",
-    "                       (headline_pick), rank (plan_drop, plan_swap, plan_edit, plan_cta),",
+    "                       (angle_pick, headline_pick, tool_pick), rank alone (angles_write for",
+    "                       one page), rank (plan_drop, plan_swap, plan_edit, plan_cta),",
     "                       text (plan_edit, plan_cta, research_file), rung (ladder_pick),",
     "                       phrases (keywords_add, keywords_drop, keywords_select,",
     "                       keywords_unselect), category (keywords_add), and pillar plus supports",
@@ -906,17 +921,27 @@ ${body}`,
     // the answer and does not say it is the same failure as not having it.
     const rows = state.plan.flatMap((p) => {
       const marks = [
+        p.angle ? "idea" : null,
         p.headline ? "headline" : null,
         p.hasOutline ? "skeleton" : null,
+        p.ctaLine ? "cta" : null,
         p.hasBody ? "body" : null,
         p.pageStatus === "published" ? "LIVE" : null,
       ].filter(Boolean);
       const head = `  ${p.rank}. [${p.role}] ${p.headline ?? p.workingTitle} <- ${p.targetKeyword} (${p.status}${marks.length ? ", " + marks.join(", ") : ""})`;
 
-      // Only where the decision is still open. A page whose headline is picked needs the pick shown,
-      // not the three it was picked from.
-      if (p.headline || !p.headlineOptions.length) return [head];
-      return [head, ...p.headlineOptions.map((h, i) => `       option ${i + 1}: ${h}`)];
+      // ‼️ THE OPEN DECISION IS PRINTED, AND ONLY THE OPEN ONE. A page with no idea is at the idea
+      // stage, so its three IDEAS are what he has to choose between; printing headline options
+      // beside them would offer a decision that cannot be made yet. Same rule one layer down as
+      // the headline note above.
+      if (!p.angle && p.angleOptions.length) {
+        return [head, ...p.angleOptions.map((a, i) => `       idea ${i + 1}: ${a}`)];
+      }
+      const argues = p.angle ? [`       argues: ${p.angle}`] : [];
+
+      // A page whose headline is picked needs the pick shown, not the three it was picked from.
+      if (p.headline || !p.headlineOptions.length) return [head, ...argues];
+      return [head, ...argues, ...p.headlineOptions.map((h, i) => `       option ${i + 1}: ${h}`)];
     });
 
     return {
@@ -925,10 +950,16 @@ ${body}`,
       detail: [
         `${state.stageText} ${state.proposed} proposed, ${state.approved} approved, ${state.drafted} with a body, ${state.outstanding} still to draft.`,
         ...rows,
+        state.needAngle.length
+          ? `still need an IDEA: ${state.needAngle.join(", ")}. The three ideas for each are listed above: show them to him verbatim and ask which, then run_pages stage=angle_pick with rank and pick. headlines_write refuses until every page has one.`
+          : "",
         state.needHeadline.length
           ? `still need a headline: ${state.needHeadline.join(", ")}. The three options for each are listed above: show them to him verbatim and ask which, then run_pages stage=headline_pick with rank and pick.`
           : "",
         state.needSkeleton.length ? `still need a skeleton: ${state.needSkeleton.join(", ")}` : "",
+        state.needHandover.length
+          ? `still need a handover: ${state.needHandover.join(", ")}. plan_cta sets the sentence, or tool_pick makes ONE of them the tool page.`
+          : "",
         state.day0ArchivedAt ? "" : "Day 0 is not archived, so publishing will refuse. Drafting is not gated.",
       ]
         .filter(Boolean)

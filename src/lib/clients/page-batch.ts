@@ -36,7 +36,15 @@ export const HEADLINE_COMMAND = /^headline\s+([0-9]{1,2})\s+(?:pick\s+([0-9]{1,2
 export const SKELETON_COMMAND = /^skeleton(?:\s+([0-9]{1,2})\s+more)?$/i;
 
 /** Where a batch has got to. Derived, never stored. */
-export type BatchStage = "no_plan" | "headlines" | "skeletons" | "research" | "drafting" | "done";
+export type BatchStage =
+  | "no_plan"
+  | "angles"
+  | "headlines"
+  | "skeletons"
+  | "handover"
+  | "research"
+  | "drafting"
+  | "done";
 
 export interface BatchState {
   stage: BatchStage;
@@ -44,10 +52,22 @@ export interface BatchState {
   pillar: PlanRow | null;
   supports: PlanRow[];
   outlines: Map<string, PageOutline | null>;
-  /** Plan rows with no headline yet. */
+  /**
+   * Plan rows with no picked angle yet.
+   *
+   * ‼️ EMPTY WHEN THE ANGLE READ FAILED, NOT "ALL OF THEM". page-angles.ts states the rule this
+   * follows: on a database without the table or the column, reporting every page as needing an
+   * angle is "a missing column presenting as work that was never done", and here it would also
+   * wedge the headline stage shut for every client with no way through. A failed read costs the
+   * gate, never the lane.
+   */
+  needAngle: PlanRow[];
+  /** Plan rows with no headline yet. Not conditioned on the angle: the GATE is, this count is not. */
   needHeadline: PlanRow[];
   /** Plan rows with a headline and no skeleton. */
   needSkeleton: PlanRow[];
+  /** Plan rows with a skeleton and no handover: no cta line, and not the page carrying the tool. */
+  needHandover: PlanRow[];
   /** Plan rows whose page has a body. */
   drafted: PlanRow[];
 }
@@ -87,8 +107,10 @@ export async function readBatch(clientId: string): Promise<BatchState | { error:
       pillar: null,
       supports: [],
       outlines: new Map(),
+      needAngle: [],
       needHeadline: [],
       needSkeleton: [],
+      needHandover: [],
       drafted: [],
     };
   }
@@ -100,20 +122,36 @@ export async function readBatch(clientId: string): Promise<BatchState | { error:
 
   const headlines = await headlinesOnPlan(clientId, rows.map((r) => r.id));
   const bodies = await pagesWithBodies(clientId, rows.map((r) => r.pageId).filter((id): id is string => Boolean(id)));
+  const angles = await anglesOnPlan(clientId, rows.map((r) => r.id));
+  const toolPageId = await toolPageFor(clientId);
 
+  const needAngle = angles.ok ? rows.filter((r) => !angles.picked.has(r.id)) : [];
   const needHeadline = rows.filter((r) => !headlines.get(r.id));
   const needSkeleton = rows.filter((r) => headlines.get(r.id) && !outlines.get(r.id));
   const drafted = rows.filter((r) => r.pageId && bodies.has(r.pageId));
 
-  const stage: BatchStage = needHeadline.length
-    ? "headlines"
-    : needSkeleton.length
-      ? "skeletons"
-      : drafted.length === rows.length
-        ? "done"
-        : drafted.length
-          ? "drafting"
-          : "research";
+  // A page has answered the handover question once it carries a sentence of its own, or once it is
+  // the page the client's one tool renders inside. Those are the only two ways a page hands over.
+  const needHandover = rows.filter(
+    (r) => outlines.get(r.id) && !r.ctaLine?.trim() && !(toolPageId && r.pageId === toolPageId)
+  );
+
+  // ‼️ HANDOVER SITS BETWEEN THE SKELETON AND THE RESEARCH AND NEVER AFTER A DRAFT. Putting it in
+  // the chain ahead of `drafted` would report a finished batch as unfinished forever, because a
+  // page that was drafted before this stage existed has no cta line and never will.
+  const stage: BatchStage = needAngle.length
+    ? "angles"
+    : needHeadline.length
+      ? "headlines"
+      : needSkeleton.length
+        ? "skeletons"
+        : drafted.length === rows.length
+          ? "done"
+          : drafted.length
+            ? "drafting"
+            : needHandover.length
+              ? "handover"
+              : "research";
 
   return {
     stage,
@@ -121,10 +159,67 @@ export async function readBatch(clientId: string): Promise<BatchState | { error:
     pillar: rows.find((r) => r.role === "pillar") ?? null,
     supports: rows.filter((r) => r.role === "support"),
     outlines,
+    needAngle,
     needHeadline,
     needSkeleton,
+    needHandover,
     drafted,
   };
+}
+
+/**
+ * Which of these plan rows already have an angle somebody picked.
+ *
+ * ‼️ ITS OWN SELECT, AND THE FAILURE IS REPORTED RATHER THAN SWALLOWED. Same blast-radius rule as
+ * headlinesOnPlan, with one difference that matters: an empty map here would mean "every page needs
+ * an angle", which gates the headline stage. So the caller is told whether the read worked, and a
+ * failed read opens the gate instead of closing it.
+ */
+async function anglesOnPlan(
+  clientId: string,
+  ids: readonly string[]
+): Promise<{ picked: Set<string>; ok: boolean }> {
+  const picked = new Set<string>();
+  if (!ids.length) return { picked, ok: true };
+
+  const { data, error } = await supabaseAdmin
+    .from("page_angles")
+    .select("plan_id")
+    .eq("client_id", clientId)
+    .eq("status", "approved")
+    .in("plan_id", ids as string[]);
+
+  if (error) {
+    console.error(
+      `[page-batch] angle read failed (${error.message}). If this names page_angles, ` +
+        `docs/2026-09-17-page-datasets-and-angles.sql has not been run. The angle gate is open.`
+    );
+    return { picked, ok: false };
+  }
+
+  for (const row of data ?? []) picked.add(String(row.plan_id));
+  return { picked, ok: true };
+}
+
+/**
+ * The page this client's one tool renders inside, if it has been bound to one yet.
+ *
+ * One row at most, because client_assets carries a unique index allowing a single not-dropped row
+ * per client. A failed read returns null, which only ever costs this page the handover tick.
+ */
+async function toolPageFor(clientId: string): Promise<string | null> {
+  const { data, error } = await supabaseAdmin
+    .from("client_assets")
+    .select("page_id")
+    .eq("client_id", clientId)
+    .neq("status", "dropped")
+    .maybeSingle();
+
+  if (error) {
+    console.error(`[page-batch] tool page read failed: ${error.message}`);
+    return null;
+  }
+  return (data?.page_id as string | null) ?? null;
 }
 
 /**
@@ -277,10 +372,14 @@ export function stageLine(state: BatchState): string {
   switch (state.stage) {
     case "no_plan":
       return "No approved plan rows yet. `plan` proposes them and `plan approve` locks them in.";
+    case "angles":
+      return `${state.needAngle.length} of ${state.rows.length} pages still need an idea. The idea comes before the line.`;
     case "headlines":
       return `${state.needHeadline.length} of ${state.rows.length} pages still need a headline.`;
     case "skeletons":
       return `${state.needSkeleton.length} of ${state.rows.length} pages still need a skeleton.`;
+    case "handover":
+      return `${state.needHandover.length} of ${state.rows.length} pages still need a handover: a cta line, or the tool.`;
     case "research":
       return `${state.rows.length} pages planned and outlined. \`batch approve\` builds the one research prompt.`;
     case "drafting":
@@ -313,13 +412,24 @@ export async function writeHeadlinesFor(
 
   const { generateKeywordHeadlines, storeHeadlines } = await import("./client-headlines");
 
+  // ‼️ THE PICKED ANGLE IS READ HERE, AND UNTIL NOW IT NEVER WAS. This is the same read
+  // writeSkeletonsFor already does below, for the same reason: the plan row only ever held the
+  // one-line idea, and the story spine and the belief live on the angle. Without it the generator
+  // is asked to write a line about a phrase, which is the measured failure page-angles.ts opens on.
+  // Null is legal and is the old behaviour: a page with no angle still gets headlines.
+  const { approvedAngleForPlan } = await import("./page-angles");
+  const picked = await approvedAngleForPlan(clientId, row.id);
+
   // ‼️ row.postFormat WAS ALREADY HELD HERE AND WAS DISCARDED. The plan row knows the shape of the
   // page these three headlines are for, so a comparison page stopped getting a headline written for
   // a generic answer page and the two arguing past each other.
   const got = await generateKeywordHeadlines({
     clientId,
     keyword: row.targetKeyword,
-    postFormat: row.postFormat,
+    postFormat: row.postFormat ?? picked?.postFormat ?? null,
+    angle: picked
+      ? { idea: picked.idea, indoctrination: picked.indoctrination, narrative: picked.narrative }
+      : null,
   });
   if (!got.ok) return got;
 

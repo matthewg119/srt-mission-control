@@ -1111,9 +1111,14 @@ async function batchCommand(session: Session, arg: string | null): Promise<void>
 
     // A batch already underway: say where it is and show the card for that stage.
     const lines = [stageLine(state)];
-    if (state.stage === "headlines") {
+    if (state.stage === "angles") {
+      // The idea comes before the line, so the angle card is what `batch` shows at this stage.
+      // `angles` and `angle N pick K` are page-angles.ts's own grammar and are unchanged by this.
+      const { angleLines } = await import("./page-angles");
+      lines.push("", ...(await angleLines(session.clientId)));
+    } else if (state.stage === "headlines") {
       lines.push("", ...headlineCardLines(state.rows, await optionsFor(session.clientId, state.rows)));
-    } else if (state.stage === "skeletons" || state.stage === "research") {
+    } else if (state.stage === "skeletons" || state.stage === "research" || state.stage === "handover") {
       lines.push("", ...skeletonCardLines(state.rows, state.outlines));
     }
     await say(session.threadTs, lines.join("\n"));
