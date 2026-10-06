@@ -448,16 +448,19 @@ const NUMBER_WORDS = [
 export const QUESTION_COUNT_WORD: string =
   NUMBER_WORDS[CARD_QUESTIONS.length] ?? String(CARD_QUESTIONS.length);
 
-/** Lower case, because these two land mid sentence rather than opening one. */
-function countWord(n: number): string {
-  return (NUMBER_WORDS[n] ?? String(n)).toLowerCase();
-}
+/**
+ * "Two", for the visit half of the opening card. Derived, for QUESTION_COUNT_WORD's reason.
+ *
+ * ‼️ CAPITALISED, AND THAT IS NOT A STYLE CHOICE. On the opening card each part's label is a block
+ * element, so the count OPENS the visual line under it rather than continuing a sentence. A lower
+ * case first word was tried on the preview and reads as a typo.
+ */
+export const VISIT_COUNT_WORD: string =
+  NUMBER_WORDS[VISIT_QUESTIONS.length] ?? String(VISIT_QUESTIONS.length);
 
-/** "two", for the visit half of the opening card. Derived, for QUESTION_COUNT_WORD's reason. */
-export const VISIT_COUNT_WORD: string = countWord(VISIT_QUESTIONS.length);
-
-/** "five", for the review half. */
-export const REVIEW_COUNT_WORD: string = countWord(REVIEW_QUESTIONS_ASKED.length);
+/** "Five", for the review half. */
+export const REVIEW_COUNT_WORD: string =
+  NUMBER_WORDS[REVIEW_QUESTIONS_ASKED.length] ?? String(REVIEW_QUESTIONS_ASKED.length);
 
 /**
  * The step after `index`, given how a gate or the recommend question at `index` was answered.
