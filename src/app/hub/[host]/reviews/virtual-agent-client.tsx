@@ -51,7 +51,8 @@ import {
   CONNECTING_LINE,
   CONNECTING_MS,
   INVITE_REWARD_LINE,
-  QUESTION_COUNT_WORD,
+  REVIEW_COUNT_WORD,
+  VISIT_COUNT_WORD,
   REVIEW_SCRIPT,
   fillBusiness,
   fillOffer,
@@ -789,11 +790,42 @@ export function VirtualAgentClient({
             loading, or she spends it looking at a spinner she did not ask for.
           */}
           <p className="rev-open-eyebrow">Thank you for visiting</p>
-          <h1 className="rev-open-title">Leave us a review</h1>
+          <h1 className="rev-open-title">Tell us how it went</h1>
           <p className="rev-open-lede">
-            Answer whichever questions you like and skip the rest. Nothing is posted unless you
-            post it yourself.
+            Two parts, and the second one is up to you. Answer whichever questions you like and
+            skip the rest.
           </p>
+
+          {/*
+            ‼️ TWO PARTS, NAMED SEPARATELY, AND THIS IS NOT A LAYOUT PREFERENCE. Matthew,
+            2026-10-06: "the seven short questions are still tied together we need separation from
+            those 2 sections". Until now the headline said "Leave us a review" over a single count
+            of seven, which told her that all seven WERE the review. They are not: the first two
+            and the stars are about her visit, and the question about a friend sits in that half
+            too. Presenting the referral inside a review ask is the one conflation this whole lane
+            is built to avoid, and clients.review_incentive_flag exists because of it.
+
+            ‼️ BOTH COUNTS ARE DERIVED FROM THE SCRIPT, split at the first `refer` step, for the
+            reason QUESTION_COUNT_WORD already carries: onboarding2 said "Six questions" over an
+            array of seven, which is a small lie told at the moment somebody has just agreed to
+            something. Reordering the walk moves the boundary and both numbers with it.
+          */}
+          <ol className="rev-open-parts">
+            <li>
+              <span className="rev-open-part-no">1</span>
+              <span>
+                <strong>Your visit.</strong> {VISIT_COUNT_WORD} questions and the stars. None of
+                this is posted anywhere.
+              </span>
+            </li>
+            <li>
+              <span className="rev-open-part-no">2</span>
+              <span>
+                <strong>A review, if you would like one.</strong> {REVIEW_COUNT_WORD} more
+                questions, then your own words handed back to you to post or not.
+              </span>
+            </li>
+          </ol>
 
           <ul className="rev-open-facts">
             <li>
@@ -826,13 +858,13 @@ export function VirtualAgentClient({
           </button>
 
           {/*
-            ‼️ THE COUNT IS DERIVED, NOT TYPED, and onboarding2 carries the scar that explains
-            why: its intro said "Six questions" while the array held seven, which is a small lie
-            told at the exact moment somebody has just agreed to something. CARD_QUESTIONS is the
-            same list the printed card prints, so the number on screen and the number on the card
-            cannot disagree either.
+            ‼️ THE SINGLE COUNT LINE LIVED HERE AND IS GONE ON PURPOSE. It read
+            "{QUESTION_COUNT_WORD} short questions", one number covering both halves, which is
+            precisely the tying-together the two parts above exist to undo. The number is not lost:
+            it is now said twice, once per part, and still derived from the same script. The
+            printed card is untouched, because review-card.ts still reads CARD_QUESTIONS and that
+            array is byte for byte what it was.
           */}
-          <p className="rev-open-count">{QUESTION_COUNT_WORD} short questions</p>
         </div>
       )}
 

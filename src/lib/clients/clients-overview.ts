@@ -1,11 +1,17 @@
-// Every client, shaped for the card that shows one. Three reads plus one index seek per client.
+// Every client, shaped for the card that shows one. Four reads plus one index seek per client.
 //
-// ‼️ SLACK LANE ONLY, AND dashboard/launch/page.tsx IS THE REASON IT IS NOT A FILTER TOGGLE: "A
-// SEPARATE PAGE FROM /dashboard/clients, NOT A FILTER ON IT. The two lanes are worked differently
-// and the Slack board's page is built around a board this lane does not have. One page showing both
-// would need a branch in every panel on it, which is the coupling this lane exists to avoid."
-// Launch-lane clients are COUNTED here and linked to, never rendered, so this file imports one
-// board's config and lane-summary.ts stays the only bridge between the two.
+// ‼️ BOTH LANES, AND THAT REVERSES THE CALL MADE EARLIER TODAY. The first cut filtered to the Slack
+// lane, citing dashboard/launch/page.tsx: "A SEPARATE PAGE FROM /dashboard/clients, NOT A FILTER ON
+// IT." Matthew opened the page and asked the obvious question: "not sure why i cant see srt agency
+// in clients?" He was right and the filter was wrong. That header is about the BOARD PANELS, which
+// are worked differently and would need a lane branch in each; a LIST of who the clients are is not
+// a panel, and a clients page that hides clients is answering a question nobody asked.
+//
+// What is kept from that rule: this file reads the launch lane's CONFIG and its SHARED TABLE and
+// nothing else. No step engine, no step-board, no launch lib. It cannot tick, verify, advance or
+// refuse anything on either board, which is the same shape lane-summary.ts calls a read-only
+// bridge. /dashboard/launch stays exactly as it is, and each row carries its own lane's
+// denominator, because 9 of 16 and 9 of 37 are different facts.
 //
 // ‼️ ONE QUERY PER TABLE, NOT ONE PER CLIENT. The idiom is dashboard/launch/page.tsx: read the
 // clients, read every step row with .in("client_id", ids), aggregate into a Map in JS.
@@ -14,6 +20,7 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import { DELIVERY_STEPS, stepNumber, type StepKey } from "@/config/delivery-steps";
+import { LAUNCH_STEPS, launchStepNumber, type LaunchStepKey } from "@/config/launch-steps";
 import { isOwnerWork } from "@/config/roles";
 import {
   clientHealth,
@@ -27,6 +34,8 @@ import {
   type OpenStepFacts,
 } from "./client-health";
 
+export type Lane = "slack" | "launch";
+
 export interface ClientOverviewRow {
   id: string;
   href: string;
@@ -39,20 +48,22 @@ export interface ClientOverviewRow {
   quiet: string;
   /** Kept as a number because the sort needs it. The card renders `quiet`. */
   quietDays: number;
+  /** Which board this client is worked on. Shown on the row, and filterable. */
+  lane: Lane;
   settled: number;
   /** ‼️ THIS CLIENT'S OWN ROW COUNT. The progress bar's denominator. Never the config's length. */
   total: number;
-  /** DELIVERY_STEPS.length, counted at read time, for the hover title and nothing else. */
+  /** This client's OWN lane's board length today, for the hover title and nothing else. */
   boardLength: number;
   /** 0 to 100, rounded once here so the card does no arithmetic. */
   percent: number;
   health: ClientHealth;
+  /** Everything the search box matches on, lower-cased once here rather than on every keystroke. */
+  haystack: string;
 }
 
 export interface ClientsOverview {
   rows: ClientOverviewRow[];
-  /** Launch-lane clients, deliberately not rendered. Shown as a count and a link. */
-  launchCount: number;
   /**
    * ‼️ SAID OUT LOUD RATHER THAN RENDERED AS AN EMPTY LIST. An outage that reads as "no clients
    * yet" on this page is how somebody opens a second client for a business that already has one.
@@ -79,41 +90,62 @@ export async function clientsOverview(now: number = Date.now()): Promise<Clients
   const { data: clientData, error: clientErr } = await supabaseAdmin
     .from("clients")
     .select(
-      "id, slug, legal_name, dba_name, website, city, state, billing_status, onboarding_status, onboarding_lane, market_conflict, pilot_ends_at, slack_channel_name, created_at"
+      "id, slug, legal_name, dba_name, website, city, state, email, billing_status, onboarding_status, onboarding_lane, market_conflict, pilot_ends_at, slack_channel_name, created_at"
     )
     .order("created_at", { ascending: false });
 
   if (clientErr) {
-    return { rows: [], launchCount: 0, error: `the client list could not be read: ${clientErr.message}` };
+    return { rows: [], error: `the client list could not be read: ${clientErr.message}` };
   }
 
   // Read as plain records, the way client-reads.ts does it. Going through `unknown` also means
   // adding a column to that select later cannot tip it over the inference wall.
-  const all = (clientData ?? []) as unknown as Record<string, unknown>[];
+  const clients = (clientData ?? []) as unknown as Record<string, unknown>[];
+  if (clients.length === 0) return { rows: [], error: null };
 
-  // onboarding_lane defaults to 'slack'. Comparing against "launch" rather than for "slack" keeps a
-  // null on this page instead of silently hiding a client, which .eq("onboarding_lane", "slack")
-  // would do.
-  const launchCount = all.filter((c) => c.onboarding_lane === "launch").length;
-  const clients = all.filter((c) => c.onboarding_lane !== "launch");
-  const ids = clients.map((c) => String(c.id));
-  if (ids.length === 0) return { rows: [], launchCount, error: null };
+  // onboarding_lane defaults to 'slack' and may be null on a row older than that column. Anything
+  // that is not literally "launch" is worked on the Slack board, which is the honest reading and
+  // also the one that cannot make a client disappear off this page.
+  const laneOf = (c: Record<string, unknown>): Lane =>
+    c.onboarding_lane === "launch" ? "launch" : "slack";
 
-  // ── READ 2: every one of those clients' boards, in one query. status, updated_at and error_detail
-  // together, so the open step, the stall clock and the error reason all come off this one read.
-  const { data: stepData, error: stepErr } = await supabaseAdmin
-    .from("client_delivery_steps")
-    .select("client_id, step_key, status, updated_at, error_detail")
-    .in("client_id", ids);
+  const slackIds = clients.filter((c) => laneOf(c) === "slack").map((c) => String(c.id));
+  const launchIds = clients.filter((c) => laneOf(c) === "launch").map((c) => String(c.id));
 
+  // ── READS 2 AND 3: both boards, one query each. status, updated_at and error_detail together, so
+  // the open step, the stall clock and the error reason all come off the same read.
+  //
   // ‼️ LOUD, NOT SILENT, AND THIS IS THE OPPOSITE CHOICE FROM lane-summary.ts ON PURPOSE. There, a
   // failed read omits one sentence from a chat answer. Here it would tell the page that every
   // client has no delivery board, which is a confident wrong answer about all of them at once.
-  if (stepErr) {
-    return { rows: [], launchCount, error: `the delivery boards could not be read: ${stepErr.message}` };
+  const [slackRead, launchRead] = await Promise.all([
+    slackIds.length
+      ? supabaseAdmin
+          .from("client_delivery_steps")
+          .select("client_id, step_key, status, updated_at, error_detail")
+          .in("client_id", slackIds)
+      : Promise.resolve({ data: [], error: null }),
+    launchIds.length
+      ? supabaseAdmin
+          .from("client_launch_steps")
+          .select("client_id, step_key, status, updated_at, error_detail")
+          .in("client_id", launchIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+
+  if (slackRead.error) {
+    return { rows: [], error: `the delivery boards could not be read: ${slackRead.error.message}` };
+  }
+  if (launchRead.error) {
+    return { rows: [], error: `the launch boards could not be read: ${launchRead.error.message}` };
   }
 
-  const boards = byClient((stepData ?? []) as unknown as StepRow[]);
+  const boards = byClient([
+    ...((slackRead.data ?? []) as unknown as StepRow[]),
+    ...((launchRead.data ?? []) as unknown as StepRow[]),
+  ]);
+
+  const ids = clients.map((c) => String(c.id));
 
   // ── READS 3..N+2: the last event per client, issued together.
   //
@@ -144,7 +176,8 @@ export async function clientsOverview(now: number = Date.now()): Promise<Clients
 
   const rows: ClientOverviewRow[] = clients.map((c) => {
     const id = String(c.id);
-    const board = boardFacts(boards.get(id), now);
+    const lane = laneOf(c);
+    const board = boardFacts(boards.get(id), lane, now);
 
     // No events at all falls back to when the client was opened. A client opened three weeks ago
     // with nothing logged is not "quiet for 0 days", and quietFrom keeps the copy honest about
@@ -168,29 +201,44 @@ export async function clientsOverview(now: number = Date.now()): Promise<Clients
     };
 
     const where = [c.city, c.state].filter(Boolean).join(", ");
+    const name = (c.dba_name as string) || (c.legal_name as string) || String(c.slug ?? id);
+    const meta = [
+      (c.website as string | null) ?? null,
+      where || null,
+      // Legacy. Per-client Slack channels were retired on 2026-08-20 in favour of ops_channel_id,
+      // and this renders for the one client provisioned before that, so the record that the
+      // channel existed is not quietly lost in a redesign.
+      c.slack_channel_name ? `#${String(c.slack_channel_name)} (legacy Slack)` : null,
+    ].filter((x): x is string => Boolean(x));
+
+    const stage = stageLabel((c.onboarding_status as string | null) ?? null);
+    const owed = owedNext(facts);
+    const health = clientHealth(facts);
 
     return {
       id,
       href: `/dashboard/clients/${id}`,
-      name: (c.dba_name as string) || (c.legal_name as string) || String(c.slug ?? id),
-      meta: [
-        (c.website as string | null) ?? null,
-        where || null,
-        // Legacy. Per-client Slack channels were retired on 2026-08-20 in favour of ops_channel_id,
-        // and this renders for the one client provisioned before that, so the record that the
-        // channel existed is not quietly lost in a redesign.
-        c.slack_channel_name ? `#${String(c.slack_channel_name)} (legacy Slack)` : null,
-      ].filter((x): x is string => Boolean(x)),
-      stage: stageLabel((c.onboarding_status as string | null) ?? null),
+      name,
+      meta,
+      stage,
       money: moneyLine(facts.billingStatus, (c.pilot_ends_at as string | null) ?? null, now),
-      owed: owedNext(facts),
+      owed,
       quiet: quietLine(quietDays, quietFrom),
       quietDays,
+      lane,
       settled: board.settled,
       total: board.total,
-      boardLength: DELIVERY_STEPS.length,
+      boardLength: lane === "launch" ? LAUNCH_STEPS.length : DELIVERY_STEPS.length,
       percent: board.total === 0 ? 0 : Math.round((board.settled / board.total) * 100),
-      health: clientHealth(facts),
+      health,
+      // ‼️ BUILT HERE, NOT IN THE SEARCH BOX. Typing filters on every keystroke, and lower-casing
+      // six fields per row per stroke is work done over and over for an answer that never changes.
+      // The slug and the legal name are in here but not on the card, because somebody searching
+      // "srt-agency" or an LLC name should still find the row.
+      haystack: [name, ...meta, stage, owed, health.reason, lane, c.slug, c.legal_name, c.email]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase(),
     };
   });
 
@@ -202,7 +250,7 @@ export async function clientsOverview(now: number = Date.now()): Promise<Clients
     (a, b) => LEVEL_ORDER[a.health.level] - LEVEL_ORDER[b.health.level] || b.quietDays - a.quietDays
   );
 
-  return { rows, launchCount, error: null };
+  return { rows, error: null };
 }
 
 const LEVEL_ORDER: Record<ClientHealth["level"], number> = { risk: 0, watch: 1, good: 2, closed: 3 };
@@ -246,7 +294,7 @@ interface BoardFacts {
  * normalising would collide and need a which-row-wins rule that nothing else in this repo has. This
  * matches lane-summary exactly, and it understates in a direction somebody can see.
  */
-function boardFacts(rows: Map<string, StepRow> | undefined, now: number): BoardFacts {
+function boardFacts(rows: Map<string, StepRow> | undefined, lane: Lane, now: number): BoardFacts {
   const empty: BoardFacts = {
     present: false,
     settled: 0,
@@ -263,7 +311,14 @@ function boardFacts(rows: Map<string, StepRow> | undefined, now: number): BoardF
   let openStep: OpenStepFacts | null = null;
   let erroredStep: OpenStepFacts | null = null;
 
-  for (const step of DELIVERY_STEPS) {
+  // ‼️ THIS CLIENT'S OWN LANE'S REGISTRY, AND BOTH LANES NUMBER THEIR OWN STEPS. Walking the Slack
+  // board over a launch client's rows would match nothing and read as "no board yet" for every one
+  // of them, which is how the filter that hid them would have come back as a subtler bug.
+  const registry = lane === "launch" ? LAUNCH_STEPS : DELIVERY_STEPS;
+  const numberOf = (key: string): number =>
+    lane === "launch" ? launchStepNumber(key as LaunchStepKey) : stepNumber(key as StepKey);
+
+  for (const step of registry) {
     const row = rows.get(step.key);
     if (!row) continue;
     total += 1;
@@ -275,9 +330,9 @@ function boardFacts(rows: Map<string, StepRow> | undefined, now: number): BoardF
     }
 
     const facts: OpenStepFacts = {
-      // ‼️ COUNTED. Any copy naming a step number calls this, says stepNumber()'s own docstring.
-      // The cast matches lane-summary.ts: DELIVERY_STEPS is typed with `key: string`.
-      number: stepNumber(step.key as StepKey),
+      // ‼️ COUNTED. Any copy naming a step number calls this, says both registries' docstrings.
+      // The cast matches lane-summary.ts: the step arrays are typed with `key: string`.
+      number: numberOf(step.key),
       key: step.key,
       label: step.label,
       status,

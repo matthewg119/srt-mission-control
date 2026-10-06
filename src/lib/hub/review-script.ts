@@ -383,19 +383,50 @@ export const NON_REVIEW_IDS: string[] = REVIEW_SCRIPT.filter(
  *   - An OFFER printed on the card would be the clinic promising a discount to every person who
  *     is handed one, months after the deal changed, with no way to withdraw it.
  */
-export const CARD_QUESTIONS: string[] = (() => {
+/**
+ * The same questions, split at the point the walk changes subject.
+ *
+ * ‼️ THE WALK IS TWO THINGS AND THE OPENING CARD USED TO PRESENT IT AS ONE. Matthew, 2026-10-06:
+ * "the seven short questions are still tied together we need separation from those 2 sections".
+ * He is right, and it is not only a wording problem. Everything up to and including the invite is
+ * about the visit and about a friend; everything after it is the review. A card that says "Leave
+ * us a review: seven short questions" promises that all seven are the review, which means the
+ * referral questions arrive inside a review ask. That is the exact conflation the whole lane is
+ * built to avoid, and review_incentive_flag exists to flag.
+ *
+ * ‼️ SPLIT AT THE FIRST `refer` STEP, DERIVED, NEVER AN INDEX TYPED IN. Reordering the script
+ * moves the boundary with it. `stars`, `refer` and `invite` are still excluded from both halves
+ * for the reasons CARD_QUESTIONS gives above: they cannot go on card stock.
+ */
+const SPLIT_QUESTIONS: { visit: string[]; review: string[] } = (() => {
   const guarded = new Set(
     REVIEW_SCRIPT.filter((s): s is Extract<ScriptStep, { kind: "gate" }> => s.kind === "gate").map(
       (s) => s.onYes
     )
   );
-  const out: string[] = [];
-  for (const step of REVIEW_SCRIPT) {
-    if (step.kind === "gate") out.push(step.prompt);
-    else if (step.kind === "ask" && !guarded.has(step.id)) out.push(step.prompt);
-  }
-  return out;
+  // Where the subject changes. With no refer step at all (a clinic with no deal on file) the
+  // boundary is the end of the walk, so every question is a visit question and the review half is
+  // empty, which is exactly what that clinic's card should say.
+  const turn = REVIEW_SCRIPT.findIndex((s) => s.kind === "refer");
+  const boundary = turn === -1 ? REVIEW_SCRIPT.length : turn;
+
+  const visit: string[] = [];
+  const review: string[] = [];
+  REVIEW_SCRIPT.forEach((step, i) => {
+    const into = i < boundary ? visit : review;
+    if (step.kind === "gate") into.push(step.prompt);
+    else if (step.kind === "ask" && !guarded.has(step.id)) into.push(step.prompt);
+  });
+  return { visit, review };
 })();
+
+export const CARD_QUESTIONS: string[] = [...SPLIT_QUESTIONS.visit, ...SPLIT_QUESTIONS.review];
+
+/** What she is asked before the walk changes subject. The visit, and nothing posted anywhere. */
+export const VISIT_QUESTIONS: readonly string[] = SPLIT_QUESTIONS.visit;
+
+/** What she is asked afterwards, which is the only half that becomes text she can post. */
+export const REVIEW_QUESTIONS_ASKED: readonly string[] = SPLIT_QUESTIONS.review;
 
 /**
  * How many questions the opening card promises, as a word.
@@ -416,6 +447,17 @@ const NUMBER_WORDS = [
 
 export const QUESTION_COUNT_WORD: string =
   NUMBER_WORDS[CARD_QUESTIONS.length] ?? String(CARD_QUESTIONS.length);
+
+/** Lower case, because these two land mid sentence rather than opening one. */
+function countWord(n: number): string {
+  return (NUMBER_WORDS[n] ?? String(n)).toLowerCase();
+}
+
+/** "two", for the visit half of the opening card. Derived, for QUESTION_COUNT_WORD's reason. */
+export const VISIT_COUNT_WORD: string = countWord(VISIT_QUESTIONS.length);
+
+/** "five", for the review half. */
+export const REVIEW_COUNT_WORD: string = countWord(REVIEW_QUESTIONS_ASKED.length);
 
 /**
  * The step after `index`, given how a gate or the recommend question at `index` was answered.

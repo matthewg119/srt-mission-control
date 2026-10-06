@@ -887,15 +887,48 @@ body:has(.hub-root) {
 
 .rev-open .rev-primary { width: 100%; }
 
-/* ‼️ 1.5rem, AND IT WAS 0.75rem, THEN 1.15rem WHICH WAS STILL NOT ENOUGH. Matthew, 2026-10-06: "the seven short questions is still too
-   close to the start button". It read as a label belonging to the button rather than a note under
-   the card, which is the one piece of text on this screen that is allowed to be quiet. The gap is
-   what makes it quiet. */
-.rev-open-count {
-  margin: 1.5rem 0 0;
-  text-align: center;
-  font-size: 0.8125rem;
-  color: var(--hub-faint);
+/* ‼️ THE TWO PARTS, AND .rev-open-count IS GONE WITH ITS ELEMENT. That rule styled a single line
+   under the button reading "Seven short questions", and three rounds of spacing tweaks went into
+   making it quiet enough. Matthew, 2026-10-06: "the seven short questions are still tied together
+   we need separation from those 2 sections". The spacing was never the problem; one number over
+   two different things was. These rows say what each half is, ABOVE the button, because they are
+   information somebody decides on rather than a note to be hushed. */
+.rev-open-parts {
+  list-style: none;
+  counter-reset: none;
+  margin: 0 0 1.5rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+.rev-open-parts li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  color: var(--hub-muted);
+}
+.rev-open-parts strong {
+  display: block;
+  font-weight: 600;
+  color: var(--hub-fg);
+}
+/* The numeral carries the separation on its own, so the two halves read as two even when
+   somebody skims past the words. */
+.rev-open-part-no {
+  flex: 0 0 auto;
+  width: 1.375rem;
+  height: 1.375rem;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--hub-accent-soft);
+  color: var(--hub-accent);
+  font-size: 0.75rem;
+  font-weight: 700;
 }
 
 /* ── The claim form at /r/{code} ───────────────────────────────────────────── */
