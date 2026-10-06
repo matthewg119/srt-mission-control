@@ -415,7 +415,7 @@ One offer proposed from what they told us at intake
 | [Done] reads | no table |
 | Dataset fields | none: the proposal is written from what intake already said, so nothing has to be collected for it. What it LOSES, the proposal's own reasoning before offer_locked overwrites it, is a missing history row rather than a missing field |
 | Feeds | nothing: the proposal is superseded by offer_locked, and its own STEP_NEEDS entry records that what it loses is a missing history row rather than a field |
-| Downstream | `client_offers` is selected in 4 other file(s), e.g. `src/app/api/launch/[id]/documents/route.ts`, `src/lib/clients/archive.ts`, `src/lib/launch/offer.ts`; `clients` is selected in 109 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
+| Downstream | `client_offers` is selected in 5 other file(s), e.g. `src/app/api/launch/[id]/documents/route.ts`, `src/lib/clients/archive.ts`, `src/lib/launch/conversation.ts`; `clients` is selected in 109 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
 
 **[Done] refuses on:**
 
@@ -544,7 +544,7 @@ Keywords: 200+ ways the offer is said, approved by me
 | [Done] reads | no table |
 | Dataset fields | 1 needed, 3 wanted |
 | Feeds | `client_keywords.selected_at` → 21 `pre_call_pages`; `keyword_serp_reads.keyword_id` → 21 `pre_call_pages` |
-| Downstream | steps 13 `custom_question_set`, 14 `page_candidates`, 21 `pre_call_pages` declare they wait on this; `client_keywords` is selected in 7 other file(s), e.g. `src/lib/clients/anchor-ladder.ts`, `src/lib/clients/archive.ts`, `src/lib/clients/keyword-cards.ts`; `keyword_clusters` is selected in 2 other file(s), e.g. `src/lib/clients/keyword-strategy.ts`, `src/lib/clients/serp-cards.ts` |
+| Downstream | steps 13 `custom_question_set`, 14 `page_candidates`, 21 `pre_call_pages` declare they wait on this; `client_keywords` is selected in 9 other file(s), e.g. `src/lib/clients/anchor-ladder.ts`, `src/lib/clients/archive.ts`, `src/lib/clients/keyword-cards.ts`; `keyword_clusters` is selected in 2 other file(s), e.g. `src/lib/clients/keyword-strategy.ts`, `src/lib/clients/serp-cards.ts` |
 
 **[Done] refuses on:**
 

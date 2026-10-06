@@ -275,7 +275,26 @@ export function selectPlan(
 //
 // !! KEEP PLAN_KEYWORDS_NEEDED IN `keyword-expansion.ts` IN STEP: it is 1 + this number, and it
 // is what the keyword verifier refuses a short set against.
-export const PRE_CALL_SUPPORTS = 6;
+/**
+ * Supports under the one pillar, so the onboarding batch is 1 + this.
+ *
+ * Was 8 until 2026-09-13, then 6, and 10 from 2026-10-05: Matthew mapped all 33 of SRT's selected
+ * keywords across eleven pages and asked for that to be the batch. The cap is what stops a plan
+ * being padded, so it is raised deliberately and not quietly widened.
+ *
+ * ‼️ TWO OTHER CONSTANTS RESTATE THIS NUMBER AND BOTH ARE HARD-CODED ON PURPOSE (no import, so no
+ * cycle between the planner and the keyword set): `PLAN_KEYWORDS_NEEDED` in keyword-expansion.ts
+ * and `PRE_CALL_PAGES` in precall-headlines.ts, each 1 + this. A comment asking somebody to keep
+ * three numbers in step is the kind of thing that goes stale, so _probe-launch-pages.ts now reads
+ * all three out of the source and fails when they disagree.
+ *
+ * ‼️ ON A `core` CLIENT THE BATCH NOW REACHES RANK 9, WHICH IS TAGGED over_delivery.
+ * draftOne tags rank >= 9 for core, and that 9 is the CONTRACT (1 + the 8 pages core sells in a
+ * month), not the batch size. Its own header forbids retargeting it to this constant, and that
+ * stays true: an eleven-page onboarding for a core client genuinely does over-deliver three pages
+ * and the tag says so honestly. No client is on `core` today.
+ */
+export const PRE_CALL_SUPPORTS = 10;
 
 /**
  * No keyword category may take more than this many of the six supports.
