@@ -194,7 +194,7 @@ Site, hosting and DNS intelligence
 | [Done] reads | no table |
 | Dataset fields | none: hosting, DNS and the site are observed from the network, never answered |
 | Feeds | nothing: it observes or hands over something outside this system, and records no artifact a later step draws from |
-| Downstream | `clients` is selected in 109 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
+| Downstream | `clients` is selected in 110 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
 
 **[Done] refuses on:**
 
@@ -415,7 +415,7 @@ One offer proposed from what they told us at intake
 | [Done] reads | no table |
 | Dataset fields | none: the proposal is written from what intake already said, so nothing has to be collected for it. What it LOSES, the proposal's own reasoning before offer_locked overwrites it, is a missing history row rather than a missing field |
 | Feeds | nothing: the proposal is superseded by offer_locked, and its own STEP_NEEDS entry records that what it loses is a missing history row rather than a field |
-| Downstream | `client_offers` is selected in 5 other file(s), e.g. `src/app/api/launch/[id]/documents/route.ts`, `src/lib/clients/archive.ts`, `src/lib/launch/conversation.ts`; `clients` is selected in 109 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
+| Downstream | `client_offers` is selected in 5 other file(s), e.g. `src/app/api/launch/[id]/documents/route.ts`, `src/lib/clients/archive.ts`, `src/lib/launch/conversation.ts`; `clients` is selected in 110 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
 
 **[Done] refuses on:**
 
@@ -1429,7 +1429,7 @@ SRT pixel live on the client site, first real session seen
 | [Done] reads | no table |
 | Dataset fields | none: the pixel is live or it is not, and a real session proves it |
 | Feeds | nothing: a real session in hub_hits proves it, and the weekly report counts sessions rather than reading a flag this step set |
-| Downstream | `clients` is selected in 109 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
+| Downstream | `clients` is selected in 110 other file(s), e.g. `src/app/api/clients/[id]/avatar/route.ts`, `src/app/api/clients/[id]/dns/route.ts`, `src/app/api/clients/[id]/hub/route.ts` |
 
 **[Done] refuses on:**
 

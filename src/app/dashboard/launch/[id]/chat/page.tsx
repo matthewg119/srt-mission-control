@@ -9,14 +9,22 @@ import { notFound } from "next/navigation";
 import { supabaseAdmin } from "@/lib/db";
 import { launchBoard, isResolved } from "@/lib/launch/steps";
 import { foundationStatus } from "@/lib/launch/documents";
-import { ensureConversation, loadHistory, type StoredMessage } from "@/lib/launch/conversation";
+import {
+  ensureConversation,
+  listConversations,
+  loadHistory,
+  type StoredMessage,
+} from "@/lib/launch/conversation";
 import { LaunchThread } from "./thread";
+import { ThreadHistory } from "./history";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 
 interface Props {
   params: { id: string };
+  /** `?c=` names which thread to open. Checked against this client's own threads, never trusted. */
+  searchParams?: { c?: string };
 }
 
 export async function generateMetadata({ params }: Props) {
@@ -29,7 +37,7 @@ export async function generateMetadata({ params }: Props) {
   return { title: `${name} | Onboarding` };
 }
 
-export default async function LaunchChatPage({ params }: Props) {
+export default async function LaunchChatPage({ params, searchParams }: Props) {
   const { data: client, error } = await supabaseAdmin
     .from("clients")
     .select("id, slug, legal_name, dba_name, vertical_slug, onboarding_lane")
@@ -51,10 +59,11 @@ export default async function LaunchChatPage({ params }: Props) {
   }
 
   const clientId = client.id as string;
-  const [board, docs, conversationId] = await Promise.all([
+  const [board, docs, conversationId, threads] = await Promise.all([
     launchBoard(clientId),
     foundationStatus(clientId),
-    ensureConversation(clientId),
+    ensureConversation(clientId, searchParams?.c ?? null),
+    listConversations(clientId),
   ]);
 
   const history: StoredMessage[] = conversationId ? await loadHistory(conversationId) : [];
@@ -77,7 +86,12 @@ export default async function LaunchChatPage({ params }: Props) {
   // flex child defaults to `min-height: auto` and refuses to shrink below its content, so without
   // it the messages push the composer off the bottom instead of scrolling.
   return (
-    <div className="flex h-[100dvh] flex-col">
+    <div className="flex h-[100dvh]">
+      {/* ‼️ THE RAIL IS PER CLIENT AND THE CLIENT IS IN THE URL. See history.tsx for why that is the
+          line that matters: many threads on one client is fine, two clients in one thread is not. */}
+      <ThreadHistory clientId={clientId} threads={threads} currentId={conversationId} />
+
+      <div className="flex min-w-0 flex-1 flex-col">
       <header className="shrink-0 border-b border-[rgba(255,255,255,0.08)] px-6 pb-4 pt-6">
         <div className="mx-auto max-w-3xl">
           <Link
@@ -104,14 +118,16 @@ export default async function LaunchChatPage({ params }: Props) {
         </div>
       </header>
 
-      <LaunchThread
-        clientId={clientId}
-        clientName={name}
-        history={history}
-        missingDocs={missingDocs}
-        settled={settled}
-        total={board.length}
-      />
+        <LaunchThread
+          clientId={clientId}
+          clientName={name}
+          conversationId={conversationId}
+          history={history}
+          missingDocs={missingDocs}
+          settled={settled}
+          total={board.length}
+        />
+      </div>
     </div>
   );
 }

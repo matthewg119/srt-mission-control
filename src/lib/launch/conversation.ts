@@ -1077,14 +1077,79 @@ async function buildHandoffPrompt(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Find or create the single thread for this client. */
-export async function ensureConversation(clientId: string): Promise<string | null> {
-  const { data: existing } = await supabaseAdmin
+export interface ConversationSummary {
+  id: string;
+  title: string | null;
+  lastTurnAt: string | null;
+  createdAt: string;
+}
+
+/**
+ * This client's threads, newest first.
+ *
+ * ‼️ `select("*")` AND NOT A COLUMN LIST, because `title` arrives with
+ * docs/2026-10-06-launch-threads.sql and PostgREST fails a WHOLE select on one unknown column.
+ * Naming it would make the history rail empty on any database where that migration has not run
+ * yet, which is the shape of outage this repo has written down three times.
+ */
+export async function listConversations(clientId: string): Promise<ConversationSummary[]> {
+  const { data, error } = await supabaseAdmin
     .from("launch_conversations")
+    .select("*")
+    .eq("client_id", clientId);
+
+  if (error) {
+    console.error("[launch/conversation] threads unreadable:", error.message);
+    return [];
+  }
+
+  return ((data ?? []) as Array<Record<string, unknown>>)
+    .map((r) => ({
+      id: String(r.id),
+      title: (r.title as string | null) ?? null,
+      lastTurnAt: (r.last_turn_at as string | null) ?? null,
+      createdAt: String(r.created_at ?? ""),
+    }))
+    .sort((a, b) => (b.lastTurnAt ?? b.createdAt).localeCompare(a.lastTurnAt ?? a.createdAt));
+}
+
+/**
+ * Open a new thread on this client.
+ *
+ * ‼️ A FAILED INSERT RETURNS THE EXISTING THREAD RATHER THAN NULL. Until
+ * docs/2026-10-06-launch-threads.sql is run, `launch_conversations_client_uidx` still allows only
+ * one row per client, so this refuses with a unique violation. Falling back keeps the chat working
+ * exactly as it did instead of handing somebody a dead "new thread" button, and the history rail
+ * simply shows one entry until the index is relaxed.
+ */
+export async function startConversation(clientId: string): Promise<string | null> {
+  const { data, error } = await supabaseAdmin
+    .from("launch_conversations")
+    .insert({ client_id: clientId })
     .select("id")
-    .eq("client_id", clientId)
     .maybeSingle();
 
-  if (existing?.id) return existing.id as string;
+  if (data?.id) return String(data.id);
+  if (error) console.warn("[launch/conversation] new thread refused, resuming the latest:", error.message);
+
+  const threads = await listConversations(clientId);
+  return threads[0]?.id ?? null;
+}
+
+/**
+ * The thread to open: the one asked for, else the latest, else a new one.
+ *
+ * ‼️ `wanted` IS CHECKED AGAINST THIS CLIENT'S OWN THREADS AND NEVER TRUSTED. It arrives from a
+ * query string, and the whole reason the client id comes from the route is that an action must run
+ * against the client in the URL. A conversation id that belongs to somebody else would put one
+ * client's history in front of another's board, so an id that is not in this list is ignored rather
+ * than refused: the honest result is "that is not your thread", which is the same as not naming one.
+ */
+export async function ensureConversation(clientId: string, wanted?: string | null): Promise<string | null> {
+  const threads = await listConversations(clientId);
+
+  if (wanted && threads.some((t) => t.id === wanted)) return wanted;
+  if (threads.length) return threads[0].id;
 
   const { data, error } = await supabaseAdmin
     .from("launch_conversations")
@@ -1093,7 +1158,33 @@ export async function ensureConversation(clientId: string): Promise<string | nul
     .maybeSingle();
 
   if (error || !data) return null;
-  return data.id as string;
+  return String(data.id);
+}
+
+/**
+ * Name a thread after the first thing asked in it.
+ *
+ * Same shape the other history rail in this app uses: the opening message, trimmed, is what a
+ * person recognises a thread by weeks later. Written once and never rewritten, so renaming a thread
+ * later is a deliberate edit rather than something that drifts with the conversation.
+ */
+async function titleConversation(conversationId: string, firstMessage: string): Promise<void> {
+  const title = firstMessage.replace(/\s+/g, " ").trim().slice(0, 80);
+  if (!title) return;
+  // Tolerant: before the migration there is no `title` column and this is a no-op, not a failure.
+  await supabaseAdmin
+    .from("launch_conversations")
+    .update({ title })
+    .eq("id", conversationId)
+    .is("title", null)
+    .then(
+      (r) => {
+        if (r.error && !/title/.test(r.error.message)) {
+          console.error("[launch/conversation] title failed:", r.error.message);
+        }
+      },
+      () => {}
+    );
 }
 
 export interface StoredMessage {
@@ -1213,6 +1304,10 @@ export async function runTurn(args: {
     role: "user",
     content: args.message,
   });
+
+  // Names the thread after its opening message, once. The `is title null` guard inside means a
+  // thread that already has a name keeps it.
+  await titleConversation(args.conversationId, args.message);
 
   const transcript = history
     .filter((m) => m.role !== "system")
