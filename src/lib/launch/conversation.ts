@@ -126,6 +126,17 @@ export const ACTION_KINDS = [
   // 50k-character report, and there was no action for it: the only door was a file upload on a
   // board he had asked to stop using. A promise a surface cannot keep is worse than a refusal.
   "file_document",
+  // ‼️ THE FILED TIER, FROM A SURFACE WITH NO FILE PICKER. Four launch steps are confirmed by
+  // evidence a person produces rather than state the app can observe, and the Day-0 wall is one of
+  // them. With one engine keyed, resolveRunLabel downgrades every requested photograph_2 to
+  // `measurement` and Day 0 is deliberately not stamped from it, so the filed tier is the only
+  // route through the wall that is not a waiver. It was reachable only by uploading on the board.
+  //
+  // ‼️ IT DOES NOT MAKE A TICK HONEST BY ITSELF, AND MUST NEVER BE DESCRIBED AS IF IT DID.
+  // Filing is evidence that an ARTIFACT exists. setLaunchStep still stamps day_0_source as
+  // 'manual_step', which day-zero.ts defines as an assertion that the archive happened rather than
+  // proof of it, and no artifact may call a manual_step stamp a photograph.
+  "file_evidence",
 ] as const;
 
 export type ActionKind = (typeof ACTION_KINDS)[number];
@@ -300,6 +311,16 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "- If something he says is malformed, correct it and say that you did. Never silently.",
     "- You may recommend and you may push back once. What he says is the default and wins.",
     "",
+    "‼️ HOW AN ACTION'S RESULT REACHES HIM, WHICH IS NOT HOW YOU MIGHT ASSUME:",
+    "- You return a plan. The server runs it AFTER you have written, and renders every result to him",
+    "  in full, directly under your message. You never see those results yourself.",
+    "- So NEVER write \"I will show you as soon as they come back\" or \"standing by for the output\".",
+    "  It is already on his screen by the time he reads your sentence, and promising it later makes",
+    "  him wait for something that has arrived. Measured twice on 2026-10-06, both times over a list",
+    "  of headline options that was sitting right below the promise.",
+    "- Write the sentence that is true once the result is there: what you ran, and what he does with",
+    "  it. \"Three options per page are below. Tell me which number for each.\"",
+    "",
     "WHAT YOU MAY DO:",
     "- Return a plan of actions. The server executes them; you do not.",
     "- You may only name a step from the list of steps you may act on. Never invent a step key.",
@@ -461,6 +482,13 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "                       and none chosen. The last one is a QUESTION: it comes back with the list,",
     "                       you show him both and he picks, then you pass destinationId.",
     "  unpublish_page       needs rank. Taking a page down is never gated: it is the remedy.",
+    "  file_evidence        needs stepKey and text: an artifact he has pasted, filed against a step",
+    "                       whose evidence is something a person produces (the Day-0 scan, GBP",
+    "                       access, GBP buildout, the review cards). It files the artifact; it does",
+    "                       NOT tick the step, and it does not make a tick more honest than it was.",
+    "                       ‼️ FOR DAY 0, SAY WHAT THE TICK THEN RECORDS: day_0_source becomes",
+    "                       manual_step, an assertion that the archive happened. With one engine",
+    "                       keyed a real photograph cannot be written at all, so never imply one was.",
     "  file_document        needs which (deep_research, avatar_sheet, short_offer,",
     "                       necessary_beliefs) and text: a document he has pasted. It supersedes the",
     "                       one on file and lands in the evidence library every later page cites.",
@@ -720,6 +748,71 @@ ${body}`,
     return { kind, ok: true, detail: lines.join(". ") };
   }
 
+  if (kind === "file_evidence") {
+    const stepKey = (action.stepKey ?? "").trim();
+    if (!isLaunchStepKey(stepKey)) {
+      return { kind, ok: false, detail: `${stepKey} is not a step on this board.` };
+    }
+
+    const text = (action.text ?? "").trim();
+    if (text.length < 120) {
+      return {
+        kind,
+        ok: false,
+        detail:
+          `That is ${text.length} characters. Evidence is the artifact itself, pasted: the scan, the ` +
+          "report, what was measured and when. A sentence saying it happened is not the artifact.",
+      };
+    }
+
+    // Same bucket, same row shape and same `source: 'board'` as the upload route, because this is
+    // the same filed tier arriving through a different door. doc-text.ts excludes 'generated' from
+    // the buyer evidence corpus, and claiming WE produced his scan would be backwards.
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const storageKey = `${clientId}/board/${stepKey}-${stamp}.md`;
+    const bytes = Buffer.from(text, "utf8");
+
+    const up = await supabaseAdmin.storage.from("onboarding").upload(storageKey, bytes, {
+      contentType: "text/markdown",
+      upsert: false,
+    });
+    if (up.error) return { kind, ok: false, detail: `The paste could not be stored: ${up.error.message}` };
+
+    const { error } = await supabaseAdmin.from("client_docs").insert({
+      client_id: clientId,
+      filename: `${stepKey}-${stamp}.md`,
+      content_type: "text/markdown",
+      size_bytes: bytes.byteLength,
+      storage_ref: storageKey,
+      // The bucket is private, so a stored URL would be a dead link. Minted on request instead.
+      web_url: null,
+      delivery_step_key: stepKey,
+      source: "board",
+      slack_file_id: null,
+      slack_thread_ts: null,
+      uploaded_by: actor,
+    });
+    if (error) {
+      return {
+        kind,
+        ok: false,
+        detail: /client_docs_source_check/.test(error.message)
+          ? "client_docs.source does not allow 'board' yet. Section 7 of docs/2026-09-30-launch-lane.sql has not been run against this database."
+          : error.message,
+      };
+    }
+
+    return {
+      kind,
+      ok: true,
+      detail:
+        `Filed ${bytes.byteLength} bytes against ${stepKey}. The step's verifier can read it back now. ` +
+        (stepKey === LAUNCH_DAY_ZERO_STEP_KEY
+          ? "Ticking the step stamps day_0_source as manual_step, which records an assertion that the archive happened. It is not a photograph and nothing may call it one."
+          : ""),
+    };
+  }
+
   if (kind === "file_document") {
     const which = (action.which ?? "").trim();
     if (!isFoundationKind(which)) {
@@ -806,14 +899,24 @@ ${body}`,
       };
     }
 
-    const rows = state.plan.map((p) => {
+    // ‼️ THE THREE CANDIDATES ARE PRINTED, AND LEAVING THEM OUT MADE THIS ACTION USELESS FOR THE ONE
+    // THING IT WAS BEING ASKED (2026-10-06). `show me the headline options for all 11 pages` ran
+    // read_pages, which held every option in launchPagesState and rendered only the page titles, so
+    // the chat answered the question it had not been asked and he could not pick. A reader that has
+    // the answer and does not say it is the same failure as not having it.
+    const rows = state.plan.flatMap((p) => {
       const marks = [
         p.headline ? "headline" : null,
         p.hasOutline ? "skeleton" : null,
         p.hasBody ? "body" : null,
         p.pageStatus === "published" ? "LIVE" : null,
       ].filter(Boolean);
-      return `  ${p.rank}. [${p.role}] ${p.headline ?? p.workingTitle} <- ${p.targetKeyword} (${p.status}${marks.length ? ", " + marks.join(", ") : ""})`;
+      const head = `  ${p.rank}. [${p.role}] ${p.headline ?? p.workingTitle} <- ${p.targetKeyword} (${p.status}${marks.length ? ", " + marks.join(", ") : ""})`;
+
+      // Only where the decision is still open. A page whose headline is picked needs the pick shown,
+      // not the three it was picked from.
+      if (p.headline || !p.headlineOptions.length) return [head];
+      return [head, ...p.headlineOptions.map((h, i) => `       option ${i + 1}: ${h}`)];
     });
 
     return {
@@ -822,7 +925,9 @@ ${body}`,
       detail: [
         `${state.stageText} ${state.proposed} proposed, ${state.approved} approved, ${state.drafted} with a body, ${state.outstanding} still to draft.`,
         ...rows,
-        state.needHeadline.length ? `still need a headline: ${state.needHeadline.join(", ")}` : "",
+        state.needHeadline.length
+          ? `still need a headline: ${state.needHeadline.join(", ")}. The three options for each are listed above: show them to him verbatim and ask which, then run_pages stage=headline_pick with rank and pick.`
+          : "",
         state.needSkeleton.length ? `still need a skeleton: ${state.needSkeleton.join(", ")}` : "",
         state.day0ArchivedAt ? "" : "Day 0 is not archived, so publishing will refuse. Drafting is not gated.",
       ]
