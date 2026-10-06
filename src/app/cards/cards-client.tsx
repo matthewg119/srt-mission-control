@@ -104,6 +104,12 @@ export function CardsClient() {
   // chat taking its place in the same box.
   const [started, setStarted] = useState(false);
   const [slots, setSlots] = useState<Slot[] | null>(null);
+  // Refs, not state: the Calendly listener reads them from a closure set up once, so it has to
+  // see the latest value rather than the one that existed when it subscribed. The same shape
+  // chatgpt-ads-client.tsx uses, and for the same reason.
+  const contactId = useRef<string | null>(null);
+  const pendingSlot = useRef<Slot | null>(null);
+  const bookedOnce = useRef(false);
   const days = useMemo(() => nextDays(), []);
 
   const bubbleId = useRef(0);
@@ -207,11 +213,33 @@ export function CardsClient() {
    */
   useEffect(() => {
     function onMessage(e: MessageEvent) {
-      if (typeof e.origin !== "string" || !e.origin.endsWith("calendly.com")) return;
-      const data = e.data as { event?: unknown } | null;
-      if (data && typeof data === "object" && data.event === "calendly.event_scheduled") {
-        setBooked(true);
-      }
+      // ‼️ EXACT ORIGIN, AND IT USED TO BE endsWith("calendly.com"). That accepted
+      // evilcalendly.com, which is the whole point of an origin check. chatgpt-ads-client.tsx
+      // already compared exactly; this one is now the same.
+      if (e.origin !== "https://calendly.com") return;
+      const data = e.data as { event?: string; payload?: { event?: { uri?: string } } } | null;
+      if (!data || typeof data !== "object" || data.event !== "calendly.event_scheduled") return;
+      // Once. Calendly can emit more than one message, and a second notice is a second booking
+      // in the thread that nobody made.
+      if (bookedOnce.current) return;
+      bookedOnce.current = true;
+      setBooked(true);
+
+      // ‼️ TELLING SLACK IS THE POINT OF THIS LISTENER NOW. Until 2026-10-06 a completed booking
+      // set one boolean here and notified nobody: the #hot-leads card went out when the questions
+      // were answered, and the thing worth interrupting somebody for happened afterwards.
+      //
+      // Fire and forget, and deliberately so. Their screen is finished; a failed notification is
+      // ours to notice in the logs and never theirs to retry.
+      void fetch("/api/cards/booked", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          contactId: contactId.current,
+          eventUri: data.payload?.event?.uri ?? "",
+          startTime: pendingSlot.current?.startTime ?? "",
+        }),
+      }).catch(() => {});
     }
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
@@ -336,12 +364,18 @@ export function CardsClient() {
           sourcePage: typeof window === "undefined" ? "" : window.location.pathname,
         }),
       });
-      const json = (await res.json()) as { ok?: boolean; error?: string; bookingUrl?: string };
+      const json = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        bookingUrl?: string;
+        contactId?: string;
+      };
       if (!json.ok) {
         setSendError(json.error ?? "That did not go through. Please reply to our email instead.");
         return;
       }
       if (json.bookingUrl) setBookingUrl(json.bookingUrl);
+      if (json.contactId) contactId.current = json.contactId;
 
       // ‼️ THE SELF BRANCH ENDS HERE AND THE CALL BRANCH HAS ONE MORE BEAT. Only somebody
       // booking a call needs a time, and only they named a day and a half-day to look one up with.
@@ -420,6 +454,7 @@ export function CardsClient() {
     const prefill =
       `${sep}name=${encodeURIComponent(name)}` +
       `&email=${encodeURIComponent(answers.email ?? "")}`;
+    pendingSlot.current = slot;
     setBookingUrl(`${slot.schedulingUrl}${prefill}`);
     push("her", slot.label);
     push("them", CARDS_SLOTS.booking);

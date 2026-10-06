@@ -156,5 +156,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       ? calendlyEmbedUrl(bookingPageUrl("install"), { name: leadName, email })
       : null;
 
-  return NextResponse.json({ ok: true, bookingUrl: booking });
+  // ‼️ THE CONTACT ID GOES BACK SO THE BOOKING CAN FIND ITS OWN THREAD. /api/cards/booked
+  // replies under the card this call just posted rather than opening a second one; see its
+  // header for why that id is not a credential and what actually guards that route.
+  return NextResponse.json({ ok: true, bookingUrl: booking, contactId: result.contactId });
 }
