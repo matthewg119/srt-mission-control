@@ -8,9 +8,31 @@
 // finding it in a search result would arrive with no idea what the cards are.
 
 import type { Metadata } from "next";
+import { DM_Sans, DM_Serif_Display } from "next/font/google";
 
 import { CardsClient } from "./cards-client";
 import "./cards.css";
+
+/**
+ * The two faces the reference screens are set in, self-hosted at build like every other webfont
+ * in this app, so nothing about a visitor leaves for Google at view time.
+ *
+ * ‼️ THEY LAND ON THE PAGE, NOT ON THE APP. cards.css reads them as --cd-text and --cd-display
+ * with real system stacks behind them, so if these classes are ever dropped the funnel degrades to
+ * a sans and a serif rather than to whatever the root layout happens to set.
+ */
+const dmSans = DM_Sans({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  variable: "--cd-text",
+  display: "swap",
+});
+const dmSerif = DM_Serif_Display({
+  subsets: ["latin"],
+  weight: ["400"],
+  variable: "--cd-display",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Set up your review cards",
@@ -22,7 +44,7 @@ export const dynamic = "force-dynamic";
 
 export default function CardsPage() {
   return (
-    <main className="cd-page">
+    <main className={`cd-page ${dmSans.variable} ${dmSerif.variable}`}>
       {/*
         ‼️ THE MASTHEAD MOVED INSIDE THE CARD ON 2026-10-06 AND IS NOT DUPLICATED HERE.
         Matthew: "make it all inside." It used to be a page header that stayed on screen while the

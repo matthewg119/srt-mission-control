@@ -288,36 +288,42 @@ export const CARDS_IDS: readonly string[] = CARDS_SCRIPT.map((s) => s.id);
  * which is the one thing a clinic arriving from an email a week later needs.
  */
 export const CARDS_HERO = {
-  // ── The promise, which used to be the page masthead OUTSIDE this box ───────────────
+  // Who is talking, at the top of both states.
   //
-  // ‼️ IT MOVED INSIDE ON 2026-10-06. Matthew: "dont let [the masthead] be outside of the
-  // section with text, make it all inside." It was a page header in cards/page.tsx that stayed
-  // rendered while the chat ran, so the screen was a headline floating above a box that had moved
-  // on without it. One box, one thing being said at a time.
-  topEyebrow: guard("cards hero top eyebrow", "AI Referral Engine"),
-  topTitle: guard(
-    "cards hero top title",
-    "Turn every checkout into a referral, a review, and a reason for AI to recommend you"
-  ),
-  topSub: guard("cards hero top sub", "It starts at your front desk with one scan."),
+  // ‼️ THE LOCKUP REPLACED THE CHAT PANEL'S HEADER (2026-10-07), which was a dot and the word
+  // SRT inside a bordered box. Rendering the same two lines in both states is what makes the chat
+  // the same section as the opening screen rather than a second screen that replaced it.
+  brand: guard("cards hero brand", "SRT Agency"),
+  product: guard("cards hero product", "AI Referral Engine"),
 
-  // ── What they actually get ──────────────────────────────────────────
+  // One block, said once.
   //
-  // ‼️ THE OFFER IS NO LONGER TEN PRINTED SHEETS, AND THAT IS A REAL CHANGE OF PROMISE.
-  // Matthew's copy, 2026-10-06. The old card sold a batch of cards; this one sells the system the
-  // cards are the front of. The chat behind it is unchanged, which is the point: the questions
-  // were always about the business and never about a print run.
-  eyebrow: guard("cards hero eyebrow", "What you get"),
-  title: guard("cards hero title", "Your front desk QR system + the AI engine behind it"),
+  // ‼️ topEyebrow, topTitle AND topSub ARE GONE, AND SO IS THE HAIRLINE BETWEEN THEM. The card
+  // used to make a promise, draw a rule, and then start again with a second eyebrow and heading
+  // saying what the thing was. Matthew, 2026-10-07: "this build my referral engine i dont like
+  // it", and then five phone screens he had designed, every one of which is an eyebrow, a line, a
+  // sentence and three facts. This is his fifth screen, the dark one, because this page is dark.
+  //
+  // ‼️ IT STILL SELLS NOTHING, which _probe-cards-funnel.ts holds. No price, no plan name and
+  // no offer key. The clinic already said yes to a free batch of cards in an email, and the chat
+  // behind this screen is unchanged: the questions were always about the business.
+  eyebrow: guard("cards hero eyebrow", "Ready when you are"),
+  title: guard("cards hero title", "Your patients already love you"),
   lede: guard(
     "cards hero lede",
-    "Answer a few questions about your business and we handle the build."
+    "Now let us make sure Google and ChatGPT know it too. Answer a few questions about your business and we build the rest."
   ),
+  // Three, in the order the icons in cards-client.tsx draw them: the review, the referral, the
+  // search. A fourth is where a list of wins becomes a brochure.
   facts: [
-    guard("cards hero fact 1", "+1 referral, +1 review, every scan"),
-    guard("cards hero fact 2", "Content that gets you found on ChatGPT and Google"),
+    guard("cards hero fact 1", "More reviews from every checkout"),
+    guard("cards hero fact 2", "More referrals from every visit"),
+    guard("cards hero fact 3", "More visibility in every search"),
   ],
   cta: guard("cards hero cta", "Build my referral engine"),
+  // Under the button, in the smallest type on the page. It says what the tap costs and what comes
+  // with it, which is what somebody still deciding wants and somebody decided skips.
+  foot: guard("cards hero foot", "QR cards included · about two minutes"),
 } as const;
 
 /**

@@ -6,90 +6,200 @@
  * depend on a client record it has no client for, and _probe-virtual-agent-grammar.ts polices the
  * other direction of exactly that boundary.
  *
- * ‼️ AND NOT TAILWIND, unlike the dashboard. This file is ~120 lines of layout for one funnel; a
- * utility soup in the markup would make the chat bubbles unreadable in review, which is the one
- * thing about this page somebody will actually argue about.
- */
+ * ‼️ AND NOT TAILWIND, unlike the dashboard. This file is layout for one funnel; a utility soup in
+ * the markup would make the chat bubbles unreadable in review, which is the one thing about this
+ * page somebody will actually argue about.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════════════════════════
+ * ‼️ REBUILT 2026-10-07 TO MATTHEW'S OWN REFERENCE SCREENS. He walked the old opening card and
+ * said so plainly: "this build my referral engine i dont like it", then sent five phone screens he
+ * had designed and asked for the built pages to match them.
+ *
+ * What the old card was doing wrong, and what every value below is answering:
+ *
+ *   ONE SECTION, NOT A BOX ON A PAGE. The card was a bordered panel floating on the page ground,
+ *   and tapping it swapped that panel for a second bordered panel holding the chat. Two boxes
+ *   where there is one thing happening. The page IS the section now: no border, no panel fill, no
+ *   radius, and the lockup at the top stays put while the content underneath it changes.
+ *
+ *   ONE BLOCK OF COPY, NOT TWO WITH A RULE BETWEEN THEM. .cd-open-promise, .cd-open-sub and
+ *   .cd-open-rule are gone with their elements. A hairline between two headlines in one box is
+ *   what you reach for when the box is saying two things, and the fix was to say one.
+ *
+ *   A DISPLAY FACE ON THE LINE THAT SELLS. DM Serif Display over DM Sans, self-hosted by
+ *   next/font in page.tsx, which is what the reference screens are set in.
+ *
+ * The palette is the reference's dark screen, not the old near-black: #111413 has a green cast
+ * that belongs with the accent, where #0b0b0c belonged with nothing. ═══════════════════════════ */
 
 .cd-page {
-  --cd-bg: #0b0b0c;
-  --cd-panel: #141416;
-  --cd-ink: #f4f4f5;
-  --cd-mut: rgba(244, 244, 245, 0.55);
-  --cd-line: rgba(255, 255, 255, 0.1);
-  --cd-accent: #00c9a7;
-  --cd-on-accent: #07211c;
-  --cd-them: #1d1d20;
-  --cd-me: #00c9a7;
+  --cd-bg: #111413;
+  --cd-ink: #f3efe9;
+  /* Two muteds, like the reference: the body sits one step down from the ink, the small print two.
+     One grey for both is how a footnote ends up shouting as loud as a lede. */
+  --cd-mut: #c2bdb5;
+  --cd-faint: #a39e96;
+  --cd-line: rgba(243, 239, 233, 0.14);
+  --cd-accent: #3cc6a8;
+  --cd-on-accent: #0b1f1a;
+  --cd-them: #1c2120;
+  --cd-me: #3cc6a8;
+
+  /* ‼️ ONE WIDTH FOR THE WHOLE FUNNEL. The opening screen used to be 34rem and so did the chat,
+     which was right; what was wrong was that 34rem is a laptop window and this is met on a phone
+     at a front desk. 26rem is the width the review walk's frame carries, so the two front doors
+     of one product are finally the same size. */
+  --cd-frame-w: 26rem;
 
   min-height: 100vh;
   margin: 0;
-  padding: 2.5rem 1.25rem 4rem;
+  padding: 2.5rem 1.5rem 2.25rem;
   background: var(--cd-bg);
   color: var(--cd-ink);
-  font: 16px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* next/font sets --cd-text and --cd-display on this element. The fallbacks are real stacks, so
+     a dropped class degrades to a system sans and a system serif rather than to nothing. */
+  font-family: var(--cd-text, ui-sans-serif), system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 16px;
+  line-height: 1.55;
 }
 
-.cd-masthead {
-  max-width: 34rem;
-  margin: 0 auto 1.5rem;
+/* ── The lockup ──────────────────────────────────────────────────────────────
+   ‼️ RENDERED IN BOTH STATES, WHICH IS WHAT MAKES THE CHAT THE SAME SECTION. The old chat panel
+   had a header of its own, a dot and the word SRT, so tapping the button replaced one identity
+   with another. This one does not move: the content under it changes and the name above it does
+   not, exactly as the review walk's clinic mark behaves. */
+.cd-id {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: 0 0 auto;
+  margin: 0 0 2.25rem;
 }
-.cd-eyebrow {
-  margin: 0 0 0.35rem;
-  font-size: 0.75rem;
-  font-weight: 700;
-  letter-spacing: 0.12em;
+.cd-mark {
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--cd-accent);
+  color: var(--cd-on-accent);
+  font-family: var(--cd-display, Georgia), "Times New Roman", serif;
+  font-size: 1.375rem;
+  line-height: 1;
+}
+.cd-who { display: flex; flex-direction: column; gap: 0.125rem; line-height: 1.3; }
+.cd-name { font-size: 0.9375rem; font-weight: 600; letter-spacing: 0.02em; }
+.cd-what { font-size: 0.8125rem; color: var(--cd-faint); }
+
+/* ── The opening screen ──────────────────────────────────────────────────────
+   The reference's shape: the copy takes whatever height is left and centres itself in it, and the
+   button sits on the floor. On a phone that is a screen with a thumb-high call to action; on a
+   laptop it is the same screen, not a short card adrift in a metre of empty page. */
+.cd-open {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: var(--cd-frame-w);
+  /* The page's own padding, subtracted, so this fills exactly what is left of the screen and the
+     button lands on its floor rather than below the fold. */
+  min-height: calc(100vh - 4.75rem);
+  margin: 0 auto;
+}
+.cd-open-body {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.cd-open-eyebrow {
+  margin: 0 0 1.25rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--cd-accent);
 }
-.cd-masthead h1 {
-  margin: 0 0 0.5rem;
-  font-size: 1.6rem;
-  line-height: 1.2;
+
+/* ‼️ WEIGHT 400, WHICH ONLY WORKS BECAUSE THE FACE IS A DISPLAY SERIF. The old title was 1.6rem of
+   700 sans, which is a heading; this is the line the page is selling with. It clamps because 44px
+   of serif inside 390px is three words a line and the headline must not wrap to four. */
+.cd-open-title {
+  margin: 0 0 1.25rem;
+  font-family: var(--cd-display, Georgia), "Times New Roman", serif;
+  font-weight: 400;
+  font-size: clamp(2.25rem, 10vw, 2.875rem);
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+  color: var(--cd-ink);
 }
-.cd-lede {
+
+.cd-open-lede {
   margin: 0;
+  font-size: 1.0625rem;
+  line-height: 1.55;
   color: var(--cd-mut);
 }
 
-.cd-shell {
-  max-width: 34rem;
-  margin: 0 auto;
-  background: var(--cd-panel);
-  border: 1px solid var(--cd-line);
-  border-radius: 16px;
-  overflow: hidden;
+/* ‼️ ICONS, NOT BULLETS, AND THAT IS NOT DECORATION. The old list drew a "\2022" through ::before,
+   which is one character that cannot say anything. Three stroked marks carry the three wins in the
+   same glance the words take, which is what the reference screens do and the only reason a row of
+   fifteen-pixel text earns its space. */
+.cd-open-facts {
+  margin: 1.5rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
 }
-
-.cd-head {
+.cd-open-facts li {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
-  border-bottom: 1px solid var(--cd-line);
+  gap: 0.75rem;
+  font-size: 0.9375rem;
+  color: var(--cd-mut);
 }
-.cd-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: var(--cd-accent);
+.cd-open-facts svg { flex: 0 0 auto; color: var(--cd-accent); }
+
+.cd-open-cta {
+  width: 100%;
+  margin-top: 2rem;
 }
-.cd-title {
+
+/* The line under the button. It says what the tap costs and what comes with it, in the smallest
+   type on the page, because somebody who has already decided does not read it. */
+.cd-open-foot {
+  margin: 0.875rem 0 0;
+  text-align: center;
   font-size: 0.8125rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  color: var(--cd-faint);
+}
+
+/* ── The chat ────────────────────────────────────────────────────────────────
+   ‼️ FLAT, ON THE PAGE, UNDER THE SAME LOCKUP. It used to be a panel: a fill, a border, a 16px
+   radius and a header bar, dropped onto a page that already had an identity at the top of it. The
+   same double stacking Matthew called out on the review walk, on the other front door.
+
+   What is left is the width and the scroll. The bubbles still have grounds of their own, because
+   two people talking need two grounds; nothing around them does. */
+.cd-shell {
+  width: 100%;
+  max-width: var(--cd-frame-w);
+  margin: 0 auto;
 }
 
 .cd-msgs {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  padding: 1rem;
   /* Tall enough that the walk does not jump as bubbles land, short enough to keep the composer
      on screen on a phone. */
   min-height: 15rem;
   max-height: 24rem;
   overflow-y: auto;
+  padding-bottom: 1rem;
 }
 
 .cd-msg {
@@ -122,7 +232,7 @@
   width: 6px;
   height: 6px;
   border-radius: 999px;
-  background: var(--cd-mut);
+  background: var(--cd-faint);
   animation: cdBlink 1.2s infinite ease-in-out;
 }
 .cd-typing span:nth-child(2) { animation-delay: 0.15s; }
@@ -135,11 +245,13 @@
   .cd-typing span { animation: none; opacity: 0.5; }
 }
 
+/* ‼️ NO SIDE PADDING ANYWHERE BELOW. Every row in the walk used to pad itself to 1rem inside a
+   panel that was already inset from the page. With the panel gone the page's own padding is the
+   only gutter, and a second one is the thing an eye reads as a container. */
 .cd-composer {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  padding: 0 1rem 1rem;
 }
 .cd-bar {
   display: flex;
@@ -152,20 +264,26 @@
   /* 16px on the control itself, or iOS zooms the page on focus. */
   font-size: 16px;
   color: var(--cd-ink);
-  background: var(--cd-bg);
+  background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--cd-line);
   border-radius: 12px;
-  padding: 0.6rem 0.75rem;
+  padding: 0.75rem 0.85rem;
 }
+.cd-bar input::placeholder { color: var(--cd-faint); }
+
+/* The one button shape in the funnel, and it is the reference's: 56px tall, a 16px corner, 17px
+   of semibold. A pill would be a chip that happens to be wide. */
 .cd-bar button,
 .cd-primary {
   font: inherit;
-  font-weight: 700;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  min-height: 3.5rem;
   color: var(--cd-on-accent);
   background: var(--cd-accent);
   border: none;
-  border-radius: 999px;
-  padding: 0.65rem 1.2rem;
+  border-radius: 16px;
+  padding: 0.75rem 1.25rem;
   cursor: pointer;
   text-align: center;
   text-decoration: none;
@@ -177,7 +295,7 @@
   align-self: flex-start;
   font: inherit;
   font-size: 0.875rem;
-  color: var(--cd-mut);
+  color: var(--cd-faint);
   background: transparent;
   border: none;
   padding: 0.25rem 0;
@@ -189,9 +307,11 @@
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  padding: 0 1rem 1rem;
 }
 .cd-chips.is-pair { flex-direction: row; }
+/* The two openings stack, because a time is read left to right and two of them side by side on a
+   phone wrap into something that looks like four. */
+.cd-chips.is-stack { flex-direction: column; }
 .cd-chips button {
   flex: 1 1 auto;
   font: inherit;
@@ -201,19 +321,22 @@
   background: transparent;
   border: 1px solid var(--cd-accent);
   border-radius: 12px;
-  padding: 0.65rem 1rem;
+  padding: 0.8rem 1rem;
   cursor: pointer;
 }
 .cd-chips.is-pair button { text-align: center; border-radius: 999px; }
-.cd-chips button:hover { background: rgba(0, 201, 167, 0.08); }
+.cd-chips button:hover { background: rgba(60, 198, 168, 0.1); }
 
 /* The fork. Two cards rather than two chips, because each needs a sentence of its own: the
-   difference between them is what gets decided and by whom, which does not fit on a chip. */
+   difference between them is what gets decided and by whom, which does not fit on a chip.
+
+   ‼️ THE ONE PLACE A BORDER SURVIVED THE REBUILD, and it is doing work the flat page cannot: two
+   choices side by side have to be two things, and whitespace alone does not say which words
+   belong to which tap. */
 .cd-fork {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
-  padding: 0 1rem 1rem;
 }
 .cd-choice {
   display: flex;
@@ -224,8 +347,8 @@
   color: var(--cd-ink);
   background: transparent;
   border: 1px solid var(--cd-line);
-  border-radius: 14px;
-  padding: 0.8rem 1rem;
+  border-radius: 16px;
+  padding: 1rem 1.1rem;
   cursor: pointer;
 }
 .cd-choice.is-primary {
@@ -251,11 +374,19 @@
 }
 
 /* The inline calendar. Tall enough that Calendly's month grid is not itself scrolling inside a
-   scroller, which is the thing that makes an embedded booker feel broken on a laptop. */
+   scroller, which is the thing that makes an embedded booker feel broken on a laptop.
+
+   ‼️ AND THE ONE ELEMENT ALLOWED OUT OF THE COLUMN. The funnel narrowed to 26rem so its two
+   front doors would be the same phone-shaped screen; a month grid at 26rem is the scroller inside
+   a scroller this comment already warns about. It centres on the PAGE rather than on the column
+   and clamps to the viewport, so it can never open a sideways scroll on a phone. */
 .cd-cal {
+  width: min(34rem, calc(100vw - 3rem));
+  margin-left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 1rem;
   height: 34rem;
-  margin: 0 1rem 1rem;
-  border-radius: 12px;
+  border-radius: 16px;
   overflow: hidden;
   background: #fff;
 }
@@ -268,98 +399,6 @@
 
 .cd-error {
   margin: 0;
-  padding: 0 1rem;
   font-size: 0.875rem;
   color: #f8a4a4;
-}
-
-/* ── The opening card (2026-10-06) ───────────────────────────────────────────
-
-   ‼️ THE SAME SHAPE AS THE REVIEW WALK'S CARD, IN THIS PAGE'S OWN PALETTE. Matthew asked for the
-   two front doors to match: eyebrow, headline, lede, two assurance rows, one big button. What it
-   must NOT do is copy the hub's light tint, because this page is dark and a pale box dropped into
-   it would read as a different product rather than the same one.
-
-   It occupies the same 34rem the chat shell does, so tapping the button swaps one box for another
-   of identical width rather than resizing the page under somebody's thumb. */
-.cd-open {
-  max-width: 34rem;
-  margin: 0 auto;
-  padding: 1.75rem 1.5rem 1.5rem;
-  background: var(--cd-panel);
-  border: 1px solid var(--cd-line);
-  border-radius: 16px;
-}
-
-.cd-open-eyebrow {
-  margin: 0 0 0.5rem;
-  font-size: 0.75rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--cd-accent);
-}
-
-.cd-open-title {
-  margin: 0 0 0.6rem;
-  font-size: 1.6rem;
-  line-height: 1.2;
-  font-weight: 700;
-  color: var(--cd-ink);
-}
-
-.cd-open-lede {
-  margin: 0 0 1.1rem;
-  color: var(--cd-mut);
-}
-
-.cd-open-facts {
-  margin: 0 0 1.4rem;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
-  font-size: 0.9375rem;
-  color: var(--cd-mut);
-}
-/* A dot rather than an icon font: one character, no asset, and it cannot fail to load. */
-.cd-open-facts li::before {
-  content: "\2022";
-  color: var(--cd-accent);
-  font-weight: 700;
-  margin-right: 0.55rem;
-}
-
-.cd-open-cta {
-  width: 100%;
-  padding: 0.85rem 1.2rem;
-  font-size: 1rem;
-}
-
-/* The two openings stack, because a time is read left to right and two of them side by side on a
-   phone wrap into something that looks like four. */
-.cd-chips.is-stack { flex-direction: column; }
-
-/* The promise block, above the rule. It is the page's h1 now that the masthead is gone, so it is
-   the biggest thing in the box and the only thing competing with the button for attention. */
-.cd-open-promise {
-  margin: 0 0 0.6rem;
-  font-size: 1.5rem;
-  line-height: 1.25;
-  font-weight: 700;
-  color: var(--cd-ink);
-}
-
-.cd-open-sub {
-  margin: 0;
-  color: var(--cd-mut);
-}
-
-/* A hairline, not a gap. Two blocks in one box need to read as two blocks, and whitespace alone
-   at this width reads as an accident. */
-.cd-open-rule {
-  margin: 1.4rem 0;
-  border: 0;
-  border-top: 1px solid var(--cd-line);
 }

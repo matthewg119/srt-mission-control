@@ -504,42 +504,49 @@ export function CardsClient() {
 
   const canSend = composed.trim().length > 0;
 
-  // ‼️ THE CARD IS THE WHOLE PAGE UNTIL IT IS TAPPED, AND THEN THE CHAT TAKES ITS PLACE IN THE
-  // SAME BOX. The review walk does exactly this and a clinic sees both; two different front doors
-  // would be two products. Nothing is queried and no lead exists until the first answer, so this
-  // card costs a visitor nothing.
+  // ‼️ THE SCREEN IS THE WHOLE PAGE UNTIL IT IS TAPPED, AND THEN THE CHAT TAKES ITS PLACE
+  // UNDER THE SAME LOCKUP. The review walk does exactly this and a clinic sees both; two different
+  // front doors would be two products. Nothing is queried and no lead exists until the first
+  // answer, so this screen costs a visitor nothing.
+  //
+  // ‼️ ONE BLOCK OF COPY, NOT TWO WITH A RULE BETWEEN THEM (2026-10-07). It used to open with
+  // a promise, a hairline, and then a second eyebrow and heading saying what the thing was. Matthew,
+  // on that version: "this build my referral engine i dont like it", followed by five phone screens
+  // he had designed, every one of which says one thing once. CARDS_HERO lost topEyebrow, topTitle
+  // and topSub along with the rule.
   if (!started) {
     return (
       <div className="cd-open">
-        {/* The promise, then a rule, then what it actually is. Two blocks in one box rather than
-            a headline floating above a card, which is what this used to be. */}
-        <p className="cd-open-eyebrow">{CARDS_HERO.topEyebrow}</p>
-        <h1 className="cd-open-promise">{CARDS_HERO.topTitle}</h1>
-        <p className="cd-open-sub">{CARDS_HERO.topSub}</p>
-
-        <hr className="cd-open-rule" />
-
-        <p className="cd-open-eyebrow">{CARDS_HERO.eyebrow}</p>
-        <h2 className="cd-open-title">{CARDS_HERO.title}</h2>
-        <p className="cd-open-lede">{CARDS_HERO.lede}</p>
-        <ul className="cd-open-facts">
-          {CARDS_HERO.facts.map((f) => (
-            <li key={f}>{f}</li>
-          ))}
-        </ul>
+        <Lockup />
+        {/* The copy takes whatever height is left and centres itself in it, so the button lands on
+            the floor of the screen rather than wherever the paragraph happened to end. */}
+        <div className="cd-open-body">
+          <p className="cd-open-eyebrow">{CARDS_HERO.eyebrow}</p>
+          <h1 className="cd-open-title">{CARDS_HERO.title}</h1>
+          <p className="cd-open-lede">{CARDS_HERO.lede}</p>
+          <ul className="cd-open-facts">
+            {CARDS_HERO.facts.map((f, i) => (
+              <li key={f}>
+                <FactIcon which={i} />
+                <span>{f}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
         <button type="button" className="cd-primary cd-open-cta" onClick={() => setStarted(true)}>
           {CARDS_HERO.cta}
         </button>
+        <p className="cd-open-foot">{CARDS_HERO.foot}</p>
       </div>
     );
   }
 
   return (
     <div className="cd-shell">
-      <div className="cd-head">
-        <span className="cd-dot" aria-hidden="true" />
-        <span className="cd-title">SRT</span>
-      </div>
+      {/* ‼️ THE SAME LOCKUP, NOT A PANEL HEADER. The chat used to arrive inside a bordered box
+          with a dot and the word SRT at the top of it, so the first tap in the funnel replaced one
+          identity with another and drew a second container around the result. */}
+      <Lockup />
 
       <div className="cd-msgs">
         {bubbles.map((b) => (
@@ -704,5 +711,74 @@ export function CardsClient() {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * SRT's mark and what this is, at the top of both states.
+ *
+ * ‼️ IT IS THE SECTION'S IDENTITY AND THE SECTION DOES NOT CHANGE. The opening copy and the
+ * chat swap underneath it; this does not move, which is the whole difference between one page that
+ * progresses and two pages that replace each other.
+ */
+function Lockup() {
+  return (
+    <div className="cd-id">
+      <span className="cd-mark" aria-hidden="true">
+        S
+      </span>
+      <span className="cd-who">
+        <span className="cd-name">{CARDS_HERO.brand}</span>
+        <span className="cd-what">{CARDS_HERO.product}</span>
+      </span>
+    </div>
+  );
+}
+
+/**
+ * One stroked mark per fact, in the order CARDS_HERO.facts declares them.
+ *
+ * ‼️ THE SHAPES LIVE HERE AND THE WORDS LIVE IN THE CONFIG, which is the same split the rest
+ * of this funnel keeps: guard() owns anything a reader reads, and a path has nothing to guard.
+ * Keyed by index rather than matched on the text, because a copy edit must never silently drop an
+ * icon, and the final branch is the default so a fourth fact still renders with a mark.
+ */
+function FactIcon({ which }: { which: number }) {
+  const common = {
+    width: 20,
+    height: 20,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.8,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    "aria-hidden": true,
+  };
+  if (which === 0) {
+    // A star: the review.
+    return (
+      <svg {...common}>
+        <path d="M12 3.5l2.6 5.3 5.8.8-4.2 4.1 1 5.8L12 16.8l-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z" />
+      </svg>
+    );
+  }
+  if (which === 1) {
+    // Two people: the referral.
+    return (
+      <svg {...common}>
+        <circle cx="9" cy="8" r="3.5" />
+        <path d="M2.5 20a6.5 6.5 0 0 1 13 0" />
+        <path d="M16 4.6a3.5 3.5 0 0 1 0 6.8" />
+        <path d="M18 14.2A6.5 6.5 0 0 1 21.5 20" />
+      </svg>
+    );
+  }
+  // A magnifier: being found.
+  return (
+    <svg {...common}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="M20 20l-3.5-3.5" />
+    </svg>
   );
 }

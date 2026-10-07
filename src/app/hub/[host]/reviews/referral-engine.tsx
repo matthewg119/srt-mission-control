@@ -34,6 +34,7 @@ import {
   type ReferralConfig,
   type ReviewDestination,
 } from "./virtual-agent-client";
+import { revSerif } from "./rev-font";
 
 /**
  * ‼️ THE SIX PLATFORMS MOVED TO src/lib/hub/review-destinations.ts ON 2026-09-08, AND THE
@@ -135,7 +136,7 @@ export async function ReferralEngine({
         panel and her finished review were three different widths on a desktop, which is three
         products in one session. The panel centres itself to this same width.
       */}
-      <div className="rev-frame">
+      <div className={`rev-frame ${revSerif.variable}`}>
         <VirtualAgentClient
           businessName={client.displayName}
           // "Miami, FL" where both are on file, one of them where only one is, and omitted

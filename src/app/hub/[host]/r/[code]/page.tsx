@@ -28,6 +28,7 @@ import { resolveHost } from "@/lib/hub/resolve";
 import { supabaseAdmin } from "@/lib/db";
 import { normaliseCode } from "@/lib/hub/referral-invite";
 import { referralEmailConfig } from "@/lib/hub/referral-config";
+import { revSerif } from "../../reviews/rev-font";
 import { ClaimForm } from "./claim-form";
 
 export const dynamic = "force-dynamic";
@@ -91,40 +92,69 @@ export default async function ClaimPage({ params }: Props) {
     }
   }
 
+  const where = [client.city, client.state].filter(Boolean).join(", ") || null;
+
   return (
     <main className="hub-wrap">
-      <header className="hub-head">
-        <p className="hub-eyebrow">{client.displayName}</p>
-        {open ? (
-          <>
-            <h1>You have been recommended</h1>
-            <p className="hub-lede">
-              A patient of ours thought you would like this. Here is what they set aside for you.
-            </p>
-          </>
-        ) : (
-          <>
-            <h1>This link is not open</h1>
-            <p className="hub-lede">
-              It may have already been used, or it may have run out. Give us a call and we will
-              sort it out.
-            </p>
-          </>
-        )}
-      </header>
+      {/*
+        ‼️ THE SAME SECTION THE WALK OPENS IN, AND THAT IS THE POINT (2026-10-07). This page used
+        to be a bare hub masthead over a tinted offer line, so the patient met a designed card at
+        the counter and the friend she texted met a document. One frame, one lockup and one type
+        scale means the thing she recommended looks like the thing they opened.
 
-      {open && offer ? (
-        <>
-          <p className="rev-offer">{offer}</p>
-          {/* The email field exists only when this clinic actually sends the confirmation. See
-              the prop's own comment in claim-form.tsx. */}
-          <ClaimForm
-            code={code}
-            businessName={client.displayName}
-            askEmail={emailConfig.enabled && emailConfig.emailFriend}
-          />
-        </>
-      ) : null}
+        Matthew, on the walk: "ideally i want it to stay in the same section." It applies here for
+        the same reason it applied there: nothing on this page is a second container.
+      */}
+      <div className={`rev-frame ${revSerif.variable}`}>
+        <header className="rev-open-id">
+          <span className="rev-open-mark" aria-hidden="true">
+            {client.displayName.trim().charAt(0).toUpperCase()}
+          </span>
+          <span className="rev-open-who">
+            <span className="rev-open-name">{client.displayName}</span>
+            {where ? <span className="rev-open-where">{where}</span> : null}
+          </span>
+        </header>
+
+        <div className="rev-open">
+          {open ? (
+            <>
+              {/*
+                ‼️ THE EYEBROW SAYS A PATIENT SENT IT AND NEVER WHICH ONE. The referrer's name is
+                on the row and would make warmer copy; she was never asked whether it could be
+                shown on a web page to the person she texted. See this file's header.
+              */}
+              <p className="rev-open-eyebrow">A patient sent you this</p>
+              <h1 className="rev-open-title">You have been recommended</h1>
+              <p className="rev-open-lede">
+                A patient of ours thought you would like this. Here is what they set aside for you.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="rev-open-eyebrow">This link is closed</p>
+              <h1 className="rev-open-title">It is not open any more</h1>
+              <p className="rev-open-lede">
+                It may have already been used, or it may have run out. Give us a call and we will
+                sort it out.
+              </p>
+            </>
+          )}
+
+          {open && offer ? (
+            <>
+              <p className="rev-offer">{offer}</p>
+              {/* The email field exists only when this clinic actually sends the confirmation. See
+                  the prop's own comment in claim-form.tsx. */}
+              <ClaimForm
+                code={code}
+                businessName={client.displayName}
+                askEmail={emailConfig.enabled && emailConfig.emailFriend}
+              />
+            </>
+          ) : null}
+        </div>
+      </div>
     </main>
   );
 }

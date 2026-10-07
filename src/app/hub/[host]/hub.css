@@ -259,15 +259,23 @@ body:has(.hub-root) {
   border-color: var(--hub-accent);
 }
 
+/* ‼️ THE REFERENCE'S SHAPE, AND --hub-radius IS DELIBERATELY NOT READ HERE. Every other
+   surface in this stylesheet takes its corner from the template, which is right for a card in a
+   document. This is the one button in the referral walk and it is the same button on every client,
+   so it carries the 16px the five reference screens carry. The editorial template's 3px radius
+   would make it a rectangle, which is not this flow wearing a clinic's colour, it is this flow
+   becoming a different button per clinic. */
 .rev-primary {
   display: inline-block;
   margin-top: 1.5rem;
+  min-height: 3.5rem;
   font: inherit;
+  font-size: 1.0625rem;
   font-weight: 600;
   color: var(--hub-on-accent);
   background: var(--hub-accent);
   border: none;
-  border-radius: var(--hub-radius);
+  border-radius: 16px;
   padding: 0.75rem 1.4rem;
   cursor: pointer;
 }
@@ -535,14 +543,68 @@ body:has(.hub-root) {
    The height is a clamp and not a viewport calculation, because this box sits in normal page flow
    under the masthead. 32rem is tall enough for three exchanges without the page growing a
    scrollbar on a laptop, and the bubble list scrolls inside it. */
+/* ‼️ ONE SECTION, NOT A CARD INSIDE A CARD (2026-10-07). Matthew, walking /demo/agent: "i
+   dont like the double stacking for the virutal agent, ideally i want it to stay in the same
+   section. same for the clients."
+
+   This is the second half of the move made on 2026-10-06. That one brought the panel INLINE, into
+   the frame, so it stopped covering the clinic's colour. It still ARRIVED as a white rounded card
+   with a header bar of its own, so the screen was a tinted box holding a second box and the first
+   thing the product did on being tapped was draw a border around itself.
+
+   In the frame the panel now keeps its NAMES and gives up its CHROME: no ground, no radius, no
+   shadow, no hairline under the head, and no side padding, because the frame is already padded.
+   Two paddings is the gutter an eye reads as a second container. The clinic's mark and name stay
+   above it and the chat simply continues underneath them.
+
+   ‼️ THE BUBBLES KEEP A GROUND AND is-them KEEPS ITS LITERAL INK. --va-card goes white here
+   because #f2f5f7 on a pale accent tint is not a bubble, it is a smudge. The panel takes
+   `color: inherit` so the page's own ink carries the agent's name and the connecting line, which
+   is what keeps this readable on a dark universe as well as a white one. The bubble does NOT
+   inherit, because its ground is a literal white and a near-white page ink inside it would vanish.
+
+   ‼️ `background: none` AND NOT `--va-bg: transparent`. The textarea and the two invite fields
+   read --va-bg for THEIR ground and still need a real one; blanking the token would leave an
+   invisible input on the tint.
+
+   ‼️ THE FLOATING WIDGET (src/app/w/[slug]) IS UNTOUCHED AND MUST STAY A CARD. That one really
+   is an agent over somebody else's website: strip its chrome and it has nothing to sit on, which
+   is why these rules are all scoped under .va-shell and none of them touch .va-panel alone. */
 .va-shell .va-panel {
   position: relative;
   width: 100%;
   height: clamp(28rem, 62vh, 34rem);
+  --va-card: #ffffff;
+  background: none;
+  color: inherit;
+  border-radius: 0;
+  box-shadow: none;
+  /* Visible, not hidden: with the side padding gone the composer touches the panel's edge, and
+     `hidden` would clip the focus ring off the one control somebody tabs to. */
+  overflow: visible;
 }
 
+/* The agent's name as a quiet label rather than a title bar. Same words, same avatar, no box. */
+.va-shell .va-head {
+  padding: 0 0 0.9rem;
+  border-bottom: 0;
+}
+.va-shell .va-avatar { width: 1.75rem; height: 1.75rem; }
+.va-shell .va-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  opacity: 0.55;
+}
+
+.va-shell .va-msgs { padding: 0 0 1rem; }
+.va-shell .va-chips,
+.va-shell .va-composer { padding: 0; }
+.va-shell .va-connecting { padding: 2rem 0; }
+
 /* On a phone the frame is already the screen's width, so the panel just needs the height to be
-   worth having. The border radius stays: it is inside the page now, not covering it. */
+   worth having. */
 @media (max-width: 40rem) {
   .va-shell .va-panel {
     height: clamp(26rem, 68vh, 32rem);
@@ -801,10 +863,21 @@ body:has(.hub-root) {
 
    The tint is the CLIENT's accent-soft, so this is one design wearing each clinic's colour: pale
    pink for Med Spa 123, pale teal for Northlight, from the same two variables. */
+/* ‼️ THE DISPLAY FACE IS THE LANE'S, AND ONLY THE COLOUR IS THE CLIENT'S. Matthew designed
+   this flow as five phone screens set in DM Serif Display over DM Sans, and asked for the built
+   pages to match them. The hub's marketing pages keep each client's own heading family; this one
+   screen does not, for the same reason the agent's panel chrome does not: it is one product sold
+   to every client, and a different headline face per clinic is a different product per clinic.
+
+   ‼️ AND IT FALLS BACK TO A REAL SERIF, NOT TO THE BODY SANS. --rev-serif is set by next/font
+   on the frame in referral-engine.tsx. If that class is ever dropped the headline lands on Georgia
+   rather than silently becoming 44px of regular-weight sans, which is what `inherit` would give. */
 .rev-frame {
+  --rev-display: var(--rev-serif, Georgia), "Iowan Old Style", "Times New Roman", serif;
+
   max-width: var(--rev-frame-w);
   margin: 0 auto;
-  padding: 2rem 1.5rem 1.75rem;
+  padding: 2.25rem 1.75rem 2rem;
   background: var(--hub-accent-soft);
   border-radius: 20px;
 }
@@ -815,52 +888,68 @@ body:has(.hub-root) {
    tap. The accent is still the CLIENT's, from --hub-accent, so this is one design wearing each
    clinic's colour rather than a design per clinic. */
 
+/* ‼️ IT STAYS RENDERED THROUGH THE WHOLE WALK, which is what makes the chat below it read as
+   the same section rather than a second screen. Sized to the reference: a 44px monogram set in the
+   display face, the name on one line and where they are on the next. */
 .rev-open-id {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  margin-bottom: 2rem;
+  gap: 0.75rem;
+  margin-bottom: 2.25rem;
 }
 /* A monogram rather than a logo slot: HubLogo already renders the real mark above this when a
    confirmed theme carries one, and two logos would be worse than one. */
 .rev-open-mark {
   display: grid;
   place-items: center;
-  width: 2rem;
-  height: 2rem;
+  width: 2.75rem;
+  height: 2.75rem;
   flex: 0 0 auto;
   border-radius: 999px;
   background: var(--hub-accent);
   color: var(--hub-on-accent);
-  font-size: 0.8125rem;
-  font-weight: 700;
+  font-family: var(--rev-display);
+  font-size: 1.375rem;
+  /* 600 and not the reference's 400: the reference is always a serif, and this falls back to the
+     body sans on nothing. A regular-weight sans initial in a 44px circle reads as a placeholder. */
+  font-weight: 600;
+  line-height: 1;
 }
-.rev-open-who { display: flex; flex-direction: column; line-height: 1.3; }
-.rev-open-name { font-size: 0.9375rem; font-weight: 600; color: var(--hub-fg); }
+.rev-open-who { display: flex; flex-direction: column; gap: 0.125rem; line-height: 1.3; }
+.rev-open-name {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--hub-fg);
+}
 .rev-open-where { font-size: 0.8125rem; color: var(--hub-muted); }
 
 .rev-open { max-width: none; }
 
 .rev-open-eyebrow {
-  margin: 0 0 0.75rem;
-  font-size: 0.6875rem;
-  font-weight: 700;
+  margin: 0 0 1.125rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--hub-accent);
 }
+/* ‼️ THE ONE PLACE A DISPLAY FACE IS WORTH IT: this is the line that has to read as a person
+   asking. Weight 400 and a 1.05 leading are the reference's, and they are what make a 44px line
+   feel spoken rather than shouted; --rev-display is why 400 is safe here. It clamps because 44px
+   of serif at 390px wide is three words a line, and the headline must not wrap to four. */
 .rev-open-title {
-  margin: 0 0 0.9rem;
-  /* The one place a serif is worth it: this is the line that has to read as a person asking. */
-  font-family: var(--hub-heading-family);
-  font-size: 2.1rem;
-  line-height: 1.12;
-  letter-spacing: -0.02em;
+  margin: 0 0 1.125rem;
+  font-family: var(--rev-display);
+  font-weight: 400;
+  font-size: clamp(2.25rem, 10vw, 2.75rem);
+  line-height: 1.05;
+  letter-spacing: -0.01em;
   color: var(--hub-fg);
 }
 .rev-open-lede {
   margin: 0 0 1.5rem;
-  font-size: 1rem;
+  font-size: 1.0625rem;
   line-height: 1.55;
   color: var(--hub-muted);
 }
@@ -879,13 +968,22 @@ body:has(.hub-root) {
 .rev-open-facts li {
   display: flex;
   align-items: center;
-  gap: 0.55rem;
+  gap: 0.75rem;
   font-size: 0.9375rem;
   color: var(--hub-muted);
 }
 .rev-open-facts svg { flex: 0 0 auto; color: var(--hub-accent); }
 
 .rev-open .rev-primary { width: 100%; }
+
+/* The footnote under the button, centred and quiet. It says what happens next, never what she
+   gets, because the two facts above already said that. */
+.rev-open-foot {
+  margin: 0.875rem 0 0;
+  text-align: center;
+  font-size: 0.8125rem;
+  color: var(--hub-muted);
+}
 
 /* ‼️ THE TWO PARTS, AND .rev-open-count IS GONE WITH ITS ELEMENT. That rule styled a single line
    under the button reading "Seven short questions", and three rounds of spacing tweaks went into
@@ -936,15 +1034,22 @@ body:has(.hub-root) {
    from a link, so it uses the page's own --hub-* tokens like every other body. The agent's panel
    grammar does not apply here and _probe-virtual-agent-grammar.ts does not read these. */
 
-/* The deal, set as the one thing on the page worth reading. */
+/* The deal, set as the one thing on the page worth reading.
+
+   ‼️ A CARD ON THE TINT, NOT THE TINT ITSELF (2026-10-07). This was --hub-accent-soft on a
+   plain page, which was the one tinted thing on it. The claim page now opens in .rev-frame, and
+   .rev-frame IS --hub-accent-soft, so the offer had become an invisible rectangle on its own
+   colour. It takes the card surface and an accent hairline instead, which is the only element in
+   the lane that gets a border and the only one that has earned one. */
 .rev-offer {
   margin: 0 0 1.25rem;
   font-size: 1.25rem;
   line-height: 1.45;
   font-weight: 600;
   color: var(--hub-fg);
-  background: var(--hub-accent-soft);
-  border-radius: var(--hub-radius);
+  background: var(--hub-card);
+  border: 1px solid var(--hub-accent);
+  border-radius: 16px;
   padding: 1rem 1.1rem;
 }
 
@@ -971,7 +1076,9 @@ body:has(.hub-root) {
   color: var(--hub-fg);
   background: var(--hub-card);
   border: 1px solid var(--hub-rule);
-  border-radius: var(--hub-radius);
+  /* 12px, the same corner the walk's own fields carry, rather than the template's radius. The
+     friend's form and the patient's composer are the same product two taps apart. */
+  border-radius: 12px;
   padding: 0.6rem 0.75rem;
 }
 

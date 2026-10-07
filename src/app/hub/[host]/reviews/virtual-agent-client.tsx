@@ -829,16 +829,16 @@ export function VirtualAgentClient({
 
           <ul className="rev-open-facts">
             <li>
-              <svg viewBox="0 0 24 24" aria-hidden="true" width="15" height="15" fill="none"
-                stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg viewBox="0 0 24 24" aria-hidden="true" width="20" height="20" fill="none"
+                stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="9" />
                 <path d="M12 7v5l3 2" />
               </svg>
               <span>About ninety seconds</span>
             </li>
             <li>
-              <svg viewBox="0 0 24 24" aria-hidden="true" width="15" height="15" fill="none"
-                stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg viewBox="0 0 24 24" aria-hidden="true" width="20" height="20" fill="none"
+                stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="4" y="10" width="16" height="10" rx="2" />
                 <path d="M8 10V7a4 4 0 0 1 8 0v3" />
               </svg>
@@ -856,6 +856,13 @@ export function VirtualAgentClient({
           <button type="button" className="rev-primary" onClick={leaveIntro}>
             Start
           </button>
+          {/*
+            The footnote the reference screens carry under their button. It says the one thing the
+            two facts above do not, which is that there is nothing to install and no account to
+            make. A patient standing at a counter with somebody waiting behind her is deciding
+            whether this is a trap, not whether it is a good deal.
+          */}
+          <p className="rev-open-foot">No account, no app, nothing to download.</p>
 
           {/*
             ‼️ THE SINGLE COUNT LINE LIVED HERE AND IS GONE ON PURPOSE. It read
