@@ -13,6 +13,7 @@
 
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Phone } from "lucide-react";
 import { formatPhoneUS, telHref } from "@/lib/clients/normalize";
 import { normalizeTarget, normalizeErrorMessage } from "@/lib/scan/normalize";
 import { LEAD_FIELD_GROUPS, type LeadFieldDef } from "@/config/lead-fields";
@@ -251,9 +252,10 @@ function FieldRow({
                 <a
                   href={telHref(current) as string}
                   title={`Call ${display(current, "phone")}`}
-                  className="shrink-0 rounded px-1 py-0.5 text-[rgba(255,255,255,0.35)] hover:bg-[rgba(255,255,255,0.06)] hover:text-[#00C9A7]"
+                  aria-label={`Call ${display(current, "phone")}`}
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-[rgba(0,201,167,0.45)] bg-[rgba(0,201,167,0.12)] text-[#00C9A7] transition-colors hover:bg-[rgba(0,201,167,0.25)] hover:text-white"
                 >
-                  &#9742;
+                  <Phone className="h-3 w-3" />
                 </a>
               )}
               {field.kind === "url" && current && (
