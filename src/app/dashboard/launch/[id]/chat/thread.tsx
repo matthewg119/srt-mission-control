@@ -8,6 +8,9 @@
 // statement about this client rather than a greeting.
 
 import { useState, useRef, useEffect } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { CHAT_MARKDOWN_COMPONENTS } from "@/components/chat-markdown";
 import type { StoredMessage, ActionResult } from "@/lib/launch/conversation";
 
 interface Turn {
@@ -27,6 +30,7 @@ const DOC_LABELS: Record<string, string> = {
 export function LaunchThread({
   clientId,
   clientName,
+  conversationId,
   history,
   missingDocs,
   settled,
@@ -34,6 +38,8 @@ export function LaunchThread({
 }: {
   clientId: string;
   clientName: string;
+  /** Which thread this is. Sent with every turn so a reply lands in the thread on screen. */
+  conversationId: string | null;
   history: StoredMessage[];
   missingDocs: string[];
   settled: number;
@@ -70,7 +76,7 @@ export function LaunchThread({
       const res = await fetch(`/api/launch/${clientId}/chat`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message, conversationId }),
       });
       const body = (await res.json()) as {
         ok?: boolean;
@@ -149,14 +155,24 @@ export function LaunchThread({
             <p className="text-[11px] uppercase tracking-wide text-[rgba(255,255,255,0.3)]">
               {t.role === "user" ? "You" : "Onboarding"}
             </p>
+            {/* ‼️ THE ANSWER IS MARKDOWN AND USED TO RENDER AS PLAIN TEXT, so every heading and
+                list he was sent arrived as literal asterisks in one block. Same renderer and same
+                component map as the other chat in this app, so the two cannot drift apart. The
+                user's own message stays plain: it is whatever he typed and nothing more. */}
             <div
-              className={`mt-1 whitespace-pre-wrap rounded-xl px-4 py-3 text-sm ${
+              className={`mt-1 rounded-xl px-4 py-3 text-sm ${
                 t.role === "user"
-                  ? "bg-[rgba(255,255,255,0.06)] text-white"
+                  ? "whitespace-pre-wrap bg-[rgba(255,255,255,0.06)] text-white"
                   : "border border-[rgba(255,255,255,0.1)] bg-[rgba(255,255,255,0.02)] text-[rgba(255,255,255,0.85)]"
               }`}
             >
-              {t.text}
+              {t.role === "user" ? (
+                t.text
+              ) : (
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={CHAT_MARKDOWN_COMPONENTS}>
+                  {t.text}
+                </ReactMarkdown>
+              )}
             </div>
 
             {t.heldBack && (
@@ -174,8 +190,21 @@ export function LaunchThread({
                     : "border-[rgba(245,166,35,0.3)] bg-[rgba(245,166,35,0.05)] text-[#F5A623]"
                 }`}
               >
-                <span className="font-medium">{r.kind}</span>
-                {r.ok ? "" : " refused"}: {r.detail}
+                {/* ‼️ FOLDED AWAY, BECAUSE THE ANSWER IS NOW ABOVE IT. Until 2026-10-06 this chip
+                    WAS the answer: a read of eleven pages and thirty-three headline options landed
+                    here as one unbroken paragraph, because nothing preserved the newlines. The
+                    reply is written from these results now, so this is the receipt rather than the
+                    message, open on a refusal and shut on a success. `whitespace-pre-wrap` is what
+                    the old version was missing and is load-bearing either way. */}
+                <details open={!r.ok}>
+                  <summary className="cursor-pointer select-none font-medium">
+                    {r.kind}
+                    {r.ok ? "" : " refused"}
+                  </summary>
+                  <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap font-sans text-[11px] leading-relaxed">
+                    {r.detail}
+                  </pre>
+                </details>
                 {/* ‼️ THE PROMPT IS SHOWN, NEVER RUN. This is the whole mechanic: it hands him
                     something to paste into another session, and he brings the answer back. */}
                 {r.prompt && (

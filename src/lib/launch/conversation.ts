@@ -13,12 +13,22 @@
 // wording. Same posture as classifyHost(), HUB_SLUG and externalPathDecision(): deny by default,
 // and widening it is an edit somebody has to make on purpose.
 //
-// ‼️ TWO THINGS ARE DELIBERATELY ABSENT FROM THE UNION AND MUST STAY ABSENT.
-//   - buying a domain. domain.ts rule 3: never called by a runner, a cron or a retry, only by a
-//     person pressing a button that showed them the price. It is the only code here that spends
-//     money and a conversation is exactly the surface that should not be able to.
-//   - publishing a page. publishPage() is the one publisher and needs an explicit yes.
-// Adding either to ACTION_KINDS is not a feature, it is the removal of a control.
+// ‼️ BUYING A DOMAIN IS DELIBERATELY ABSENT FROM THE UNION AND MUST STAY ABSENT.
+// domain.ts rule 3: never called by a runner, a cron or a retry, only by a person pressing a button
+// that showed them the price. It is the only code here that spends money, and a conversation is
+// exactly the surface that should not be able to.
+//
+// ‼️ PUBLISHING WAS ALSO ABSENT UNTIL 2026-10-05 AND IS NOW HERE, ON MATTHEW'S EXPLICIT
+// INSTRUCTION, after the trade-off was put to him in those words. He wants the whole onboarding
+// driven from this chat and nothing else. What that removed is the SURFACE restriction, and only
+// that. Every rail publishing has is inside publishPage() and is untouched:
+//   - the Day-0 wall still refuses while clients.day_0_archived_at is null,
+//   - the quality gate still refuses, and there is still no waiver on this surface,
+//   - with more than one destination wired it still REFUSES rather than choosing, and the choice
+//     comes back as a question he answers.
+// So a publish started by typing is the same publish, with the same three ways to be told no. What
+// is gone is "a conversation cannot start one". Do not quietly re-add a fourth rail here to
+// compensate: the rails live in publishPage, one copy, for both lanes.
 
 import { callClaudeJSON, callClaudeText, type ClaudeModel } from "@/lib/claude-calls";
 import { hasBannedDash } from "@/lib/copy-guard";
@@ -30,13 +40,28 @@ import {
 } from "@/config/launch-steps";
 import { launchBoard, setLaunchStep, isResolved } from "./steps";
 import { refusalText, verdictDetail } from "./verify";
-import { foundationStatus, FOUNDATION_LABELS, type FoundationKind } from "./documents";
+import {
+  foundationStatus,
+  ingestFoundationDocument,
+  isFoundationKind,
+  FOUNDATION_KINDS,
+  FOUNDATION_LABELS,
+  type FoundationKind,
+} from "./documents";
 import { proposeVocabulary, confirmVocabulary } from "./vocabulary";
 import { proposeOfferFromDocument, confirmOffer, currentOffer } from "./offer";
 import { searchDomains } from "./domain";
 import { dnsFacts } from "./dns-facts";
+import { kindBelongsToOffer } from "@/lib/clients/audience-documents";
 import { slackLaneSummary } from "@/lib/clients/lane-summary";
 import { publishingFacts } from "./publishing-facts";
+import {
+  LAUNCH_PAGE_ACTIONS,
+  isLaunchPageAction,
+  launchPagesState,
+  pageRunText,
+  runLaunchPagesAction,
+} from "./pages";
 
 const TURN_MODEL: ClaudeModel = "claude-sonnet-4-6";
 
@@ -77,9 +102,54 @@ export const ACTION_KINDS = [
   // DNS, and make it answer worse about everything to answer better about one thing. As an action
   // the model asks for the one it needs, which is the same shape search_domains and check_dns use.
   "read_document",
+  // ‼️ READ ONLY. Where the page run stands: what is planned, which pages still want a headline or
+  // a skeleton, how many have a body, and what the next stage is. It belongs as an action rather
+  // than always-on context for the reason read_document does: it is several reads and a model-free
+  // gate check, and most turns are not about pages.
+  "read_pages",
+  // ‼️ ONE ACTION WITH A `stage`, NOT FOURTEEN FLAT ENTRIES, AND THE REASON IS THE ORDER.
+  // The stages run plan, approve, headlines, a pick each, skeletons, research, draft, and the whole
+  // difficulty of this lane is that they cannot be done out of order: `plan approve` stopped
+  // drafting on 2026-09-14 precisely so every decision lands before a page is written. A single
+  // action whose argument is an ordered list teaches that order; fourteen siblings in a prompt
+  // teach nothing and invite the model to reach for the last one. The server refuses an
+  // out-of-order stage anyway, off the same readBatch the Slack thread refuses on.
+  "run_pages",
+  // ‼️ ITS OWN KIND RATHER THAN A run_pages STAGE, BECAUSE IT USED TO BE FORBIDDEN HERE.
+  // See the note at the top of this file. Giving it a name of its own keeps it visible in the
+  // prompt, in the results and in this list, instead of hiding the one genuinely irreversible
+  // thing in the lane inside a generic verb.
+  "publish_page",
+  "unpublish_page",
+  // ‼️ IT EXISTS BECAUSE THIS CHAT PROMISED IT AND COULD NOT DO IT (2026-10-05). It told Matthew
+  // "paste the full output back and I will file it", he ran hours of deep research and pasted a
+  // 50k-character report, and there was no action for it: the only door was a file upload on a
+  // board he had asked to stop using. A promise a surface cannot keep is worse than a refusal.
+  "file_document",
+  // ‼️ THE FILED TIER, FROM A SURFACE WITH NO FILE PICKER. Four launch steps are confirmed by
+  // evidence a person produces rather than state the app can observe, and the Day-0 wall is one of
+  // them. With one engine keyed, resolveRunLabel downgrades every requested photograph_2 to
+  // `measurement` and Day 0 is deliberately not stamped from it, so the filed tier is the only
+  // route through the wall that is not a waiver. It was reachable only by uploading on the board.
+  //
+  // ‼️ IT DOES NOT MAKE A TICK HONEST BY ITSELF, AND MUST NEVER BE DESCRIBED AS IF IT DID.
+  // Filing is evidence that an ARTIFACT exists. setLaunchStep still stamps day_0_source as
+  // 'manual_step', which day-zero.ts defines as an assertion that the archive happened rather than
+  // proof of it, and no artifact may call a manual_step stamp a photograph.
+  "file_evidence",
 ] as const;
 
 export type ActionKind = (typeof ACTION_KINDS)[number];
+
+/**
+ * The stages `run_pages` accepts: every page action except the two that publish.
+ *
+ * Derived from the action layer rather than retyped, so a stage added there is offered here and a
+ * stage renamed there cannot go stale here.
+ */
+const PAGE_RUN_STAGES: readonly string[] = LAUNCH_PAGE_ACTIONS.filter(
+  (a) => a !== "publish" && a !== "unpublish"
+);
 
 export interface LaunchAction {
   kind: ActionKind;
@@ -92,6 +162,25 @@ export interface LaunchAction {
   domains?: string[];
   /** hand_prompt, and read_document: which document to open. */
   which?: string;
+  /** run_pages: which stage of the page run. One of PAGE_RUN_STAGES. */
+  stage?: string;
+  /** run_pages: which planned page, by the rank the plan shows. */
+  rank?: number;
+  /** run_pages stage=headline_pick: which of the three candidates, 1 to 3. */
+  pick?: number;
+  /** run_pages stage=ladder_pick: the rung, 5 (furthest from buying) to 1. */
+  rung?: number;
+  /** run_pages: a title, a CTA sentence, or the pasted research answer. */
+  text?: string;
+  /** keywords_select and keywords_unselect: phrases exactly as the pool spells them. */
+  phrases?: string[];
+  /** strategy_set: the pillar phrase, and the supports under it. */
+  pillar?: string;
+  supports?: string[];
+  /** keywords_add: the cluster the new phrases join. */
+  category?: string;
+  /** publish_page: which page, by the rank the plan shows. */
+  destinationId?: string;
 }
 
 export interface ActionResult {
@@ -129,7 +218,7 @@ export interface BoardContext {
  * and says why, and a key outside the set is refused by executeAction rather than trusted.
  */
 export async function boardContext(clientId: string): Promise<BoardContext> {
-  const [board, docs, offer, dns, slack, publishing] = await Promise.all([
+  const [board, docs, offer, dns, slack, publishing, pageRun] = await Promise.all([
     launchBoard(clientId),
     foundationStatus(clientId),
     currentOffer(clientId),
@@ -143,6 +232,11 @@ export async function boardContext(clientId: string): Promise<BoardContext> {
     // the client being asked about. See lib/clients/lane-summary.ts for why the import is allowed.
     slackLaneSummary(clientId).catch(() => null),
     publishingFacts(clientId).catch(() => null),
+    // ‼️ ON EVERY TURN, BECAUSE "0 pages" AND "nothing has started" ARE DIFFERENT FACTS.
+    // publishingFacts counts client_pages, which is empty until drafting, so seven rows waiting in
+    // page_plan were invisible and the chat answered "no page run has started yet" over them.
+    // Measured on SRT, 2026-10-05. See pageRunText's own header.
+    pageRunText(clientId).catch(() => null),
   ]);
 
   const byKey = new Map(board.map((e) => [e.step.key, e]));
@@ -184,6 +278,8 @@ export async function boardContext(clientId: string): Promise<BoardContext> {
       "",
       publishing ? publishing.text : "PUBLISHING: could not be read just now. Say so rather than guessing.",
       "",
+      pageRun ?? "THE PAGE RUN: could not be read just now. Say so rather than guessing.",
+      "",
       slack?.present
         ? slack.text
         : "THE SLACK BOARD: this client is not on it. Only the steps above exist for them.",
@@ -215,12 +311,27 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "- If something he says is malformed, correct it and say that you did. Never silently.",
     "- You may recommend and you may push back once. What he says is the default and wins.",
     "",
+    "‼️ HOW AN ACTION'S RESULT REACHES HIM, WHICH IS NOT HOW YOU MIGHT ASSUME:",
+    "- You return a plan. The server runs it AFTER you have written, and renders every result to him",
+    "  in full, directly under your message. You never see those results yourself.",
+    "- So NEVER write \"I will show you as soon as they come back\" or \"standing by for the output\".",
+    "  It is already on his screen by the time he reads your sentence, and promising it later makes",
+    "  him wait for something that has arrived. Measured twice on 2026-10-06, both times over a list",
+    "  of headline options that was sitting right below the promise.",
+    "- Write the sentence that is true once the result is there: what you ran, and what he does with",
+    "  it. \"Three options per page are below. Tell me which number for each.\"",
+    "",
     "WHAT YOU MAY DO:",
     "- Return a plan of actions. The server executes them; you do not.",
     "- You may only name a step from the list of steps you may act on. Never invent a step key.",
-    "- You may NOT buy a domain and you may NOT publish a page. There is no action for either,",
-    "  because both spend something that cannot be taken back. Tell him to press the button.",
-    "- Never change keywords and never touch the concierge without him saying yes in words.",
+    "- You may NOT buy a domain. There is no action for it, because it spends money that cannot be",
+    "  taken back. Tell him to press the button on the board.",
+    "- You MAY publish, with publish_page. It still goes through publishPage(), so the Day-0 wall,",
+    "  the quality gate and the destination question all still apply and you cannot talk past any",
+    "  of them. Never publish unless he asked for it in this turn or the one before.",
+    "- You may change keywords and the strategy map, but ONLY when he says so in words. Never as a",
+    "  tidy-up, never as a side effect of a question, and never a phrase he did not name.",
+    "- Never touch the concierge without him saying yes in words.",
     `- If you are less than ${Math.round(ACT_THRESHOLD * 100)} percent sure, return no actions and ask instead.`,
     "- ‼️ THAT BAR DOES NOT APPLY TO complete_step, read_document, check_dns, search_domains or",
     "  read_offer. Those either prove themselves or change nothing: a tick runs the step's verifier",
@@ -286,10 +397,48 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "  the full name into a registrar creates learn.example.com.example.com, and it is the single",
     "  most common way this goes wrong.",
     "",
+    "‼️ THE CONTEXT BELOW BEATS ANYTHING EARLIER IN THIS CONVERSATION, INCLUDING YOUR OWN WORDS:",
+    "- Everything under THE BOARD, PUBLISHING and THE PAGE RUN was read from the database seconds",
+    "  ago. A list you wrote in an earlier turn was not. It may have been a proposal he never",
+    "  accepted, or something you got wrong, and nothing you say becomes true by being said.",
+    "- ‼️ THIS HAPPENED ON 2026-10-05. You described an eleven-page plan in prose, he liked it, and",
+    "  several turns later you wrote a research prompt listing THOSE pages. The real plan was in",
+    "  front of you and four of the eleven were different. He would have commissioned research for",
+    "  pages that do not exist.",
+    "- So before naming any page, keyword or count: read it out of the context block. If what you",
+    "  said before disagrees, the context is right and say so plainly in one line.",
+    "",
     "THE PROMPT MECHANIC, WHICH MATTERS MORE THAN ANYTHING ELSE YOU DO:",
     "- You do not do research. You hand him a prompt he runs in a separate session and pastes back.",
-    '- Use the hand_prompt action with which="avatar_chain" when the four documents are not in hand.',
+    '- Use the hand_prompt action with which="avatar_chain" ONLY when a foundation document is',
+    "  missing. The context says which are present. All four present means that chain is hours of",
+    "  work to reproduce what is already on file, and the server now refuses it.",
+    "- ‼️ NEVER WRITE THE PAGE RESEARCH PROMPT YOURSELF. run_pages stage=research_prompt is the only",
+    "  place it comes from: it is built from the approved pages, their picked headlines and their",
+    "  skeletons, so a hand-written one is aimed at whatever you happened to remember. If it refuses,",
+    "  it names the stage that is missing. Say that and run that stage instead.",
     "- Page copy ALWAYS goes through a research prompt first. Never draft it from nothing.",
+    "",
+    "THE PAGE RUN, WHICH IS HOW A KEYWORD BECOMES A LIVE PAGE:",
+    "- ‼️ THE ORDER IS THE WHOLE DIFFICULTY AND IT CANNOT BE SHORTCUT. Approving the plan STOPPED",
+    "  drafting on 2026-09-14, on purpose, so that every decision lands before a word is written:",
+    "    plan_new -> plan_approve -> headlines_write -> headline_pick (one per page)",
+    "    -> skeletons_write -> research_prompt -> research_file -> draft_wave -> publish_page",
+    "  client_pages rows, the only thing publishable, appear at draft_wave and not before.",
+    "- Run ONE stage per turn and say what came back. Do not chain the whole run in one plan: each",
+    "  stage is a decision he may want to look at, and several of them are model calls.",
+    "- headline_pick needs rank and pick. Every page needs its own pick before skeletons_write.",
+    "- research_prompt hands back a prompt. He runs it elsewhere and pastes the answer, and you file",
+    "  that with research_file and text. You never do the research yourself.",
+    "- draft_wave writes one pass and tells you how many are left. If any are left, say so and offer",
+    "  to run it again. That is the design, not a failure: a page with a body is never rewritten.",
+    "- Before the plan exists, the strategy map is what to talk about: one pillar and six supports,",
+    "  listed under PUBLISHING. Changing them with strategy_set changes every page that follows, so",
+    "  re-propose the plan after.",
+    "- ‼️ THE PAGES ARE NOT THE PLAN'S TITLES. plan_new writes a working title per page off the",
+    "  keyword. If he says he does not recognise a title, that is the title being new, not the",
+    "  keyword being wrong: read_pages shows which keyword each page aims at, and the keywords came",
+    "  from his own picks. Check before agreeing something was invented.",
     "",
     "THE ACTIONS:",
     "  propose_vocabulary   read the documents and propose the words. No arguments.",
@@ -308,6 +457,46 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "  check_dns            resolve the records and report what is actually live. No arguments.",
     "                       Free and read only. Use it whenever he asks whether DNS is working,",
     "                       rather than reading the stored status back at him.",
+    "  read_pages           where the page run stands: every planned page, the keyword it aims at,",
+    "                       and what each one still needs. Free and read only. Use it before",
+    "                       answering anything about the pages, and before publishing.",
+    "  run_pages            needs stage, one of the stages listed above. Also takes rank and pick",
+    "                       (headline_pick), rank (plan_drop, plan_swap, plan_edit, plan_cta),",
+    "                       text (plan_edit, plan_cta, research_file), rung (ladder_pick),",
+    "                       phrases (keywords_add, keywords_drop, keywords_select,",
+    "                       keywords_unselect), category (keywords_add), and pillar plus supports",
+    "                       (strategy_set).",
+    "",
+    "THE FOUR KEYWORD VERBS, WHICH ARE FOUR DIFFERENT DECISIONS. Do not use one for another:",
+    "  keywords_add         MINTS phrases that do not exist yet, approves them and puts them in the",
+    "                       page pool. Needs a category, which you propose from the ones already in",
+    "                       use and he confirms. A phrase that is a marketing line rather than a",
+    "                       search is stored as a hook and can never be a page's keyword.",
+    "  keywords_drop        out of both pools AND remembered as unwanted, so a later expansion will",
+    "                       not propose it again. This is what he means by remove.",
+    "  keywords_select      puts an EXISTING approved phrase into the page pool. It cannot create",
+    "                       one: a phrase that is not already in the pool is refused by name.",
+    "  keywords_unselect    out of the page pool only. Still approved, still measured at Day 0.",
+    "  publish_page         needs rank. Goes through publishPage(), so it can be refused three ways:",
+    "                       Day 0 not archived, the quality gate, or more than one destination wired",
+    "                       and none chosen. The last one is a QUESTION: it comes back with the list,",
+    "                       you show him both and he picks, then you pass destinationId.",
+    "  unpublish_page       needs rank. Taking a page down is never gated: it is the remedy.",
+    "  file_evidence        needs stepKey and text: an artifact he has pasted, filed against a step",
+    "                       whose evidence is something a person produces (the Day-0 scan, GBP",
+    "                       access, GBP buildout, the review cards). It files the artifact; it does",
+    "                       NOT tick the step, and it does not make a tick more honest than it was.",
+    "                       ‼️ FOR DAY 0, SAY WHAT THE TICK THEN RECORDS: day_0_source becomes",
+    "                       manual_step, an assertion that the archive happened. With one engine",
+    "                       keyed a real photograph cannot be written at all, so never imply one was.",
+    "  file_document        needs which (deep_research, avatar_sheet, short_offer,",
+    "                       necessary_beliefs) and text: a document he has pasted. It supersedes the",
+    "                       one on file and lands in the evidence library every later page cites.",
+    "                       ‼️ USE IT THE MOMENT HE PASTES ONE. A long paste that is obviously a",
+    "                       research report, an avatar sheet or an offer document is him answering a",
+    "                       prompt you handed him, and saying 'thanks, I have filed that' without",
+    "                       this action is a lie about work he just did. If you cannot tell which",
+    "                       kind it is, ask in one line rather than filing it as the wrong one.",
     "",
     ctx.text,
     "",
@@ -466,7 +655,30 @@ async function executeAction(
   }
 
   if (kind === "hand_prompt") {
-    const prompt = await buildHandoffPrompt(clientId, action.which ?? "");
+    const which = action.which ?? "";
+
+    // ‼️ THE AVATAR CHAIN IS REFUSED ONCE THE FOUR DOCUMENTS ARE ON FILE, AND IT IS A CODE CHECK
+    // RATHER THAN A PROMPT LINE BECAUSE THE PROMPT ALREADY SAID IT. On 2026-10-05, with all four
+    // documents live on SRT, this handed Matthew the seven-message avatar chain: hours of research
+    // to reproduce 60k characters the client library already held, and the prompt's own rule is
+    // "never send him to redo work the context shows finished". Whether the documents exist is a
+    // fact in the database, so it is settled here instead of being asked for nicely.
+    if (/avatar/i.test(which)) {
+      const docs = await foundationStatus(clientId).catch(() => null);
+      const have = (docs ?? []).filter((d) => d.present).map((d) => d.kind);
+      if (have.length === 4) {
+        return {
+          kind,
+          ok: false,
+          detail:
+            `All four foundation documents are already on file (${have.join(", ")}), so the avatar chain ` +
+            "would be redoing them. Use read_document to quote one. If a document is genuinely out of " +
+            "date, say which and replace that one rather than running the whole chain again.",
+        };
+      }
+    }
+
+    const prompt = await buildHandoffPrompt(clientId, which);
     if (!prompt.ok) return { kind, ok: false, detail: prompt.error };
     return { kind, ok: true, detail: prompt.label, prompt: prompt.text };
   }
@@ -534,6 +746,261 @@ ${body}`,
     });
 
     return { kind, ok: true, detail: lines.join(". ") };
+  }
+
+  if (kind === "file_evidence") {
+    const stepKey = (action.stepKey ?? "").trim();
+    if (!isLaunchStepKey(stepKey)) {
+      return { kind, ok: false, detail: `${stepKey} is not a step on this board.` };
+    }
+
+    const text = (action.text ?? "").trim();
+    if (text.length < 120) {
+      return {
+        kind,
+        ok: false,
+        detail:
+          `That is ${text.length} characters. Evidence is the artifact itself, pasted: the scan, the ` +
+          "report, what was measured and when. A sentence saying it happened is not the artifact.",
+      };
+    }
+
+    // Same bucket, same row shape and same `source: 'board'` as the upload route, because this is
+    // the same filed tier arriving through a different door. doc-text.ts excludes 'generated' from
+    // the buyer evidence corpus, and claiming WE produced his scan would be backwards.
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const storageKey = `${clientId}/board/${stepKey}-${stamp}.md`;
+    const bytes = Buffer.from(text, "utf8");
+
+    const up = await supabaseAdmin.storage.from("onboarding").upload(storageKey, bytes, {
+      contentType: "text/markdown",
+      upsert: false,
+    });
+    if (up.error) return { kind, ok: false, detail: `The paste could not be stored: ${up.error.message}` };
+
+    const { error } = await supabaseAdmin.from("client_docs").insert({
+      client_id: clientId,
+      filename: `${stepKey}-${stamp}.md`,
+      content_type: "text/markdown",
+      size_bytes: bytes.byteLength,
+      storage_ref: storageKey,
+      // The bucket is private, so a stored URL would be a dead link. Minted on request instead.
+      web_url: null,
+      delivery_step_key: stepKey,
+      source: "board",
+      slack_file_id: null,
+      slack_thread_ts: null,
+      uploaded_by: actor,
+    });
+    if (error) {
+      return {
+        kind,
+        ok: false,
+        detail: /client_docs_source_check/.test(error.message)
+          ? "client_docs.source does not allow 'board' yet. Section 7 of docs/2026-09-30-launch-lane.sql has not been run against this database."
+          : error.message,
+      };
+    }
+
+    return {
+      kind,
+      ok: true,
+      detail:
+        `Filed ${bytes.byteLength} bytes against ${stepKey}. The step's verifier can read it back now. ` +
+        (stepKey === LAUNCH_DAY_ZERO_STEP_KEY
+          ? "Ticking the step stamps day_0_source as manual_step, which records an assertion that the archive happened. It is not a photograph and nothing may call it one."
+          : ""),
+    };
+  }
+
+  if (kind === "file_document") {
+    const which = (action.which ?? "").trim();
+    if (!isFoundationKind(which)) {
+      return {
+        kind,
+        ok: false,
+        detail: `"${which}" is not a foundation document. They are: ${FOUNDATION_KINDS.join(", ")}.`,
+      };
+    }
+
+    const text = (action.text ?? "").trim();
+    if (text.length < 200) {
+      return {
+        kind,
+        ok: false,
+        detail: `That is ${text.length} characters. Under 200 is a paste that went wrong, not a document.`,
+      };
+    }
+
+    // ‼️ THE ADDRESS IS RESOLVED HERE AND NEVER TAKEN FROM THE MODEL, the same rule the upload
+    // route states: audience_documents is keyed on (audience, offer, kind), so an id carried
+    // through a conversation would let one client's document be filed against another's audience.
+    const { data: audience } = await supabaseAdmin
+      .from("client_audiences")
+      .select("id")
+      .eq("client_id", clientId)
+      .eq("is_primary", true)
+      .maybeSingle();
+    if (!audience) {
+      return { kind, ok: false, detail: "This client has no audience yet, and a document is filed against one." };
+    }
+
+    let offerId: string | null = null;
+    if (kindBelongsToOffer(which)) {
+      const { data: offer } = await supabaseAdmin
+        .from("client_offers")
+        .select("id")
+        .eq("client_id", clientId)
+        .eq("is_primary", true)
+        .maybeSingle();
+      if (!offer) {
+        return { kind, ok: false, detail: `The ${which.replace(/_/g, " ")} hangs off an offer, and this client has none.` };
+      }
+      offerId = offer.id as string;
+    }
+
+    // Wrapped as a .md file rather than given a second ingest path. extractFileText reads markdown
+    // directly and does no model transcription, so the bytes arrive exactly as he pasted them, and
+    // every rule the upload has (the 200-character floor, the second write into page_sources that
+    // makes it evidence) applies without being restated here.
+    const res = await ingestFoundationDocument({
+      clientId,
+      audienceId: audience.id as string,
+      offerId,
+      kind: which,
+      filename: `${which}-pasted.md`,
+      contentType: "text/markdown",
+      bytes: Buffer.from(text, "utf8"),
+      by: actor,
+    });
+
+    return res.ok
+      ? {
+          kind,
+          ok: true,
+          detail:
+            `Filed the ${which.replace(/_/g, " ")}, ${res.chars} characters. It supersedes the previous one and ` +
+            "is in the evidence library every later page cites.",
+        }
+      : { kind, ok: false, detail: res.error ?? "The document was not filed." };
+  }
+
+  if (kind === "read_pages") {
+    const state = await launchPagesState(clientId);
+    if ("error" in state) return { kind, ok: false, detail: state.error };
+
+    if (!state.plan.length) {
+      return {
+        kind,
+        ok: true,
+        detail: state.ready
+          ? "No pages planned yet. run_pages stage=plan_new proposes one pillar and six supports off the selected keywords."
+          : `No pages planned, and nothing can be planned yet. Waiting on: ${state.missing.join("; ")}.`,
+      };
+    }
+
+    // ‼️ THE THREE CANDIDATES ARE PRINTED, AND LEAVING THEM OUT MADE THIS ACTION USELESS FOR THE ONE
+    // THING IT WAS BEING ASKED (2026-10-06). `show me the headline options for all 11 pages` ran
+    // read_pages, which held every option in launchPagesState and rendered only the page titles, so
+    // the chat answered the question it had not been asked and he could not pick. A reader that has
+    // the answer and does not say it is the same failure as not having it.
+    const rows = state.plan.flatMap((p) => {
+      const marks = [
+        p.headline ? "headline" : null,
+        p.hasOutline ? "skeleton" : null,
+        p.hasBody ? "body" : null,
+        p.pageStatus === "published" ? "LIVE" : null,
+      ].filter(Boolean);
+      const head = `  ${p.rank}. [${p.role}] ${p.headline ?? p.workingTitle} <- ${p.targetKeyword} (${p.status}${marks.length ? ", " + marks.join(", ") : ""})`;
+
+      // Only where the decision is still open. A page whose headline is picked needs the pick shown,
+      // not the three it was picked from.
+      if (p.headline || !p.headlineOptions.length) return [head];
+      return [head, ...p.headlineOptions.map((h, i) => `       option ${i + 1}: ${h}`)];
+    });
+
+    return {
+      kind,
+      ok: true,
+      detail: [
+        `${state.stageText} ${state.proposed} proposed, ${state.approved} approved, ${state.drafted} with a body, ${state.outstanding} still to draft.`,
+        ...rows,
+        state.needHeadline.length
+          ? `still need a headline: ${state.needHeadline.join(", ")}. The three options for each are listed above: show them to him verbatim and ask which, then run_pages stage=headline_pick with rank and pick.`
+          : "",
+        state.needSkeleton.length ? `still need a skeleton: ${state.needSkeleton.join(", ")}` : "",
+        state.day0ArchivedAt ? "" : "Day 0 is not archived, so publishing will refuse. Drafting is not gated.",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    };
+  }
+
+  if (kind === "run_pages") {
+    const stage = (action.stage ?? "").trim();
+    // ‼️ NARROWED, NOT CAST, for the reason the step key is: the string came out of a model.
+    if (!isLaunchPageAction(stage) || !PAGE_RUN_STAGES.includes(stage)) {
+      return {
+        kind,
+        ok: false,
+        detail: `"${stage}" is not a stage of the page run. The stages are: ${PAGE_RUN_STAGES.join(", ")}.`,
+      };
+    }
+
+    const res = await runLaunchPagesAction({
+      clientId,
+      action: stage,
+      actor,
+      rank: action.rank ?? null,
+      pick: action.pick ?? null,
+      stage: action.rung ?? null,
+      text: action.text ?? null,
+      phrases: action.phrases ?? null,
+      category: action.category ?? null,
+      pillar: action.pillar ?? null,
+      supports: action.supports ?? null,
+    });
+
+    // ‼️ THE REFUSAL IS PASSED THROUGH WORD FOR WORD, same rule as a step refusal. These name work
+    // that is owed in the order it is owed, and rewording them is how this surface starts
+    // disagreeing with the engine it is a surface for.
+    return res.ok
+      ? { kind: `${kind}:${stage}`, ok: true, detail: res.message, ...(res.prompt ? { prompt: res.prompt } : {}) }
+      : { kind: `${kind}:${stage}`, ok: false, detail: res.error };
+  }
+
+  if (kind === "publish_page" || kind === "unpublish_page") {
+    const state = await launchPagesState(clientId);
+    if ("error" in state) return { kind, ok: false, detail: state.error };
+
+    // Addressed by RANK, which is what the plan shows him, and resolved to a page id here so the
+    // model never carries one. A rank with no drafted page is a refusal, not a guess.
+    const row = state.plan.find((p) => p.rank === action.rank);
+    if (!row) {
+      return { kind, ok: false, detail: `There is no page ${action.rank} in the plan. There are ${state.plan.length}.` };
+    }
+    if (!row.pageId) {
+      return { kind, ok: false, detail: `Page ${row.rank} has no body yet, so there is nothing to publish.` };
+    }
+
+    const res = await runLaunchPagesAction({
+      clientId,
+      action: kind === "publish_page" ? "publish" : "unpublish",
+      actor,
+      pageId: row.pageId,
+      destinationId: action.destinationId ?? null,
+    });
+
+    if (!res.ok) {
+      // The destination refusal is a QUESTION, so it carries the list he picks from. The other two
+      // are rails and say what is wrong.
+      const choices =
+        res.refusal?.blockedBy === "destination"
+          ? ` Choose one and say which: ${res.refusal.choices.map((c) => `${c.label} (${c.id})`).join(", ")}.`
+          : "";
+      return { kind, ok: false, detail: `${res.error}${choices}` };
+    }
+    return { kind, ok: true, detail: [res.message, res.pageUrl ? `Live at ${res.pageUrl}` : ""].filter(Boolean).join(" ") };
   }
 
   return { kind, ok: false, detail: `${kind} is not an action this lane has.` };
@@ -610,14 +1077,79 @@ async function buildHandoffPrompt(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Find or create the single thread for this client. */
-export async function ensureConversation(clientId: string): Promise<string | null> {
-  const { data: existing } = await supabaseAdmin
+export interface ConversationSummary {
+  id: string;
+  title: string | null;
+  lastTurnAt: string | null;
+  createdAt: string;
+}
+
+/**
+ * This client's threads, newest first.
+ *
+ * ‼️ `select("*")` AND NOT A COLUMN LIST, because `title` arrives with
+ * docs/2026-10-06-launch-threads.sql and PostgREST fails a WHOLE select on one unknown column.
+ * Naming it would make the history rail empty on any database where that migration has not run
+ * yet, which is the shape of outage this repo has written down three times.
+ */
+export async function listConversations(clientId: string): Promise<ConversationSummary[]> {
+  const { data, error } = await supabaseAdmin
     .from("launch_conversations")
+    .select("*")
+    .eq("client_id", clientId);
+
+  if (error) {
+    console.error("[launch/conversation] threads unreadable:", error.message);
+    return [];
+  }
+
+  return ((data ?? []) as Array<Record<string, unknown>>)
+    .map((r) => ({
+      id: String(r.id),
+      title: (r.title as string | null) ?? null,
+      lastTurnAt: (r.last_turn_at as string | null) ?? null,
+      createdAt: String(r.created_at ?? ""),
+    }))
+    .sort((a, b) => (b.lastTurnAt ?? b.createdAt).localeCompare(a.lastTurnAt ?? a.createdAt));
+}
+
+/**
+ * Open a new thread on this client.
+ *
+ * ‼️ A FAILED INSERT RETURNS THE EXISTING THREAD RATHER THAN NULL. Until
+ * docs/2026-10-06-launch-threads.sql is run, `launch_conversations_client_uidx` still allows only
+ * one row per client, so this refuses with a unique violation. Falling back keeps the chat working
+ * exactly as it did instead of handing somebody a dead "new thread" button, and the history rail
+ * simply shows one entry until the index is relaxed.
+ */
+export async function startConversation(clientId: string): Promise<string | null> {
+  const { data, error } = await supabaseAdmin
+    .from("launch_conversations")
+    .insert({ client_id: clientId })
     .select("id")
-    .eq("client_id", clientId)
     .maybeSingle();
 
-  if (existing?.id) return existing.id as string;
+  if (data?.id) return String(data.id);
+  if (error) console.warn("[launch/conversation] new thread refused, resuming the latest:", error.message);
+
+  const threads = await listConversations(clientId);
+  return threads[0]?.id ?? null;
+}
+
+/**
+ * The thread to open: the one asked for, else the latest, else a new one.
+ *
+ * ‼️ `wanted` IS CHECKED AGAINST THIS CLIENT'S OWN THREADS AND NEVER TRUSTED. It arrives from a
+ * query string, and the whole reason the client id comes from the route is that an action must run
+ * against the client in the URL. A conversation id that belongs to somebody else would put one
+ * client's history in front of another's board, so an id that is not in this list is ignored rather
+ * than refused: the honest result is "that is not your thread", which is the same as not naming one.
+ */
+export async function ensureConversation(clientId: string, wanted?: string | null): Promise<string | null> {
+  const threads = await listConversations(clientId);
+
+  if (wanted && threads.some((t) => t.id === wanted)) return wanted;
+  if (threads.length) return threads[0].id;
 
   const { data, error } = await supabaseAdmin
     .from("launch_conversations")
@@ -626,7 +1158,33 @@ export async function ensureConversation(clientId: string): Promise<string | nul
     .maybeSingle();
 
   if (error || !data) return null;
-  return data.id as string;
+  return String(data.id);
+}
+
+/**
+ * Name a thread after the first thing asked in it.
+ *
+ * Same shape the other history rail in this app uses: the opening message, trimmed, is what a
+ * person recognises a thread by weeks later. Written once and never rewritten, so renaming a thread
+ * later is a deliberate edit rather than something that drifts with the conversation.
+ */
+async function titleConversation(conversationId: string, firstMessage: string): Promise<void> {
+  const title = firstMessage.replace(/\s+/g, " ").trim().slice(0, 80);
+  if (!title) return;
+  // Tolerant: before the migration there is no `title` column and this is a no-op, not a failure.
+  await supabaseAdmin
+    .from("launch_conversations")
+    .update({ title })
+    .eq("id", conversationId)
+    .is("title", null)
+    .then(
+      (r) => {
+        if (r.error && !/title/.test(r.error.message)) {
+          console.error("[launch/conversation] title failed:", r.error.message);
+        }
+      },
+      () => {}
+    );
 }
 
 export interface StoredMessage {
@@ -659,6 +1217,78 @@ export async function loadHistory(conversationId: string, limit = 40): Promise<S
  * show, because a conversation that loses a turn to an exception loses the context that made the
  * turn make sense.
  */
+/**
+ * Write the reply again, this time with the results in hand.
+ *
+ * ‼️ IT PRESENTS AND IT NEVER RE-DECIDES. It returns prose, not a plan, so nothing it says can run
+ * anything. The raw results still render underneath, which is what keeps it honest: if this pass
+ * ever rewords a headline or invents a number, the real value is six inches below it on the screen.
+ *
+ * On any failure it returns the first pass unchanged. A turn that did the work and then could not
+ * describe it must still report what it did.
+ */
+async function narrate(
+  clientName: string,
+  message: string,
+  firstSay: string,
+  asks: string[],
+  results: ActionResult[]
+): Promise<string> {
+  const body = results
+    .map((r) => `--- ${r.kind} ${r.ok ? "(ok)" : "(REFUSED)"} ---\n${r.detail}`)
+    .join("\n\n");
+
+  try {
+    const text = await callClaudeText({
+      model: TURN_MODEL,
+      maxTokens: 4000,
+      temperature: 0.2,
+      system: [
+        `You are writing the message Matthew reads about ${clientName}. He owns the agency, he is`,
+        "terse and he is fast. The work below has ALREADY RUN. You are not deciding anything and you",
+        "are not proposing anything: you are laying out what came back so he can act on it.",
+        "",
+        "‼️ THE RESULTS ARE THE FACTS AND THEY ARE THE ONLY FACTS YOU HAVE.",
+        "- Quote every value out of them VERBATIM: headlines word for word, keywords exactly as",
+        "  spelled, counts, slugs, URLs, option numbers. Renumbering an option or tidying a headline",
+        "  means he picks one thing and gets another.",
+        "- NEVER add a number, a percentage, a date or a claim that is not in the results. If",
+        "  something is not there, it is not known, and saying so is a complete answer.",
+        "- A refusal is reported as what is owed, in the words the engine used. Do not soften it and",
+        "  do not guess at a workaround.",
+        "",
+        "HOW IT SHOULD LOOK:",
+        "- Markdown. Headings, numbered lists, and a table when several things are being compared.",
+        "- When a result lists pages with options under them, give each page its own short heading",
+        "  with its keyword, then its options as a numbered list. He is choosing from these, so they",
+        "  have to be readable one at a time, never run together in a paragraph.",
+        "- Length follows the data. A one line result gets one line. Do not pad and do not summarise",
+        "  away detail he asked to see.",
+        "- Finish with the single next thing to do, as one sentence.",
+        "- Never use an em dash or an en dash. Use a comma or a full stop. This is a hard rule.",
+        "- Do not say you will show him something later. It is on his screen now.",
+      ].join("\n"),
+      user: [
+        `HE ASKED: ${message}`,
+        "",
+        firstSay ? `WHAT YOU SAID BEFORE THE WORK RAN (rewrite it, do not repeat it):\n${firstSay}` : "",
+        asks.length ? `\nQUESTIONS STILL OPEN:\n${asks.map((a) => `- ${a}`).join("\n")}` : "",
+        "",
+        "WHAT CAME BACK:",
+        body,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    });
+
+    const clean = (text?.text ?? "").trim();
+    return clean.length ? clean : firstSay;
+  } catch (e) {
+    console.error("[launch/conversation] narration failed:", (e as Error).message);
+    return firstSay;
+  }
+}
+
 export async function runTurn(args: {
   clientId: string;
   clientName: string;
@@ -674,6 +1304,10 @@ export async function runTurn(args: {
     role: "user",
     content: args.message,
   });
+
+  // Names the thread after its opening message, once. The `is title null` guard inside means a
+  // thread that already has a name keeps it.
+  await titleConversation(args.conversationId, args.message);
 
   const transcript = history
     .filter((m) => m.role !== "system")
@@ -746,7 +1380,19 @@ export async function runTurn(args: {
   // ‼️ `skip_step` IS STILL GATED, AND THE DIFFERENCE IS THE WHOLE POINT. A skip has no verifier:
   // it is an assertion that something does not apply, recorded with a reason and nothing to check
   // it against. That is exactly the shape of claim a 90 percent confidence bar exists for.
-  const SELF_PROVING: ReadonlySet<string> = new Set(["complete_step", "read_document", "check_dns", "search_domains", "read_offer"]);
+  //
+  // ‼️ `read_pages` IS ON THE LIST AND `run_pages` IS NOT, WHICH IS THE SAME LINE AS ABOVE.
+  // Reading where the page run stands changes nothing. Running a stage writes rows, spends a model
+  // call, and in the case of publish_page puts words on the internet under a client's name, so all
+  // of those stay behind the bar: if it is not sure he asked for it, it should ask.
+  const SELF_PROVING: ReadonlySet<string> = new Set([
+    "complete_step",
+    "read_document",
+    "check_dns",
+    "search_domains",
+    "read_offer",
+    "read_pages",
+  ]);
   const proposed = plan.actions ?? [];
   const risky = proposed.filter((a) => !SELF_PROVING.has(a.kind));
   const heldBack = plan.confidence < ACT_THRESHOLD && risky.length > 0;
@@ -765,10 +1411,25 @@ export async function runTurn(args: {
     }
   }
 
+  // ‼️ A SECOND PASS, BECAUSE THE FIRST ONE WRITES BEFORE IT CAN POSSIBLY KNOW THE ANSWER.
+  // The model returns a plan, the server runs it, and until 2026-10-06 that was the end: whatever
+  // it had guessed it would say was what Matthew read, with the real output rendered underneath as
+  // a raw chip. Asked for eleven pages and their headline options he got one unbroken paragraph of
+  // thirty-three candidates and said, correctly, "what kind of answer is this... I cant read it."
+  //
+  // So when actions ran, the reply is written AGAIN with their results in hand. This is the only
+  // place in the lane that makes two model calls for one turn, and the cost buys the thing a chat
+  // is for: an answer, laid out, rather than a promise followed by a data dump.
+  //
+  // ‼️ IT PRESENTS, IT NEVER RE-DECIDES. No actions come out of this pass, so nothing it says can
+  // execute anything, and the raw results still render below it. A pass that could act would be a
+  // second engine, which the header of this file forbids.
+  const finalSay = results.length ? await narrate(args.clientName, args.message, say, asks, results) : say;
+
   await supabaseAdmin.from("launch_messages").insert({
     conversation_id: args.conversationId,
     role: "assistant",
-    content: [say, ...asks.map((a) => `- ${a}`)].filter(Boolean).join("\n"),
+    content: [finalSay, ...asks.map((a) => `- ${a}`)].filter(Boolean).join("\n"),
     actions: results.length ? results : null,
     step_key: settled,
   });
@@ -778,5 +1439,5 @@ export async function runTurn(args: {
     .update({ last_turn_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq("id", args.conversationId);
 
-  return { say, asks, results, heldBack };
+  return { say: finalSay, asks, results, heldBack };
 }

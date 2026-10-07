@@ -137,16 +137,26 @@ export default async function LeadsPage({
   // ‼️ THE SOURCE LIST IS READ FROM THE TABLE, NEVER HARD-CODED. Every importer writes its own
   // value ("TRT Clinic Scrape", "Med Spa Scrape - No Website", "reachinbox"), so a checked-in list
   // would be stale the first time somebody added a lane, and the chip for the newest lead source
-  // would be the one missing. Capped, because this is a filter bar rather than a report.
-  const { data: sourceRows } = await supabaseAdmin
-    .from("contacts")
-    .select("source")
-    .not("source", "is", null)
-    .limit(5000);
+  // would be the one missing.
+  //
+  // ‼️ PAGED, BECAUSE POSTGREST CAPS A RESPONSE AT 1,000 ROWS AND IGNORES A LARGER .limit().
+  // The first version asked for 5,000 and silently got 1,000, so every chip counted only the rows
+  // that happened to land in that page: the 92 no-website med spas showed as "4". A count that is
+  // quietly a sample is worse than no count, because it reads as the answer to "how many are there".
   const sourceCounts = new Map<string, number>();
-  for (const r of (sourceRows ?? []) as Array<{ source: string | null }>) {
-    const key = (r.source ?? "").trim();
-    if (key) sourceCounts.set(key, (sourceCounts.get(key) ?? 0) + 1);
+  const SOURCE_PAGE = 1000;
+  for (let from = 0; from < 50_000; from += SOURCE_PAGE) {
+    const { data: page } = await supabaseAdmin
+      .from("contacts")
+      .select("source")
+      .not("source", "is", null)
+      .range(from, from + SOURCE_PAGE - 1);
+    const rowsIn = (page ?? []) as Array<{ source: string | null }>;
+    for (const r of rowsIn) {
+      const key = (r.source ?? "").trim();
+      if (key) sourceCounts.set(key, (sourceCounts.get(key) ?? 0) + 1);
+    }
+    if (rowsIn.length < SOURCE_PAGE) break;
   }
   const sources = [...sourceCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 14);
 

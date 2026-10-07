@@ -15,11 +15,22 @@
 // drop reasons it writes are read by a person and pasted into Slack.
 
 /**
- * Med spas, the AEO offer's buyer.
+ * The front-desk buyer. Still keyed `medspa`, and the name is now narrower than the profile.
  *
- * Every line is drawn from something this repo already believes rather than invented:
- * `EXCLUDED_TYPES` and `CHAIN_DOMAINS` in src/lib/medspa.ts, and the US-only rule that
- * beginScoreWorkflow already enforces on geography.
+ * ‼️ THE SLUG IS NOT RENAMED ON PURPOSE. `vertical_slug` is written onto every raw_lead and every
+ * run, and renaming a key orphans the rows that carry the old one. The constant keeps its name so
+ * the grep still works; what changed is who it describes.
+ *
+ * ‼️ AND WHO IT DESCRIBES CHANGED A LOT, ON 2026-10-06. It used to be "an owner-operated med spa
+ * selling injectables". Matthew: "our pitch works for pretty much exactly every single person who
+ * has a front desk". The opener is a custom review QR card, and anybody who checks a customer out
+ * at a desk can use one, so the filter is no longer about medical aesthetics at all. Measured on the
+ * 500-lead Dallas pull: 399 were dropped and 286 of those had a website, which is 286 businesses
+ * with a front desk that this profile was refusing to let anybody email.
+ *
+ * ‼️ TWO EXCLUSIONS SURVIVED, AND BOTH ARE ABOUT WHETHER ANYONE CAN SAY YES. A national chain
+ * location has a front desk and no budget; a company that sells equipment TO clinics has a budget
+ * and no front desk. Everything else in the drop list is "not a real trading business".
  *
  * ‼️ THE CHAINS ARE NAMED RATHER THAN DESCRIBED. "Not a chain" invites the model to apply its own
  * idea of what a chain is, and it will drop a three-location local group that is exactly the
@@ -29,36 +40,36 @@
  * ‼️ THE KEEP-ON-DOUBT RULE IS NOT RESTATED HERE. qualify.ts's system prompt already owns it, and
  * two authorities on the same question is how a prompt starts contradicting itself.
  */
-export const MED_SPA_ICP = `We sell AI-search visibility to med spas: we get them named when
-somebody asks ChatGPT or Google's AI for the best med spa in their city.
+export const MED_SPA_ICP = `We sell to local businesses that have a FRONT DESK asking customers
+for reviews. The opener is custom review QR cards; what it leads to is AI-search visibility, getting
+them named when somebody asks ChatGPT or Google's AI for the best clinic in their city.
 
 KEEP a business if all of these hold:
-- It is a med spa, aesthetics clinic, skin clinic, or DERMATOLOGY PRACTICE offering injectables,
-  laser treatment, or body contouring under its own brand.
+- A customer or patient physically goes there and checks out with a person at a desk. Med spas,
+  aesthetics and skin clinics, dermatology, plastic and cosmetic surgery, dentists, orthodontists,
+  laser hair removal, permanent make-up, nail salons, day spas, beauty salons, massage studios,
+  wellness and weight-loss clinics, IV bars and eye care all qualify.
 - It is owner operated or a small local group, roughly one to three locations.
-- It is in the United States.
-- It has its own website on its own domain.
-- It has at least some reviews, so we can tell it is still trading.
+- It has its own website on its own domain, OR it has a phone number we can call.
+- It has at least some reviews, or is plainly still trading.
 
 DROP a business if any of these hold:
-- It is a location of a national franchise. The ones we see most: Ideal Image, Milan Laser,
-  Sono Bello, LaserAway, European Wax Center, Skin Laundry, Restore Hyper Wellness, The DRIPBaR.
-  Treat any other business that is plainly a national chain the same way.
-- It is a plastic surgery or cosmetic surgery group, or a hospital or health system, including one
-  with a med spa attached. A surgical practice buys differently and is not our buyer.
-- It is a dermatology practice that is purely medical or surgical: skin cancer, Mohs surgery,
-  general dermatology with no cosmetic offering. A derm practice that DOES sell injectables, laser
-  or cosmetic treatment is a KEEP, not a drop.
-- It is outside the United States.
-- It has no website of its own, or its only web presence is a Facebook page, an Instagram link,
-  a Linktree, or a booking platform subdomain.
-- It is a salon, nail bar, day spa, massage studio, barber, or gym with no medical aesthetics.
-- It is permanently closed, or it is a directory listing rather than a business.
+- It is a location of a national franchise or chain. The ones we see most: Ideal Image, Milan Laser,
+  Sono Bello, LaserAway, European Wax Center, Skin Laundry, Restore Hyper Wellness, The DRIPBaR,
+  dermani MEDSPA. Treat any other business that is plainly a national chain the same way. A
+  location manager cannot buy anything and the marketing is set at head office.
+- It SELLS TO clinics rather than treating customers: equipment and device makers, software,
+  medical waste disposal, staffing, pharmacy supply, marketing or practice-growth consultancies,
+  distributors, franchise sales. It has no patients to ask for a review, so the offer does not
+  land. Examples of this mistake: a body-scanner manufacturer, a waste disposal company, a
+  fitness equipment distributor, a practice development consultancy.
+- It is a hospital, a health system, or a multi-site medical group of more than a few locations.
+- It is permanently closed, or it is a directory listing rather than a real business.
 
 When you drop one, write the reason as a short phrase describing the business, not the rule.
-Write "national chain location" rather than "fails criterion 1", and write "dermatology practice"
-rather than "excluded type". Those phrases get grouped and counted, so two businesses dropped for
-the same thing should read the same way.`;
+Write "national chain location" rather than "fails criterion 1", and write "sells equipment to
+clinics" rather than "excluded type". Those phrases get grouped and counted, so two businesses
+dropped for the same thing should read the same way.`;
 
 /**
  * Dentists, the second vertical.
@@ -73,10 +84,11 @@ the same thing should read the same way.`;
  * physician practice, and an orthodontist competes for "best orthodontist near me" on exactly the
  * offer we sell. That exclusion was about a different BUYER, not about a narrower specialty.
  *
- * ‼️ AND THE MED SPA PROFILE NO LONGER DROPS DERMATOLOGY AT ALL. Matthew, 2026-10-03: "we can do
- * dermatologist but no plastic surgery". Measured on the 500-lead Dallas pull: 17 dermatologists
- * were pulled and all 17 were dropped, which is 17 clinics competing for the same cosmetic queries
- * that were being discarded by a rule written about surgeons.
+ * ‼️ AND THE PROFILE ABOVE NO LONGER DROPS SPECIALTIES AT ALL. It dropped dermatology until
+ * 2026-10-03 and plastic surgery until 2026-10-06. The second reversal was settled by Matthew's own
+ * sent campaign rather than by argument: the CSV he was already mailing is full of plastic surgeons,
+ * so the rule in the file and the list going out of the door disagreed, and the file was the one
+ * that was wrong.
  */
 export const DENTIST_ICP = `We sell AI-search visibility to dental practices: we get them named
 when somebody asks ChatGPT or Google's AI for the best dentist in their city.
