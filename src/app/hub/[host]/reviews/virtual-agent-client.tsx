@@ -1395,10 +1395,15 @@ export function VirtualAgentClient({
                         </button>
                       ))}
 
-                    {/* Gone once something has been sent: there is nothing left to skip. */}
+                    {/*
+                      Gone once something has been sent: there is nothing left to skip.
+
+                      The label changes in round two because by then she has already sent one, and
+                      "Skip this one" would read as undoing it rather than stopping here.
+                    */}
                     {!inviteSent && (
                       <button type="button" className="va-skip" onClick={skipInvite}>
-                        Skip this one
+                        {inviteRound === 1 ? "Skip this one" : "That is enough"}
                       </button>
                     )}
                   </div>
