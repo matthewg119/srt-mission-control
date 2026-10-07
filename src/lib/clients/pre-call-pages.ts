@@ -587,7 +587,8 @@ async function approvedRows(clientId: string): Promise<PlanRow[] | { error: stri
   return plan.rows.filter((r) => r.role && (r.status === "approved" || r.status === "claimed"));
 }
 
-type DraftOutcome = { status: "drafted" | "skipped" | "failed"; rank: number; detail: string };
+/** What one row's draft attempt did. Exported for draftOnePage's callers, which get exactly one. */
+export type DraftOutcome = { status: "drafted" | "skipped" | "failed"; rank: number; detail: string };
 
 async function draftOne(
   clientId: string,
@@ -820,6 +821,49 @@ export async function draftWave(
   const after = await approvedRows(clientId);
   const remaining = "error" in after ? todo.length : (await outstanding(clientId, after)).length;
   return { outcomes, remaining };
+}
+
+/**
+ * Draft ONE page, named by its plan row.
+ *
+ * ‼️ A WRAPPER, AND draftOne STAYS PRIVATE, WHICH IS THE WHOLE POINT OF ADDING THIS. draftOne takes
+ * an `env` carrying the tier, the actor and a LEASE ID, which is wave bookkeeping: a caller that
+ * assembled its own would be deciding something about concurrency it has no way to reason about,
+ * and a caller that reused a lease id would hand itself another wave's lock. So the bookkeeping is
+ * minted here, once per page, and every rail inside draftOne is reached unchanged: the conditional
+ * lease, "a page with a body is never redrafted", the archived-page refusal, markClaimed, the
+ * evidence map and the capture.
+ *
+ * ‼️ draftWave IS UNTOUCHED AND THE TWO CANNOT COLLIDE. The lease is the reason: whichever of them
+ * takes it first drafts the row and the other is told "another pass is drafting it". That property
+ * belongs to draftOne and is not re-implemented here.
+ *
+ * ‼️ IT REACHES NEITHER SLACK SINK. `say` and `refreshCard` are the only two in this file and
+ * neither is reachable from draftOne, which is what lets the Launch Lane call this at all. See
+ * src/lib/launch/pages.ts's header and scripts/_probe-launch-isolation.ts.
+ *
+ * The caller decides what to say and whether to tick a step. One page is not a wave, so there is no
+ * budget to run out of and no hop to chain: at roughly eighty seconds this is one request's work.
+ */
+export async function draftOnePage(
+  clientId: string,
+  row: PlanRow,
+  by: string
+): Promise<DraftOutcome | { error: string }> {
+  const { data: client, error } = await supabaseAdmin
+    .from("clients")
+    .select("tier_scope")
+    .eq("id", clientId)
+    .maybeSingle();
+  if (error) return { error: error.message };
+
+  return draftOne(clientId, row, {
+    tier: ((client as { tier_scope?: string | null } | null)?.tier_scope ?? null) as string | null,
+    by,
+    // ‼️ ITS OWN LEASE ID, NEVER A SHARED CONSTANT. It is what the conditional release matches on,
+    // so two concurrent per-page drafts of DIFFERENT rows must not be able to release each other's.
+    leaseId: randomUUID(),
+  });
 }
 
 /**
