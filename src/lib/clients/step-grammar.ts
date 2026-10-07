@@ -819,6 +819,27 @@ const SKELETON: CommandSpec = {
   gatedIn: "src/lib/clients/pre-call-pages.ts",
 };
 
+/**
+ * The per-page walk. `page 3`, `page 3 more`, `page 3 pick 2`, `page 3 draft`, `page 3 check`.
+ *
+ * ‼️ `unmistakable` IS NARROWER THAN `test` BY ONE THING THAT MATTERS: it requires a verb or
+ * nothing after the digit and will not point at a sentence. "page 3" is a phrase somebody types
+ * about a document, so this earns a pointer only in the exact forms the card prints.
+ *
+ * The grammar lives in page-batch.ts with the rest of the batch verbs and is gated on the step in
+ * pre-call-pages.ts, which is the same split `plan`, `skeleton` and `headline N` already have.
+ */
+const PAGE_WALK: CommandSpec = {
+  label: "page 3 pick 2",
+  test: /^page\s+([0-9]{1,2})(?:\s+(?:pick\s+([0-9]{1,2})|(more|draft|check)))?$/i,
+  unmistakable: /^\s*[`*_]*page\s+[0-9]{1,2}\s+(?:pick\s+[0-9]{1,2}|more|draft|check)[`*_]*\s*$/i,
+  pointAt: "pre_call_pages",
+  what: "Page batch commands",
+  implementedIn: "src/lib/clients/page-batch.ts",
+  gatedIn: "src/lib/clients/pre-call-pages.ts",
+  mustBeOnTheCard: true,
+};
+
 const EMOTIONAL: CommandSpec = {
   label: "emotional:\nthe lines",
   test: /^emotional\s*:\s*\n([\s\S]+)$/i,
@@ -914,6 +935,7 @@ export const STEP_COMMANDS: Record<StepKey, readonly CommandSpec[]> = {
     PLAN,
     CTA,
     ANCHOR,
+    PAGE_WALK,
     HEADLINE_BATCH,
     SKELETON,
     OUTCOME,

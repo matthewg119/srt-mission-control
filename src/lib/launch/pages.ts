@@ -43,6 +43,7 @@ import {
 } from "@/lib/clients/page-plan";
 import {
   optionsFor,
+  pageAtRank,
   pageStage,
   pageWalkLines,
   pickForStage,
@@ -91,6 +92,15 @@ export interface LaunchPlanPage {
   angle: string | null;
   /** The three ideas written for this page, in pick order. Empty until angles run. */
   angleOptions: string[];
+  /**
+   * Where THIS page has got to, which is not where the batch has got to.
+   *
+   * ‼️ THE WHOLE REASON A PER-PAGE STAGE IS SURFACED. With one stage for eleven pages the panel and
+   * the chat could only say "the batch needs headlines", so a person working page 4 and page 7 at
+   * two different stages was reading a sentence that was true of neither. Null only when readBatch
+   * itself failed, or when the row is not in the batch yet (a proposed row awaiting approval).
+   */
+  stage: PageStage | null;
 }
 
 export interface LaunchLadderRung {
@@ -165,6 +175,9 @@ function toPage(
     headlineOptions: options.get(row.id) ?? [],
     angle: angle?.picked ?? null,
     angleOptions: angle?.options ?? [],
+    // Derived, not stored, and only for rows the batch actually holds: pageStage reads membership
+    // in readBatch's need-lists, and a proposed row is in none of them.
+    stage: batch && batch.rows.some((r) => r.id === row.id) ? pageStage(batch, row) : null,
   };
 }
 
@@ -317,7 +330,7 @@ export async function pageRunText(clientId: string): Promise<string> {
       p.pageStatus === "published" ? "LIVE" : null,
     ].filter(Boolean);
     return [
-      `    ${p.rank}. [${p.role}] ${p.headline ?? p.workingTitle} <- ${p.targetKeyword} (${p.status}${has.length ? ", " + has.join(", ") : ", nothing written yet"})`,
+      `    ${p.rank}. [${p.role}]${p.stage ? ` {${p.stage}}` : ""} ${p.headline ?? p.workingTitle} <- ${p.targetKeyword} (${p.status}${has.length ? ", " + has.join(", ") : ", nothing written yet"})`,
       // The idea is what the headline and the skeleton are both written from, so it belongs on the
       // page's own line rather than being something the chat has to go and ask for.
       ...(p.angle ? [`         argues: ${p.angle}`] : []),
@@ -329,7 +342,10 @@ export async function pageRunText(clientId: string): Promise<string> {
     `  ‼️ ${st.plan.length} page(s) ARE PLANNED. A plan exists before any page does, so "0 drafted" never means "nothing has started".`,
     `  ${st.proposed} proposed, ${st.approved} approved, ${st.drafted} with a body, ${st.outstanding} still to draft.`,
     `  stage: ${st.stageText}`,
-    "  the planned pages, and the keyword each one aims at:",
+    "  the planned pages, the stage each one is at in {braces}, and the keyword each aims at:",
+    "  ‼️ EACH PAGE HAS ITS OWN STAGE AND THEY ARE MEANT TO DIFFER. page_write and page_pick work",
+    "  ONE page at whatever stage it is at, so several can be in flight at once. Never tell him the",
+    "  run is at one stage when the braces below disagree.",
     ...lines,
     ...(st.plan.length > shown.length
       ? [`    ...and ${st.plan.length - shown.length} more not listed. Say so rather than implying this is all of them.`]
@@ -347,6 +363,59 @@ export async function pageRunText(clientId: string): Promise<string> {
     "  ‼️ THE WORKING TITLES ARE WRITTEN AT PLAN TIME AND THE KEYWORDS ARE HIS OWN PICKS. If he does",
     "  not recognise a title, that is the title being new, not the keyword being wrong.",
   ].join("\n");
+}
+
+/**
+ * ONE page, its stage and the options for it, as text for the conversation.
+ *
+ * ‼️ A READ, AND IT IS FREE ON PURPOSE. Every per-page verb that writes or spends sits behind the
+ * confidence bar, which is right: they cost model calls and they change decisions. Looking at one
+ * page must not, or "show me page 4" becomes a thing the chat declines to do while it is sure
+ * enough to rewrite page 4's ideas. It is served through read_pages, which is already in
+ * SELF_PROVING, rather than becoming a fifth page action that would have to be exempted by hand.
+ *
+ * ‼️ IT RENDERS THROUGH pageWalkLines, THE SAME BUILDER THE SLACK CARD USES. A second renderer here
+ * is how the two doors start describing the same page differently, which is the failure the whole
+ * walk is shaped to avoid.
+ */
+export async function pageWalkText(clientId: string, rank: number): Promise<string> {
+  const batch = await readBatch(clientId);
+  if ("error" in batch) return `Page ${rank} could not be read just now. Say so rather than guessing.`;
+
+  const row = pageAtRank(batch, rank);
+  if (!row) {
+    return batch.rows.length
+      ? `There is no page ${rank} in this batch. There are ${batch.rows.length}, ranked ${batch.rows.map((r) => r.rank).join(", ")}.`
+      : "No approved pages yet, so there is no page to look at. The plan has to be proposed and approved first.";
+  }
+
+  const [options, angles] = await Promise.all([
+    optionsFor(clientId, [row]).then((m) => m.get(row.id) ?? []),
+    // A failed angle read costs the card its ideas, never the page: same posture as the gate.
+    import("@/lib/clients/page-angles")
+      .then((m) => m.anglesFor(clientId))
+      .then((all) => all.filter((a) => a.planId === row.id))
+      .catch(() => [] as Array<{ idea: string; status: string }>),
+  ]);
+
+  // The handover stage is the only one whose options are not on the page itself, so it is the only
+  // one that costs two more reads, and they are only taken when it is the stage in play.
+  let tools: Array<{ label: string; answers: string }> | undefined;
+  let toolOnOtherPage: { componentKey: string; rank: number } | null = null;
+  if (pageStage(batch, row) === "handover") {
+    const { toolOptions, clientTool } = await import("@/lib/clients/tool-lane");
+    const [opts, current] = await Promise.all([
+      toolOptions(clientId).catch(() => []),
+      clientTool(clientId).catch(() => null),
+    ]);
+    tools = opts.map((o) => ({ label: o.component.label, answers: o.component.answers }));
+    if (current?.pageId && current.pageId !== row.pageId) {
+      const other = batch.rows.find((r) => r.pageId === current.pageId);
+      toolOnOtherPage = { componentKey: current.componentKey, rank: other?.rank ?? 0 };
+    }
+  }
+
+  return pageWalkLines({ state: batch, row, options, angles, tools, toolOnOtherPage }).join("\n");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

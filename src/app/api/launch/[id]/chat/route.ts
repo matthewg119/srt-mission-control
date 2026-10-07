@@ -16,7 +16,12 @@ import { supabaseAdmin } from "@/lib/db";
 import { ensureConversation, runTurn } from "@/lib/launch/conversation";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+// ‼️ 300, AND 120 WAS ALREADY TOO SHORT FOR A VERB THIS ROUTE OFFERS. draft_wave runs to
+// WAVE_BUDGET_MS, which is 240 s, inside this limit: a wave could legally be killed mid-page by
+// the route it was called from, and the only sign would be a turn that never came back.
+// page_draft is one page at about eighty seconds, and a turn spends two model calls of its own
+// around it. 300 is the ceiling this plan allows, so it is a limit rather than a guess.
+export const maxDuration = 300;
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const session = await auth();
