@@ -17,6 +17,32 @@ import { formatPhoneUS } from "@/lib/clients/normalize";
 import { normalizeTarget, normalizeErrorMessage } from "@/lib/scan/normalize";
 import { LEAD_FIELD_GROUPS, type LeadFieldDef } from "@/config/lead-fields";
 
+/**
+ * What goes in a `tel:` href, which is not what goes on the screen.
+ *
+ * ‼️ IT NORMALISES RATHER THAN TRUSTING THE STORED VALUE, AND THE WINDOW IS SMALL BUT REAL.
+ * A saved phone IS E.164: the PATCH route runs it through normalizeLeadPhone(), the one door every
+ * inbound funnel uses. But this row holds the value optimistically between the save and the
+ * refresh, and in that moment it is whatever was typed, separators and all. A dialler handed
+ * "(214) 532-7263" with the brackets may dial nothing and say nothing about why.
+ *
+ * Defaults to +1 only on a bare ten digits, which is the one case where the country is not a guess.
+ * Anything already carrying a + is passed through untouched.
+ */
+function telHref(value: string): string | null {
+  const trimmed = value.trim();
+  if (trimmed.startsWith("+")) {
+    const rest = trimmed.slice(1).replace(/\D/g, "");
+    return rest.length >= 10 ? `tel:+${rest}` : null;
+  }
+  const digits = trimmed.replace(/\D/g, "");
+  if (digits.length === 10) return `tel:+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `tel:+${digits}`;
+  // Eleven-plus digits with no +: a country code somebody typed without one. Eight to ten with no
+  // country code is not enough to guess from, so it gets no button rather than a wrong call.
+  return digits.length > 11 ? `tel:+${digits}` : null;
+}
+
 /** Matches the page's old fmt(): empty reads as a dash, numbers get separators. */
 function display(value: string | null, kind: LeadFieldDef["kind"]): string {
   if (value === null || value === "") return "";
@@ -234,6 +260,28 @@ function FieldRow({
               >
                 {saving ? "Saving…" : shown || "+ add"}
               </button>
+              {/*
+                ‼️ A CALL BUTTON BESIDE THE NUMBER, NOT INSTEAD OF IT, for exactly the reason
+                the url affordance above gives: making the value itself a link would leave no way
+                to correct a typo except deleting the field, and a wrong phone number is the field
+                most worth being able to fix.
+
+                It is a plain `tel:` link, which hands the call to whatever this machine has
+                registered as its dialler. That is the whole feature: the audio is on the PC
+                because the softphone is on the PC. RingCentral RingOut exists in this repo
+                (initiateRingOut, used by Speed to Lead and /api/ext/ringout) and is the other
+                shape, where the desk phone rings first; it needs a dashboard-authed route and is
+                not what a click here does.
+              */}
+              {field.kind === "phone" && current && telHref(current) && (
+                <a
+                  href={telHref(current) as string}
+                  title={`Call ${display(current, "phone")}`}
+                  className="shrink-0 rounded px-1 py-0.5 text-[rgba(255,255,255,0.35)] hover:bg-[rgba(255,255,255,0.06)] hover:text-[#00C9A7]"
+                >
+                  &#9742;
+                </a>
+              )}
               {field.kind === "url" && current && (
                 <a
                   href={current}
