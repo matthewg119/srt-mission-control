@@ -13,7 +13,8 @@
 
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { formatPhoneUS } from "@/lib/clients/normalize";
+import { Phone } from "lucide-react";
+import { formatPhoneUS, telHref } from "@/lib/clients/normalize";
 import { normalizeTarget, normalizeErrorMessage } from "@/lib/scan/normalize";
 import { LEAD_FIELD_GROUPS, type LeadFieldDef } from "@/config/lead-fields";
 
@@ -234,6 +235,29 @@ function FieldRow({
               >
                 {saving ? "Saving…" : shown || "+ add"}
               </button>
+              {/*
+                ‼️ A CALL BUTTON BESIDE THE NUMBER, NOT INSTEAD OF IT, for exactly the reason
+                the url affordance above gives: making the value itself a link would leave no way
+                to correct a typo except deleting the field, and a wrong phone number is the field
+                most worth being able to fix.
+
+                It is a plain `tel:` link, which hands the call to whatever this machine has
+                registered as its dialler. That is the whole feature: the audio is on the PC
+                because the softphone is on the PC. RingCentral RingOut exists in this repo
+                (initiateRingOut, used by Speed to Lead and /api/ext/ringout) and is the other
+                shape, where the desk phone rings first; it needs a dashboard-authed route and is
+                not what a click here does.
+              */}
+              {field.kind === "phone" && current && telHref(current) && (
+                <a
+                  href={telHref(current) as string}
+                  title={`Call ${display(current, "phone")}`}
+                  aria-label={`Call ${display(current, "phone")}`}
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-[rgba(0,201,167,0.45)] bg-[rgba(0,201,167,0.12)] text-[#00C9A7] transition-colors hover:bg-[rgba(0,201,167,0.25)] hover:text-white"
+                >
+                  <Phone className="h-3 w-3" />
+                </a>
+              )}
               {field.kind === "url" && current && (
                 <a
                   href={current}
