@@ -573,7 +573,19 @@ body:has(.hub-root) {
 .va-shell .va-panel {
   position: relative;
   width: 100%;
-  height: clamp(28rem, 62vh, 34rem);
+  /* ‼️ AUTO, AND IT USED TO BE A FIXED clamp(28rem, 62vh, 34rem). A fixed height works for
+     a panel whose tallest state is three bubbles and a text box. The INVITE step is two inputs, a
+     contacts link, an optional email, three wording chips, a message preview, three send buttons
+     and a skip; that is taller than any clamp, so the panel overflowed. While the panel still had
+     `overflow: hidden` the extra was silently CLIPPED, and the moment the side padding came off and
+     overflow went visible, it spilled out of the tinted frame and landed on top of the demo ribbon.
+     Matthew, looking at it: "it seems like it got messed up not sure why".
+
+     Auto height with a floor is the honest shape: the section grows for the step that needs it and
+     the page scrolls, which is what a page does. The bubble list is what gets capped instead, so a
+     long conversation scrolls inside while the controls below it are always fully on screen. */
+  height: auto;
+  min-height: clamp(22rem, 52vh, 30rem);
   --va-card: #ffffff;
   background: none;
   color: inherit;
@@ -598,16 +610,21 @@ body:has(.hub-root) {
   opacity: 0.55;
 }
 
-.va-shell .va-msgs { padding: 0 0 1rem; }
+/* The scroller moved here from the panel. A cap rather than a share of the panel's height,
+   because the panel no longer has one to share. */
+.va-shell .va-msgs {
+  padding: 0 0 1rem;
+  max-height: clamp(14rem, 44vh, 22rem);
+}
 .va-shell .va-chips,
 .va-shell .va-composer { padding: 0; }
 .va-shell .va-connecting { padding: 2rem 0; }
 
-/* On a phone the frame is already the screen's width, so the panel just needs the height to be
-   worth having. */
+/* On a phone the frame is already the screen's width, and the floor comes down so a short step
+   does not open with a field of empty tint under it. */
 @media (max-width: 40rem) {
   .va-shell .va-panel {
-    height: clamp(26rem, 68vh, 32rem);
+    min-height: 20rem;
   }
 }
 

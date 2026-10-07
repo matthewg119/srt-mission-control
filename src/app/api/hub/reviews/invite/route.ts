@@ -95,6 +95,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     friendName?: unknown;
     friendContact?: unknown;
     referrerOfferText?: unknown;
+    round?: unknown;
     mode?: unknown;
     channel?: unknown;
     referrerEmail?: unknown;
@@ -134,6 +135,12 @@ export async function POST(req: Request): Promise<NextResponse> {
   const templateKey = templateByKey(text(body.templateKey, 40) ?? "").key;
   const mode = readInviteMode(body.mode);
   const referrerOfferText = text(body.referrerOfferText, MAX_OFFER);
+  // ‼️ WHICH FRIEND THIS IS, 1 OR 2, AND ANYTHING ELSE IS 1. The second invite is the one
+  // the two-for-one paid for, so the clinic needs to tell the two rows apart at the desk: the
+  // first reward is earned when that friend books, the second when she and that friend come in
+  // together. It rides in offer_snapshot rather than a column, because the snapshot is already the
+  // frozen record of what was promised and this is part of what was promised.
+  const round = body.round === 2 ? 2 : 1;
 
   const { data, error } = await supabaseAdmin
     .from("referral_invites")
@@ -145,7 +152,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       service_label: serviceLabel,
       // BOTH deals, frozen. A later edit to the clinic's offers must not be able to change what
       // either person was promised: the friend has a text message quoting one of them.
-      offer_snapshot: { serviceLabel, offerText, referrerOfferText, templateKey },
+      offer_snapshot: { serviceLabel, offerText, referrerOfferText, templateKey, round },
       code,
       friend_name: text(body.friendName, MAX_FIELD),
       friend_contact: text(body.friendContact, MAX_FIELD),

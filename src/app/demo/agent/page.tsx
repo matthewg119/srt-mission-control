@@ -158,6 +158,11 @@ const DEMO_REFERRAL = {
   ],
   defaultOffer: "20% off their first visit",
   defaultReferrerOffer: "20% off your next session",
+  // ‼️ THE SECOND FRIEND'S DEAL, AND IT IS ABOUT BOTH OF THEM TURNING UP. A real clinic
+  // sets this in clients.review_workflow.referral_offer.default_pair_offer and a clinic that has
+  // not agreed one gets no second ask at all. It is a literal here for the same reason the rest of
+  // this object is: the demo reaches no database.
+  defaultPairOffer: "two treatments for the price of one",
   clinicPhone: DEMO_CLIENT.phone,
   // No reviews host on a client that does not exist, so claimUrl falls back to this origin and
   // the link in the previewed message is openable from the demo.

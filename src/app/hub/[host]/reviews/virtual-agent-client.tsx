@@ -102,6 +102,23 @@ export interface ReferralConfig {
   defaultOffer: string | null;
   /** Her reward, when the service she named carries none of its own. */
   defaultReferrerOffer?: string | null;
+  /**
+   * The two-for-one she is offered for a SECOND friend, and null means she is not asked for one.
+   *
+   * ‼️ CLINIC-WIDE AND IN THE BAG, NOT A COLUMN ON client_service_offers. Matthew,
+   * 2026-10-07: "after they referred one friend we tell them if they add a 2nd friend we give them
+   * an extre offer. 2x1 so you can come with that friend and get X together, this way you get both
+   * in at the same time a 2nd time and you can upsell other stuff." That is a deal about a VISIT,
+   * two people through the door at once, not a deal about the service she happened to name, so it
+   * is one value per clinic and belongs beside default_offer in clients.review_workflow. It also
+   * means no migration: a column would have made the whole offers select fail until the SQL ran,
+   * which would silently drop every per-service deal in the meantime.
+   *
+   * ‼️ AND NULL REALLY MEANS NOT ASKED. Exactly like defaultOffer: a clinic that has not
+   * agreed a two-for-one must not have one invented for it, because the argument lands at the
+   * front desk with two people standing there.
+   */
+  defaultPairOffer?: string | null;
   /** The clinic's number, so the text she sends has them on the thread. */
   clinicPhone: string | null;
   /** The host the claim link is built on. Null falls back to this app's origin. */
@@ -220,13 +237,33 @@ export function VirtualAgentClient({
    *
    * `instruct` go and find it, press Done when you have it
    * `confirm`  did you actually copy it? A No goes back rather than forward
-   * `enter`    now type it, or skip
+   * `enter`    paste it, and nothing else on screen
+   * `send`     now pick the wording, read it, and send it
+   *
+   * ‼️ `send` SPLIT OFF `enter` ON 2026-10-07 AND THE SPLIT IS THE WHOLE FIX. `enter` had
+   * grown back into the wall this three-beat sequence was built to undo: two inputs, a contacts
+   * link, an optional email, three wording chips, a message preview, three send buttons and a
+   * skip, all at once. Matthew: "after they click in yes when they actually copied the number just
+   * leave a space for them to paste the number in the conversation and then we just keep the chat
+   * as regular." So `enter` is now one box and a Next, like every other question in the walk, and
+   * everything about the message happens after she has answered it.
    *
    * ‼️ THE CONFIRM STEP IS NOT A NAG. She has just come back from another app, which on a phone
    * means this page may have been unloaded and restored; asking is how she finds out whether the
    * thing she copied survived, before she is looking at an empty box wondering what she did wrong.
    */
-  const [invitePhase, setInvitePhase] = useState<"instruct" | "confirm" | "enter">("instruct");
+  const [invitePhase, setInvitePhase] = useState<
+    "instruct" | "confirm" | "enter" | "send"
+  >("instruct");
+  /**
+   * Which friend she is on, 1 or 2.
+   *
+   * ‼️ TWO IS THE CEILING AND IT IS NOT AN OVERSIGHT. The second ask is paid for by a
+   * specific deal, the two-for-one, and there is no third deal to pay for a third ask. A loop that
+   * kept offering would be this tool pressing somebody who has already said yes twice, at a
+   * counter, which is the one thing the whole handover was shaped to avoid.
+   */
+  const [inviteRound, setInviteRound] = useState<1 | 2>(1);
   const [inviteError, setInviteError] = useState<string | null>(null);
   /**
    * Minted once per visit, so the message she previews carries the code that gets stored.
@@ -236,7 +273,17 @@ export function VirtualAgentClient({
    * on both sides from Math.random and disagree. useState's initialiser runs once per mount on
    * the client, which is the only place the code is ever read.
    */
-  const [code] = useState(() => inviteCode());
+  const [codes] = useState(() => [inviteCode(), inviteCode()]);
+  /**
+   * The code for the friend she is on.
+   *
+   * ‼️ ONE PER FRIEND, MINTED TOGETHER AND UP FRONT. Both rows are real invites with real
+   * expiries, so the second friend cannot be handed the first friend's link: whoever claimed it
+   * first would close it for the other, and the clinic would see one referral where there were
+   * two. Minted in the same lazy initialiser for the reason above: a code computed during render
+   * disagrees between the server pass and hydration.
+   */
+  const code = codes[inviteRound - 1];
 
   // ── The walk ───────────────────────────────────────────────────────────────
   const [stage, setStage] = useState<Stage>("intro");
@@ -304,6 +351,15 @@ export function VirtualAgentClient({
 
   const offerText = resolvedOffer.friend;
   const referrerOffer = resolvedOffer.referrer;
+  /** The two-for-one, offered once, for a second friend. Null means she is never asked. */
+  const pairOffer = referral?.defaultPairOffer ?? null;
+  /**
+   * ‼️ ASKED ONLY AFTER A FIRST INVITE ACTUALLY WENT, AND ONLY WHERE THERE IS A DEAL. Not
+   * after a skip: she declined to send one, and following that with a better deal for sending two
+   * is haggling. The reward she is shown here is the pair offer and never the first one, because
+   * they are earned by different things.
+   */
+  const canOfferSecond = inviteRound === 1 && Boolean(pairOffer);
 
   /**
    * Whether the referral half of the walk happens at all.
@@ -555,6 +611,50 @@ export function VirtualAgentClient({
   }
 
   /**
+   * She has pasted the number. Move to the message, in the rhythm of the rest of the chat.
+   *
+   * ‼️ THE NUMBER NEVER GOES INTO A BUBBLE. The transcript is on screen at a counter with
+   * the front desk beside her and it is the easiest thing in this tool to photograph. Her friend's
+   * name is already visible in the preview she is about to read, so the bubble carries that and
+   * stops there. Nothing in the transcript is stored either way; store() sends `answers`.
+   */
+  function toSend() {
+    setInviteError(null);
+    // ‼️ VALIDATED HERE RATHER THAN AT THE SEND BUTTON, because the send button is now on
+    // the next screen and an error about a field she can no longer see is an error she cannot fix.
+    // composeInvite() still refuses an empty number on its own; this is the half that can explain.
+    if (inviteMode === "text" && !friendContact.trim()) {
+      setInviteError("We need their number to open the message.");
+      return;
+    }
+    if (inviteMode === "internal" && !friendName.trim() && !friendContact.trim()) {
+      setInviteError("We need their name or their number to pass on.");
+      return;
+    }
+    const who = friendName.trim();
+    push("her", who ? `It is ${who}.` : "Got it.");
+    setInvitePhase("send");
+  }
+
+  /**
+   * The two-for-one: a second friend, on a deal that is about both of them coming in together.
+   *
+   * ‼️ IT RESETS THE FRIEND AND NOTHING ELSE. templateKey stays, because she has already
+   * chosen how she wants to sound, and her own email stays, because it is hers and she gave it
+   * once. inviteRound moves the code to the second one, so the second friend gets a link of their
+   * own rather than one that the first friend can close by claiming it.
+   */
+  function addSecondFriend() {
+    push("her", "Yes, I will add one more.");
+    setFriendName("");
+    setFriendContact("");
+    setInviteError(null);
+    setInviteSent(false);
+    setInviteRound(2);
+    setInvitePhase("instruct");
+  }
+
+  /**
    * The `internal` shape: record the referral and send nothing.
    *
    * ‼️ THE SECOND OF THE TWO OPTIONS, AND IT IS NOT A DEGRADED FIRST. Nothing leaves the building,
@@ -686,8 +786,14 @@ export function VirtualAgentClient({
           offerText,
           // Snapshotted beside the friend's, so a later edit to the clinic's deals cannot change
           // what either of them was promised.
-          referrerOfferText: referrerOffer,
+          //
+          // ‼️ THE SECOND FRIEND'S ROW CARRIES THE PAIR OFFER, NOT THE FIRST REWARD. They are
+          // earned by different things: the first is earned when that friend books, the two-for-one
+          // when she and the second friend come in together. Storing the first reward on both rows
+          // would have the clinic honouring the wrong one at the desk.
+          referrerOfferText: inviteRound === 1 ? referrerOffer : pairOffer,
           templateKey,
+          round: inviteRound,
           code,
           friendName: friendName.trim() || null,
           friendContact: friendContact.trim() || null,
@@ -1046,47 +1152,8 @@ export function VirtualAgentClient({
                     it is us writing to her friends in her name.
                   */
                   <div className="va-composer va-invite">
-                    {(invitePhase === "enter" || inviteSent) && (
-                    <div className="va-bar is-stack">
-                      <input
-                        type="text"
-                        value={friendName}
-                        onChange={(e) => setFriendName(e.target.value)}
-                        placeholder="Their first name"
-                        aria-label="Your friend's first name"
-                      />
-                      <input
-                        type="tel"
-                        value={friendContact}
-                        onChange={(e) => setFriendContact(e.target.value)}
-                        placeholder="Their mobile number"
-                        aria-label="Your friend's mobile number"
-                      />
-                      <button type="button" className="va-skip" onClick={() => void pickContact()}>
-                        Or pick from contacts
-                      </button>
-                      {/*
-                        ‼️ HERS, OPTIONAL, AND LAST. It is below her friend's details because her
-                        friend's details are what the step is for; hers buys one message when that
-                        friend comes in. The placeholder says so, and leaving it blank costs her
-                        nothing: no address means no message and nothing ever asks again.
-                      */}
-                      {askReferrerEmail && referrerOffer && (
-                        <input
-                          type="email"
-                          value={referrerEmail}
-                          onChange={(e) => setReferrerEmail(e.target.value)}
-                          placeholder="Your email, to hear when they book (optional)"
-                          aria-label="Your own email, optional"
-                          autoComplete="email"
-                          inputMode="email"
-                        />
-                      )}
-                    </div>
-                    )}
-
                     {/* ── Beat one: go and get it ── */}
-                    {invitePhase === "instruct" && !inviteSent && (
+                    {invitePhase === "instruct" && (
                       <>
                         <p className="va-invite-note">
                           Open your contacts and find their number. Come back and press Done when
@@ -1103,11 +1170,16 @@ export function VirtualAgentClient({
                     )}
 
                     {/* ── Beat two: did it actually work ── */}
-                    {invitePhase === "confirm" && !inviteSent && (
+                    {invitePhase === "confirm" && (
                       <>
                         <p className="va-invite-note">
                           Did you copy their number?
-                          {referrerOffer ? ` You get ${referrerOffer} once they book.` : ""}
+                          {inviteRound === 1 && referrerOffer
+                            ? ` You get ${referrerOffer} once they book.`
+                            : ""}
+                          {inviteRound === 2 && pairOffer
+                            ? ` You both get ${pairOffer} when you come in together.`
+                            : ""}
                         </p>
                         <div className="va-chips is-pair">
                           <button
@@ -1135,68 +1207,200 @@ export function VirtualAgentClient({
                     )}
 
                     {/*
-                      ‼️ THE WORDING PICKER AND THE PREVIEW ARE `text` MODE ONLY. In `internal`
-                      mode there is no message, so showing her one to choose and read would be
-                      the screen describing something that will not happen.
+                      ── Beat three: the space to paste it, and nothing else ──
+
+                      ‼️ THIS SCREEN IS TWO BOXES AND A BUTTON ON PURPOSE. It used to be these two
+                      boxes PLUS the contacts link, her own email, three wording chips, a message
+                      preview, three send buttons and a skip, all at once, which is the wall the
+                      three-beat sequence was supposed to have removed and which grew back.
+                      Matthew, 2026-10-07: "just leave a space for them to paste the number in the
+                      conversation and then we just keep the chat as regular". Everything about the
+                      message moved to the beat after this one.
                     */}
-                    {inviteMode === "text" && (invitePhase === "enter" || inviteSent) && (
+                    {invitePhase === "enter" && (
                       <>
-                        <div className="va-chips" role="group" aria-label="Message wording">
-                          {INVITE_TEMPLATES.map((t) => (
-                            <button
-                              key={t.key}
-                              type="button"
-                              className={t.key === templateKey ? "va-chip is-on" : "va-chip"}
-                              aria-pressed={t.key === templateKey}
-                              onClick={() => setTemplateKey(t.key)}
-                            >
-                              {t.label}
-                            </button>
-                          ))}
+                        <div className="va-bar is-stack">
+                          <input
+                            type="text"
+                            value={friendName}
+                            onChange={(e) => setFriendName(e.target.value)}
+                            placeholder="Their first name"
+                            aria-label="Your friend's first name"
+                          />
+                          <input
+                            type="tel"
+                            value={friendContact}
+                            onChange={(e) => setFriendContact(e.target.value)}
+                            placeholder="Paste their mobile number"
+                            aria-label="Your friend's mobile number"
+                          />
+                          <button
+                            type="button"
+                            className="va-skip"
+                            onClick={() => void pickContact()}
+                          >
+                            Or pick from contacts
+                          </button>
+                          {/*
+                            ‼️ HERS, OPTIONAL, LAST, AND ROUND ONE ONLY. It is below her friend's
+                            details because her friend's details are what the step is for; hers buys
+                            one message when that friend comes in. Leaving it blank costs her
+                            nothing. It is not asked again for the second friend: she either gave an
+                            address the first time or chose not to, and asking twice is this tool
+                            not listening.
+                          */}
+                          {askReferrerEmail && referrerOffer && inviteRound === 1 && (
+                            <input
+                              type="email"
+                              value={referrerEmail}
+                              onChange={(e) => setReferrerEmail(e.target.value)}
+                              placeholder="Your email, to hear when they book (optional)"
+                              aria-label="Your own email, optional"
+                              autoComplete="email"
+                              inputMode="email"
+                            />
+                          )}
                         </div>
 
-                        <p className="va-invite-preview">{inviteMessage}</p>
+                        {inviteError && (
+                          <p className="va-invite-error" role="alert">
+                            {inviteError}
+                          </p>
+                        )}
+
+                        <button type="button" className="va-send is-wide" onClick={toSend}>
+                          Next
+                        </button>
                       </>
                     )}
 
-                    {inviteMode === "internal" && invitePhase === "enter" && !inviteSent && (
-                      <p className="va-invite-note">
-                        {businessName} will reach out to them directly.
-                      </p>
-                    )}
+                    {/*
+                      ── Beat four: the message ──
 
-                    {inviteError && (
-                      <p className="va-invite-error" role="alert">
-                        {inviteError}
-                      </p>
-                    )}
+                      ‼️ NOTHING HERE IS SENT BY US. The buttons open her own messages app with the
+                      message already written. See composeInvite(): it returns an href and there is
+                      no sender in this lane.
 
-                    {inviteSent ? (
-                      <button type="button" className="va-send is-wide" onClick={finishInvite}>
-                        Done, next question
-                      </button>
-                    ) : invitePhase !== "enter" ? null : inviteMode === "internal" ? (
-                      <button type="button" className="va-send is-wide" onClick={recordInvite}>
-                        Pass their details on
-                      </button>
-                    ) : (
-                      <div className="va-chips" role="group" aria-label="How to send it">
-                        {INVITE_CHANNELS.map((c) => (
+                      ‼️ SHE READS IT BEFORE IT OPENS, in full, in her own words' place. She is
+                      about to send it from her number to a friend. A referral message that goes out
+                      of her phone without her having read it is us writing to her friends in her
+                      name.
+
+                      ‼️ AND THE WORDING PICKER AND THE PREVIEW ARE `text` MODE ONLY. In `internal`
+                      mode there is no message, so showing her one to choose and read would be the
+                      screen describing something that will not happen.
+                    */}
+                    {invitePhase === "send" && !inviteSent && (
+                      <>
+                        {inviteMode === "text" ? (
+                          <>
+                            <div className="va-chips" role="group" aria-label="Message wording">
+                              {INVITE_TEMPLATES.map((t) => (
+                                <button
+                                  key={t.key}
+                                  type="button"
+                                  className={t.key === templateKey ? "va-chip is-on" : "va-chip"}
+                                  aria-pressed={t.key === templateKey}
+                                  onClick={() => setTemplateKey(t.key)}
+                                >
+                                  {t.label}
+                                </button>
+                              ))}
+                            </div>
+
+                            <p className="va-invite-preview">{inviteMessage}</p>
+                          </>
+                        ) : (
+                          <p className="va-invite-note">
+                            {businessName} will reach out to them directly.
+                          </p>
+                        )}
+
+                        {inviteError && (
+                          <p className="va-invite-error" role="alert">
+                            {inviteError}
+                          </p>
+                        )}
+
+                        {inviteMode === "internal" ? (
                           <button
-                            key={c.key}
                             type="button"
-                            className="va-chip"
-                            onClick={() => openInvite(c.key)}
+                            className="va-send is-wide"
+                            onClick={recordInvite}
                           >
-                            {c.label}
+                            Pass their details on
                           </button>
-                        ))}
-                      </div>
+                        ) : (
+                          <div className="va-chips" role="group" aria-label="How to send it">
+                            {INVITE_CHANNELS.map((c) => (
+                              <button
+                                key={c.key}
+                                type="button"
+                                className="va-chip"
+                                onClick={() => openInvite(c.key)}
+                              >
+                                {c.label}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* The way back to the boxes, because they are no longer on this screen. */}
+                        <button
+                          type="button"
+                          className="va-skip"
+                          onClick={() => setInvitePhase("enter")}
+                        >
+                          Change their details
+                        </button>
+                      </>
                     )}
 
-                    <button type="button" className="va-skip" onClick={skipInvite}>
-                      Skip this one
-                    </button>
+                    {/*
+                      ── Beat five: it went. The two-for-one, or the way on ──
+
+                      ‼️ THE SECOND ASK IS PAID FOR, AND IT IS ASKED ONCE. Matthew, 2026-10-07: a
+                      second friend earns a two-for-one so she comes in WITH them, which puts two
+                      people through the door on one visit. It appears only where the clinic has
+                      agreed one (see defaultPairOffer) and only after a first invite actually went,
+                      never after a skip.
+
+                      ‼️ AND IT IS NOT TIED TO WHAT SHE WRITES. The deal is earned by the two of them
+                      turning up. Tying any reward to a review is what the FTC endorsement rules
+                      reach and what _probe-review-gating.ts fails the build over.
+                    */}
+                    {inviteSent &&
+                      (canOfferSecond ? (
+                        <>
+                          <p className="va-invite-note">
+                            Add a second friend and you both get {pairOffer} when you come in
+                            together.
+                          </p>
+                          <div className="va-chips is-pair">
+                            <button
+                              type="button"
+                              className="va-chip"
+                              onClick={addSecondFriend}
+                            >
+                              Yes, add one more
+                            </button>
+                            <button type="button" className="va-chip" onClick={finishInvite}>
+                              No thanks
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <button type="button" className="va-send is-wide" onClick={finishInvite}>
+                          Done, next question
+                        </button>
+                      ))}
+
+                    {/* Gone once something has been sent: there is nothing left to skip. */}
+                    {!inviteSent && (
+                      <button type="button" className="va-skip" onClick={skipInvite}>
+                        Skip this one
+                      </button>
+                    )}
                   </div>
                 ) : awaiting === "text" ? (
                   <div className="va-composer">

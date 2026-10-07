@@ -385,7 +385,12 @@
   margin-left: 50%;
   transform: translateX(-50%);
   margin-bottom: 1rem;
-  height: 34rem;
+  /* ‼️ TALL, AND 34rem WAS NOT. Matthew, on the live page: "i still cant see the call
+     button". At this width Calendly stacks the month grid ABOVE the times instead of beside them,
+     so the day picker alone fills 34rem and the times and the confirm button are below the fold of
+     an iframe that scrolls inside a page that also scrolls. It takes the screen now and the page
+     carries the scroll, which is the arrangement the rest of this funnel already uses. */
+  height: clamp(36rem, 92vh, 52rem);
   border-radius: 16px;
   overflow: hidden;
   background: #fff;

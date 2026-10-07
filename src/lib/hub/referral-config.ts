@@ -32,6 +32,16 @@ export interface ReferralConfigData {
   offers: ReferralServiceOffer[];
   defaultOffer: string | null;
   defaultReferrerOffer: string | null;
+  /**
+   * The two-for-one offered for a SECOND friend, or null for a clinic that has not agreed one.
+   *
+   * ‼️ IN THE BAG AND NOT A COLUMN, WHICH IS THE SAME CALL defaultOffer CARRIES. A
+   * two-for-one is a deal about a VISIT, two people through the door at once, not about the
+   * service she named, so it is one value per clinic. Keeping it out of client_service_offers also
+   * means no migration: naming a column that does not exist yet makes the whole offers select
+   * fail, and the catch below would then drop every per-service deal until the SQL ran.
+   */
+  defaultPairOffer: string | null;
   clinicPhone: string | null;
   /** The host a claim link is built on. Null falls back to the app's own origin. */
   reviewsHost: string | null;
@@ -58,6 +68,7 @@ export async function referralConfigFor(client: HubClient): Promise<ReferralConf
 
   const defaultOffer = trimmed(referral.default_offer);
   const defaultReferrerOffer = trimmed(referral.default_referrer_offer);
+  const defaultPairOffer = trimmed(referral.default_pair_offer);
   const mode = readInviteMode(referral.mode);
   // The number the patient's text is addressed to, so the clinic is on the thread. The clinic's
   // own record, never typed into this lane.
@@ -117,6 +128,7 @@ export async function referralConfigFor(client: HubClient): Promise<ReferralConf
     offers,
     defaultOffer,
     defaultReferrerOffer,
+    defaultPairOffer,
     clinicPhone,
     reviewsHost,
     mode: mode ?? DEFAULT_INVITE_MODE,
