@@ -831,8 +831,8 @@ const SKELETON: CommandSpec = {
  */
 const PAGE_WALK: CommandSpec = {
   label: "page 3 pick 2",
-  test: /^page\s+([0-9]{1,2})(?:\s+(?:pick\s+([0-9]{1,2})|(more|draft|check)))?$/i,
-  unmistakable: /^\s*[`*_]*page\s+[0-9]{1,2}\s+(?:pick\s+[0-9]{1,2}|more|draft|check)[`*_]*\s*$/i,
+  test: /^page\s+([0-9]{1,2})(?:\s+(?:pick\s+([0-9]{1,2})|(more|draft|check|ads)))?$/i,
+  unmistakable: /^\s*[`*_]*page\s+[0-9]{1,2}\s+(?:pick\s+[0-9]{1,2}|more|draft|check|ads)[`*_]*\s*$/i,
   pointAt: "pre_call_pages",
   what: "Page batch commands",
   implementedIn: "src/lib/clients/page-batch.ts",

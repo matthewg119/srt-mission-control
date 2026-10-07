@@ -1043,6 +1043,8 @@ export async function preCallPagesCardLines(clientId: string): Promise<string[]>
     "*One page at a time:* `page 3` shows where page 3 is and what it has to choose between. " +
       "`page 3 pick 2` takes an option, `page 3 more` writes new ones, `page 3 draft` writes its " +
       "body and `page 3 check` reads that body against the evidence and Google's guidance. " +
+      "`page 3 ads` writes the twenty direct-response headlines for the ad that sends her there, " +
+      "which are a different artifact from the page's own H1 and never replace it. " +
       "The number is the page's RANK, as printed above.",
     "_The pillar cannot be dropped, only swapped: every support links to it._",
   ];
@@ -1335,6 +1337,34 @@ export async function handlePreCallThreadReply(input: {
               : `Page ${row.rank} was not drafted: ${out.detail}`
           );
           await refreshCard(clientId);
+        },
+      };
+    }
+
+    if (walk.verb === "ads") {
+      return {
+        message: `Writing the ad headlines for page ${row.rank}. Twenty, and they take a moment.`,
+        after: async () => {
+          const { generateDrHeadlinesForPage, storeDrHeadlines, drHeadlinesFor, drHeadlineLines } =
+            await import("./page-dr-headlines");
+
+          const existing = (await drHeadlinesFor(clientId, [row.id])).get(row.id) ?? [];
+          if (existing.length) return void (await say(clientId, drHeadlineLines(row, existing).join("\n")));
+
+          const got = await generateDrHeadlinesForPage({ clientId, row });
+          if (!got.ok) return void (await say(clientId, `:warning: ${got.error}`));
+
+          const { loadOffer } = await import("./offers");
+          const offer = await loadOffer(clientId).catch(() => null);
+          const stored = await storeDrHeadlines({
+            clientId,
+            planId: row.id,
+            headlines: got.headlines,
+            audienceId: offer?.audienceId ?? null,
+          });
+          if (!stored.ok) return void (await say(clientId, `:warning: ${stored.error}`));
+
+          await say(clientId, drHeadlineLines(row, got.headlines).join("\n"));
         },
       };
     }

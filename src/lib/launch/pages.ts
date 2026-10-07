@@ -453,6 +453,9 @@ export const LAUNCH_PAGE_ACTIONS = [
   "page_pick",
   "page_draft",
   "page_check",
+  // The ad headline, which is a different artifact from the page's H1 and not a replacement for
+  // it. See src/lib/clients/page-dr-headlines.ts for why both exist.
+  "page_ads",
   // ─────────────────────────────────────────────────────────────────────────
   // ‼️ THE IDEA COMES BEFORE THE LINE, AND LISTING THEM IN THIS ORDER IS HALF OF WHY. The chat is
   // handed this array as the stages it may run, so the order it reads in is the order it teaches.
@@ -1378,6 +1381,50 @@ export async function runLaunchPagesAction(input: LaunchPagesInput): Promise<Lau
           checks: res.run.checks,
           ranAt: res.run.createdAt,
         }).join("\n"),
+      };
+    }
+
+    // ‼️ THE OTHER HEADLINE, AND THE TWO ARE NOT COMPETING DRAFTS OF ONE LINE. The page's H1 is a
+    // question a buyer types, because being cited when she types it is the mechanism this lane
+    // sells. These are the ad, the advertorial and the VSL headlines that send her to the page,
+    // which it cannot generate for itself. Written from the SAME angle, so they argue one thing.
+    case "page_ads": {
+      const rows = await planRows(clientId);
+      if ("error" in rows) return { ok: false, error: rows.error };
+      const row = atRank(rows, input.rank);
+      if (!row) {
+        return { ok: false, error: `There is no page ${input.rank} in this plan. There are ${rows.length}.` };
+      }
+
+      const { generateDrHeadlinesForPage, storeDrHeadlines, drHeadlinesFor, drHeadlineLines } =
+        await import("@/lib/clients/page-dr-headlines");
+
+      // ‼️ ALREADY-WRITTEN ONES COME BACK RATHER THAN BEING BURIED UNDER TWENTY MORE, the rule
+      // headlines_write keeps. Asking twice is usually asking to see them again.
+      const existing = (await drHeadlinesFor(clientId, [row.id])).get(row.id) ?? [];
+      if (existing.length) {
+        return { ok: true, message: drHeadlineLines(row, existing).join("\n") };
+      }
+
+      const got = await generateDrHeadlinesForPage({ clientId, row });
+      if (!got.ok) return { ok: false, error: got.error };
+
+      const { loadOffer } = await import("@/lib/clients/offers");
+      const offer = await loadOffer(clientId).catch(() => null);
+      const stored = await storeDrHeadlines({
+        clientId,
+        planId: row.id,
+        headlines: got.headlines,
+        audienceId: offer?.audienceId ?? null,
+      });
+      if (!stored.ok) return { ok: false, error: stored.error };
+
+      return {
+        ok: true,
+        message: [
+          ...drHeadlineLines(row, got.headlines),
+          ...(got.dropped.length ? ["", `${got.dropped.length} were refused by the rules and dropped.`] : []),
+        ].join("\n"),
       };
     }
 

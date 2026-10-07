@@ -41,6 +41,14 @@ import {
 } from "../src/lib/clients/page-batch";
 import { HEADLINE_COMMAND, SKELETON_COMMAND, BATCH_COMMAND } from "../src/lib/clients/page-batch";
 import { isAngleCommand } from "../src/lib/clients/page-angles";
+import { headlineFaults, isQueryShaped } from "../src/lib/clients/client-headlines";
+import {
+  DR_HEADLINES_PER_PAGE,
+  DR_ORIGIN,
+  drHeadlineFaults,
+  drHeadlineLines,
+  drHeadlinePrompt,
+} from "../src/lib/clients/page-dr-headlines";
 import type { PlanRow } from "../src/lib/clients/page-plan";
 
 let pass = 0;
@@ -118,6 +126,8 @@ for (const [t, verb] of [
   ["page 3 more", "more"],
   ["page 3 draft", "draft"],
   ["page 3 check", "check"],
+  ["page 3 ads", "ads"],
+  ["PAGE 3 ADS", "ads"],
   ["PAGE 3 CHECK", "check"],
   ["`page 3 draft`", "draft"],
 ] as const) {
@@ -183,7 +193,7 @@ console.log("\n3. no collision with the verbs already in step 21's thread");
 for (const t of ["headline 3 pick 2", "headline 3 more", "skeleton", "skeleton 3 more", "batch", "batch approve"]) {
   check(`"${t}" is not the page walk`, parsePageWalk(t) === null);
 }
-for (const t of ["page 3", "page 3 pick 2", "page 3 more", "page 3 draft", "page 3 check"]) {
+for (const t of ["page 3", "page 3 pick 2", "page 3 more", "page 3 draft", "page 3 check", "page 3 ads"]) {
   check(`"${t}" is not a headline, skeleton or batch command`, !HEADLINE_COMMAND.test(t) && !SKELETON_COMMAND.test(t) && !BATCH_COMMAND.test(t));
   check(`"${t}" is not an angle command`, !isAngleCommand(t));
 }
@@ -289,6 +299,102 @@ for (const s of STAGES) {
     check(`${s}: the card teaches "${typed}", and it parses`, parsePageWalk(typed) !== null);
   }
 }
+
+// ── 7. The ad headline, which is a different artifact from the H1 ────────────
+//
+// ‼️ THE WHOLE POINT OF THIS SECTION IS THAT THE TWO RULE SETS MUST NOT CONVERGE. The page H1 is
+// query-shaped because being cited when a buyer types her question is the mechanism this lane
+// sells, and isQueryShaped enforces that in code. An ad headline is the opposite artifact and
+// would be rejected by every one of those rules. If drHeadlineFaults ever starts refusing a
+// statement, somebody has merged the two and the ad lane is dead without erroring.
+
+console.log("\n7. ad headlines are judged by their own rules, not the H1's");
+
+// Matthew's own favourites, 2026-10-07. Every one of these is a statement and would die on
+// isQueryShaped. If a rule here rejects one of them, the rule is wrong, not the headline.
+const DR_GOOD = [
+  "Stop Paying Meta to Send You Ghosts",
+  "Agencies Sell You Clicks. ChatGPT Sends You Patients. Only One of Them Gets Paid Whether You Grow or Not.",
+  "You Didn't Open a Med Spa to Become a Salesperson. Here's How to Get Patients Who Walk In Already Wanting to Book.",
+  "The Med Spa Owner So Embarrassed She Made a Throwaway Account to Ask for Help, and the One Fix No Agency Ever Mentioned",
+  "Every Month You Stay Invisible to AI, Another Clinic Books the Patient Who Was Looking for You",
+];
+check("none of his favourites is query shaped", DR_GOOD.every((h) => !isQueryShaped(h)));
+check("and the H1 lane would reject every one of them", DR_GOOD.every((h) => headlineFaults([h], 0).length > 0));
+check(
+  "the ad lane accepts all of them",
+  drHeadlineFaults(DR_GOOD, 0).length === 0,
+  drHeadlineFaults(DR_GOOD, 0).join(" | ")
+);
+
+// What the ad lane still refuses, and the number rule is the one that matters: law 4 of the
+// engine asks for unusual numbers, which is exactly the instruction that invents a statistic.
+check(
+  "an invented figure is refused",
+  drHeadlineFaults(["47% of Patients Ask AI First. Yours Cannot Be Found."], 0).length === 1
+);
+check(
+  "the same figure is allowed once something on file says it",
+  drHeadlineFaults(["47% of Patients Ask AI First. Yours Cannot Be Found."], 0, "47 percent of patients").length === 0
+);
+check("a year is not a statistic", drHeadlineFaults(["What Changed in 2026 for Every Med Spa Owner Buying Ads"], 0).length === 0);
+check("a single digit is not a statistic", drHeadlineFaults(["The 3 Words That Decide Which Clinic ChatGPT Names"], 0).length === 0);
+check("an em dash is refused", drHeadlineFaults(["Stop Paying Meta — Start Being Found"], 0).length === 1);
+check(
+  "three headlines opening the same way is refused",
+  drHeadlineFaults(
+    ["Why Your Clinic Is Invisible", "Why Your Clinic Is Ignored", "Why Your Clinic Is Last", "Something Else Entirely"],
+    0
+  ).some((f) => f.includes("opens 3 headlines"))
+);
+check(
+  "twice is allowed, because the engine says twice",
+  drHeadlineFaults(["Why Your Clinic Is Invisible", "Why Your Clinic Is Ignored", "A Third One"], 0).length === 0
+);
+check("a short count is reported when one was asked for", drHeadlineFaults(["one"], 20)[0]?.includes("expected 20") === true);
+
+// ‼️ THE ENGINE IS THE ONE IN THE REPO, NOT A SECOND COPY OF ITS LAWS. A re-authored engine is
+// two sets of laws that drift, and the one that drifts is always the copy nobody is testing.
+const DR_PROMPT = drHeadlinePrompt({
+  ctx: {
+    clientName: "A Clinic",
+    city: "Richardson",
+    businessType: "med spa",
+    avatarLabel: "the owner",
+    treatment: null,
+    positioning: null,
+    framework: null,
+    approvedNumbers: [],
+    quotes: [],
+  },
+  row: { rank: 4, targetKeyword: "ai search vs google search", headline: "Is my med spa invisible?", workingTitle: "t" } as never,
+  angle: { idea: "Her ad spend buys clicks, not patients", indoctrination: null, narrative: null },
+  count: 20,
+});
+check("the prompt carries the seven laws", DR_PROMPT.includes("THE SEVEN LAWS"));
+check("the prompt carries the 30-angle menu", DR_PROMPT.includes("Vulnerable Confession"));
+check("the prompt carries the classic patterns", DR_PROMPT.includes("They Laughed When I Sat Down At The Piano"));
+check("the prompt states the real length band", DR_PROMPT.includes("12 to 45 words"));
+check("the prompt says the 8-word rule does not apply", DR_PROMPT.includes("THERE IS NO 8-WORD RULE"));
+// The page is the brief. Without it, eleven pages get one set of twenty with the keyword swapped.
+check("the prompt names the page's keyword", DR_PROMPT.includes("ai search vs google search"));
+check("the prompt names what the page argues", DR_PROMPT.includes("Her ad spend buys clicks, not patients"));
+check("the prompt names the page's own H1 as a different artifact", DR_PROMPT.includes("Is my med spa invisible?"));
+check("the prompt says these are NOT the H1", DR_PROMPT.includes("NOT the page's own H1"));
+// With no approved numbers, the numbers block must forbid figures outright rather than stay silent.
+check("with nothing on file the prompt forbids figures", DR_PROMPT.includes("NO approved statistics"));
+check("no banned dash anywhere in the assembled prompt", !hasBannedDash(DR_PROMPT));
+
+// The storage origin is what keeps these out of the H1 picker.
+check("the ad origin is its own value", DR_ORIGIN === "dr_ad");
+check("twenty, which is the number the angle menu is sized to", DR_HEADLINES_PER_PAGE === 20);
+
+// The card says what these are for, because a list of twenty statements under a page whose H1 is
+// a question is otherwise indistinguishable from the H1 lane having gone wrong.
+const CARD = drHeadlineLines({ rank: 4, headline: "Is my med spa invisible?", workingTitle: "t" } as never, DR_GOOD);
+check("the card says the page keeps its own H1", CARD.join(" ").includes("keeps its own H1"));
+check("the card carries no banned dash", CARD.every((l) => !hasBannedDash(l)));
+check("an empty bank says so rather than printing an empty list", drHeadlineLines({ rank: 4 } as never, []).length === 1);
 
 // ── Summary ──────────────────────────────────────────────────────────────────
 //

@@ -36,7 +36,7 @@ export const HEADLINE_COMMAND = /^headline\s+([0-9]{1,2})\s+(?:pick\s+([0-9]{1,2
 export const SKELETON_COMMAND = /^skeleton(?:\s+([0-9]{1,2})\s+more)?$/i;
 
 /**
- * `page 3`, `page 3 more`, `page 3 pick 2`, `page 3 draft`, `page 3 check`.
+ * `page 3`, `page 3 more`, `page 3 pick 2`, `page 3 draft`, `page 3 check`, `page 3 ads`.
  *
  * ONE page through its own stages, rather than the whole batch through one. The verbs above are
  * every decision a page needs, and which one a bare `page 3` answers is worked out from what that
@@ -53,10 +53,10 @@ export const SKELETON_COMMAND = /^skeleton(?:\s+([0-9]{1,2})\s+more)?$/i;
  * is the only one of the two that cannot silently name a different page after a swap.
  */
 export const PAGE_WALK_COMMAND =
-  /^\s*[`*_]*page\s+([0-9]{1,2})(?:\s+(?:(pick)\s+([0-9]{1,2})|(more|draft|check)))?[`*_]*\s*$/i;
+  /^\s*[`*_]*page\s+([0-9]{1,2})(?:\s+(?:(pick)\s+([0-9]{1,2})|(more|draft|check|ads)))?[`*_]*\s*$/i;
 
 export type PageWalkCommand =
-  | { page: number; verb: "show" | "more" | "draft" | "check" }
+  | { page: number; verb: "show" | "more" | "draft" | "check" | "ads" }
   | { page: number; verb: "pick"; option: number };
 
 /**
@@ -84,7 +84,7 @@ export function parsePageWalk(text: string): PageWalkCommand | null {
   }
 
   const verb = (m[4] ?? "show").toLowerCase();
-  if (verb === "more" || verb === "draft" || verb === "check") return { page, verb };
+  if (verb === "more" || verb === "draft" || verb === "check" || verb === "ads") return { page, verb };
   return { page, verb: "show" };
 }
 
@@ -594,7 +594,10 @@ export function pageReplyLine(stage: PageStage, rank: number): string {
     case "headline":
       return `\`page ${rank} pick 2\` takes option 2. \`page ${rank} more\` writes three new ones.`;
     case "skeleton":
-      return `\`page ${rank} more\` writes its skeleton. There is nothing to choose between here.`;
+      return (
+        `\`page ${rank} more\` writes its skeleton. There is nothing to choose between here. ` +
+        `\`page ${rank} ads\` writes the twenty ad headlines that send her here.`
+      );
     case "handover":
       return (
         `\`page ${rank} pick 1\` puts the tool on this page. \`cta ${rank}: <one sentence>\` is the ` +
@@ -603,7 +606,10 @@ export function pageReplyLine(stage: PageStage, rank: number): string {
     case "draft":
       return `\`page ${rank} draft\` writes the body. One page at a time, and the batch research should be filed first.`;
     case "review":
-      return `\`page ${rank} check\` reads it against the evidence and Google's guidance. Publishing is a separate press.`;
+      return (
+        `\`page ${rank} check\` reads it against the evidence and Google's guidance. Publishing is a separate press. ` +
+        `\`page ${rank} ads\` writes the twenty ad headlines that send her here.`
+      );
     case "live":
       return `Nothing is owed. \`page ${rank} check\` reads it again after an edit.`;
   }
