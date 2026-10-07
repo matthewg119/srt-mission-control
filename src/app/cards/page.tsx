@@ -21,9 +21,19 @@ import "./cards.css";
  * with real system stacks behind them, so if these classes are ever dropped the funnel degrades to
  * a sans and a serif rather than to whatever the root layout happens to set.
  */
+// ‼️ NO `weight` ON THIS ONE, AND THE PRODUCTION BUILD IS WHY. DM Sans is a VARIABLE font with
+// an optical-size axis as well as a weight axis, so asking next/font for ["400","500","600"]
+// makes it request static instances that Google does not serve for this family. The loader gets a
+// response it cannot parse and throws `Cannot read properties of null (reading '1')` out of
+// @next/font/dist/google/loader.js, which is what killed main's deploy on 2026-10-07 in 36
+// seconds after the same commit had built green as a preview and green on a laptop.
+//
+// Omitting weight loads the variable font itself, which is the whole range in one file and is
+// what every weight below 700 in this stylesheet wants anyway. DM Serif Display below KEEPS its
+// weight because it is a static single-weight family, which is also how universe-fonts.ts
+// declares it.
 const dmSans = DM_Sans({
   subsets: ["latin"],
-  weight: ["400", "500", "600"],
   variable: "--cd-text",
   display: "swap",
 });
