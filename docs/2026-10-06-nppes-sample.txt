@@ -1,0 +1,82 @@
+# The frozen NPPES cohort: companies in run c74a895d-4ea0-4d1b-9904-33fb4ace00b4 that were qualified, offered to the site
+# crawl, and left with no owner name. Written 2026-10-06.
+#
+# ‼️ RE-DERIVING THIS IS A DIFFERENT COHORT. The predicate keys on owner_name being empty, so
+# every name this rung finds removes a row from it. Frozen so a re-run stays paired.
+#
+# id	business_name	city	state	domain
+34abf2aa-1ab1-47ed-bcee-e643aea124d8	28 Skin Envy	Richardson	Texas	28skinenvy.com
+892226f4-a2ab-4cb2-b9fd-24746d21f574	47 Aesthetics	Dallas	Texas	47aesthetics.com
+4606b948-4304-45fc-adea-5b3785268a1d	AAFE Medspa Dallas	Dallas	Texas	facialesthetics.org
+3dbd362c-4266-40a9-8b2f-2d785d660c0a	ABS Clínica Cosmética "The Clinic"	Farmers Branch	Texas	abstheclinic.com
+15e8b687-3c64-42c9-9a7d-99a9d7db966a	Advanced Regeneration	Dallas	Texas	advancedregeneration.com
+8f108a13-a2e7-4430-bb23-ac9956e9d4fb	Ageless Aura	Arlington	Texas	ageless-aura.com
+e7a31112-d134-436a-8aac-593643c673ed	Alegria Med Spa and Hair Restoration Center	Sunnyvale	Texas	alegriamedspa.com
+1f6852d4-d7dc-4682-ad89-f3b9ea1b1b49	Andrea's Med Spa	Dallas	TX	andreasmedspa.com
+87d13296-e5aa-4881-ade8-052bef40997f	April's Laser Studio	Irving	Texas	aprilsstonesskincare.com
+abf314e0-db5a-4939-bee7-8ed43fe366e1	AssuredSkin	Dallas	Texas	assuredskin.com
+78abe617-943d-4106-abd9-16e4185017b0	Bex Laser Aesthetix	Arlington	Texas	bexme.net
+e9c4edd6-a71e-48ac-a545-e743e3d9f440	Chameleon Medical Spa	DeSoto	Texas	chameleonmedspa.com
+00eb163f-123e-414d-939d-25a4b9fd301a	Charm Laser Skin Center	Carrollton	Texas	charmlaser.com
+a5c19f60-2576-48ae-83d8-67b0e5c137cf	Dallas Beauty Room	Dallas	Texas	evolutionofbeautyacademy.com
+ed8644bc-0c53-4710-b5ef-2f4dfea32ea6	Dallas Pro Aesthetics	Dallas	Texas	dallasproaesthetics.com
+e38f0ada-7c8f-4d7f-824b-a0844ca57bee	DANGSKYN BEAUTY - Acne Clinic & Facial Spa	Dallas	Texas	dangskynbeauty.com
+e56c3204-725e-44be-affe-c20e5645b959	DeBeauty Aesthetics	Dallas	Texas	lips-in-dallas.com
+1375a13d-e25e-42bb-8d9e-e7bfd4cf5585	Dermaglow Medspa & Wellness	Dallas	Texas	dermaglowesthetics.com
+e9352b3a-0be6-4de5-8999-db3cd80c5ff9	DLS Aesthetics	Dallas	Texas	dlsaesthetics.com
+301cc6f9-4b3b-42d7-88a1-84ff8b9a3e8a	Eleven Wellness	Dallas	Texas	elevenwellness.com
+de003ba0-85dd-4159-aa01-7f4d99754def	Elite Pro Wellness Health & Beauty Center	Dallas	Texas	eliteprowellness.com
+21c81a36-828b-4ae2-a189-7d11ff083b53	Evoque Aesthetics	Dallas	Texas	evoqueaesthetics.com
+1fbae0b4-c37d-4ada-8a46-3b4b79f4173e	Eyden Medical Spa	Dallas	Texas	eydenspa.com
+a1047ff2-3059-4520-aa78-761f3d59e4e2	Faceing Aesthetics	Dallas	Texas	faceingaesthetics.com
+53586e48-06b2-49ee-aae9-51773c7c4860	Facial Mania Med Spa Irving	Irving	Texas	facialmaniamedspa.com
+7d6c5bc6-3c83-4e3f-950a-901aabde0c14	Glow Finity Med Spa	Carrollton	Texas	glowfinityspa.com
+93c28c3d-78dd-4eeb-883a-5f21871be934	Halo Skin and Scar	Irving	Texas	haloskinandscar.com
+d121a601-c243-4d3e-a202-d69cd34e90ac	HydroPros-Health. Rehydration. Beauty	Irving	Texas	ivhydropros.com
+5d1c881c-4220-4c32-a8a1-9f4272fb815b	It's A Secret Med Spa	Dallas	Texas	secretmedspa.com
+62b6217c-646f-45e4-bffe-a75e8c8b1fd6	Jewell Aesthetics	Dallas	Texas	jewellaesthetics.com
+5554cff5-4a35-49dc-9dd3-a67bb37e7c7d	La Bella Esthetics	Dallas	Texas	labellaesthetics.net
+dcca0af8-8875-4f7e-a550-4b78a87d2b2d	La Lumiere Esthetique	Dallas	Texas	lalumiereesthetiques.com
+f6824135-0760-4ffd-9534-927536050c3b	Laser Essentials Medical Spa	Plano	Texas	laseressentials.net
+56ecb52d-80ac-436d-b648-82958152967b	Laser Lounge Dallas	Dallas	Texas	laserloungedallas.com
+605b7d3f-1716-42af-9619-2fb98cd29db4	Le Beauty Spa	Garland	Texas	lebeautymedspa.com
+89fc3b9e-06c5-4dac-a566-14c3c4554f76	Luna Med Aesthetics	Dallas	Texas	lunamedaesthetics.com
+47b008d8-edcb-4d98-81fe-06c1ba8f79c4	Mandy Ward, Aesthetic Nurse Practitioner	Dallas	Texas	vivadayspa.com
+bbfb6529-6fb3-4d72-80ed-b28d3b7e117c	Marvelous NP Injector	Dallas	Texas	marvelousnpinjector.com
+71a7febe-2c95-4d84-a066-beea15b53977	MD Aesthetics	Dallas	Texas	mdaestheticsdfw.com
+b4f92cf2-e408-4f18-aeae-311b47982f1e	MD Laser Med Spa	Plano	Texas	mdlasermed.com
+b8bf9946-24c9-4ccb-bacf-0549e9500f51	MedSkinMe	Cedar Hill	Texas	medskinme.com
+41815baa-9727-4506-8bb7-ef193c0529b5	MNML Med Spa	Richardson	Texas	mnmlmedspa.com
+7c36c5c8-00ed-43e3-bde2-aea95f404539	MyBliss Wellness	Dallas	Texas	lovemybliss.com
+59506199-eefe-4f17-954a-0c0e64abb1b1	Mysa Medical & Wellness Spa	Dallas	Texas	mysamedspa.com
+ca7c4b8e-30b5-4d4f-a632-392f1b3d7884	NICHÉ SKIN STUDIO INK	Lewisville	Texas	nicheskinstudioink.com
+18bdbef1-a2ec-4c99-9209-4aeaae3c0e07	Noor Laser Med Spa	Richardson	Texas	noorlasermedspa.com
+e3a215cf-73de-4907-b294-f612ccd0f916	Nourish Lifestyle Spa	Dallas	Texas	nourishlifestylespa.com
+ec9807b7-4b69-42ad-aae9-f1699f23412b	Peak Life Health	Dallas	Texas	peaklife.health
+2ad8e0e7-afc9-4a68-9dc1-e2865733a7d9	Posh Laser Studio	Richardson	Texas	poshlaserstudio.com
+0b90f5fe-9c93-4362-a09f-bb75ae635016	PureSkin Dallas	Dallas	Texas	pureskindallas.com
+ce9fbdf3-c7b4-424a-869c-f8f964f1289f	Reformé Medical Spa	Arlington	Texas	reformemedicalspa.com
+3efee569-fcb0-46e7-87e0-70c01c815929	Refresh Medical Aesthetics | Christa Moses, PA	Arlington	TX	refreshmedicalaesthetics.com
+eeac3e67-be4f-46d8-9c0f-25d2aa040393	Regen Medical Aesthetics	Irving	Texas	regenmedicalaesthetics.com
+61357b72-3d43-4f24-8948-26ed14c67751	Regionelle Med Spa	Richardson	Texas	regionellemedspa.com
+4b0eca75-e392-4daa-b676-1b5d8281654b	Rejuva Skinn By Cynita Lynn	Carrollton	Texas	carrolltonmedicalspa.com
+f89d82ee-d224-4233-b3b8-9b0461504638	Renewaskin Spa	Coppell	Texas	renewaskin-spa.com
+15fa2be3-c9be-40bd-b7e2-f1ca9c7258da	Resilient Skin Lab	Dallas	Texas	resilientskinlab.com
+e24731df-d10e-4ac8-8710-85fde02dedc2	ReSpa Dallas	Dallas	Texas	respadallas.com
+ecde41ed-3716-47b5-aa07-63ab6bf32e5c	REVION Aesthetics | Performance Wellness	Dallas	Texas	revionaesthetics.com
+2a9de20b-980a-461f-b065-474211a69f3f	Sculpted By Joy	Irving	Texas	irvingbodysculpting.com
+afad700d-4884-4231-8be9-600539fe7596	SculptorRx Medspa	Arlington	Texas	sculptorrx.com
+9112c596-528d-423b-bd19-70b1b18b52b0	Skinfinity	Dallas	Texas	skinfinitydallas.com
+bb58c33c-7447-4221-ae45-d779652b281a	SkinMed Studio	Dallas	Texas	skinmedstudio.com
+e3e4efa3-9dc8-4bc3-bc30-6212f2d9d835	SN BEAUTY MEDICAL SPA	Irving	Texas	snbeautystudio.com
+d9b88749-344b-457e-9816-6831ff46e9fc	Soza Clinic	Richardson	Texas	weightloss4texas.com
+739c38c3-9310-45b3-a0f1-4997b7b97e36	Summer House Aesthetics	Dallas	Texas	summerhousedallas.com
+f8e90334-6730-43d3-8aa1-dfc396649c84	The Haus of Aesthetiks Medspa & Wellness	Grand Prairie	Texas	hausofaesthetiks.com
+581b4b80-ebba-4755-8354-57461a95478a	the L.A.B. med spa	Dallas	Texas	thelabmedspa.com
+b24497d3-a48e-4e4c-baee-8e432305bb5d	The Laser Spa Tx Plano	Plano	Texas	thelaserspatx.com
+33b68f20-6d90-45a8-9faa-dbdf7c49c13f	The Rejuvenation Station Med Spa	Cedar Hill	Texas	rejuvenationstationmedspa.com
+729feb8b-2e90-4343-8134-d77b369f5cef	Ultimate Image MedSpa	Richardson	Texas	ultimateimagemedspa.com
+99d35465-1aa6-4cd8-aac2-bfd2ae849278	VENDETTA AESTHETICS	Dallas	Texas	vendettaaesthetics.com
+d835f152-abc9-4e4e-a4a4-f058e39596d4	VIO Med Spa | Casa Linda	Dallas	Texas	viomedspa.com
+036a14d0-bcc4-4da6-ab39-69183ab467f8	Vitalité Med Spa	Arlington	Texas	vitalitemedspa.com
+e5ca6284-abd2-4077-9eed-a56f2b4939c1	Wellness Code	Dallas	Texas	wellnesscode.com

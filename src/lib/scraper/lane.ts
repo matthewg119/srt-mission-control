@@ -32,6 +32,7 @@ import { hasMx } from "./mx";
 import { crawlSite } from "@/lib/email-scrape";
 import { checkMany } from "@/lib/outreach/suppression";
 import { DEFAULT_VERTICAL, icpFor, knownVerticals, resolveVertical } from "./icp";
+import { campaignFor } from "./verticals";
 import {
   fromCsv,
   funnelLines,
@@ -65,6 +66,8 @@ import {
   pendingQualify,
   pendingSuppression,
   qualifyTally,
+  tierTally,
+  applyFreeRules,
   recordCatchallRecheck,
   recordEnrichment,
   recordSuppression,
@@ -1257,6 +1260,21 @@ async function beginListPrepWorkflow(
 /** How long a pull may sit waiting for its webhook before the batch is failed. */
 const PULL_TIMEOUT_MS = 6 * 60 * 60 * 1000;
 
+/**
+ * How many times an APPROVED pull may be driven at the vendor before the batch is refused by name.
+ *
+ * ‼️ THREE, BECAUSE THE FAILURE THIS EXISTS FOR IS A SINGLE BAD SECOND. Batch
+ * 7a472c40-0ef8-40ce-ac57-88950642a8df died on one `DataForSEO returned HTTP 500`, with cost_usd 0
+ * and raw_count 0, and `error` is not in ACTIVE_STATUSES, so the cron could never look at it again:
+ * an approved pull of a whole metro thrown away by a transient vendor error. Two retries five
+ * minutes apart cover that without being a strategy for a vendor that is genuinely refusing.
+ *
+ * ‼️ AND IT IS A CAP, NOT A SCHEDULE. The retry happens on the next ordinary cron tick, so
+ * there is no sleep, no backoff timer and nothing holding a lambda open. The spacing is whatever the
+ * cron's interval already is.
+ */
+const PULL_MAX_ATTEMPTS = 3;
+
 /** The new door's own switch. Deliberately NOT MAPS_PULL_ENABLED, which guards a different lane. */
 function mapsPullEnabled(): boolean {
   return process.env.LISTPREP_MAPS_ENABLED === "1";
@@ -1366,7 +1384,7 @@ async function startNextCell(event: ScraperEvent, want: NextMetroCommand): Promi
     await slack.postMessage(
       event.channel,
       ":no_entry: there are no DataForSEO categories mapped for `" + want.vertical + "`, so there is " +
-        "nothing to measure. Add them to `DFS_CATEGORIES` in `src/lib/scraper/maps-command.ts`."
+        "nothing to measure. Add them to the vertical's `dfsCategories` in `src/lib/scraper/verticals.ts`."
     );
     return;
   }
@@ -1470,7 +1488,7 @@ async function beginCellProbe(event: ScraperEvent, vertical: string, probeBatch:
     await slack.postMessage(
       event.channel,
       ":no_entry: there are no DataForSEO categories mapped for `" + vertical + "`, so there is nothing " +
-        "to measure. Add them to `DFS_CATEGORIES` in `src/lib/scraper/maps-command.ts`."
+        "to measure. Add them to the vertical's `dfsCategories` in `src/lib/scraper/verticals.ts`."
     );
     return;
   }
@@ -1963,6 +1981,80 @@ async function releaseMapsPull(batch: BatchRow): Promise<void> {
  * It still writes pull_finished_at, because sweepPullMaps is the one thing that advances the stage and
  * it reads that marker regardless of which vendor filled the table. One poll, two doors.
  */
+/**
+ * The terminal refusal, naming the attempts it used.
+ *
+ * ‼️ IT NAMES THE COUNT BECAUSE "it failed" AND "it failed three times" ASK FOR DIFFERENT THINGS.
+ * The first invites another check mark on the same card. The second says the vendor is not having a
+ * bad second, and the thing to change is the command: a smaller limit, a different offset, or a wait.
+ */
+function pullRefusalLine(command: MapsCommand, attempts: number, lastError: string | null): string {
+  return (
+    "DataForSEO would not answer this pull after " + attempts + " attempt" +
+    (attempts === 1 ? "" : "s") + ", so I have stopped asking. " +
+    (lastError ? "The last answer was: " + lastError + ". " : "") +
+    "Nothing further was bought. `" + command.metro + "` at `limit " + command.limit + " | offset " +
+    command.offset + "` is the command to change: a smaller limit is the usual fix, because a limit " +
+    "far past what the metro contains is a deep offset the vendor is likelier to refuse."
+  );
+}
+
+/**
+ * A vendor that refused: park the pull for another tick, or refuse it by name.
+ *
+ * ‼️ PARKING MEANS LEAVING THE BATCH IN `pulling`, WHICH IS THE WHOLE FIX. `pulling` is in
+ * ACTIVE_STATUSES (src/lib/scraper/store.ts) and `error` is not, so the old `fail()` here moved the
+ * row off the cron's worklist and the retry became unreachable. Measured on batch
+ * 7a472c40-0ef8-40ce-ac57-88950642a8df: one HTTP 500, cost_usd 0, raw_count 0, and an approved pull
+ * of a whole metro gone.
+ *
+ * ‼️ AND THE ERROR IS NOT STORED ON THE RUN WHEN IT PARKS. sweepPullMaps fails a batch whose run
+ * carries an `error`, so writing the reason there would have the next tick kill the batch this
+ * function just kept alive. The Slack thread is the record of a parked attempt; `error` stays for
+ * the terminal one.
+ *
+ * ‼️ THE FAILED ATTEMPT'S COST IS STILL RECORDED. DataForSEO charges a task fee per call whether
+ * or not the page answered, so an attempt that delivered nothing was not free, and a run that
+ * forgets it reports the metro as cheaper than it was.
+ */
+async function parkOrRefusePull(
+  batch: BatchRow,
+  runId: string,
+  command: MapsCommand,
+  pageError: string,
+  costUsd: number
+): Promise<void> {
+  const run = await getRun(runId);
+  const used = run?.pull_attempts ?? 1;
+  const spent = Number(run?.cost_usd ?? 0) + costUsd;
+
+  if (used >= PULL_MAX_ATTEMPTS) {
+    const line = pullRefusalLine(command, used, pageError);
+    await updateRun(runId, {
+      cost_usd: spent,
+      error: line,
+      stage: "error",
+      finished_at: new Date().toISOString(),
+      // Taken back, because nothing was bought under it. The batch is in `error` by the time this
+      // lands, so no reaction can act on it either way; clearing it keeps the ledger honest rather
+      // than leaving a release standing over a purchase that never happened.
+      spend_approved_at: null,
+    });
+    await fail(batch, line);
+    return;
+  }
+
+  await updateRun(runId, { cost_usd: spent });
+  await updateBatch(batch.id, { status: "pulling" });
+  await say(
+    batch,
+    ":hourglass_flowing_sand: *DataForSEO refused that page and nothing was stored.* " + pageError +
+      "\n  Attempt " + used + " of " + PULL_MAX_ATTEMPTS + ". The approval still stands, so the next " +
+      "cron tick tries again by itself. Nothing to do here unless this says attempt " +
+      PULL_MAX_ATTEMPTS + "."
+  );
+}
+
 async function pullFromDataForSeo(batch: BatchRow, runId: string, command: MapsCommand): Promise<void> {
   if (!dfsPlacesConfigured()) {
     await updateRun(runId, { error: "DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD are not set" });
@@ -1994,8 +2086,31 @@ async function pullFromDataForSeo(batch: BatchRow, runId: string, command: MapsC
     return;
   }
 
+  // ‼️ THE CAP IS CHECKED BEFORE THE COUNT IS RAISED AND THE COUNT IS RAISED BEFORE THE MONEY
+  // IS ASKED FOR. Checked first, a run already at the cap cannot be driven again by a second caller;
+  // raised before the fetch, a lambda killed mid-fetch still leaves the attempt recorded. The other
+  // order is a spin: an attempt counted on the way out is never counted on the attempts that die,
+  // so the cap is never reached and the cron asks forever.
+  const before = await getRun(runId);
+  const attempt = (before?.pull_attempts ?? 0) + 1;
+  if (attempt > PULL_MAX_ATTEMPTS) {
+    await fail(batch, pullRefusalLine(command, attempt - 1, before?.error ?? null));
+    return;
+  }
+
   const now = new Date().toISOString();
-  await updateRun(runId, { spend_approved_at: now, spend_approved_by: "slack_reaction", started_at: now });
+  // ‼️ THE APPROVAL AND THE CLOCK ARE WRITTEN ONCE, ON THE FIRST ATTEMPT ONLY, and both for a
+  // concrete reason. started_at is the boundary dropCrossRunDuplicates compares against
+  // (`created_at < started_at`), so moving it forward on a retry would change which copy of a
+  // duplicated clinic counts as the earliest one. And re-stamping spend_approved_at on a tick nobody
+  // reacted to would have the spend ledger claim a second human release that never happened.
+  const approval: Record<string, unknown> = { pull_attempts: attempt, error: null };
+  if (!before?.spend_approved_at) {
+    approval.spend_approved_at = now;
+    approval.spend_approved_by = "slack_reaction";
+  }
+  if (!before?.started_at) approval.started_at = now;
+  await updateRun(runId, approval);
   await updateBatch(batch.id, { status: "pulling" });
 
   // ‼️ THE OFFSET IS WHAT MAKES A SECOND PULL DIFFERENT ROWS RATHER THAN THE SAME 500 AGAIN. Without
@@ -2059,8 +2174,17 @@ async function pullFromDataForSeo(batch: BatchRow, runId: string, command: MapsC
   }
 
   if (!items.length) {
+    // ‼️ AN EMPTY ANSWER AND A REFUSED QUERY ARE DIFFERENT THINGS, and this used to treat them
+    // as one. `pageError` is the discriminator: set means the vendor failed to answer, absent means
+    // it answered "nothing here". A metro with no med spas is a REAL result and retrying it three
+    // times buys the same nothing three times; a 500 is a bad second and killing the batch for it
+    // throws away an approved pull. Same tri-state doctrine as mxRecords in mx.ts, where null and []
+    // mean opposite things.
+    if (pageError) {
+      return parkOrRefusePull(batch, runId, command, pageError, costUsd);
+    }
     await updateRun(runId, { spend_approved_at: null });
-    await fail(batch, pageError ?? "DataForSEO returned no businesses for this search");
+    await fail(batch, "DataForSEO returned no businesses for this search");
     return;
   }
 
@@ -2084,7 +2208,20 @@ async function pullFromDataForSeo(batch: BatchRow, runId: string, command: MapsC
   await updateRun(runId, {
     pull_finished_at: new Date().toISOString(),
     raw_count: stored.inserted,
-    cost_usd: found.costUsd,
+    // ‼️ ADDED, NEVER ASSIGNED. A pull that failed twice and succeeded on the third attempt was
+    // charged a task fee for all three, and overwriting here would report the metro as costing only
+    // what the winning attempt cost. See RunRow.cost_usd.
+    cost_usd: Number(before?.cost_usd ?? 0) + found.costUsd,
+    // ‼️ THE CIRCLE'S OWN SIZE, WHICH WAS BEING THROWN AWAY ON EVERY NAMED-METRO PULL. total_count
+    // comes back free on every DataForSEO response, and until now it only reached the Slack card:
+    // "Dallas, Texas, United States within 40km has 1,765 matching these categories in total" lived
+    // in one message and nowhere else. It is the denominator behind "is this metro finished", which
+    // is the single decision /dashboard/territory exists to support.
+    //
+    // ‼️ A MAXIMUM, FOR THE REASON scraper_cells TAKES ONE. The vendor's index is live and read
+    // 159,075 then 159,074 seconds apart on 2026-09-28. Following an upward drift loses nothing;
+    // writing a downward one would make a finished metro look unfinished and buy it again.
+    metro_total_count: Math.max(found.totalCount, before?.metro_total_count ?? 0),
     error: stored.error ?? null,
   });
 
@@ -2158,6 +2295,28 @@ async function sweepPullMaps(batch: BatchRow): Promise<boolean> {
   }
 
   if (!run.pull_finished_at) {
+    // ‼️ A DataForSEO PULL HAS NOTHING TO WAIT FOR, AND THAT IS WHY IT IS BRANCHED ON HERE. That
+    // door is synchronous: pullFromDataForSeo either returns with the rows in raw_leads or it parks
+    // the batch for another attempt. Falling through to the Outscraper wait below would sit for six
+    // hours and then blame a webhook that was never registered, which is what a parked DataForSEO
+    // pull used to do before it was made parkable at all.
+    //
+    // ‼️ THE SOURCE IS RE-READ FROM THE COMMAND, THE SAME WAY releaseMapsPull READS IT. The two
+    // doors are told apart BY NAME, never by which columns happen to be null: `pull_request_id` is
+    // absent on a DataForSEO run and also absent on an Outscraper run whose submit failed.
+    const reparsed = parseMapsCommand(batch.batch_label ?? "");
+    if (reparsed.ok && reparsed.command.source === "dataforseo") {
+      // ‼️ THE CRON MAY HONOUR AN APPROVAL. IT MAY NEVER GIVE ONE. A batch sitting in `pulling`
+      // with no `spend_approved_at` is a batch nobody released, and re-driving it here would be the
+      // cron spending money on a tick nobody reacted to: the one thing this lane forbids outright.
+      // Retrying a pull whose approval is already on file is the opposite, it is finishing what was
+      // released. PULL_MAX_ATTEMPTS is what keeps that from becoming an open tab.
+      if (!run.spend_approved_at) return false;
+      // It advances the batch itself when the rows land, and parks or refuses when they do not.
+      await pullFromDataForSeo(batch, runId, reparsed.command);
+      return false;
+    }
+
     const startedAt = run.started_at ? Date.parse(run.started_at) : Date.now();
     if (Number.isFinite(startedAt) && Date.now() - startedAt > PULL_TIMEOUT_MS) {
       await fail(
@@ -2310,16 +2469,45 @@ async function sweepQualify(batch: BatchRow, deadline: number): Promise<boolean>
 
   // The free rules first, exactly as filter.ts runs its string checks before the DNS lookup.
   await dropWebsiteless(runId);
-  // ‼️ AND THE CROSS-RUN DUPLICATE, WHICH IS FREE FOR THE SAME REASON AND SAVES THE SAME MONEY.
+
+  // ‼️ THE CROSS-RUN DUPLICATE, WHICH IS FREE FOR THE SAME REASON AND SAVES THE SAME MONEY.
   // Overlapping cells deliver the same clinic under several runs by design, and raw_leads is unique on
   // (run_id, place_id) only WITHIN a run, so without this every duplicate is judged again at full
   // price. It writes an ordinary drop reason, so it groups on the drop-review card like any verdict.
+  //
+  // ‼️ AND IT RUNS BEFORE applyFreeRules BELOW, WHICH IS NOT THE ORDER IT WAS WRITTEN IN. A
+  // second copy of a clinic that reached the per-row rules first would be routed to the CALL list,
+  // where the earlier copy already sits, and the person dialling would ring the same front desk
+  // twice. Dropped first, it never reaches them. The cheaper query also happens to be the one that
+  // can be answered in bulk, so this is the right order on both counts.
   const reDropped = await dropCrossRunDuplicates(runId);
   if (reDropped > 0) {
     await say(
       batch,
       ":recycle: " + reDropped + " of these were already pulled under an earlier run, from a cell that " +
         "overlaps this one. Dropped before the model was asked, so they cost nothing to judge."
+    );
+  }
+
+  // ‼️ THE TWO RULES SQL CANNOT ANSWER. The aggregator host list is TypeScript
+  // (NON_IDENTIFYING_HOSTS in dedup.ts, 27 entries) and "how many rows in this pull share this
+  // domain" needs the pull in hand. Replayed over the Dallas 500 on 2026-10-08 they decide 33 rows:
+  //
+  //   17  Instagram, Facebook, Vagaro or Square only      -> the call list, not the bin
+  //   16  usdermatologypartners.com x6, handandstone.com x4, massageenvy x3, thefacehaus.com x3
+  //
+  // ‼️ THE SAVING IS SMALL AND THE ROUTING IS THE POINT. 33 of 500 is about 7% of the model calls,
+  // which at four cents a batch is pennies. What actually changes is where those 17 go: they used to
+  // be dropped with a Haiku reason and never looked at again, and they are real trading clinics with
+  // phone numbers. The other 16 of the 32 shared-domain rows are PAIRS, left for the model on
+  // purpose, because the ICP's buyer is "one to three locations" and a two-site group is exactly it.
+  const free = await applyFreeRules(runId);
+  if (free.call + free.drop > 0) {
+    await say(
+      batch,
+      ":scissors: " + (free.call + free.drop) + " were decided for free before the model was asked.  " +
+        free.call + " to the call list (a booking page or a social profile rather than their own " +
+        "domain), " + free.drop + " dropped (one domain across three or more locations)."
     );
   }
 
@@ -2336,7 +2524,12 @@ async function sweepQualify(batch: BatchRow, deadline: number): Promise<boolean>
       await fail(batch, "this run has no buyer profile on file, so nothing can be judged.");
       return false;
     }
-    let verdicts = await qualifyChunk(chunk, icp);
+    // ‼️ THE VERTICAL IS READ OFF THE RUN, NEVER RE-RESOLVED FROM THE CAPTION. beginListPrep
+    // decided it once and wrote it there, for the reason it states: the alias table is editable, and
+    // a run whose rows were pulled under one vertical and tiered under another is not something the
+    // drop-review card could explain. Same contract as icp_text.
+    const runVertical = (await getRun(runId))?.vertical_slug ?? DEFAULT_VERTICAL;
+    let verdicts = await qualifyChunk(chunk, icp, runVertical);
 
     // ‼️ ONE RETRY, THEN THE ROW IS PARKED AS UNJUDGED. A model timeout is usually transient, so
     // re-asking once inside the same tick is worth it. Re-asking FOREVER is not: without the
@@ -2344,7 +2537,7 @@ async function sweepQualify(batch: BatchRow, deadline: number): Promise<boolean>
     // minutes and the batch never leaves `qualifying`.
     const unjudged = verdicts.filter((v) => v.keep === null).map((v) => v.id);
     if (unjudged.length) {
-      const retry = await qualifyChunk(chunk.filter((c) => unjudged.includes(c.id)), icp);
+      const retry = await qualifyChunk(chunk.filter((c) => unjudged.includes(c.id)), icp, runVertical);
       const byId = new Map(retry.map((v) => [v.id, v]));
       verdicts = verdicts.map((v) => (v.keep === null && byId.get(v.id) ? byId.get(v.id)! : v));
     }
@@ -2374,9 +2567,10 @@ async function postDropReview(batch: BatchRow): Promise<void> {
   if (!run || run.drop_review_ts) return;
 
   const tally = await qualifyTally(runId);
+  const tiers = await tierTally(runId);
   const reasons = await dropReasons(runId);
   const groups = groupDrops(
-    reasons.map((r) => ({ id: r.name, keep: false, reason: r.reason, businessName: r.name }))
+    reasons.map((r) => ({ keep: false, reason: r.reason, businessName: r.name }))
   );
 
   const dropped = await droppedRows(runId);
@@ -2395,6 +2589,7 @@ async function postDropReview(batch: BatchRow): Promise<void> {
       kept: tally.kept,
       unjudged: tally.unjudged,
       groups,
+      tiers,
     }).join("\n")
   );
   if (ts) await updateRun(runId, { drop_review_ts: ts });
@@ -2782,7 +2977,21 @@ async function publishSendable(batch: BatchRow): Promise<void> {
   // this person" out of `outreach_prospects`, and until now nothing wrote a row there except a
   // REPLY, so everyone who ignored us stayed invisible to the next list. Measured on production
   // 2026-09-19: that table held zero rows while a 136 address campaign had already gone out.
-  const handoff = await recordHandoff(runId, rows, batch.batch_label || batch.file_name);
+  //
+  // ‼️ THE CAMPAIGN IS THE VERTICAL'S, NOT THE BATCH LABEL, AND THE OLD VALUE WAS BREAKING A
+  // REPORT. This used to pass `batch.batch_label`, so outreach_prospects.campaign held strings like
+  // "pull maps medspa | Dallas TX | med spa | limit 500". reachinbox_campaign_funnel GROUPS on that
+  // column, so every pull became its own campaign of one and the funnel could never report a rate
+  // over more than one metro. Provenance never needed the campaign name to carry it: source_query
+  // and source_metro are on every raw lead already.
+  //
+  // ‼️ IT FALLS BACK TO THE LABEL RATHER THAN TO null. A vertical with no registry entry cannot
+  // reach this line (startRun refuses without an ICP), but if one ever did, an unlabelled handoff is
+  // a row suppression can still read and a funnel that is merely ugly. A null campaign is a row the
+  // digest skips.
+  const campaign =
+    campaignFor((await getRun(runId))?.vertical_slug) ?? batch.batch_label ?? batch.file_name;
+  const handoff = await recordHandoff(runId, rows, campaign);
 
   await updateRun(runId, {
     stage: "done",

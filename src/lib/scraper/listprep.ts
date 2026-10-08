@@ -13,8 +13,9 @@
 
 import { supabaseAdmin } from "@/lib/db";
 import type { EnrichAttempt, EnrichHit } from "./enrich";
-import type { QualifyCandidate, Verdict } from "./qualify";
-import { isCrossRunIdentity } from "./dedup";
+import type { QualifyCandidate, TierTally, Verdict } from "./qualify";
+import { domainKey, isCrossRunIdentity } from "./dedup";
+import { freeVerdict, type LeadRoute } from "./tiering";
 import type { Funnel } from "./pull";
 
 export type RunStage =
@@ -40,6 +41,22 @@ export interface RunRow {
   enriched_count: number;
   verified_count: number;
   sendable_count: number;
+  /**
+   * What this run has been charged, by every vendor, to date.
+   *
+   * ‼️ IT IS READ SO IT CAN BE ADDED TO. A retried pull that overwrote this would erase the
+   * previous attempt's task fees, which DataForSEO charges whether or not the page answered, and the
+   * run would report a metro as cheaper than it was. Every writer of this column adds.
+   */
+  cost_usd: number;
+  /**
+   * How many businesses the vendor reports inside this pull's circle, for its category list.
+   *
+   * ‼️ THE DENOMINATOR OF "IS THIS METRO FINISHED", AND NOTHING ELSE HOLDS IT. Dallas has about
+   * 1,765 across the five med spa categories and a 500-record pull took the first 500; without this
+   * number the territory table cannot tell that from a metro that only ever had 500.
+   */
+  metro_total_count: number | null;
   drop_review_ts: string | null;
   error: string | null;
   /** Where these leads came from. 'csv' for a drop, 'outscraper' for a Maps pull. */
@@ -52,6 +69,16 @@ export interface RunRow {
   pull_approval_ts: string | null;
   /** Set by the check mark on that card, and only then is Outscraper called. */
   spend_approved_at: string | null;
+  /**
+   * How many times the vendor fetch has been driven for this pull.
+   *
+   * ‼️ RAISED BEFORE THE ATTEMPT, NEVER AFTER IT. A counter bumped on the way out is not written
+   * at all when the lambda is cut off mid-fetch, so a pull that dies three times reads as never
+   * having been tried and is re-driven forever. Bumped first, the worst case is one attempt charged
+   * that was not finished, which is the safe direction: the cap is reached rather than never
+   * approached.
+   */
+  pull_attempts: number;
   started_at: string | null;
 }
 
@@ -61,10 +88,12 @@ export interface RunRow {
 // true forever. Add to both or neither.
 const RUN_COLUMNS =
   "id, batch_id, label, icp_text, vertical_slug, stage, raw_count, qualified_count, " +
-  "enriched_count, verified_count, sendable_count, drop_review_ts, error, " +
+  "enriched_count, verified_count, sendable_count, cost_usd, metro_total_count, " +
+  "drop_review_ts, error, " +
   // The Maps door. Every one of these is read by a guard, so omitting any makes that guard true
   // forever, which is the trap the comment above states.
-  "source, pull_request_id, pull_finished_at, pull_approval_ts, spend_approved_at, started_at";
+  "source, pull_request_id, pull_finished_at, pull_approval_ts, spend_approved_at, " +
+  "pull_attempts, started_at";
 
 export async function getRun(runId: string): Promise<RunRow | null> {
   const { data, error } = await supabaseAdmin
@@ -105,7 +134,11 @@ export async function bindRunToBatch(runId: string, batchId: string): Promise<vo
 export async function pendingQualify(runId: string, limit: number): Promise<QualifyCandidate[]> {
   const { data, error } = await supabaseAdmin
     .from("raw_leads")
-    .select("id, business_name, domain, city, state, categories, primary_type, rating, review_count, instagram_handle")
+    // ‼️ ONE STRING LITERAL, NOT A CONCATENATION, AND tsc IS THE REASON. supabase-js infers the
+    // row type from the literal text of this argument; built with `+` it widens to string and `data`
+    // comes back as GenericStringError[], which then needs a double cast at every field. Long line,
+    // honest types.
+    .select("id, business_name, domain, website, city, state, categories, primary_type, rating, review_count, instagram_handle, is_claimed")
     .eq("run_id", runId)
     .is("qualify_keep", null)
     .is("qualify_reason", null)
@@ -125,6 +158,8 @@ export async function pendingQualify(runId: string, limit: number): Promise<Qual
       rating: (row.rating as number | null) ?? null,
       reviewCount: (row.review_count as number | null) ?? null,
       instagramHandle: (row.instagram_handle as string | null) ?? null,
+      website: (row.website as string | null) ?? null,
+      isClaimed: (row.is_claimed as boolean | null) ?? null,
     };
   });
 }
@@ -141,10 +176,21 @@ export async function writeVerdicts(verdicts: readonly Verdict[], model: string)
   for (const v of verdicts) {
     // An unjudged verdict is written as reason-without-keep, which is the middle state above. It
     // must never be coerced to keep:false; a model timeout is not a drop.
+    // ‼️ AN UNJUDGED ROW GETS NO TIER AND NO ROUTE EITHER, for the reason the comment above
+    // gives about `keep`. Writing route 'drop' on a model timeout would move the lead off the call
+    // list as well as off the email list, which is the same mistake twice.
     const patch: Record<string, unknown> =
       v.keep === null
         ? { qualify_reason: v.reason, qualify_model: model }
-        : { qualify_keep: v.keep, qualify_reason: v.reason, qualify_model: model, qualified_at: now };
+        : {
+            qualify_keep: v.keep,
+            qualify_reason: v.reason,
+            qualify_model: model,
+            qualified_at: now,
+            tier: v.tier,
+            judged_vertical: v.judgedVertical,
+            route: v.route,
+          };
     const { error } = await supabaseAdmin.from("raw_leads").update(patch).eq("id", v.id);
     if (error) throw new Error("writeVerdicts(" + v.id + "): " + error.message);
   }
@@ -166,6 +212,12 @@ export async function dropWebsiteless(runId: string): Promise<number> {
       qualify_reason: "no website on the row",
       qualify_model: "rule",
       qualified_at: new Date().toISOString(),
+      // ‼️ THE ROUTE IS 'call', AND THAT IS THE WHOLE CHANGE OF 2026-10-08 IN ONE WORD. These rows
+      // were already being exported by scripts/export-cold-call-leads.ts, which selected on
+      // `website is null` and therefore re-derived this rule in SQL. Now the row SAYS where it goes,
+      // so the export reads a column and the call list cannot silently diverge from the pipeline.
+      // `qualify_keep` stays false because it still means "not going into enrichment".
+      route: "call",
     })
     .eq("run_id", runId)
     .is("qualify_keep", null)
@@ -263,6 +315,9 @@ export async function dropCrossRunDuplicates(runId: string): Promise<number> {
         qualify_reason: "already pulled under an earlier run (overlapping cell)",
         qualify_model: "rule",
         qualified_at: now,
+        // A genuine 'drop': the earlier copy is the one that carries the route. Routing this to
+        // 'call' as well would put the same clinic on the call list twice.
+        route: "drop",
       })
       .in("id", slice)
       // Re-checked at write time: a chunk that took a while must not overwrite a verdict the model
@@ -298,6 +353,149 @@ export async function qualifyTally(runId: string): Promise<QualifyTally> {
   // - unjudged` and is what keeps the stage running.
   const unjudged = await count((q) => q.is("qualify_keep", null).not("qualify_reason", "is", null));
   return { raw, kept, dropped, unjudged };
+}
+
+/**
+ * The tier and route breakdown for the drop-review card.
+ *
+ * ‼️ SEVEN HEAD COUNTS RATHER THAN ONE GROUP BY, for the reason qualifyTally is written the same
+ * way: PostgREST cannot express a group-by, and the alternative is reading every row of the run into
+ * the lambda to count it in JavaScript. A head count is one index probe; seven of them is still
+ * cheaper than one 5,000 row read, and the shape of the answer is fixed rather than depending on
+ * which values happen to be present.
+ *
+ * ‼️ `untiered` COUNTS KEPT ROWS WITH NO TIER, NOT ALL ROWS WITH NO TIER. A dropped row has no
+ * tier either and is already counted as a drop; adding it here would double count it and make the
+ * card's own numbers fail to sum.
+ */
+export async function tierTally(runId: string): Promise<TierTally> {
+  const baseQuery = () =>
+    supabaseAdmin.from("raw_leads").select("id", { count: "exact", head: true }).eq("run_id", runId);
+  const count = async (apply: (q: ReturnType<typeof baseQuery>) => ReturnType<typeof baseQuery>) => {
+    const { count: n, error } = await apply(baseQuery());
+    if (error) {
+      throw new Error(
+        "tierTally: " + error.message +
+          ". If that names tier or route, docs/2026-10-08-lead-tiers.sql has not been run."
+      );
+    }
+    return n ?? 0;
+  };
+
+  const [a, b, c, untiered, emailable, callable] = await Promise.all([
+    count((q) => q.eq("tier", "A")),
+    count((q) => q.eq("tier", "B")),
+    count((q) => q.eq("tier", "C")),
+    count((q) => q.eq("qualify_keep", true).is("tier", null)),
+    count((q) => q.eq("route", "email")),
+    count((q) => q.eq("route", "call")),
+  ]);
+  return { a, b, c, untiered, emailable, callable };
+}
+
+/**
+ * The free rules, applied to every unjudged row of a run before the model is asked.
+ *
+ * ‼️ IT REPLACES NOTHING AND RUNS BEFORE EVERYTHING. `dropWebsiteless` still handles the
+ * commonest case in one UPDATE, because 128 of the stored 550 rows have no website and doing that
+ * row by row would be 128 round trips for a question SQL can answer in one. This handles the two
+ * rules SQL cannot: the aggregator host list lives in TypeScript (dedup.ts), and "how many rows in
+ * this pull share this domain" needs the pull in hand.
+ *
+ * ‼️ AGGREGATOR HOSTS ARE EXCLUDED FROM THE CHAIN COUNT, AND THAT IS MEASURED. On the Dallas 500,
+ * 15 domains appear at 2+ locations covering 47 rows, and 15 of those 47 are instagram.com (9),
+ * vagaro.com (4) and facebook.com (2). Counting them as a chain deletes nine unrelated businesses
+ * as one franchise. They are routed to the call list by the rule ABOVE the chain rule, so by the
+ * time the count is taken they are already gone.
+ */
+export async function applyFreeRules(runId: string): Promise<{ call: number; drop: number }> {
+  const { data, error } = await supabaseAdmin
+    .from("raw_leads")
+    .select("id, website, domain")
+    .eq("run_id", runId)
+    .is("qualify_keep", null)
+    .is("qualify_reason", null);
+  if (error) throw new Error("applyFreeRules(read): " + error.message);
+
+  const rows = (data ?? []).map((r) => {
+    const row = r as Record<string, unknown>;
+    return {
+      id: String(row.id),
+      website: (row.website as string | null) ?? null,
+      domain: (row.domain as string | null) ?? null,
+    };
+  });
+  if (!rows.length) return { call: 0, drop: 0 };
+
+  // How many rows share each identifying domain. domainKey returns null for an aggregator, so those
+  // rows never enter this map and can never be counted as a chain.
+  const perDomain = new Map<string, number>();
+  for (const r of rows) {
+    const key = domainKey(r.website ?? r.domain);
+    if (!key) continue;
+    perDomain.set(key, (perDomain.get(key) ?? 0) + 1);
+  }
+
+  // ‼️ GROUPED BY VERDICT AND WRITTEN IN BULK, NOT ROW BY ROW, AND AT 5,000 RECORDS A DAY THAT IS
+  // THE DIFFERENCE BETWEEN A TICK AND A TIMEOUT. The first version of this did one PostgREST UPDATE
+  // per decided row. Measured on the Dallas 500 about 49 rows fire, which is 490 round trips per
+  // 5,000 record day at perhaps 30ms each: a quarter of the whole 240s tick spent on writes, before
+  // the model is asked anything. Grouping collapses it to one write per distinct reason, because a
+  // free rule's reason is drawn from a tiny fixed set.
+  //
+  // ‼️ AND THE CHAIN REASON CARRIES THE LOCATION COUNT, so "domain shared by 6 locations" and
+  // "domain shared by 4 locations" are different groups. That is wanted: the number is the evidence,
+  // and it is what makes the drop-review card readable. It also keeps the group count bounded, since
+  // there are only ever a handful of distinct counts in one pull.
+  const byVerdict = new Map<string, { route: LeadRoute; reason: string; ids: string[] }>();
+  for (const r of rows) {
+    const key = domainKey(r.website ?? r.domain);
+    const verdict = freeVerdict({
+      website: r.website,
+      domain: r.domain,
+      reviewCount: null,
+      sameDomainCount: key ? (perDomain.get(key) ?? 1) - 1 : 0,
+    });
+    if (!verdict) continue;
+    const groupKey = verdict.route + "|" + verdict.reason;
+    const group = byVerdict.get(groupKey) ?? { route: verdict.route, reason: verdict.reason, ids: [] };
+    group.ids.push(r.id);
+    byVerdict.set(groupKey, group);
+  }
+
+  const now = new Date().toISOString();
+  let call = 0;
+  let drop = 0;
+
+  for (const group of byVerdict.values()) {
+    for (let i = 0; i < group.ids.length; i += IN_CHUNK) {
+      const slice = group.ids.slice(i, i + IN_CHUNK);
+      const { data: written, error: writeError } = await supabaseAdmin
+        .from("raw_leads")
+        .update({
+          // A free rule never puts a row into enrichment, so keep is false whichever way it routed.
+          // The ROUTE is what says whether there is still somebody to ring.
+          qualify_keep: false,
+          qualify_reason: group.reason,
+          qualify_model: "rule",
+          qualified_at: now,
+          route: group.route,
+        })
+        .in("id", slice)
+        // Re-checked at write time, the same guard dropCrossRunDuplicates uses: a sweep that took a
+        // while must not overwrite a verdict the model wrote in the meantime.
+        .is("qualify_keep", null)
+        .select("id");
+      if (writeError) throw new Error("applyFreeRules(write): " + writeError.message);
+      // ‼️ COUNTED FROM WHAT THE DATABASE ACCEPTED, NOT FROM WHAT WAS ASKED. The guard above can
+      // refuse a row, and a card reporting the ask rather than the write would overstate the saving.
+      const n = written?.length ?? 0;
+      if (group.route === "call") call += n;
+      else drop += n;
+    }
+  }
+
+  return { call, drop };
 }
 
 /** Every drop reason on the run, for grouping. Read in full because the card counts them all. */
@@ -369,7 +567,16 @@ export async function pendingEnrich(runId: string, limit: number): Promise<Enric
     .from("raw_leads")
     .select("id, business_name, domain, website, owner_name, city, state, raw")
     .eq("run_id", runId)
-    .eq("qualify_keep", true)
+    // ‼️ ROUTE, NOT qualify_keep, AND THE DIFFERENCE IS TIER C. A nail bar under the front-desk
+    // profile is genuinely the buyer (it has a front desk and it asks for reviews), so it is KEPT;
+    // what it is not is worth a crawl and a MillionVerifier credit. Selecting on `qualify_keep` here
+    // would enrich it anyway and the "never emailed" rule would have to be enforced somewhere
+    // further downstream, which is a rule in two places. One column decides the channel.
+    //
+    // ‼️ AND IT STILL PICKS UP EVERY PRE-TIERING ROW. docs/2026-10-08-lead-tiers.sql backfilled
+    // route='email' for all 270 kept-with-a-website rows, so nothing already judged falls out of
+    // this worklist. A row with a null route was never judged and must not be enriched.
+    .eq("route", "email")
     .is("enriched_at", null)
     .order("created_at", { ascending: true })
     .limit(limit);
@@ -586,6 +793,42 @@ export async function applyFreeRejects(
       .select("id");
     if (error) throw new Error("applyFreeRejects: " + error.message);
     updated += data?.length ?? 0;
+  }
+
+  // ‼️ A no_mx DOMAIN IS A BUSINESS FOR THE CALL LIST, NOT A LEAD WE ARE DONE WITH. Measured over
+  // the 75 nameless Dallas clinics: 26 had NO MX RECORD AT ALL, which means the domain cannot receive
+  // mail from anybody, ever. The address is dead; the clinic is not. Marking the address invalid and
+  // stopping there leaves a real business with a real phone number sitting in a table nobody exports.
+  //
+  // ‼️ AND IT IS no_mx ALONE, NEVER bad_syntax OR disposable. A malformed address is a fact about
+  // our CRAWL, not about the business: the site published something unparseable and the right answer
+  // is to crawl it again, not to give up on email for that clinic. A disposable domain is a fact
+  // about a throwaway inbox. Only "this domain has no mail server" is evidence about the business.
+  //
+  // ‼️ mxRecords [] AND mxRecords null MEAN OPPOSITE THINGS, and the caller is what has to keep
+  // them apart: `mailProviderOf` returns null for BOTH "no MX" and "an MX we do not recognise". This
+  // function only ever sees the kind the caller already decided, which is why it can act on it.
+  const noMx = rejects.filter((r) => r.kind === "no_mx").map((r) => r.id);
+  if (noMx.length) {
+    for (let i = 0; i < noMx.length; i += IN_CHUNK) {
+      const slice = noMx.slice(i, i + IN_CHUNK);
+      const { data, error } = await supabaseAdmin
+        .from("sendable_leads")
+        .select("raw_lead_id")
+        .eq("run_id", runId)
+        .in("id", slice);
+      if (error) throw new Error("applyFreeRejects(no_mx lookup): " + error.message);
+      const leadIds = [...new Set((data ?? []).map((r) => String((r as Record<string, unknown>).raw_lead_id)))];
+      if (!leadIds.length) continue;
+      const { error: routeError } = await supabaseAdmin
+        .from("raw_leads")
+        .update({ route: "call" })
+        .in("id", leadIds)
+        // Only a row still routed to email. A lead the free rules already sent to the call list is
+        // there; one that was dropped as a chain is dropped for a reason MX cannot overturn.
+        .eq("route", "email");
+      if (routeError) throw new Error("applyFreeRejects(no_mx route): " + routeError.message);
+    }
   }
 
   for (let i = 0; i < duplicates.length; i += IN_CHUNK) {
