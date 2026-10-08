@@ -1281,7 +1281,53 @@ export async function handlePreCallThreadReply(input: {
           toolOnOtherPage = { componentKey: current.componentKey, rank: other?.rank ?? 0 };
         }
       }
-      return { message: pageWalkLines({ state, row, options, angles, tools, toolOnOtherPage }).join("\n") };
+      const { otherFormatsFor } = await import("./page-batch");
+      const other = await otherFormatsFor(clientId, row);
+      return {
+        message: pageWalkLines({
+          state,
+          row,
+          options,
+          angles,
+          tools,
+          toolOnOtherPage,
+          titles: other.titles,
+          ads: other.ads,
+        }).join("\n"),
+      };
+    }
+
+    // The title tag, which is the second of the three artifacts and has its own verb because it
+    // is pickable at more than one stage. Both doors reach the same two functions.
+    if (walk.verb === "title") {
+      return {
+        message: `Reading page ${row.rank}'s title tags.`,
+        after: async () => {
+          const fresh = await readBatch(clientId);
+          if ("error" in fresh) return void (await say(clientId, `:warning: ${fresh.error}`));
+          const target = pageAtRank(fresh, walk.page);
+          if (!target) return void (await say(clientId, `Page ${walk.page} has gone from this batch.`));
+          const { showTitlesForPage } = await import("./page-batch");
+          const res = await showTitlesForPage(clientId, target);
+          await say(clientId, res.ok ? res.lines.join("\n") : `:warning: ${res.error}`);
+        },
+      };
+    }
+
+    if (walk.verb === "title_pick") {
+      return {
+        message: `Taking title tag ${walk.option} for page ${row.rank}.`,
+        after: async () => {
+          const fresh = await readBatch(clientId);
+          if ("error" in fresh) return void (await say(clientId, `:warning: ${fresh.error}`));
+          const target = pageAtRank(fresh, walk.page);
+          if (!target) return void (await say(clientId, `Page ${walk.page} has gone from this batch.`));
+          const { pickTitleForPage } = await import("./page-batch");
+          const res = await pickTitleForPage(clientId, target, walk.option, by);
+          await say(clientId, res.ok ? res.lines.join("\n") : `:warning: ${res.error}`);
+          await refreshCard(clientId);
+        },
+      };
     }
 
     // ‼️ EVERYTHING BELOW RUNS IN `after`, FOR THE REASON handlePageAngleThreadReply STATES: Slack

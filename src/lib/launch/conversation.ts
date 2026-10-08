@@ -138,6 +138,17 @@ export const ACTION_KINDS = [
   // 'manual_step', which day-zero.ts defines as an assertion that the archive happened rather than
   // proof of it, and no artifact may call a manual_step stamp a photograph.
   "file_evidence",
+  // ‼️ THE PASTE DOOR FOR CUSTOMER PAIN, AND IT IS A VERB RATHER THAN A SNIFFER. Matthew,
+  // 2026-10-07: he wants to paste Reddit-style phrases and have them "recognised, filed as VOC,
+  // and crumbled down into what somebody would actually type into ChatGPT". Neither file_document
+  // nor file_evidence takes them: the first accepts only the four foundation kinds and the second
+  // is step evidence.
+  //
+  // The reason it is an explicit kind and not a classifier on arriving text is the rule
+  // research-intake.ts states: a paste counts as research only when it says so, because sniffing
+  // for one "would eventually swallow somebody thinking out loud". This surface also takes
+  // dictation and call notes.
+  "file_voc",
 ] as const;
 
 export type ActionKind = (typeof ACTION_KINDS)[number];
@@ -456,6 +467,17 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "    read_pages rank=4 -> page_write 4 -> page_pick 4 -> page_write 4 -> page_pick 4 -> ...",
     "  until that page is decided end to end. Then the batch rejoins: ONE research_prompt for all of",
     "  them, research_file, and then page_draft, page_check and publish_page one page at a time.",
+    "- ‼️ WHEN HE ASKS FOR HEADLINES WITHOUT NAMING A PAGE, ASK WHICH KEYWORD FIRST. Do not run the",
+    "  batch verb to cover the ambiguity: headlines_write spends a model call on every page in the",
+    "  plan, and he asked about one. Call read_pages, show him the ranks with their keywords, and ask",
+    "  which. Then walk THAT page with page_write and page_pick until it is decided, and only move to",
+    "  the next page when he says so.",
+    "- ‼️ EVERY PAGE CARRIES THREE HEADLINE ARTIFACTS AND page_write WRITES ALL THREE. Six H1",
+    "  candidates (the question an engine matches), six title tags (what Google prints), and twenty",
+    "  ad hooks (what stops a scroll). They are three different artifacts for three different readers,",
+    "  they are tracked separately, and none of them replaces another. When you show a headline card,",
+    "  name which of the three each block is. If one of them is reported missing in the notes, say so",
+    "  rather than presenting the page as finished.",
     "- Every page hands over to something. plan_cta sets the sentence a page offers the house offer",
     "  with. ONE page may be the tool page instead: tool_options lists what suits this client and",
     "  tool_pick needs the rank of the page it goes on. There is one tool per client, never one per",
@@ -511,11 +533,21 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "",
     "THE PER-PAGE VERBS, WHICH ARE THE SAME WORK ASKED OF ONE PAGE:",
     "  page_write           needs rank. Writes whatever that ONE page needs next, worked out from",
-    "                       what it already has: its three ideas, or its three headlines, or its",
-    "                       skeleton, or the tool options. You do not say which; the page's stage",
-    "                       decides, and the result comes back with the options to show him.",
+    "                       what it already has: its three ideas, or its six headlines plus its",
+    "                       title tags and ad hooks, or its skeleton, or the tool options. You do",
+    "                       not say which; the page's stage decides, and the result comes back with",
+    "                       the options to show him.",
     "  page_pick            needs rank and pick. Takes one of the options the card just printed for",
     "                       that page, at whatever stage it is at. The page then moves on by itself.",
+    "                       ‼️ IT ALWAYS MEANS THE H1, never the title tag. Use page_title_pick for",
+    "                       that one: two artifacts on one page are pickable and a bare pick is the",
+    "                       H1's, which is what every card and every earlier thread teaches.",
+    "  page_title           needs rank. The TITLE TAG candidates for that page, numbered, written",
+    "                       if none exist yet. This is the line Google prints in a results list:",
+    "                       50 to 60 characters, keyword in the first few words, no hype.",
+    "                       ‼️ IT IS NOT THE H1 AND IT DOES NOT REPLACE ONE. A page carries both.",
+    "  page_title_pick      needs rank and pick. Takes one title tag. It lands on the page, or on",
+    "                       the page the moment its skeleton creates one.",
     "  page_draft           needs rank. Writes the body of ONE page. It takes about eighty seconds,",
     "                       so run it ALONE in a turn and say nothing else is happening.",
     "  page_check           needs rank. Runs the quality gate on one drafted page and reports the",
@@ -562,6 +594,15 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "                       prompt you handed him, and saying 'thanks, I have filed that' without",
     "                       this action is a lie about work he just did. If you cannot tell which",
     "                       kind it is, ask in one line rather than filing it as the wrong one.",
+    "  file_voc             needs text: customer phrases he has pasted, in their own words. Reddit",
+    "                       posts, review quotes, things a patient said on a call. It files them as",
+    "                       this client's own voice-of-customer evidence, which every later headline",
+    "                       run reads FIRST, and it crumbles each one into what somebody would",
+    "                       actually TYPE into ChatGPT to find that answer.",
+    "                       ‼️ USE IT WHEN HE PASTES CUSTOMER PAIN, and say what came back. A quote",
+    "                       is evidence and never a headline: the whole point of the crumble is that",
+    "                       nobody types a confession into a search box. The queries it returns are",
+    "                       candidates for keywords_add, so offer them and let him choose.",
     "",
     ctx.text,
     "",
@@ -875,6 +916,17 @@ ${body}`,
         (stepKey === LAUNCH_DAY_ZERO_STEP_KEY
           ? "Ticking the step stamps day_0_source as manual_step, which records an assertion that the archive happened. It is not a photograph and nothing may call it one."
           : ""),
+    };
+  }
+
+  if (kind === "file_voc") {
+    const { fileVocPaste, vocIntakeLines } = await import("@/lib/clients/voc-intake");
+    const res = await fileVocPaste({ clientId, raw: action.text ?? "", by: actor });
+    if (!res.ok) return { kind, ok: false, detail: res.error };
+    return {
+      kind,
+      ok: true,
+      detail: vocIntakeLines({ filed: res.filed, crumbled: res.crumbled, notes: res.notes }).join("\n"),
     };
   }
 

@@ -270,7 +270,7 @@ export async function generateDrHeadlinesForPage(args: {
  * ‼️ origin = 'dr_ad', WHICH IS WHAT KEEPS THEM OUT OF THE H1 PICKER. optionsFor filters
  * origin='keyword', pickHeadlineFor reads that list, and client_headlines carries a unique index
  * on (client_id, normalized) so a line already on file is skipped rather than duplicated. The
- * origin CHECK constraint must already allow this value: see docs/2026-10-07-dr-ad-headlines.sql.
+ * origin CHECK constraint must already allow this value: see docs/2026-10-08-page-headline-formats.sql.
  */
 export async function storeDrHeadlines(args: {
   clientId: string;
@@ -299,7 +299,7 @@ export async function storeDrHeadlines(args: {
 
   if (error) {
     const hint = /client_headlines_origin_check/.test(error.message)
-      ? " If this names client_headlines_origin_check, docs/2026-10-07-dr-ad-headlines.sql has not been run."
+      ? " If this names client_headlines_origin_check, docs/2026-10-08-page-headline-formats.sql has not been run."
       : "";
     return { ok: false, error: `${error.message}.${hint}` };
   }

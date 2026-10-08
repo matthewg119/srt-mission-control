@@ -53,20 +53,27 @@ export const SKELETON_COMMAND = /^skeleton(?:\s+([0-9]{1,2})\s+more)?$/i;
  * is the only one of the two that cannot silently name a different page after a swap.
  */
 export const PAGE_WALK_COMMAND =
-  /^\s*[`*_]*page\s+([0-9]{1,2})(?:\s+(?:(pick)\s+([0-9]{1,2})|(more|draft|check|ads)))?[`*_]*\s*$/i;
+  /^\s*[`*_]*page\s+([0-9]{1,2})(?:\s+(?:title\s+(pick)\s+([0-9]{1,2})|(pick)\s+([0-9]{1,2})|(more|draft|check|ads|title)))?[`*_]*\s*$/i;
 
 export type PageWalkCommand =
-  | { page: number; verb: "show" | "more" | "draft" | "check" | "ads" }
-  | { page: number; verb: "pick"; option: number };
+  | { page: number; verb: "show" | "more" | "draft" | "check" | "ads" | "title" }
+  | { page: number; verb: "pick"; option: number }
+  | { page: number; verb: "title_pick"; option: number };
 
 /**
- * Read one of the five page verbs, or null.
+ * Read one of the page verbs, or null.
  *
  * ‼️ NULL FOR A BARE DIGIT, AND THAT IS LOAD-BEARING RATHER THAN AN OMISSION. page-studio.ts
  * records what a bare digit cost the last time one was claimed: "1" typed under five numbered
  * offers was filed as the page body, verbatim. parseAngleCommand refuses a bare number for the
  * same reason and _probe-page-angles.ts pins it. In the chat a model resolves "1" against the
  * transcript and sends an explicit rank; here the person types the page.
+ *
+ * ‼️ `title pick N` IS MATCHED BEFORE `pick N`, AND THE ORDER IS THE CORRECTNESS. Two artifacts
+ * on one page are now pickable, the H1 and the title tag, so an unqualified `pick` has to keep
+ * meaning the H1: that is what every card, every earlier thread and page-studio.ts already
+ * teaches. Reversing the two alternatives would make `page 3 title pick 2` parse as the H1 pick
+ * with a stray word, which is the class of bug that files one answer against another question.
  */
 export function parsePageWalk(text: string): PageWalkCommand | null {
   const m = PAGE_WALK_COMMAND.exec(text);
@@ -80,11 +87,19 @@ export function parsePageWalk(text: string): PageWalkCommand | null {
   if (m[2]) {
     const option = Number(m[3]);
     if (!Number.isInteger(option) || option < 1) return null;
+    return { page, verb: "title_pick", option };
+  }
+
+  if (m[4]) {
+    const option = Number(m[5]);
+    if (!Number.isInteger(option) || option < 1) return null;
     return { page, verb: "pick", option };
   }
 
-  const verb = (m[4] ?? "show").toLowerCase();
-  if (verb === "more" || verb === "draft" || verb === "check" || verb === "ads") return { page, verb };
+  const verb = (m[6] ?? "show").toLowerCase();
+  if (verb === "more" || verb === "draft" || verb === "check" || verb === "ads" || verb === "title") {
+    return { page, verb };
+  }
   return { page, verb: "show" };
 }
 
@@ -97,6 +112,7 @@ export type BatchStage =
   | "no_plan"
   | "angles"
   | "headlines"
+  | "formats"
   | "skeletons"
   | "handover"
   | "research"
@@ -121,6 +137,20 @@ export interface BatchState {
   needAngle: PlanRow[];
   /** Plan rows with no headline yet. Not conditioned on the angle: the GATE is, this count is not. */
   needHeadline: PlanRow[];
+  /**
+   * Plan rows whose H1 is picked but which are missing one of the other two artifacts.
+   *
+   * ‼️ THE PER-PAGE HALF OF "BEFORE THAT PAGE MOVES ON", AND IT IS EMPTY ON THE HAPPY PATH.
+   * Matthew, 2026-10-07: the walk "works ONE page at a time to at least 6 concepts in all three
+   * formats before that page moves on". `writeHeadlinesFor` writes all three together, so a page
+   * that ran normally never lands here. What this catches is the run where the title tags or the
+   * ad bank failed and were reported in `notes`: without it that page keeps its H1, looks
+   * finished, and goes to draft missing an artifact nobody will notice is absent.
+   *
+   * Same posture `needAngle` keeps: a FAILED READ leaves this empty rather than reporting every
+   * page as incomplete, because a missing table must not wedge the lane shut.
+   */
+  needFormats: PlanRow[];
   /** Plan rows with a headline and no skeleton. */
   needSkeleton: PlanRow[];
   /** Plan rows with a skeleton and no handover: no cta line, and not the page carrying the tool. */
@@ -166,6 +196,7 @@ export async function readBatch(clientId: string): Promise<BatchState | { error:
       outlines: new Map(),
       needAngle: [],
       needHeadline: [],
+      needFormats: [],
       needSkeleton: [],
       needHandover: [],
       drafted: [],
@@ -182,8 +213,20 @@ export async function readBatch(clientId: string): Promise<BatchState | { error:
   const angles = await anglesOnPlan(clientId, rows.map((r) => r.id));
   const toolPageId = await toolPageFor(clientId);
 
+  const formats = await formatsOnPlan(clientId, rows.map((r) => r.id));
+
   const needAngle = angles.ok ? rows.filter((r) => !angles.picked.has(r.id)) : [];
   const needHeadline = rows.filter((r) => !headlines.get(r.id));
+  // A page only owes its other two artifacts once its H1 exists: before that it is at the
+  // headline stage anyway, and writeHeadlinesFor is what produces all three.
+  const needFormats = formats.ok
+    ? rows.filter((r) => headlines.get(r.id) && !formats.complete.has(r.id))
+    : [];
+  // ‼️ NOT NARROWED BY needFormats, AND NARROWING IT WAS A REAL BUG FOR ONE EDIT. These two lists
+  // are independent facts about a row and the STAGE CHAIN below is the only thing that decides
+  // which question is asked first. Excluding format-incomplete rows from needSkeleton left a page
+  // with an H1, no title tags and no outline in neither list, which walked it straight past
+  // draft_wave's gate and drafted a page off no skeleton at all.
   const needSkeleton = rows.filter((r) => headlines.get(r.id) && !outlines.get(r.id));
   const drafted = rows.filter((r) => r.pageId && bodies.has(r.pageId));
 
@@ -196,19 +239,25 @@ export async function readBatch(clientId: string): Promise<BatchState | { error:
   // ‼️ HANDOVER SITS BETWEEN THE SKELETON AND THE RESEARCH AND NEVER AFTER A DRAFT. Putting it in
   // the chain ahead of `drafted` would report a finished batch as unfinished forever, because a
   // page that was drafted before this stage existed has no cta line and never will.
+  // ‼️ `formats` SITS BETWEEN `headlines` AND `skeletons`, AND IT IS NOT AFTER `drafted` FOR THE
+  // SAME REASON handover is not: a page drafted before the three-format split existed has no
+  // title tags and never will, so ordering this after `drafted` would report every old batch as
+  // unfinished forever.
   const stage: BatchStage = needAngle.length
     ? "angles"
     : needHeadline.length
       ? "headlines"
-      : needSkeleton.length
-        ? "skeletons"
-        : drafted.length === rows.length
-          ? "done"
-          : drafted.length
-            ? "drafting"
-            : needHandover.length
-              ? "handover"
-              : "research";
+      : drafted.length === rows.length
+        ? "done"
+        : needFormats.length
+          ? "formats"
+          : needSkeleton.length
+            ? "skeletons"
+            : drafted.length
+              ? "drafting"
+              : needHandover.length
+                ? "handover"
+                : "research";
 
   return {
     stage,
@@ -218,10 +267,56 @@ export async function readBatch(clientId: string): Promise<BatchState | { error:
     outlines,
     needAngle,
     needHeadline,
+    needFormats,
     needSkeleton,
     needHandover,
     drafted,
   };
+}
+
+/**
+ * Which plan rows already carry all three headline artifacts.
+ *
+ * ‼️ ok:false ON A FAILED READ, AND EVERY CALLER TREATS THAT AS "DO NOT GATE". Same contract
+ * `anglesOnPlan` keeps and for the same reason: `page-seo-titles.ts` writes through an origin
+ * that docs/2026-10-08-page-headline-formats.sql has to allow first, so on a database where that
+ * migration has not run, every page would report as missing its title tags and the walk would
+ * wedge shut between the headline and the skeleton with no way through.
+ *
+ * "Complete" is a title tag AND an ad hook on file. The counts are not compared to six: a run
+ * that was refused down to four good titles has four real candidates, and demanding six would
+ * block the page on a number rather than on an artifact.
+ */
+async function formatsOnPlan(
+  clientId: string,
+  ids: readonly string[]
+): Promise<{ ok: true; complete: Set<string> } | { ok: false }> {
+  if (!ids.length) return { ok: true, complete: new Set() };
+
+  const { data, error } = await supabaseAdmin
+    .from("client_headlines")
+    .select("used_page_id, origin")
+    .eq("client_id", clientId)
+    .in("origin", ["seo_title", "dr_ad"])
+    .is("dropped_at", null)
+    .in("used_page_id", ids as string[]);
+
+  if (error) {
+    console.error(
+      `[page-batch] the three-format read failed (${error.message}). If this names origin, ` +
+        "docs/2026-10-08-page-headline-formats.sql has not been run, so no page is gated on its formats."
+    );
+    return { ok: false };
+  }
+
+  const titles = new Set<string>();
+  const ads = new Set<string>();
+  for (const row of data ?? []) {
+    const id = String(row.used_page_id);
+    if (row.origin === "seo_title") titles.add(id);
+    else ads.add(id);
+  }
+  return { ok: true, complete: new Set(ids.filter((id) => titles.has(id) && ads.has(id))) };
 }
 
 /**
@@ -371,6 +466,7 @@ export async function existingPillars(clientId: string): Promise<PlanRow[]> {
 export type PageStage =
   | "angle"
   | "headline"
+  | "formats"
   | "skeleton"
   | "handover"
   | "draft"
@@ -396,9 +492,13 @@ export function pageStage(state: BatchState, row: PlanRow): PageStage {
 
   if (has(state.needAngle)) return "angle";
   if (has(state.needHeadline)) return "headline";
-  if (has(state.needSkeleton)) return "skeleton";
-  // A body exists, so every decision behind it was made. Published or not is the only question left.
+  // A body exists, so every decision behind it was made. Published or not is the only question
+  // left. ‼️ AND IT IS TESTED BEFORE `needFormats` FOR THE REASON THE HANDOVER NOTE ABOVE GIVES:
+  // a page drafted before the three-format split has no title tags and never will, so asking the
+  // formats question first would report every old page as owing one forever.
   if (has(state.drafted)) return row.pageStatus === "published" ? "live" : "review";
+  if (has(state.needFormats)) return "formats";
+  if (has(state.needSkeleton)) return "skeleton";
   if (has(state.needHandover)) return "handover";
   return "draft";
 }
@@ -533,6 +633,8 @@ export function stageLine(state: BatchState): string {
       return `${state.needAngle.length} of ${state.rows.length} pages still need an idea. The idea comes before the line.`;
     case "headlines":
       return `${state.needHeadline.length} of ${state.rows.length} pages still need a headline.`;
+    case "formats":
+      return `${state.needFormats.length} of ${state.rows.length} pages have an H1 and are missing a title tag or their ad headlines.`;
     case "skeletons":
       return `${state.needSkeleton.length} of ${state.rows.length} pages still need a skeleton.`;
     case "handover":
@@ -567,6 +669,8 @@ export function pageStageLine(stage: PageStage, row: PlanRow): string {
       return `Page ${row.rank} has no idea yet. The idea comes before the line.`;
     case "headline":
       return `Page ${row.rank} argues: ${row.angle || "(its idea is picked)"}. It has no headline yet.`;
+    case "formats":
+      return `Page ${row.rank} is "${row.headline || row.workingTitle}". Its H1 is picked and one of its other two formats is missing.`;
     case "skeleton":
       return `Page ${row.rank} is "${row.headline || row.workingTitle}". It has no skeleton yet.`;
     case "handover":
@@ -591,8 +695,18 @@ export function pageStageLine(stage: PageStage, row: PlanRow): string {
 export function pageReplyLine(stage: PageStage, rank: number): string {
   switch (stage) {
     case "angle":
-    case "headline":
       return `\`page ${rank} pick 2\` takes option 2. \`page ${rank} more\` writes three new ones.`;
+    case "headline":
+      return (
+        `\`page ${rank} pick 2\` takes option 2, which sets the H1. \`page ${rank} more\` writes a ` +
+        `fresh set of six, plus the title tags and the ad headlines. \`page ${rank} title\` numbers ` +
+        "the title tags on their own."
+      );
+    case "formats":
+      return (
+        `\`page ${rank} title pick 2\` takes title tag 2. \`page ${rank} more\` writes whichever of ` +
+        `the three formats is missing, and \`page ${rank} ads\` writes just the ad headlines.`
+      );
     case "skeleton":
       return (
         `\`page ${rank} more\` writes its skeleton. There is nothing to choose between here. ` +
@@ -629,6 +743,15 @@ export function pageWalkLines(args: {
   options: readonly string[];
   /** This page's ideas, every one of them, oldest first, as anglesFor returns them. */
   angles: readonly { idea: string; status: string }[];
+  /**
+   * This page's title tags, from seoTitlesFor, and how many ad hooks are on file.
+   *
+   * ‼️ OPTIONAL, AND OMITTING THEM IS THE OLD CARD EXACTLY. Every caller that has not been
+   * taught the three formats yet renders what it always did rather than printing "0 title tags"
+   * about a page whose titles simply were not read.
+   */
+  titles?: readonly string[];
+  ads?: number;
   /** This client's tool options, only read at the handover stage. */
   tools?: readonly { label: string; answers: string }[];
   /** The tool this client has already placed, when it is on another page. */
@@ -657,8 +780,31 @@ export function pageWalkLines(args: {
     if (!args.angles.length) lines.push("No ideas written yet.");
     else args.angles.forEach((a, i) => lines.push(`  ${i + 1}. ${a.idea}`));
   } else if (stage === "headline") {
-    if (!args.options.length) lines.push("No headlines written yet.");
+    // ‼️ THE H1 KEEPS THE NUMBERS AND THE OTHER TWO FORMATS DO NOT, which is this file's own rule
+    // about printing two sets of options on one card: the H1 is the decision this stage is
+    // waiting on, so `page N pick 2` has exactly one meaning. The title tags are numbered under
+    // their own verb at the formats stage, where the H1 is already settled.
+    lines.push("The H1, which is the question an engine matches. Pick one:");
+    if (!args.options.length) lines.push("  No headlines written yet.");
     else args.options.forEach((h, i) => lines.push(`  ${i + 1}. ${h}`));
+    if (args.titles?.length) {
+      lines.push(
+        "",
+        `Its title tag, which is what Google prints. ${args.titles.length} written, numbered under \`page ${row.rank} title\`:`,
+        ...args.titles.slice(0, 3).map((t) => `     ${t}`),
+        ...(args.titles.length > 3 ? [`     and ${args.titles.length - 3} more`] : [])
+      );
+    }
+    if (args.ads) lines.push("", `Its ad headlines: ${args.ads} on file, under \`page ${row.rank} ads\`.`);
+  } else if (stage === "formats") {
+    lines.push(`Its H1 is "${row.headline ?? ""}", already picked.`, "");
+    if (args.titles?.length) {
+      lines.push("Its title tags, which is what Google prints. Pick one:");
+      args.titles.forEach((t, i) => lines.push(`  ${i + 1}. ${t}`));
+    } else {
+      lines.push("No title tags yet, and this page owes one.");
+    }
+    lines.push("", args.ads ? `Its ad headlines: ${args.ads} on file.` : "No ad headlines yet, and this page owes them.");
   } else if (stage === "skeleton") {
     const outline = state.outlines.get(row.id) ?? null;
     if (!outline) lines.push("No skeleton yet.");
@@ -789,11 +935,30 @@ export function pageReviewLines(args: {
 // five numbered offers was filed as the page body, verbatim.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Three new candidates for one page, filed and claimed for it. */
+/**
+ * All three headline artifacts for one page, written together, filed and claimed for it.
+ *
+ * ‼️ THREE ARTIFACTS PER RUN SINCE 2026-10-08, AND THAT IS THE WHOLE DECISION. Matthew, after
+ * rejecting the H1 card for SRT's own pages: every run returns the title tag, the H1 and the ad
+ * hook, "stored and tracked separately so each accumulates its own traffic data over time". They
+ * are three rows under three origins, never three columns on one row, because separate tracking
+ * is the point and a traffic number has to hang off an id.
+ *
+ * ‼️ THREE MODEL CALLS AND NOT ONE, for the reason seo-title-engine.ts's banner states: a 60
+ * character budget and a 4 to 12 word budget in one prompt collapse into whichever is tighter.
+ *
+ * ‼️ AND THE H1 IS THE ONLY ONE THAT CAN FAIL THE RUN. A missing title tag or a missing ad bank
+ * is a page that still has its H1 to pick, which is the decision the walk is waiting on. Losing
+ * the whole run because the ad lane timed out would block the page on the artifact nobody picks.
+ * Both are reported.
+ */
 export async function writeHeadlinesFor(
   clientId: string,
   row: PlanRow
-): Promise<{ ok: true; headlines: string[] } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; headlines: string[]; titles: string[]; ads: number; notes: string[] }
+  | { ok: false; error: string }
+> {
   if (!row.targetKeyword?.trim()) {
     return { ok: false, error: `page ${row.rank} has no target keyword, so there is nothing to aim a headline at` };
   }
@@ -836,7 +1001,59 @@ export async function writeHeadlinesFor(
       .eq("client_id", clientId);
   }
 
-  return { ok: true, headlines: stored.stored.map((h) => h.headline) };
+  const notes: string[] = [];
+
+  // The other two artifacts. Each stores itself against the plan row under its own origin, so
+  // neither needs the claim loop above and neither can reach the H1 picker.
+  let titles: string[] = [];
+  try {
+    const { generateSeoTitlesForPage, storeSeoTitles } = await import("./page-seo-titles");
+    const made = await generateSeoTitlesForPage({ clientId, row, keyword: row.targetKeyword });
+    if (made.ok) {
+      titles = made.titles;
+      const put = await storeSeoTitles({
+        clientId,
+        planId: row.id,
+        titles: made.titles,
+        audienceId: got.audienceId,
+      });
+      if (!put.ok) notes.push(`the title tags could not be filed: ${put.error}`);
+    } else {
+      notes.push(`no title tags: ${made.error}`);
+    }
+  } catch (e) {
+    notes.push(`no title tags: ${(e as Error).message}`);
+  }
+
+  // ‼️ THE AD BANK IS WRITTEN ONCE AND NEVER REWRITTEN, which is the idempotency `page_ads`
+  // already had. Twenty hooks are used across weeks of ads, so a second headline run on the same
+  // page must not spend the call again or hand back a different bank than the one in use.
+  let ads = 0;
+  try {
+    const { drHeadlinesFor, generateDrHeadlinesForPage, storeDrHeadlines } = await import("./page-dr-headlines");
+    const existing = (await drHeadlinesFor(clientId, [row.id])).get(row.id) ?? [];
+    if (existing.length) {
+      ads = existing.length;
+    } else {
+      const made = await generateDrHeadlinesForPage({ clientId, row });
+      if (made.ok) {
+        const put = await storeDrHeadlines({
+          clientId,
+          planId: row.id,
+          headlines: made.headlines,
+          audienceId: got.audienceId,
+        });
+        if (put.ok) ads = put.stored;
+        else notes.push(`the ad headlines could not be filed: ${put.error}`);
+      } else {
+        notes.push(`no ad headlines: ${made.error}`);
+      }
+    }
+  } catch (e) {
+    notes.push(`no ad headlines: ${(e as Error).message}`);
+  }
+
+  return { ok: true, headlines: stored.stored.map((h) => h.headline), titles, ads, notes };
 }
 
 /**
@@ -872,6 +1089,90 @@ export async function optionsFor(
     );
   }
   return out;
+}
+
+/**
+ * The other two artifacts for one page, for the card.
+ *
+ * One helper rather than two reads at four call sites, and it never throws: a card missing its
+ * title tags is worth less than a card, and a card that threw is worth nothing.
+ */
+export async function otherFormatsFor(
+  clientId: string,
+  row: PlanRow
+): Promise<{ titles: string[]; ads: number }> {
+  try {
+    const [{ seoTitlesFor }, { drHeadlinesFor }] = await Promise.all([
+      import("./page-seo-titles"),
+      import("./page-dr-headlines"),
+    ]);
+    const [titles, ads] = await Promise.all([
+      seoTitlesFor(clientId, [row.id]),
+      drHeadlinesFor(clientId, [row.id]),
+    ]);
+    return { titles: titles.get(row.id) ?? [], ads: (ads.get(row.id) ?? []).length };
+  } catch (e) {
+    console.error(`[page-batch] the other two formats could not be read: ${(e as Error).message}`);
+    return { titles: [], ads: 0 };
+  }
+}
+
+/**
+ * The title tags for one page, numbered, written first if there are none.
+ *
+ * ‼️ NOT STAGE DISPATCHED, AND THAT IS THE POINT OF A SEPARATE VERB. A page's title tags exist
+ * from the headline stage onward, so `page 3 title` has to answer at the headline stage, at the
+ * formats stage and after the skeleton. `writeForStage` and `pickForStage` both switch on the
+ * stage because the thing they act on IS the stage's open decision; this one names its artifact.
+ */
+export async function showTitlesForPage(clientId: string, row: PlanRow): Promise<PageWorkResult> {
+  const { seoTitleLines, generateSeoTitlesForPage, storeSeoTitles } = await import("./page-seo-titles");
+
+  let titles = (await otherFormatsFor(clientId, row)).titles;
+  if (!titles.length) {
+    if (!row.targetKeyword?.trim()) {
+      return { ok: false, error: `page ${row.rank} has no target keyword, so there is nothing to aim a title at` };
+    }
+    const made = await generateSeoTitlesForPage({ clientId, row, keyword: row.targetKeyword });
+    if (!made.ok) return { ok: false, error: made.error };
+    const put = await storeSeoTitles({ clientId, planId: row.id, titles: made.titles });
+    if (!put.ok) return { ok: false, error: put.error };
+    titles = made.titles;
+  }
+
+  return {
+    ok: true,
+    stage: "formats",
+    lines: [...seoTitleLines(row, titles), "", `\`page ${row.rank} title pick 2\` takes title tag 2.`],
+  };
+}
+
+/** Take title tag `option` (1-based) for one page. */
+export async function pickTitleForPage(
+  clientId: string,
+  row: PlanRow,
+  option: number,
+  by: string
+): Promise<PageWorkResult> {
+  const { approveSeoTitleFor } = await import("./page-seo-titles");
+  const res = await approveSeoTitleFor(clientId, row, option, by);
+  if (!res.ok) return { ok: false, error: res.error };
+
+  const after = await readBatch(clientId);
+  if ("error" in after) return { ok: false, error: after.error };
+  const fresh = pageAtRank(after, row.rank) ?? row;
+
+  return {
+    ok: true,
+    stage: pageStage(after, fresh),
+    lines: [
+      `Page ${row.rank}'s title tag is now "${res.title}".`,
+      row.pageId
+        ? "It is on the page now."
+        : "It lands on the page when its skeleton creates one, which is the next stage.",
+      "The H1 is unchanged: these are two artifacts on one page.",
+    ],
+  };
 }
 
 /** Take option `pick` (1-based) for one page. */
@@ -958,6 +1259,13 @@ export async function writeSkeletonsFor(
         .update({ page_id: pageId, status: "claimed" })
         .eq("id", row.id)
         .eq("client_id", clientId);
+
+      // The title tag is picked at the formats stage, which runs BEFORE this one, so the page row
+      // that has just been created is the first place the choice can land. Applied as its own
+      // update rather than passed to startPageDraft, because `title` there is also the source of
+      // the SLUG and a title tag is the line Google prints, never the address it fetched.
+      const { applyApprovedTitle } = await import("./page-seo-titles");
+      await applyApprovedTitle(clientId, row.id, pageId);
     }
 
     // The picked angle carries the story spine and the belief this page has to install. Both are
@@ -1012,9 +1320,15 @@ export async function buildBatchPrompt(
   const state = await readBatch(clientId);
   if ("error" in state) return { ok: false, error: state.error };
 
-  if (state.needHeadline.length || state.needSkeleton.length) {
+  // ‼️ THE FORMATS ARE PART OF "READY" SINCE 2026-10-08. Matthew's workflow: the deep research
+  // prompt goes out only "when every page in the batch is ready", and a page whose title tags or
+  // ad hooks silently failed is not ready. The research prompt is the expensive manual step he
+  // runs by hand elsewhere, so sending it out over an incomplete batch costs a person's afternoon
+  // rather than a model call.
+  if (state.needHeadline.length || state.needFormats.length || state.needSkeleton.length) {
     const parts: string[] = [];
     if (state.needHeadline.length) parts.push(`${state.needHeadline.length} need a headline`);
+    if (state.needFormats.length) parts.push(`${state.needFormats.length} need a title tag or their ad headlines`);
     if (state.needSkeleton.length) parts.push(`${state.needSkeleton.length} need a skeleton`);
     return { ok: false, error: `not yet: ${parts.join(", ")}` };
   }
@@ -1146,7 +1460,67 @@ export async function writeForStage(
       const options = (await optionsFor(clientId, [row])).get(row.id) ?? [];
       const { anglesFor } = await import("./page-angles");
       const mine = (await anglesFor(clientId)).filter((a) => a.planId === row.id);
-      return { ok: true, stage, lines: pageWalkLines({ state, row, options, angles: mine }) };
+      const other = await otherFormatsFor(clientId, row);
+      return {
+        ok: true,
+        stage,
+        lines: [
+          ...pageWalkLines({ state, row, options, angles: mine, titles: other.titles, ads: other.ads }),
+          // Said out loud, because a format that silently failed looks identical to one nobody
+          // asked for. writeHeadlinesFor refuses to fail the whole run over either of these.
+          ...(got.notes.length ? ["", ...got.notes.map((n) => `note: ${n}`)] : []),
+        ],
+      };
+    }
+
+    // ‼️ THIS STAGE ONLY EXISTS WHEN SOMETHING WENT WRONG EARLIER, which is why it writes the
+    // missing artifact rather than offering a choice. A page reaches it when its H1 is picked and
+    // either the title tags or the ad hooks are absent, and the only way that happens is a failed
+    // or refused call inside writeHeadlinesFor, reported in its notes at the time.
+    case "formats": {
+      const notes: string[] = [];
+      const before = await otherFormatsFor(clientId, row);
+
+      if (!before.titles.length) {
+        const { generateSeoTitlesForPage, storeSeoTitles } = await import("./page-seo-titles");
+        const made = await generateSeoTitlesForPage({ clientId, row, keyword: row.targetKeyword ?? "" });
+        if (made.ok) {
+          const put = await storeSeoTitles({ clientId, planId: row.id, titles: made.titles });
+          if (!put.ok) notes.push(`the title tags could not be filed: ${put.error}`);
+        } else notes.push(`no title tags: ${made.error}`);
+      }
+
+      if (!before.ads) {
+        const { generateDrHeadlinesForPage, storeDrHeadlines } = await import("./page-dr-headlines");
+        const made = await generateDrHeadlinesForPage({ clientId, row });
+        if (made.ok) {
+          const put = await storeDrHeadlines({ clientId, planId: row.id, headlines: made.headlines });
+          if (!put.ok) notes.push(`the ad headlines could not be filed: ${put.error}`);
+        } else notes.push(`no ad headlines: ${made.error}`);
+      }
+
+      // Re-read, so the card prints what is now on file rather than what was missing a moment ago.
+      const after = await readBatch(clientId);
+      if ("error" in after) return { ok: false, error: after.error };
+      const fresh = pageAtRank(after, row.rank) ?? row;
+      const { anglesFor } = await import("./page-angles");
+      const mine = (await anglesFor(clientId)).filter((a) => a.planId === row.id);
+      const other = await otherFormatsFor(clientId, fresh);
+      return {
+        ok: true,
+        stage,
+        lines: [
+          ...pageWalkLines({
+            state: after,
+            row: fresh,
+            options: [],
+            angles: mine,
+            titles: other.titles,
+            ads: other.ads,
+          }),
+          ...(notes.length ? ["", ...notes.map((n) => `note: ${n}`)] : []),
+        ],
+      };
     }
 
     case "skeleton": {
@@ -1304,6 +1678,18 @@ export async function pickForStage(
         ],
       };
     }
+
+    // ‼️ AN UNQUALIFIED `pick` NEVER MEANS THE TITLE TAG, and this arm is what says so out loud.
+    // A page at this stage has its H1 settled, so a bare digit here has no slot to fill and the
+    // one thing it must not do is quietly fill a different one. parsePageWalk keeps the same
+    // rule in the grammar by matching `title pick` ahead of `pick`.
+    case "formats":
+      return {
+        ok: false,
+        error:
+          `page ${row.rank} already has its H1, so there is nothing for a bare pick to take. ` +
+          `\`page ${row.rank} title pick ${option}\` takes title tag ${option}.`,
+      };
 
     case "handover": {
       // A tool renders INSIDE a page, so the page has to exist. It does not until the skeleton

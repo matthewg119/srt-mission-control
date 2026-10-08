@@ -155,8 +155,19 @@ jobs:
       - name: Page walk (a page's own stage, and no bare digit is a command)
         run: bun --no-env-file run scripts/_probe-page-walk.ts
 
+      # ‼️ FOUR ARTIFACTS, FOUR LENGTH CONTRACTS, AND THE REGRESSION IS THEM CONVERGING. A reel
+      # title is 8 words or fewer, an ad hook is 12 to 45 words, a page H1 is a 4 to 12 word query
+      # core and a title tag is 50 to 60 CHARACTERS. They reach prompts through shared blocks, and
+      # in one prompt the shortest rule silently wins every run, which is why each has its own
+      # engine constant and why the aeo and seo probes assert the ABSENCE of each other's band.
+      #
+      # _probe-headline-first.ts was in neither this file nor package.json until 2026-10-08, so
+      # nothing ran it. It is offline by construction and it guards the pre-call lane's command
+      # grammar, which the three-format change reaches.
       - name: Headline probes
         run: |
           bun --no-env-file run scripts/_probe-aeo-headlines.ts
+          bun --no-env-file run scripts/_probe-seo-titles.ts
           bun --no-env-file run scripts/_probe-dr-headlines.ts
           bun --no-env-file run scripts/_probe-headline-page.ts
+          bun --no-env-file run scripts/_probe-headline-first.ts

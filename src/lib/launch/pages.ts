@@ -453,8 +453,12 @@ export const LAUNCH_PAGE_ACTIONS = [
   "page_pick",
   "page_draft",
   "page_check",
-  // The ad headline, which is a different artifact from the page's H1 and not a replacement for
-  // it. See src/lib/clients/page-dr-headlines.ts for why both exist.
+  // The other two of the three artifacts every page carries. See the three-format split in
+  // docs/prompts/2026-10-07-three-headline-formats.md: the H1 above is the question an engine
+  // matches, the title tag is what Google prints, the ad hooks are what stop a scroll. One page,
+  // three lines, and neither of these replaces the H1.
+  "page_title",
+  "page_title_pick",
   "page_ads",
   // ─────────────────────────────────────────────────────────────────────────
   // ‼️ THE IDEA COMES BEFORE THE LINE, AND LISTING THEM IN THIS ORDER IS HALF OF WHY. The chat is
@@ -730,11 +734,40 @@ export async function runLaunchPagesAction(input: LaunchPagesInput): Promise<Lau
     }
 
     // ── The plan ──────────────────────────────────────────────────────────────
+    // ‼️ THE CARD IS APPENDED HERE, AND WITHOUT IT THIS REPLY NAMED NOTHING. `res.note` ends with
+    // "Read the card below", which is true in the Slack door where refreshCard() posts one next.
+    // In the chat there is no card and no pages panel, so the entire answer to "propose a plan"
+    // was a count and a promise of rows that never arrived: nothing numbered, nothing to reply
+    // with. Matthew, 2026-10-07: "plan_new's card prints NO numbers or letters, so there is
+    // nothing to reply with."
+    //
+    // `formatPlan` is the renderer the Slack card already uses, so the two doors print the same
+    // rows rather than a second renderer drifting from the first. It numbers by RANK, which is
+    // the number every other page verb takes.
     case "plan_new": {
       const fc = await frameContext(clientId);
       if (!fc.ok) return { ok: false, error: `Not yet. Waiting on: ${fc.missing.join("; ")}.` };
       const res = await proposePreCallPlan(clientId, fc.ctx);
-      return res.ok ? { ok: true, message: res.note } : { ok: false, error: res.error };
+      if (!res.ok) return { ok: false, error: res.error };
+
+      const { loadPlan, formatPlan } = await import("@/lib/clients/page-plan");
+      const plan = await loadPlan(clientId);
+      if ("error" in plan) {
+        return { ok: true, message: `${res.note}\n\n(the rows could not be read back: ${plan.error})` };
+      }
+
+      return {
+        ok: true,
+        message: [
+          res.note,
+          "",
+          "Show him every row below, numbered exactly as they are numbered here:",
+          formatPlan(plan.rows, null),
+          "",
+          "Each number is the page's RANK and it is what every page verb takes: reply `plan approve` to",
+          "lock them all in, or name a rank to change one first.",
+        ].join("\n"),
+      };
     }
 
     case "plan_approve": {
@@ -1181,9 +1214,12 @@ export async function runLaunchPagesAction(input: LaunchPagesInput): Promise<Lau
     case "draft_wave": {
       const batch = await readBatch(clientId);
       if ("error" in batch) return { ok: false, error: batch.error };
-      if (batch.needHeadline.length || batch.needSkeleton.length) {
+      if (batch.needHeadline.length || batch.needFormats.length || batch.needSkeleton.length) {
         const parts: string[] = [];
         if (batch.needHeadline.length) parts.push(`${batch.needHeadline.length} need a headline`);
+        if (batch.needFormats.length) {
+          parts.push(`${batch.needFormats.length} need a title tag or their ad headlines`);
+        }
         if (batch.needSkeleton.length) parts.push(`${batch.needSkeleton.length} need a skeleton`);
         return {
           ok: false,
@@ -1258,10 +1294,47 @@ export async function runLaunchPagesAction(input: LaunchPagesInput): Promise<Lau
         };
       }
       if (!input.pick) {
-        return { ok: false, error: `Which option for page ${row.rank}? There are three.` };
+        return { ok: false, error: `Which option for page ${row.rank}?` };
       }
 
       const res = await pickForStage(clientId, row, Number(input.pick), actor, batch);
+      if (!res.ok) return { ok: false, error: res.error };
+      return { ok: true, message: res.lines.join("\n") };
+    }
+
+    case "page_title": {
+      const batch = await readBatch(clientId);
+      if ("error" in batch) return { ok: false, error: batch.error };
+      const row = atRank(batch.rows, input.rank);
+      if (!row) {
+        return {
+          ok: false,
+          error: `There is no page ${input.rank} in this batch. There are ${batch.rows.length}.`,
+        };
+      }
+
+      const { showTitlesForPage } = await import("@/lib/clients/page-batch");
+      const res = await showTitlesForPage(clientId, row);
+      if (!res.ok) return { ok: false, error: res.error };
+      return { ok: true, message: ["Show these to him verbatim and ask which:", ...res.lines].join("\n") };
+    }
+
+    case "page_title_pick": {
+      const batch = await readBatch(clientId);
+      if ("error" in batch) return { ok: false, error: batch.error };
+      const row = atRank(batch.rows, input.rank);
+      if (!row) {
+        return {
+          ok: false,
+          error: `There is no page ${input.rank} in this batch. There are ${batch.rows.length}.`,
+        };
+      }
+      if (!input.pick) {
+        return { ok: false, error: `Which title tag for page ${row.rank}?` };
+      }
+
+      const { pickTitleForPage } = await import("@/lib/clients/page-batch");
+      const res = await pickTitleForPage(clientId, row, Number(input.pick), actor);
       if (!res.ok) return { ok: false, error: res.error };
       return { ok: true, message: res.lines.join("\n") };
     }

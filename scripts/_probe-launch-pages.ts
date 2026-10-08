@@ -154,12 +154,18 @@ check(
   "a skeleton written before its headline is an outline for a page that does not know what it promises"
 );
 
+// ‼️ needFormats JOINED THIS GUARD ON 2026-10-08 AND needSkeleton MUST STILL BE IN IT. The three
+// lists are independent facts about a row, and for one edit needSkeleton was narrowed to exclude
+// format-incomplete rows, which put a page with an H1, no title tags and no outline in NEITHER
+// list and walked it straight past this guard into a draft off no skeleton at all. So this
+// asserts all three terms are present rather than matching the condition as one string.
 const draftCase = caseBody(mod, "draft_wave");
 check(
   draftCase.length > 0 &&
     /readBatch\(/.test(draftCase) &&
-    /if \(\s*batch\.needHeadline\.length\s*\|\|\s*batch\.needSkeleton\.length\s*\)/.test(draftCase),
-  "drafting is GUARDED on any page lacking a headline or a skeleton",
+    /if \(\s*batch\.needHeadline\.length\s*\|\|[\s\S]{0,80}?batch\.needSkeleton\.length\s*\)/.test(draftCase) &&
+    /batch\.needFormats\.length/.test(draftCase),
+  "drafting is GUARDED on any page lacking a headline, a format or a skeleton",
   "this is the refusal `plan draft` gives in the thread, read off the same readBatch"
 );
 check(
