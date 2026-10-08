@@ -219,8 +219,16 @@ export async function readBatch(clientId: string): Promise<BatchState | { error:
   const needHeadline = rows.filter((r) => !headlines.get(r.id));
   // A page only owes its other two artifacts once its H1 exists: before that it is at the
   // headline stage anyway, and writeHeadlinesFor is what produces all three.
+  //
+  // ‼️ AND ONLY UNTIL ITS SKELETON EXISTS, WHICH IS WHAT STOPS THIS GATE REACHING BACKWARDS. The
+  // natural position of this question is between the headline and the skeleton, so a page that is
+  // already outlined is PAST it. Without the `!outlines` term, every page of every client already
+  // mid-batch on the day this shipped would be dragged back to the formats stage and draft_wave
+  // would refuse for all of them until two model calls had run per page: a gate on new work
+  // presenting as a wall across work in flight. The `drafted` ordering below exempts finished
+  // pages for the same reason one stage further on.
   const needFormats = formats.ok
-    ? rows.filter((r) => headlines.get(r.id) && !formats.complete.has(r.id))
+    ? rows.filter((r) => headlines.get(r.id) && !outlines.get(r.id) && !formats.complete.has(r.id))
     : [];
   // ‼️ NOT NARROWED BY needFormats, AND NARROWING IT WAS A REAL BUG FOR ONE EDIT. These two lists
   // are independent facts about a row and the STAGE CHAIN below is the only thing that decides

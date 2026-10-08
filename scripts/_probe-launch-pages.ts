@@ -174,6 +174,21 @@ check(
   "a runner believing it succeeded is not evidence that it did"
 );
 
+// ‼️ THE THREE-FORMAT GATE IS SCOPED TO PAGES THAT ARE NOT YET OUTLINED, AND THAT TERM IS THE
+// DIFFERENCE BETWEEN A GATE AND A WALL. The question belongs between the headline and the
+// skeleton, so an already-outlined page is past it. Without the `!outlines` term every page of
+// every client mid-batch on the day this shipped would be dragged back and draft_wave would
+// refuse for all of them until two model calls had run per page. Read off page-batch.ts rather
+// than this module, because that is where the list is derived.
+const batchSrc = read("src/lib/clients/page-batch.ts");
+check(
+  /const needFormats = formats\.ok[\s\S]{0,200}?!outlines\.get\(r\.id\)[\s\S]{0,120}?!formats\.complete\.has\(r\.id\)/.test(
+    batchSrc
+  ),
+  "the formats gate only asks a page that is not yet outlined",
+  "a gate on new work must not present as a wall across work already in flight"
+);
+
 // ── 3b. The per-page walk keeps the same rails, asked of one page ────────────
 //
 // ‼️ THE PER-PAGE GATE IS A DIFFERENT GATE FROM THE BATCH ONE ABOVE AND BOTH MUST EXIST. The batch
