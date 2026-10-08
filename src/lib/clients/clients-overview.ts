@@ -50,6 +50,16 @@ export interface ClientOverviewRow {
   quietDays: number;
   /** Which board this client is worked on. Shown on the row, and filterable. */
   lane: Lane;
+  /**
+   * The client's onboarding conversation, or null where there is not one.
+   *
+   * ‼️ DECIDED HERE AND NOT IN THE VIEW, like every string on this row. clients-view.tsx
+   * says in its own header that it holds no rule, and "which lane has a chat" is a rule: a Slack
+   * board client is worked in its ops channel and /dashboard/launch/{id}/chat answers them with a
+   * page explaining they are on the other lane. A null here is that answer given before the click
+   * rather than after it.
+   */
+  chatHref: string | null;
   settled: number;
   /** ‼️ THIS CLIENT'S OWN ROW COUNT. The progress bar's denominator. Never the config's length. */
   total: number;
@@ -218,6 +228,9 @@ export async function clientsOverview(now: number = Date.now()): Promise<Clients
     return {
       id,
       href: `/dashboard/clients/${id}`,
+      // The conversation is keyed on the CLIENT id: see the launch chat page, which selects from
+      // `clients` by params.id. There is no separate launch id to carry.
+      chatHref: lane === "launch" ? `/dashboard/launch/${id}/chat` : null,
       name,
       meta,
       stage,

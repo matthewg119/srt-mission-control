@@ -177,6 +177,48 @@ function summary(count: number, needing: number, query: string): string {
   return `${what}. ${needing} ${needing === 1 ? "needs" : "need"} a look, worst first.`;
 }
 
+/**
+ * The way into the client's onboarding conversation, straight from the list.
+ *
+ * ‼️ A SECOND DESTINATION ON A CARD THAT IS ITSELF A LINK, which is why the card below is a
+ * div with a stretched link in it rather than an <a> wrapped round everything. An anchor inside an
+ * anchor is invalid HTML and browsers recover from it by splitting the outer one, which loses the
+ * hover state on half the card and makes keyboard order unpredictable. The stretched link sits at
+ * z-[1] and covers the card; anything that needs its own click sits at z-[2] above it.
+ *
+ * It lands on the chat page rather than on a create endpoint, because that page already carries
+ * both halves of what Matthew asked for: the thread rail lists every conversation on this client
+ * newest first, and the button at the top of it opens a new one.
+ */
+function ChatLink({ href, className }: { href: string; className?: string }) {
+  return (
+    <Link
+      href={href}
+      className={
+        "relative z-[2] inline-flex shrink-0 items-center gap-1.5 rounded-full border " +
+        "border-[rgba(0,201,167,0.45)] bg-[rgba(0,201,167,0.12)] px-3 py-1 text-xs font-medium " +
+        "text-[#00C9A7] transition-colors hover:bg-[rgba(0,201,167,0.22)] hover:text-white " +
+        (className ?? "")
+      }
+    >
+      <svg
+        viewBox="0 0 24 24"
+        width="12"
+        height="12"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M4 5h16v11H9l-5 4z" />
+      </svg>
+      Onboarding chat
+    </Link>
+  );
+}
+
 function LaneTag({ lane }: { lane: Lane }) {
   if (lane !== "launch") return null;
   // Only the exception is labelled. Tagging every Slack-board client would be a word on every row
@@ -203,10 +245,15 @@ function progressLabel(row: ClientOverviewRow): string {
 
 function Card({ row: r }: { row: ClientOverviewRow }) {
   return (
-    <Link
-      href={r.href}
-      className="block rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-4 hover:border-[rgba(255,255,255,0.18)]"
-    >
+    <div className="relative rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-4 hover:border-[rgba(255,255,255,0.18)]">
+      {/*
+        ‼️ THE WHOLE CARD IS STILL ONE CLICK, and this is how it stays one while the chat
+        link below gets its own. The anchor covers the card at z-[1] and carries the client's name
+        for a screen reader, because an empty link is a link that announces nothing.
+      */}
+      <Link href={r.href} className="absolute inset-0 z-[1] rounded-xl" aria-label={r.name}>
+        <span className="sr-only">{r.name}</span>
+      </Link>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 className="truncate text-base font-semibold text-white">{r.name}</h2>
@@ -250,19 +297,30 @@ function Card({ row: r }: { row: ClientOverviewRow }) {
           ))}
         </p>
       )}
-    </Link>
+
+      {/*
+        Matthew, 2026-10-08: "in the client list i want to be able to click it and go into the chat
+        history or create a new conversation to finish onboarding". One link does both, because the
+        chat page opens on the newest thread with the rail beside it and the rail's own button
+        starts a new one. Only on a lane that has a conversation; see chatHref.
+      */}
+      {r.chatHref && <ChatLink href={r.chatHref} className="mt-3" />}
+    </div>
   );
 }
 
 /** The same facts on one line, for when there are more clients than fit as cards. */
 function Row({ row: r, first }: { row: ClientOverviewRow; first: boolean }) {
   return (
-    <Link
-      href={r.href}
-      className={`flex items-center gap-3 px-4 py-3 hover:bg-[rgba(255,255,255,0.03)] ${
+    <div
+      className={`relative flex items-center gap-3 px-4 py-3 hover:bg-[rgba(255,255,255,0.03)] ${
         first ? "" : "border-t border-[rgba(255,255,255,0.07)]"
       }`}
     >
+      {/* Same stretched link as the card, for the same reason. */}
+      <Link href={r.href} className="absolute inset-0 z-[1]" aria-label={r.name}>
+        <span className="sr-only">{r.name}</span>
+      </Link>
       <span
         className={`h-2 w-2 shrink-0 rounded-full ${DOT[r.health.level]}`}
         title={`${r.health.label}: ${r.health.reason}`}
@@ -286,6 +344,14 @@ function Row({ row: r, first }: { row: ClientOverviewRow; first: boolean }) {
       <span className="hidden w-32 shrink-0 text-right text-xs text-[rgba(255,255,255,0.35)] md:block">
         {r.health.reason}
       </span>
-    </Link>
+      {/*
+        ‼️ A FIXED SLOT, FILLED OR EMPTY, so the columns to the left of it line up down the
+        whole list whether or not a given client has a conversation. A link that only some rows
+        carry, in a flex row, shifts every other column on those rows.
+      */}
+      <span className="hidden w-36 shrink-0 justify-end lg:flex">
+        {r.chatHref && <ChatLink href={r.chatHref} />}
+      </span>
+    </div>
   );
 }

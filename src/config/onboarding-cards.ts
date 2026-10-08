@@ -320,7 +320,7 @@ export const CARDS_HERO = {
     guard("cards hero fact 2", "More referrals from every visit"),
     guard("cards hero fact 3", "More visibility in every search"),
   ],
-  cta: guard("cards hero cta", "Build my referral engine"),
+  cta: guard("cards hero cta", "Get my referral engine"),
   // Under the button, in the smallest type on the page. It says what the tap costs and what comes
   // with it, which is what somebody still deciding wants and somebody decided skips.
   foot: guard("cards hero foot", "QR cards included · about two minutes"),
