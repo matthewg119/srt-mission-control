@@ -11,6 +11,7 @@
 // wrong list. Hence an explicit vertical, and a refusal when it is absent or unknown.
 
 import { knownVerticals, resolveVertical } from "./icp";
+import { VERTICALS } from "./verticals";
 import { cityNameFrom, stateNameFrom } from "./geo";
 import { cellKey, parseCellKey, type Cell } from "./cells";
 
@@ -107,33 +108,19 @@ export const MAPS_SOURCE_DEFAULT: MapsSource = "dataforseo";
  * businesses worldwide, but plenty of the target list files itself under `facial_spa` (175,899) or
  * `skin_care_clinic` (248,926). Broad enough to find them, narrow enough that the qualification sweep
  * is not paying to read nail salons: `day_spa` and `beauty_salon` are deliberately absent.
+ *
+ * ‼️ THE LISTS THEMSELVES MOVED TO ./verticals.ts ON 2026-10-08, AND THIS IS A VIEW OVER THEM,
+ * NOT A SECOND COPY. A vertical is four things (an ICP, a category list, its search strings and a
+ * campaign name) that used to live in four files, and four places is three places to forget: a
+ * vertical with an ICP and no categories pulls nothing. The NAME stays here because five refusal
+ * messages, two probes and `_probe-cells-live.ts` already say `DFS_CATEGORIES`, and renaming a
+ * constant to move it is two diffs pretending to be one.
+ *
+ * The measured keep rates that decided each entry are recorded next to the list, in verticals.ts.
  */
-export const DFS_CATEGORIES: Record<string, string[]> = {
-  // ‼️ WIDENED ON 2026-10-04 AGAINST MEASURED KEEP RATES, NOT BY TASTE. The 500-record Dallas pull
-  // reported, by the primary category Google shows for each business:
-  //
-  //   medical_spa                 146 pulled, 78 kept   53%
-  //   laser_hair_removal_service    6 pulled,  4 kept   67%   <- better than anything already listed
-  //   permanent_make_up_clinic      6 pulled,  3 kept   50%
-  //   skin_care_clinic             77 pulled,  7 kept    9%
-  //   facial_spa                   71 pulled,  5 kept    7%
-  //
-  // The two weak ones are kept anyway: they are where most of the nail salons ride in, but they still
-  // produced 12 real clinics per 500, which is ~120 per 5,000, and the junk they bring is dropped by a
-  // free rule or by a Haiku call costing about four cents a batch. Noise that gets filtered is cheaper
-  // than coverage that is never pulled.
-  //
-  // ‼️ AND day_spa AND beauty_salon ARE STILL ABSENT. They kept 0 of 35 between them. That is the line:
-  // a category earns a place by converting, not by sounding adjacent.
-  medspa: [
-    "medical_spa",
-    "facial_spa",
-    "skin_care_clinic",
-    "laser_hair_removal_service",
-    "permanent_make_up_clinic",
-  ],
-  dentist: ["dentist", "cosmetic_dentist"],
-};
+export const DFS_CATEGORIES: Record<string, string[]> = Object.fromEntries(
+  VERTICALS.map((v) => [v.slug, [...v.dfsCategories]])
+);
 
 export interface MapsCommand {
   vertical: string;
@@ -417,7 +404,8 @@ export function parseMapsCommand(text: string): MapsParse {
       ok: false,
       reason:
         "there are no DataForSEO categories mapped for `" + vertical + "`, so a pull would search for " +
-        "nothing. Add them to DFS_CATEGORIES in `src/lib/scraper/maps-command.ts`, or run it " +
+        "nothing. Add them to the vertical's `dfsCategories` in `src/lib/scraper/verticals.ts`, " +
+        "or run it " +
         "`via outscraper`, which searches on the text instead.",
     };
   }

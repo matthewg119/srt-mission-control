@@ -1183,6 +1183,43 @@ const READ_DYNAMICALLY: Record<string, string> = {
   // that file's tracked-fields list. Arrived with the lead-engine front doors on 2026-09-25.
   "contacts.source_page":
     "written by lead-intake.ts and rendered beside Source on the lead card, through lead-thread.ts's CONTACT_FIELD_MAP loop over a select(\"*\") row. The key is a runtime string, so no literal property access exists for the star rule to find.",
+
+  // ── THE TERRITORY MAP, 2026-10-08 ────────────────────────────────────────────────────────────
+  //
+  // ‼️ READ BY SQL, WHICH THIS PROBE CANNOT SEE, AND THAT IS A REAL BLIND SPOT RATHER THAN AN
+  // EXCUSE. The probe greps TypeScript for a literal property access. These three are read inside
+  // `territory_lead_stage` and `territory_dots`, both committed in
+  // docs/2026-10-08-territory-rollups.sql and both called on every render of /dashboard/territory.
+  // The consumer is real, versioned and in the repo; it is just not written in TypeScript.
+  //
+  // ‼️ AND THE SAME PASS FAILED competitor_name, competitor_rating AND competitor_reviews, WHICH
+  // WERE GENUINELY DEAD. Those three were lifted out of `raw`, backfilled over 1,582 rows, and read
+  // by nothing at all: not by SQL, not by TypeScript, not by the CSV. They are NOT declared here.
+  // They were wired into `sendableRows` so the opening line reaches ReachInbox, which is what they
+  // were lifted for. The probe was right, and the fix was code rather than a declaration.
+  "raw_leads.latitude":
+    "the business pin, read by the `territory_lead_stage` view and by `territory_dots(p_vertical, p_round, p_limit)` in docs/2026-10-08-territory-rollups.sql, which /dashboard/territory calls on every render. SQL, so no TypeScript property access exists to find.",
+  "raw_leads.longitude":
+    "the other half of the pin. Same two SQL consumers as raw_leads.latitude, and dead without it: a lead with one coordinate cannot be a dot.",
+  // ‼️ AN EMBEDDED-RESOURCE SELECT IS ATTRIBUTED TO THE PARENT TABLE, which is the same blind
+  // spot `client_assets.vertical_asset_id` already records. `sendableRows` reads these through
+  // `.from("sendable_leads").select("... raw_leads!inner(competitor_name, competitor_rating,
+  // competitor_reviews, is_claimed)")`, so `readsIn` sees the column names in a chunk whose table
+  // is sendable_leads, and raw_leads gets no credit for them.
+  //
+  // ‼️ THESE THREE WERE GENUINELY DEAD UNTIL 2026-10-09 AND ARE NOT BEING EXCUSED. The probe
+  // failed the build with "No writer and no reader" and it was right: three columns lifted out of
+  // `raw` and backfilled over 1,582 rows, reaching nothing. They are now merge fields on
+  // sendable.csv, which is the only place a fact can reach a ReachInbox sequence. The sentence
+  // below describes a read that exists, not one that is owed.
+  "raw_leads.competitor_name":
+    "the best-reviewed business Google shows beside this one. Read by sendableRows through the raw_leads!inner embedded select and written to sendable.csv as a merge field, so the opener can say what the clinic down the road has. The probe attributes an embedded select to the parent table, so no raw_leads-chunk read exists to find.",
+  "raw_leads.competitor_rating":
+    "that competitor's star rating, same embedded read and same CSV column as raw_leads.competitor_name. Carried only when the name and the review count are both present: a rating on its own is not a sentence.",
+  "raw_leads.competitor_reviews":
+    "that competitor's review COUNT, which is the half the opener actually compares. Same embedded read and same CSV column. 1,390 of 1,750 stored leads are out-reviewed by their own listed competitor.",
+  "raw_leads.judged_vertical":
+    "what the model said the business ACTUALLY is, as opposed to what the pull asked for. Selected by the `territory_lead_stage` view. Owed a column on the territory page's drop panel, which is Phase C of docs/prompts/2026-10-09-auto-pull-and-conversational-scraper.md: it is the answer to \"what are we throwing away\", and until that panel exists it is read only by the view.",
 };
 
 /**
@@ -1202,7 +1239,13 @@ const READ_DYNAMICALLY: Record<string, string> = {
  * every one of them, so a new column fails by name and with the migration that declared it. This
  * number is kept because it is the thing a person reads, and §6c asserts the two cannot disagree.
  */
-const BOARD_BASELINE = 497;
+// ‼️ 2026-10-09: 497 -> 494. Three columns stopped being dead because something started reading
+// them, which is the only direction this number may move. list_pipeline_runs.cost_usd is now read
+// by the bounded pull retry, which ADDS a failed attempt's task fee rather than overwriting it;
+// raw_leads.full_address and raw_leads.postal_code are now read by recordCallList and written to
+// contacts.biz_address and contacts.biz_zip, so a person dialling the call list can see where the
+// business is.
+const BOARD_BASELINE = 494;
 
 type Verdict = "write_only" | "never_touched";
 interface Finding {

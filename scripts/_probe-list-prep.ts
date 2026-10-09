@@ -15,6 +15,8 @@ import { readFileSync } from "fs";
 import { supabaseAdmin } from "@/lib/db";
 import {
   verdictFaults,
+  verticalVocabularyFaults,
+  DROP_ANSWER,
   groupDrops,
   normalizeReason,
   dropReviewLines,
@@ -38,6 +40,15 @@ import {
   knownVerticals,
   resolveVertical,
 } from "@/lib/scraper/icp";
+import {
+  campaignFor,
+  categoriesFor,
+  judgedVerticalsFor,
+  tierOf,
+  verticalDef,
+  verticalSlugs,
+} from "@/lib/scraper/verticals";
+import { freeVerdict, isAggregatorDomain, reviewBand, routeForTier } from "@/lib/scraper/tiering";
 
 type Row = Record<string, unknown>;
 interface TxSQL {
@@ -481,19 +492,203 @@ async function main() {
     /RUN_COLUMNS[\s\S]{0,400}vertical_slug/.test(listprepSrc)
   );
 
+  console.log("\n4b. a vendor 500 parks the pull instead of killing it");
+
+  // ‼️ THESE ARE STRUCTURAL CHECKS OVER THE SOURCE, AND THAT IS THE ONLY WAY TO TEST THIS ONE
+  // WITHOUT A VENDOR OUTAGE. The bug was not a wrong value, it was a STATUS: fail() writes
+  // status 'error', 'error' is not in ACTIVE_STATUSES, and the cron therefore never looks at the
+  // batch again. Measured on batch 7a472c40-0ef8-40ce-ac57-88950642a8df: one HTTP 500, cost_usd 0,
+  // raw_count 0, and an approved pull of a whole metro gone. A unit test over a pure function
+  // cannot see that; a grep for the shape can.
+  const laneSrc = readFileSync("src/lib/scraper/lane.ts", "utf8");
+  const storeSrc = readFileSync("src/lib/scraper/store.ts", "utf8");
+
+  check(
+    "a vendor error routes to parkOrRefusePull rather than straight to fail()",
+    /if \(pageError\) \{[\s\S]{0,200}parkOrRefusePull/.test(laneSrc)
+  );
+  check(
+    "and the park path puts the batch back in `pulling`",
+    /parkOrRefusePull[\s\S]{0,2600}updateBatch\(batch\.id, \{ status: "pulling" \}\)/.test(laneSrc)
+  );
+  // ‼️ THE CHECK THAT ACTUALLY MATTERS: `pulling` HAS TO BE A STATUS THE CRON LOOKS AT. If
+  // somebody later removes it from ACTIVE_STATUSES the retry silently becomes unreachable again, and
+  // every other check in this section would still pass.
+  //
+  // ‼️ AND THE COMMENTS ARE STRIPPED BEFORE THE ARRAY IS READ, BECAUSE THE FIRST VERSION OF THIS
+  // CHECK WAS DECORATION. ACTIVE_STATUSES has a four line comment INSIDE it that mentions the
+  // statuses by name, so a plain search for the quoted string matched `// "pulling",` just as
+  // happily as `"pulling",`. Commenting the entry out is the likeliest way somebody disables it, so
+  // that was the one mutation the check could not see. Proved by mutating the source and asserting
+  // the regex goes false.
+  const activeStatuses = (() => {
+    const body = storeSrc.match(/const ACTIVE_STATUSES: BatchStatus\[\] = \[([\s\S]*?)\];/)?.[1] ?? "";
+    return body
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => !l.startsWith("//"))
+      .join(" ");
+  })();
+  check(
+    "ACTIVE_STATUSES was found at all, or the check below is vacuous",
+    activeStatuses.length > 0
+  );
+  check(
+    "`pulling` is in ACTIVE_STATUSES, or parking is the same bug in a new coat",
+    /"pulling"/.test(activeStatuses),
+    activeStatuses
+  );
+  check(
+    "the attempt counter is raised BEFORE the vendor is called",
+    // The window is 3000 rather than a few hundred because the comment between the two is long.
+    // Deliberately only a little wider than the 2446 characters measured today: a window wide
+    // enough to span the whole function would match whatever the order was.
+    /pull_attempts: attempt[\s\S]{0,3000}searchListings\(\{/.test(laneSrc)
+  );
+  check(
+    "there is a terminal refusal, and it names the attempts used",
+    /function pullRefusalLine[\s\S]{0,600}attempts \+ " attempt"/.test(laneSrc)
+  );
+  check(
+    "the cap is checked before the count is raised, so a capped run cannot be re-driven",
+    /if \(attempt > PULL_MAX_ATTEMPTS\)[\s\S]{0,200}pullRefusalLine/.test(laneSrc)
+  );
+  check(
+    "the park path does NOT write run.error, which sweepPullMaps would fail on",
+    !/await updateRun\(runId, \{ cost_usd: spent, error:/.test(laneSrc)
+  );
+  check(
+    "the cron re-drives a DataForSEO pull only when an approval is already on file",
+    /if \(!run\.spend_approved_at\) return false;[\s\S]{0,300}pullFromDataForSeo/.test(laneSrc)
+  );
+  check(
+    "and it tells the two vendor doors apart by NAME, not by a null column",
+    /reparsed\.command\.source === "dataforseo"/.test(laneSrc)
+  );
+  check(
+    "a retried pull adds its cost rather than overwriting it",
+    /cost_usd: Number\(before\?\.cost_usd \?\? 0\) \+ found\.costUsd/.test(laneSrc)
+  );
+  check(
+    "the circle's own size is stored, so `remaining` is a measurement",
+    /metro_total_count: Math\.max\(found\.totalCount/.test(laneSrc)
+  );
+  check(
+    "and RUN_COLUMNS asks for the new columns, or every guard on them reads undefined",
+    /RUN_COLUMNS[\s\S]{0,500}pull_attempts/.test(listprepSrc) &&
+      /RUN_COLUMNS[\s\S]{0,500}metro_total_count/.test(listprepSrc)
+  );
+
   console.log("\n5. the qualify verdicts");
 
   const ids = ["a", "b"];
-  const good = { verdicts: [{ id: "a", keep: true, reason: "owner operated med spa" }, { id: "b", keep: false, reason: "national chain" }] };
-  check("a good batch passes", verdictFaults(good, ids).length === 0, verdictFaults(good, ids).join(" "));
-  check("a missing verdict is refused", verdictFaults({ verdicts: [good.verdicts[0]] }, ids).some((f) => /were not judged/.test(f)));
-  check("an invented id is refused", verdictFaults({ verdicts: [...good.verdicts, { id: "zz", keep: true, reason: "x" }] }, ids).some((f) => /not in the batch/.test(f)));
-  check("a duplicate verdict is refused", verdictFaults({ verdicts: [good.verdicts[0], good.verdicts[0], good.verdicts[1]] }, ids).some((f) => /judged twice/.test(f)));
-  check("a missing reason is refused", verdictFaults({ verdicts: [{ id: "a", keep: true, reason: "" }, good.verdicts[1]] }, ids).some((f) => /reason is required/.test(f)));
-  check("an em dash in a reason is refused", verdictFaults({ verdicts: [{ id: "a", keep: true, reason: "fine — good" }, good.verdicts[1]] }, ids).some((f) => /em dash/.test(f)));
-  check("a non-boolean keep is refused", verdictFaults({ verdicts: [{ id: "a", keep: "yes", reason: "x" }, good.verdicts[1]] }, ids).some((f) => /must be true or false/.test(f)));
-  check("nothing at all is refused", verdictFaults({ verdicts: [] }, ids).length > 0);
+  // The vocabulary the model is given, out of the registry rather than typed here: a probe that
+  // asserted against its own hand-written list would pass while the prompt and the mapper disagreed.
+  const vocab = judgedVerticalsFor("medspa");
+  const faults = (v: unknown) => verdictFaults(v, ids, vocab);
+
+  const good = {
+    verdicts: [
+      { id: "a", vertical: "med spa", reason: "owner operated med spa" },
+      { id: "b", vertical: "drop", reason: "national chain" },
+    ],
+  };
+  check("a good batch passes", faults(good).length === 0, faults(good).join(" "));
+  check("a missing verdict is refused", faults({ verdicts: [good.verdicts[0]] }).some((f) => /were not judged/.test(f)));
+  check("an invented id is refused", faults({ verdicts: [...good.verdicts, { id: "zz", vertical: "med spa", reason: "x" }] }).some((f) => /not in the batch/.test(f)));
+  check("a duplicate verdict is refused", faults({ verdicts: [good.verdicts[0], good.verdicts[0], good.verdicts[1]] }).some((f) => /judged twice/.test(f)));
+  check("a missing reason is refused", faults({ verdicts: [{ id: "a", vertical: "med spa", reason: "" }, good.verdicts[1]] }).some((f) => /reason is required/.test(f)));
+  check("an em dash in a reason is refused", faults({ verdicts: [{ id: "a", vertical: "med spa", reason: "fine — good" }, good.verdicts[1]] }).some((f) => /em dash/.test(f)));
+  check("a missing vertical is refused", faults({ verdicts: [{ id: "a", reason: "x" }, good.verdicts[1]] }).some((f) => /vertical is required/.test(f)));
+  check("nothing at all is refused", faults({ verdicts: [] }).length > 0);
   check("the chunk size is sane", QUALIFY_CHUNK >= 5 && QUALIFY_CHUNK <= 50, String(QUALIFY_CHUNK));
+
+  // ‼️ THE CHECK THAT MATTERS MOST, AND IT IS AN EXPENSIVE MISTAKE MADE CHEAP. A vertical the model
+  // invented stores fine, tiers as null, and silently leaves the lead out of every Tier A count: no
+  // error anywhere and a supply plan built on a wrong number. Refused at the door, callClaudeJSON
+  // re-asks the batch instead.
+  check(
+    "a vertical outside the vocabulary is refused rather than stored untiered",
+    faults({ verdicts: [{ id: "a", vertical: "medical aesthetics spa", reason: "x" }, good.verdicts[1]] })
+      .some((f) => /not one of the verticals/.test(f))
+  );
+  check(
+    "and the refusal lists what was allowed, so the retry can succeed",
+    faults({ verdicts: [{ id: "a", vertical: "nope", reason: "x" }, good.verdicts[1]] })
+      .some((f) => /Use exactly one of/.test(f))
+  );
+
+  // ‼️ EVERY REGISTERED VERTICAL'S VOCABULARY IS CHECKED, not just medspa's. A band listing the
+  // literal word "drop" would turn every business in it into a drop, and one string in two bands
+  // would make tierOf depend on array order. Both are silent.
+  for (const v of knownVerticals()) {
+    const vf = verticalVocabularyFaults(judgedVerticalsFor(v));
+    check("`" + v + "` has a usable tier vocabulary", vf.length === 0, vf.join(" "));
+    check("`" + v + "` tiers every word it offers the model", judgedVerticalsFor(v).every((w) => tierOf(v, w) !== null));
+  }
+  check("an unknown answer tiers as null rather than as C", tierOf("medspa", "hairdresser") === null);
+  check("the drop sentinel is not a vertical", !judgedVerticalsFor("medspa").includes(DROP_ANSWER));
+
+  // ‼️ THE REGISTRY AND THE ICP TABLE MUST NAME THE SAME VERTICALS. verticals.ts references icp.ts
+  // by import, so a vertical added to one and not the other COMPILES: verticalDef answers and
+  // icpFor returns null, and startRun then refuses a pull for a vertical the territory page lists.
+  check(
+    "the registry and the ICP table agree on which verticals exist",
+    verticalSlugs().join(",") === knownVerticals().join(","),
+    verticalSlugs().join(",") + "  vs  " + knownVerticals().join(",")
+  );
+  for (const v of verticalSlugs()) {
+    check("`" + v + "` references the same ICP text the judge is handed", verticalDef(v)?.icp === icpFor(v));
+    check("`" + v + "` has DataForSEO categories, or a pull searches for nothing", categoriesFor(v).length > 0);
+    check("`" + v + "` has a campaign name, so a handoff is not labelled with a raw command", Boolean(campaignFor(v)));
+    check("`" + v + "` has at least one search string for the plan view", verticalDef(v)!.searchQueries.length > 0);
+  }
+
+  console.log("\n5b. the free rules, which decide before the model is paid");
+
+  // ‼️ THE MEASURED TRAP, AS A CHECK. 15 of the 47 same-domain rows on the Dallas 500 were
+  // instagram.com (9), vagaro.com (4) and facebook.com (2). A naive "same domain means chain" rule
+  // deletes nine unrelated businesses as one franchise, so the aggregator rule has to fire FIRST.
+  const insta = freeVerdict({ website: "https://instagram.com/kosmikstudiodallas", domain: "instagram.com", reviewCount: 40, sameDomainCount: 8 });
+  check("an Instagram-only row goes to the call list, not the chain bin", insta?.route === "call", JSON.stringify(insta));
+  const vagaro = freeVerdict({ website: "http://vagaro.com/nuvoskin", domain: "vagaro.com", reviewCount: 12, sameDomainCount: 3 });
+  check("a Vagaro-only row goes to the call list", vagaro?.route === "call", JSON.stringify(vagaro));
+  const chain = freeVerdict({ website: "https://usdermatologypartners.com/plano", domain: "usdermatologypartners.com", reviewCount: 200, sameDomainCount: 5 });
+  check("a real multi-site domain is dropped as a chain", chain?.route === "drop", JSON.stringify(chain));
+  const pair = freeVerdict({ website: "https://twositeclinic.com", domain: "twositeclinic.com", reviewCount: 90, sameDomainCount: 1 });
+  check("a two-site local group is left for the model, not dropped", pair === null, JSON.stringify(pair));
+  const siteless = freeVerdict({ website: null, domain: null, reviewCount: 3, sameDomainCount: 0 });
+  check("no website goes to the call list", siteless?.route === "call", JSON.stringify(siteless));
+  const ordinary = freeVerdict({ website: "https://realclinic.com", domain: "realclinic.com", reviewCount: 60, sameDomainCount: 0 });
+  check("an ordinary row is left for the model", ordinary === null, JSON.stringify(ordinary));
+  check("a real domain is not called an aggregator", !isAggregatorDomain("https://usdermatologypartners.com/plano"));
+  check("a subdomain of a real business is not an aggregator", !isAggregatorDomain("https://locations.massageenvy.com/texas"));
+  check("a blank website is not called an aggregator either", !isAggregatorDomain(null) && !isAggregatorDomain(""));
+
+  // WW THE BOUNDARIES, NOT THE MIDDLES, BECAUSE AN OFF-BY-ONE HERE IS INVISIBLE. The band is shown
+  // to the model beside the raw count, so a wrong edge does not break anything: it quietly describes
+  // a 99 review clinic as large and a 100 review one as mid, and the verdicts drift.
+  check("no reviews is its own band, not the smallest one", reviewBand(0) === "none" && reviewBand(null) === "none");
+  check("1 to 24 is small", reviewBand(1) === "small" && reviewBand(24) === "small");
+  check("25 to 99 is mid", reviewBand(25) === "mid" && reviewBand(99) === "mid");
+  check("100 to 299 is large", reviewBand(100) === "large" && reviewBand(299) === "large");
+  check("300 and over is huge", reviewBand(300) === "huge" && reviewBand(4000) === "huge");
+  // WW THE BANDS MUST PARTITION THE MEASURED DISTRIBUTION, or a documented count has nowhere to go.
+  // The 48 sendable rows split 0 / 9 / 22 / 13 / 4 across these five bands and they have to sum.
+  check(
+    "the five bands cover every count with no gap and no overlap",
+    [0, 1, 24, 25, 99, 100, 299, 300].every((n) => reviewBand(n).length > 0) &&
+      new Set([reviewBand(24), reviewBand(25)]).size === 2 &&
+      new Set([reviewBand(99), reviewBand(100)]).size === 2 &&
+      new Set([reviewBand(299), reviewBand(300)]).size === 2
+  );
+
+  // ‼️ TIER C NEVER ROUTES TO 'drop'. The operator's own standing rule in one assertion: do not
+  // throw away leads without an email. A nail bar has a front desk and a phone number.
+  check("Tier C is called, never dropped", routeForTier("C", true) === "call");
+  check("Tier A and B are emailed", routeForTier("A", true) === "email" && routeForTier("B", true) === "email");
+  check("an untiered keep is still emailable", routeForTier(null, true) === "email");
+  check("a model drop is dropped whatever the tier", routeForTier("A", false) === "drop");
 
   // ── 5. Drop reasons group on meaning, not on wording ──────────────────────
   console.log("\n6. the bulk drop review, which is the human checkpoint");
@@ -588,9 +783,38 @@ async function main() {
   check("the handoff carries the run, so a send can be attributed to the list that made it",
     /run_id: runId,/.test(lpsrc));
 
+  // ‼️ ORDERING IS ASSERTED BY COMPARING POSITIONS, NOT BY A CHARACTER WINDOW. This used to be
+  // /recordHandoff[\s\S]{0,400}status: "done"/, which is a proxy for "before" that measures
+  // DISTANCE. Adding a paragraph of comment between the two broke it while the ordering it exists
+  // to protect was untouched, so the probe went red for a reason that had nothing to do with the
+  // rule. A window also passes when the two are adjacent and in the WRONG order, which is the
+  // failure it is supposed to catch. Index comparison says what is meant and cannot be moved by a
+  // comment.
+  const laneOrder = normalize(readFileSync("src/lib/scraper/lane.ts", "utf8"));
+  const atHandoff = laneOrder.indexOf("recordHandoff(runId");
+  const atCallList = laneOrder.indexOf("recordCallList(runId");
+  const atDone = laneOrder.indexOf("updateBatch(batch.id, { status: \"done\" })", atHandoff);
+  check("the lane calls recordHandoff at all", atHandoff > -1);
+  check("the lane marks the batch done at all", atDone > -1);
   check(
     "the lane records the handoff before it calls the batch done",
-    /recordHandoff[\s\S]{0,400}status: "done"/.test(normalize(readFileSync("src/lib/scraper/lane.ts", "utf8")))
+    atHandoff > -1 && atDone > atHandoff,
+    "handoff at " + atHandoff + ", done at " + atDone
+  );
+
+  // ‼️ AND THE CALL LIST GOES TO THE CRM BEFORE THE BATCH IS DONE, for the same reason: after
+  // `done` the cron never looks at this batch again, so a write placed below it is a write that
+  // only ever happens on the tick that got that far. Measured 2026-10-09, before this wire existed:
+  // 376 businesses with no website and 323 phone numbers sat in raw_leads with nothing to dial them.
+  check("the lane writes the call list to the CRM", atCallList > -1);
+  check(
+    "and it does so before the batch is marked done",
+    atCallList > -1 && atDone > atCallList,
+    "call list at " + atCallList + ", done at " + atDone
+  );
+  check(
+    "the CRM source comes from the registry, never from a label",
+    !/" Scrape - No Website"/.test(normalize(readFileSync("src/lib/scraper/listprep.ts", "utf8")))
   );
 
   // A real lookup against production, read only. An unknown address must not be suppressed.

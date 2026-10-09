@@ -47,7 +47,65 @@ export interface RawLeadInput {
   verticalSlug: string | null;
   businessType: string | null;
   avatarSlug: string | null;
+
+  /**
+   * Whether the owner has verified the Google listing.
+   *
+   * ‼️ TRI-STATE, AND null IS NOT false. Measured on the Dallas 500: 429 claimed, 71 not. An
+   * unclaimed listing is the strongest "nobody is managing this" signal in the payload, which is
+   * exactly why "the source did not say" must never be written as "not claimed". Same doctrine as
+   * MxVerdict in mx.ts, where null and [] mean opposite things.
+   */
+  isClaimed: boolean | null;
+
+  /** The business pin. Required by /dashboard/territory: a row without one cannot be a dot. */
+  latitude: number | null;
+  longitude: number | null;
+
+  /**
+   * The best-reviewed business Google shows beside this one.
+   *
+   * ‼️ CHOSEN ON REVIEW COUNT, NOT ON RATING, because the opener compares COUNTS: "you have 23
+   * reviews, the clinic down the road has 310". A 5.0 rating from four people is not the thing that
+   * makes a clinic owner uncomfortable.
+   */
+  competitorName: string | null;
+  competitorRating: number | null;
+  competitorReviews: number | null;
+
   raw: Record<string, unknown>;
+}
+
+/**
+ * The best-reviewed neighbour out of DataForSEO's `people_also_search`.
+ *
+ * ‼️ IT REFUSES AN ENTRY WITH NO VOTE COUNT RATHER THAN RANKING IT TOP. Measured on the stored
+ * payload: plenty of entries carry `"votes_count": null`, and any comparison that treats a missing
+ * count as zero still SORTS it, so a lead whose neighbours all lack counts would be handed one at
+ * random and the opening line would read "the clinic down the road has  reviews". Nothing is a
+ * better answer than something invented.
+ *
+ * Pure and total, so the backfill in docs/2026-10-08-lead-personalisation.sql and this mapper can be
+ * compared against each other.
+ */
+export function topCompetitor(
+  raw: Record<string, unknown>
+): { name: string; rating: number | null; reviews: number } | null {
+  const list = raw.people_also_search;
+  if (!Array.isArray(list)) return null;
+
+  let best: { name: string; rating: number | null; reviews: number } | null = null;
+  for (const entry of list) {
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as { title?: unknown; rating?: { value?: unknown; votes_count?: unknown } | null };
+    const name = str(e.title);
+    const reviews = num(e.rating?.votes_count);
+    if (!name || reviews === null) continue;
+    if (!best || reviews > best.reviews) {
+      best = { name, rating: num(e.rating?.value), reviews };
+    }
+  }
+  return best;
 }
 
 function str(v: unknown): string | null {
@@ -60,6 +118,29 @@ function num(v: unknown): number | null {
   if (v === null || v === undefined || v === "") return null;
   const n = typeof v === "number" ? v : Number(String(v).replace(/[^0-9.]/g, ""));
   return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * A coordinate, which `num` above CANNOT read.
+ *
+ * ‼️ num() STRIPS THE MINUS SIGN, AND FOR A LONGITUDE THAT IS THE WRONG HEMISPHERE. Its
+ * character class is `[^0-9.]`, written for "1,234 reviews" and "4.7 stars" where a sign is noise.
+ * Every US longitude is negative, so a vendor that ever answers "-96.7970" as a STRING rather than a
+ * number would put a Dallas clinic in the Yellow Sea, with no error anywhere and a dot on the map to
+ * prove it. DataForSEO sends numbers today, which is exactly the kind of thing that changes quietly.
+ *
+ * Bounds are checked here as well as in the column's CHECK, because a mapper that hands Postgres a
+ * value it will reject fails the whole 500-row insert over one bad coordinate.
+ */
+function coord(v: unknown, limit: 90 | 180): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = typeof v === "number" ? v : Number(String(v).trim());
+  if (!Number.isFinite(n) || Math.abs(n) > limit) return null;
+  // ‼️ 0,0 IS REFUSED. It is the shape a missing coordinate takes when something upstream
+  // coalesced it, it is in the Gulf of Guinea, and on a US map it is not even visible as wrong: the
+  // dot simply does not render and the lead reads as unmapped. Better refused by name here.
+  if (n === 0) return null;
+  return n;
 }
 
 /** The handle out of whichever field carries it, the same four medspa.ts already reads. */
@@ -117,6 +198,18 @@ export function fromOutscraper(
     verticalSlug: ctx.verticalSlug ?? null,
     businessType: null,
     avatarSlug: null,
+    // ‼️ READ OFF THE INDEX SIGNATURE AND UNMEASURED, WHICH IS WHY IT IS num()/str() AND NOT A
+    // CAST. Outscraper's Maps rows do usually carry latitude and longitude, but this door has had no
+    // production pull since the DataForSEO one was built, so nothing here is measured the way the
+    // 500 Dallas rows are. A field that is absent reads null and the lead is simply not mappable,
+    // which is the correct outcome rather than a dot at 0,0 in the Gulf of Guinea.
+    isClaimed: typeof rec.verified === "boolean" ? rec.verified : null,
+    latitude: coord(rec.latitude, 90),
+    longitude: coord(rec.longitude, 180),
+    // No people_also_search on this vendor. Null rather than guessed.
+    competitorName: null,
+    competitorRating: null,
+    competitorReviews: null,
     raw: rec as Record<string, unknown>,
   };
 }
@@ -142,6 +235,8 @@ export function fromDataForSeo(
   const website = str(item.url);
   const domain = normalizeDomain(website);
   const addr = item.address_info ?? {};
+  // Once, not once per column: it walks the whole people_also_search array.
+  const rival = topCompetitor(item as Record<string, unknown>);
 
   return {
     runId: ctx.runId,
@@ -168,6 +263,15 @@ export function fromDataForSeo(
     verticalSlug: ctx.verticalSlug ?? null,
     businessType: null,
     avatarSlug: null,
+    // ‼️ ALL FOUR ARE MEASURED PRESENT ON EVERY ONE OF THE 500 STORED DALLAS ROWS, which is why
+    // this door fills them and the other two do not. They were in `raw` from the first pull and
+    // nothing read them for ten days.
+    isClaimed: typeof item.is_claimed === "boolean" ? item.is_claimed : null,
+    latitude: coord(item.latitude, 90),
+    longitude: coord(item.longitude, 180),
+    competitorName: rival?.name ?? null,
+    competitorRating: rival?.rating ?? null,
+    competitorReviews: rival?.reviews ?? null,
     raw: item as Record<string, unknown>,
   };
 }
@@ -248,6 +352,14 @@ export function fromCsv(
     verticalSlug: ctx.verticalSlug ?? null,
     businessType: null,
     avatarSlug: null,
+    // A dropped CSV carries none of these, and inventing a coordinate from a city name would put
+    // every lead in a metro on one pixel. Null, and the row is simply not a dot.
+    isClaimed: null,
+    latitude: null,
+    longitude: null,
+    competitorName: null,
+    competitorRating: null,
+    competitorReviews: null,
     raw: row as Record<string, unknown>,
   };
 }
@@ -298,6 +410,12 @@ export async function storeRawLeads(rows: readonly RawLeadInput[]): Promise<Stor
     vertical_slug: r.verticalSlug,
     business_type: r.businessType,
     avatar_slug: r.avatarSlug,
+    is_claimed: r.isClaimed,
+    latitude: r.latitude,
+    longitude: r.longitude,
+    competitor_name: r.competitorName,
+    competitor_rating: r.competitorRating,
+    competitor_reviews: r.competitorReviews,
     found_in_sources: [r.source],
     raw: r.raw,
   }));
