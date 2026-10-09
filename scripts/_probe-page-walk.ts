@@ -104,6 +104,7 @@ function state(rows: PlanRow[], lists: Partial<Record<string, PlanRow[]>> = {}):
     outlines: new Map(),
     needAngle: lists.needAngle ?? [],
     needHeadline: lists.needHeadline ?? [],
+    needFormats: lists.needFormats ?? [],
     needSkeleton: lists.needSkeleton ?? [],
     needHandover: lists.needHandover ?? [],
     drafted: lists.drafted ?? [],
@@ -215,6 +216,17 @@ check("needing an idea beats everything", pageStage(state([r], { needAngle: [r],
 check("needing a headline beats a skeleton", pageStage(state([r], { needHeadline: [r], needSkeleton: [r] }), r) === "headline");
 check("needing a skeleton", pageStage(state([r], { needSkeleton: [r] }), r) === "skeleton");
 check("needing a handover", pageStage(state([r], { needHandover: [r] }), r) === "handover");
+// The three-format gate, 2026-10-08. A page whose H1 is picked but whose title tags or ad hooks
+// are missing stops HERE rather than walking on to its skeleton.
+check("needing the other two formats", pageStage(state([r], { needFormats: [r] }), r) === "formats");
+check(
+  "needing a headline still beats needing the formats",
+  pageStage(state([r], { needHeadline: [r], needFormats: [r] }), r) === "headline"
+);
+check(
+  "needing the formats beats needing a skeleton",
+  pageStage(state([r], { needFormats: [r], needSkeleton: [r] }), r) === "formats"
+);
 
 const drafted = row(3, { pageId: "p3", pageStatus: "draft" });
 const live = row(3, { pageId: "p3", pageStatus: "published" });
@@ -234,11 +246,25 @@ check(
   pageStage(state([live], { drafted: [live], needHandover: [live] }), live) === "live"
 );
 
+// ‼️ THE SAME TRAP AS needHandover, ONE STAGE EARLIER. Every page drafted before 2026-10-08 has
+// no title tags and never will, so a drafted row is also in needFormats forever. Asking the
+// formats question ahead of `drafted` would report every old page as owing one with no answer.
+check(
+  "a drafted page in needFormats is REVIEW, not formats",
+  pageStage(state([drafted], { drafted: [drafted], needFormats: [drafted] }), drafted) === "review",
+  "needFormats does not exclude drafted rows; readBatch orders them the same way for the same reason"
+);
+check(
+  "a published page in needFormats is LIVE, not formats",
+  pageStage(state([live], { drafted: [live], needFormats: [live] }), live) === "live"
+);
+
 // Every stage is reachable, so a switch that lost one is caught rather than defaulting.
 const REACHED = new Set<PageStage>();
 for (const s of [
   pageStage(state([r], { needAngle: [r] }), r),
   pageStage(state([r], { needHeadline: [r] }), r),
+  pageStage(state([r], { needFormats: [r] }), r),
   pageStage(state([r], { needSkeleton: [r] }), r),
   pageStage(state([r], { needHandover: [r] }), r),
   pageStage(state([r]), r),
@@ -247,7 +273,7 @@ for (const s of [
 ]) {
   REACHED.add(s);
 }
-check(`all seven stages are reachable (${[...REACHED].join(", ")})`, REACHED.size === 7, String(REACHED.size));
+check(`all eight stages are reachable (${[...REACHED].join(", ")})`, REACHED.size === 8, String(REACHED.size));
 
 // A page that is in NO list of a state whose rows do not hold it still answers, rather than throwing.
 const stranger = row(99);
@@ -276,7 +302,7 @@ check("the summary carries BOTH numbers for every page", summary.length === 3 &&
 
 console.log("\n6. what a person reads");
 
-const STAGES: PageStage[] = ["angle", "headline", "skeleton", "handover", "draft", "review", "live"];
+const STAGES: PageStage[] = ["angle", "headline", "formats", "skeleton", "handover", "draft", "review", "live"];
 for (const s of STAGES) {
   const line = pageStageLine(s, row(3, { headline: "A headline", angle: "an idea" }));
   // A sentence that names the page. Not a length floor: "Page 3 is live." is the whole truth at
@@ -395,6 +421,35 @@ const CARD = drHeadlineLines({ rank: 4, headline: "Is my med spa invisible?", wo
 check("the card says the page keeps its own H1", CARD.join(" ").includes("keeps its own H1"));
 check("the card carries no banned dash", CARD.every((l) => !hasBannedDash(l)));
 check("an empty bank says so rather than printing an empty list", drHeadlineLines({ rank: 4 } as never, []).length === 1);
+
+// ── 8. The title tag's verbs, which are the third artifact's ─────────────────
+//
+// ‼️ A BARE `pick` MUST ALWAYS MEAN THE H1. Two artifacts on one page are pickable now, and the
+// H1's claim on the unqualified verb is what every card, every earlier thread and page-studio.ts
+// already teaches. parsePageWalk matches `title pick` BEFORE `pick` for exactly this reason, so
+// the two checks below are the ones that fail if somebody reorders those alternatives.
+
+console.log("\n8. the title tag's own verbs");
+
+check("`page 3 title` is the title verb", parsePageWalk("page 3 title")?.verb === "title");
+const tp = parsePageWalk("page 3 title pick 2");
+check("`page 3 title pick 2` is a title pick, on option 2", tp?.verb === "title_pick" && tp.option === 2);
+check("`page 3 pick 2` is STILL the H1 pick", parsePageWalk("page 3 pick 2")?.verb === "pick");
+check("`page 3 title pick 0` is refused", parsePageWalk("page 3 title pick 0") === null);
+check("`page 3 title pick` with no number is refused", parsePageWalk("page 3 title pick") === null);
+check("`page 3 titles` is not the command", parsePageWalk("page 3 titles") === null);
+check("a sentence about a title is not the command", parsePageWalk("what should the title of page 3 be") === null);
+check("the title verbs do not collide with the headline command", !HEADLINE_COMMAND.test("page 3 title pick 2"));
+
+// The formats card numbers the TITLE TAGS, because the H1 is already settled by then. Printing
+// both numbered on one card is how `pick 2` came to mean two things in the first place.
+const formatsReply = pageReplyLine("formats", 3);
+check("the formats reply teaches the title pick", formatsReply.includes("title pick"));
+check("the headline reply teaches the H1 pick first", pageReplyLine("headline", 3).includes("page 3 pick 2"));
+check(
+  "and names the title tags as a separate thing to look at",
+  pageReplyLine("headline", 3).includes("page 3 title")
+);
 
 // ── Summary ──────────────────────────────────────────────────────────────────
 //

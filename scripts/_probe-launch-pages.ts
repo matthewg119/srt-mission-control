@@ -154,18 +154,39 @@ check(
   "a skeleton written before its headline is an outline for a page that does not know what it promises"
 );
 
+// ‼️ needFormats JOINED THIS GUARD ON 2026-10-08 AND needSkeleton MUST STILL BE IN IT. The three
+// lists are independent facts about a row, and for one edit needSkeleton was narrowed to exclude
+// format-incomplete rows, which put a page with an H1, no title tags and no outline in NEITHER
+// list and walked it straight past this guard into a draft off no skeleton at all. So this
+// asserts all three terms are present rather than matching the condition as one string.
 const draftCase = caseBody(mod, "draft_wave");
 check(
   draftCase.length > 0 &&
     /readBatch\(/.test(draftCase) &&
-    /if \(\s*batch\.needHeadline\.length\s*\|\|\s*batch\.needSkeleton\.length\s*\)/.test(draftCase),
-  "drafting is GUARDED on any page lacking a headline or a skeleton",
+    /if \(\s*batch\.needHeadline\.length\s*\|\|[\s\S]{0,80}?batch\.needSkeleton\.length\s*\)/.test(draftCase) &&
+    /batch\.needFormats\.length/.test(draftCase),
+  "drafting is GUARDED on any page lacking a headline, a format or a skeleton",
   "this is the refusal `plan draft` gives in the thread, read off the same readBatch"
 );
 check(
   /autoCompleteLaunchStep\(/.test(draftCase),
   "a drafting pass ticks pages_drafted through the verifier",
   "a runner believing it succeeded is not evidence that it did"
+);
+
+// ‼️ THE THREE-FORMAT GATE IS SCOPED TO PAGES THAT ARE NOT YET OUTLINED, AND THAT TERM IS THE
+// DIFFERENCE BETWEEN A GATE AND A WALL. The question belongs between the headline and the
+// skeleton, so an already-outlined page is past it. Without the `!outlines` term every page of
+// every client mid-batch on the day this shipped would be dragged back and draft_wave would
+// refuse for all of them until two model calls had run per page. Read off page-batch.ts rather
+// than this module, because that is where the list is derived.
+const batchSrc = read("src/lib/clients/page-batch.ts");
+check(
+  /const needFormats = formats\.ok[\s\S]{0,200}?!outlines\.get\(r\.id\)[\s\S]{0,120}?!formats\.complete\.has\(r\.id\)/.test(
+    batchSrc
+  ),
+  "the formats gate only asks a page that is not yet outlined",
+  "a gate on new work must not present as a wall across work already in flight"
 );
 
 // ── 3b. The per-page walk keeps the same rails, asked of one page ────────────
