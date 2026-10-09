@@ -178,20 +178,62 @@ export function seoTitleFaults(
     }
   }
 
-  // Never the same opening more than twice, counted on the first three words. The same rule the
-  // other two lanes keep, for the same reason: six candidates that all open "How to Get" are one
-  // candidate written six times.
+  // Never the same opening more than twice. The same rule the other two lanes keep, and for the
+  // same reason: six candidates that are one candidate written six times are not six candidates.
+  //
+  // ‼️ COUNTED AFTER THE KEYWORD, AND COUNTING IT FROM WORD ONE WAS AN UNSATISFIABLE RULE. Rule 1
+  // REQUIRES the keyword inside the first five words, so every title in a batch front-loads the
+  // same phrase by design. Measured from word one, this fired on every batch ever written: the
+  // first live run on `ai search ranking factors` returned six good titles and a fault reading
+  // '"ai search ranking" opens 6 titles'. Two of this file's own rules cannot be in conflict, and
+  // the one that moves is this one, because rule 1 is Matthew's page rule 2 and is the point.
+  //
+  // So the opening is what comes AFTER the keyword, which is where a title actually varies. Six
+  // titles reading "<keyword>: What Med Spas Must Know" six times still trip it.
   const openings = new Map<string, number>();
   for (const t of titles) {
-    const key = t.trim().toLowerCase().split(/\s+/).slice(0, 3).join(" ");
-    if (!key) continue;
-    openings.set(key, (openings.get(key) ?? 0) + 1);
+    openings.set(titleOpeningAfterKeyword(t, keyword), (openings.get(titleOpeningAfterKeyword(t, keyword)) ?? 0) + 1);
   }
   for (const [opening, n] of openings) {
-    if (n > 2) out.push(`"${opening}" opens ${n} titles, and two is the most the engine allows`);
+    if (!opening) continue;
+    if (n > 2) {
+      out.push(
+        `${n} titles continue "${opening}" after the keyword, and two is the most the engine allows. ` +
+          "A title tag that varies only in its year is one title tag"
+      );
+    }
   }
 
   return out;
+}
+
+/**
+ * The first three words of a title AFTER the keyword's own words, lowercased.
+ *
+ * Returns "" when there is nothing after the keyword, which is not a repeat to count: a title
+ * that IS the keyword is caught by the character floor instead.
+ *
+ * Pure.
+ */
+export function titleOpeningAfterKeyword(title: string, keyword: string): string {
+  const words = title
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]+/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!keyword.trim()) return words.slice(0, 3).join(" ");
+
+  const wanted = new Set<string>();
+  for (const w of keywordContentWords(keyword)) for (const form of wordForms(w)) wanted.add(form);
+
+  // Skip the leading run that belongs to the keyword, plus the filler inside it ("for", "to").
+  let i = 0;
+  let seen = 0;
+  while (i < words.length && (wanted.has(words[i]) || (seen > 0 && seen < wanted.size && words[i].length <= 3))) {
+    if (wanted.has(words[i])) seen++;
+    i++;
+  }
+  return words.slice(i, i + 3).join(" ");
 }
 
 /**

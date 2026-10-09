@@ -20,6 +20,7 @@ import {
   seoTitleLength,
   seoTitleLines,
   seoTitlePrompt,
+  titleOpeningAfterKeyword,
   seoTitleWarnings,
   SEO_ORIGIN,
   SEO_TITLES_PER_PAGE,
@@ -139,17 +140,45 @@ check(
   "      an em dash is refused",
   seoTitleFaults([`Med Spa AEO ${String.fromCharCode(8212)} What to Pay in 2026`], 1, "med spa").length > 0
 );
+// ‼️ THE REPEAT RULE IS COUNTED AFTER THE KEYWORD, AND COUNTING IT FROM WORD ONE WAS A RULE THAT
+// COULD NEVER BE SATISFIED. Rule 1 requires the keyword inside the first five words, so every
+// title in a batch front-loads the same phrase BY DESIGN. Measured from word one it fired on
+// every batch ever written: the first live run on `ai search ranking factors` (2026-10-09)
+// returned six good titles and the fault '"ai search ranking" opens 6 titles'. Both halves are
+// pinned here, because a rule that cannot be satisfied is worse than no rule.
+const SAME_OPENING = [
+  "AI Search Ranking Factors for Med Spas (2026)",
+  "AI Search Ranking Factors: What Med Spas Must Know",
+  "AI Search Ranking Factors Explained for Med Spas 2026",
+  "AI Search Ranking Factors: A 2026 Med Spa Guide",
+  "AI Search Ranking Factors That Decide Who Gets Named",
+  "AI Search Ranking Factors for Med Spa Owners (2026)",
+];
 check(
-  "      three titles opening the same way is refused",
+  "      six titles that all LEAD with the keyword are clean, because rule 1 requires that",
+  seoTitleFaults(SAME_OPENING, 6, "ai search ranking factors").length === 0,
+  seoTitleFaults(SAME_OPENING, 6, "ai search ranking factors").join(" | ")
+);
+check(
+  "      but titles that are the same AFTER the keyword are refused",
   seoTitleFaults(
     [
       "Med Spa AEO Pricing: What to Pay in 2026 for This",
-      "Med Spa AEO Agencies: What They Charge in 2026 Now",
-      "Med Spa AEO Results: What to Expect in 2026 Really",
+      "Med Spa AEO Pricing: What to Pay in 2027 for That",
+      "Med Spa AEO Pricing: What to Pay Later On This Year",
     ],
     0,
-    "med spa aeo"
-  ).some((f) => /opens 3 titles/.test(f))
+    "med spa aeo pricing"
+  ).some((f) => /after the keyword/.test(f))
+);
+check(
+  "      the opening is measured past the keyword's own words",
+  titleOpeningAfterKeyword("AI Search Ranking Factors That Decide Who Gets Named", "ai search ranking factors") ===
+    "that decide who"
+);
+check(
+  "      a title that is only the keyword has no opening to count",
+  titleOpeningAfterKeyword("AEO Agency Pricing", "aeo agency pricing") === ""
 );
 check("      a short count is reported when one was asked for", seoTitleFaults(GOOD.map((g) => g.title), 6, "").length > 0);
 
