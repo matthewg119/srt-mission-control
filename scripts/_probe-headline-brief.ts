@@ -16,7 +16,7 @@
 import {
   BRIEF_MARKS,
   BRIEF_MAX_KEYWORDS,
-  BRIEF_PER_FORMAT,
+  BRIEF_TOTAL_PER_FORMAT,
   buildHeadlineBrief,
   parseHeadlinePaste,
   parseKeywordList,
@@ -59,7 +59,34 @@ check("blank lines and fragments are dropped", parseKeywordList("\n\nbotox\nx\n"
 
 console.log("\n2. BOTH contracts reach the brief, stated separately and in full");
 check("it asks for two parts", /PART A\./.test(BRIEF) && /PART B\./.test(BRIEF));
-check(`${BRIEF_PER_FORMAT} of each`, new RegExp(`PART A\\. ${BRIEF_PER_FORMAT} AEO`).test(BRIEF) && new RegExp(`PART B\\. ${BRIEF_PER_FORMAT} SEO`).test(BRIEF));
+// ‼️ THE COUNTS ARE TOTALS ACROSS THE PILE, NOT PER KEYWORD, since 2026-10-09. Twenty per keyword
+// over eleven keywords is 440 lines, which is not a batch anybody reads, and Matthew asked for
+// "one final prompt to run a batch of 100 variations". Both halves are pinned here: the totals in
+// the part headings, and the wording that says they ARE totals.
+check(
+  `${BRIEF_TOTAL_PER_FORMAT} of each`,
+  new RegExp(`PART A\\. ${BRIEF_TOTAL_PER_FORMAT} AEO`).test(BRIEF) &&
+    new RegExp(`PART B\\. ${BRIEF_TOTAL_PER_FORMAT} SEO`).test(BRIEF)
+);
+check("the counts are stated as TOTALS", /IN TOTAL, across every keyword/.test(BRIEF));
+check("and never as a per-keyword count", !/AEO H1s PER KEYWORD|SEO TITLE TAGS PER KEYWORD/.test(BRIEF));
+check("the size of the job is named up front", new RegExp(`${BRIEF_TOTAL_PER_FORMAT * 2} lines in total`).test(BRIEF));
+check("it says roughly how many that is per keyword", /of each per keyword/.test(BRIEF));
+check("no keyword may be skipped", /never skip one/.test(BRIEF));
+
+// One keyword must still read sensibly: the whole total goes to that single page.
+const ONE = buildHeadlineBrief({ ctx: CTX, keywords: ["aeo agency pricing"] });
+check("a single keyword still asks for the full total", new RegExp(`PART A\\. ${BRIEF_TOTAL_PER_FORMAT} AEO`).test(ONE));
+check(
+  "and spreads all of it onto that one keyword",
+  new RegExp(`about ${BRIEF_TOTAL_PER_FORMAT} of each per keyword`).test(ONE)
+);
+
+// Eleven keywords, which is his real plan, must stay ONE brief rather than being split.
+const ELEVEN = buildHeadlineBrief({ ctx: CTX, keywords: Array.from({ length: 11 }, (_, i) => `keyword ${i + 1}`) });
+check("eleven keywords still ask for the same total", new RegExp(`PART A\\. ${BRIEF_TOTAL_PER_FORMAT} AEO`).test(ELEVEN));
+check("and all eleven are listed", /THE 11 KEYWORDS/.test(ELEVEN));
+check("eleven is inside the cap, so nothing is dropped", BRIEF_MAX_KEYWORDS >= 11);
 check("the AEO WORD band is stated", new RegExp(`4 to ${QUERY_CORE_TARGET_WORDS} words`).test(BRIEF));
 check("the AEO hard ceiling is stated", new RegExp(`${QUERY_CORE_MAX_WORDS} is the hard ceiling`).test(BRIEF));
 check("the SEO CHARACTER band is stated", new RegExp(`${SEO_TITLE_TARGET_MIN} to ${SEO_TITLE_TARGET_MAX} CHARACTERS`).test(BRIEF));
@@ -126,7 +153,9 @@ check(
   "this door hands back a prompt; the moment it generates, it is the other door"
 );
 check("it does write to client_headlines, which is the point of the paste-back", /from\("client_headlines"\)/.test(SRC));
-check(`the keyword cap is stated (${BRIEF_MAX_KEYWORDS})`, BRIEF_MAX_KEYWORDS >= 1 && BRIEF_MAX_KEYWORDS <= 11);
+// The cap has to cover his eleven planned pages in ONE brief, which is the whole ask, and still
+// stop somebody pasting a hundred phrases into a prompt that would spread two lines per keyword.
+check(`the keyword cap covers his eleven and is still a cap (${BRIEF_MAX_KEYWORDS})`, BRIEF_MAX_KEYWORDS >= 11 && BRIEF_MAX_KEYWORDS <= 25);
 
 console.log("\n6. what he reads back");
 const CARD = filedLines({
