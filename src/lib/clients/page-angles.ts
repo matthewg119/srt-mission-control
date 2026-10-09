@@ -267,13 +267,23 @@ export function toAngles(raw: unknown): DraftedAngle[] {
   }));
 }
 
+// ‼️ THE CAPS ARE IN THE SCHEMA BECAUSE A RULE ONLY IN CODE IS A RULE THE MODEL CANNOT FOLLOW.
+// This file's own doctrine, shared with client-headlines.ts, is that a rule stated only in a
+// prompt is not a rule: hence angleFaults. The converse was missed, and it cost SEVEN OF ELEVEN
+// pages on 2026-10-09. IDEA_MAX, PROMISE_MAX and NARRATIVE_MAX were enforced above and stated
+// NOWHERE the model could read, so it wrote 300 character ideas, was refused, and the single
+// correction retry was refused too. Measured on page 1, "how to get my med spa on chatgpt":
+// every one of the three options overran on idea AND narrative, two of three on promise.
+//
+// Both halves are needed. The validator so the rule is real, and the schema so it is reachable.
+// With the caps stated, all seven pages drafted, at 178 to 192 characters against the 240 cap.
 const SCHEMA_HINT = `{
   "angles": [
     {
-      "idea": "what this page argues, one or two sentences, in her words",
-      "promise": "what the reader can do or decide after reading it",
-      "narrative": "the story spine the page runs on",
-      "indoctrination": "the one belief this page has to install to move her a stage",
+      "idea": "what this page argues, one or two sentences, in her words. MAX ${IDEA_MAX} CHARACTERS",
+      "promise": "what the reader can do or decide after reading it. MAX ${PROMISE_MAX} CHARACTERS",
+      "narrative": "the story spine the page runs on. MAX ${NARRATIVE_MAX} CHARACTERS",
+      "indoctrination": "the one belief this page has to install to move her a stage. MAX ${BELIEF_MAX} CHARACTERS",
       "awareness_entry": 4,
       "awareness_target": 3,
       "proof_needed": ["what this angle obliges us to prove"],
