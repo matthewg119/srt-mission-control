@@ -85,21 +85,38 @@ const printerSrc = stripComments(read(PRINTER));
 // palette file. See CARD_COPY_SETS for what the loosening costs.
 console.log("\n1. a design picks a wording and can never invent one");
 
-check(CARD_DESIGNS.length >= 2, `there are ${CARD_DESIGNS.length} designs`);
+check(CARD_DESIGNS.length >= 1, `there are ${CARD_DESIGNS.length} design(s)`);
 check(
   new Set(CARD_DESIGNS.map((d) => d.key)).size === CARD_DESIGNS.length,
   "no two designs share a key"
 );
+// ‼️ ONE CARD, AND NO PICKER UNDER IT. "remove the option to look at 2 previews 2 squares",
+// 2026-10-09. A clinic being shown a card is being shown THE card.
 check(
-  OFFERED_DESIGNS.length === 2,
-  "exactly two are offered on the landing",
+  OFFERED_DESIGNS.length === 1,
+  "exactly one card is offered on the landing",
   `offered: ${OFFERED_DESIGNS.join(", ")}`
 );
 check(
-  !CARD_DESIGNS.some((d) => d.key === "ink"),
-  "the ink design is deleted, not merely unlisted",
-  "a card kept in the registry and shown to nobody is a fourth thing to keep working"
+  !/cp-swatch/.test(clientSrc) && !/offeredDesigns/.test(clientSrc),
+  "and the two-square picker is gone from the screen"
 );
+// ‼️ DELETED, NOT UNLISTED, ALL THREE OF THEM. A card in the registry that nothing renders is a
+// look that goes stale silently and is found broken the day somebody needs it.
+for (const dead of ["ink", "offer", "clean"]) {
+  check(
+    !CARD_DESIGNS.some((d) => d.key === dead),
+    `the ${dead} design is deleted`,
+    "ink and the picker on his call; offer folded into blush; clean still carried the old wording"
+  );
+}
+// The one that is left is the blush look saying the offer words, which is the combination he
+// picked after seeing both. Either half drifting makes it a card he did not choose.
+{
+  const only = CARD_DESIGNS[0];
+  check(only?.key === "blush" && only.copy === "offer", "the one card is blush wearing the offer copy", `${only?.key}/${only?.copy}`);
+  check(only?.layout === "stack", "laid out so the clinic name sits directly over the offer", only?.layout);
+}
 // Every design names a copy set that exists. This is what replaced "a design carries no wording":
 // it may PICK one of a fixed, checked set and may never invent one.
 check(
@@ -412,6 +429,10 @@ check(
   "it is a button into the funnel rather than a link out of it"
 );
 // The shortcut past the walkthrough, for somebody who already understands the product.
+check(
+  !/layout === "band"|layout === "edge"/.test(artSrc),
+  "and the artwork carries no branch for a layout nothing uses"
+);
 check(
   Boolean(PREVIEW_SCAN.skipToChat),
   "screen one offers a way straight to the chat",

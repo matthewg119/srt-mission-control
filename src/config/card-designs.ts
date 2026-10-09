@@ -36,10 +36,13 @@ export type CardCopyKey = "neutral" | "offer";
  * How the front of the card is arranged.
  *
  * `stack`  centred, in the printed card's own order: name, promise, code, instruction, url.
- * `band`   the name in an accent band across the top, the rest on the ground below it.
- * `edge`   everything left aligned inside a hairline frame, the code sitting on the bottom rule.
+ *
+ * ‼️ `band` AND `edge` WERE DELETED ON 2026-10-09 ALONG WITH THE DESIGNS THAT USED THEM, and
+ * the union is kept rather than collapsed because the axis is real and the next design will pick
+ * one. What is gone is the RENDERING: two unreachable branches in card-art.tsx and their CSS,
+ * which is how a dead look quietly stops working and nobody finds out until it is needed.
  */
-export type CardLayout = "stack" | "band" | "edge";
+export type CardLayout = "stack";
 
 export interface CardDesign {
   key: string;
@@ -88,53 +91,32 @@ export const CARD_DESIGNS: readonly CardDesign[] = [
     onAccent: "#ffffff",
     plate: "#ffffff",
     face: "serif",
-    copy: "neutral",
-  },
-  {
-    // ‼️ THE OFFER CARD. Added 2026-10-09 at Matthew's request and it is the one design whose
-    // words differ; see CARD_COPY_SETS.offer for what that costs and why the probe no longer
-    // forbids it. The look is deliberately the loudest of the three, because a card leading with a
-    // deal that looks like the quiet one is a deal nobody reads.
-    key: "offer",
-    label: guard("design offer", "Offer"),
-    layout: "band",
-    ground: "#ffffff",
-    ink: "#241a1f",
-    muted: "#7c6b72",
-    accent: "#c26b89",
-    onAccent: "#ffffff",
-    plate: "#ffffff",
-    face: "serif",
+    // ‼️ THE BLUSH LOOK CARRYING THE OFFER WORDS, which is the combination Matthew picked on
+    // 2026-10-09 after seeing both: "scan for 80% off is what i want but i only want the blush
+    // version and the clinic name right above it like the blush version". The band layout put the
+    // clinic name in a strip at the top and a rule between it and the offer; the stack puts the
+    // name directly over the line that sells, which is what he means by "right above it".
     copy: "offer",
-  },
-  {
-    // Not offered on the landing. ?d=clean opens it, for comparing and for the onboarding video.
-    key: "clean",
-    label: guard("design clean", "Clean"),
-    layout: "edge",
-    ground: "#ffffff",
-    ink: "#191717",
-    muted: "#7c7472",
-    accent: "#d6809c",
-    onAccent: "#2d1620",
-    plate: "#ffffff",
-    face: "sans",
-    copy: "neutral",
   },
 ];
 
 /**
- * The two offered on the landing.
+ * The ones offered on the landing. One.
  *
- * ‼️ TWO, BECAUSE HE ASKED FOR TWO: "i want 2 options in the new landing with the preview".
- * Three chips on a phone is a survey; two is a preference.
+ * ‼️ THERE IS NO PICKER ANY MORE. "remove the option to look at 2 previews 2 squares", same
+ * message. A clinic being shown a card is being shown THE card; two squares under it turned a
+ * demonstration into a form, and the second square was the only reason this list ever had two
+ * entries. The array survives because designByKey and ?d= read it, and because a second design
+ * is one entry plus a picker away rather than a rewrite.
  *
- * ‼️ `ink` WAS DELETED ON 2026-10-09, not merely dropped from this list. Matthew: "also remove
- * the ink version". A dark card kept in the registry but shown to nobody is a fourth thing to keep
- * working, and this repo has already paid for that once ("get rid of absolutely all of those old
- * pages"). `clean` survives because it is still reachable at ?d=clean and he has not seen it yet.
+ * ‼️ `ink`, `offer` AND `clean` ARE ALL DELETED, not unlisted. `ink` went the same day he
+ * said so; `offer` was folded into this one rather than kept beside it, because keeping both
+ * would have left two cards with identical words and different grounds; `clean` went with them
+ * because it was only ever reachable at ?d=clean and it still carried the NEUTRAL wording, so
+ * that link would have quietly shown the card he had just replaced. See the header of
+ * src/app/cards/p/card-art.tsx for the two layouts deleted alongside them.
  */
-export const OFFERED_DESIGNS: readonly string[] = ["blush", "offer"];
+export const OFFERED_DESIGNS: readonly string[] = ["blush"];
 
 /** A design by key, falling back to the first offered one. Never throws, never returns undefined. */
 export function designByKey(key: string | null | undefined): CardDesign {

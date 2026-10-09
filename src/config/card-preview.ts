@@ -160,10 +160,11 @@ export const PREVIEW_SCAN = {
    * code opens our walkthrough; a printed card's code opens the clinic's own reviews page on their
    * own domain. Leaving that unsaid is how somebody prints a thousand cards pointing at a demo.
    */
-  qrNote: guard(
-    "preview scan qr note",
-    "On your printed cards this code points at your own page, on your own domain."
-  ),
+  // ‼️ CUT TO ONE CLAUSE ON 2026-10-09. It read "On your printed cards this code points at your
+  // own page, on your own domain", which spent two clauses defending a distinction nobody had
+  // questioned yet. The point it has to make is that the code becomes THEIRS, and that is the
+  // whole sentence.
+  qrNote: guard("preview scan qr note", "This code will point at your own page."),
   cta: guard("preview scan cta", "Show me what they see"),
   /**
    * The way past screen two, beside the line about their own domain.
@@ -178,9 +179,7 @@ export const PREVIEW_SCAN = {
    * is not a different conversation, and a bubble acknowledging the skip would be the funnel
    * talking about itself.
    */
-  skipToChat: guard("preview scan skip", "Skip the preview and set up your domain"),
-  /** Which of the designs is on screen, above the toggle. */
-  pickLabel: guard("preview scan pick", "Two designs. Pick the one you like."),
+  skipToChat: guard("preview scan skip", "Skip the preview"),
 } as const;
 
 /**

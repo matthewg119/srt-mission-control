@@ -36,7 +36,7 @@ import {
   type PreviewKey,
   type PreviewStep,
 } from "@/config/card-preview";
-import { designByKey, offeredDesigns, type CardDesign } from "@/config/card-designs";
+import { designByKey } from "@/config/card-designs";
 import { CardFront, ScanHand } from "./card-art";
 
 const GAP_MS = { min: 420, max: 820 } as const;
@@ -92,7 +92,9 @@ export interface PreviewClientProps {
 
 export function PreviewClient(props: PreviewClientProps) {
   const [screen, setScreen] = useState<Screen>("card");
-  const [designKey, setDesignKey] = useState(props.initialDesign);
+  // ‼️ READ ONCE AND NEVER SET. The picker that used to change it is gone; ?d= still seeds it on
+  // the server, so a second design is a setter and a control away rather than a rewrite.
+  const [designKey] = useState(props.initialDesign);
   // ‼️ THE FRAME DOES NOT START INTERACTIVE, WHICH IS A REQUIREMENT AND NOT A DETAIL. "they need
   // to click it to go inside". A clinic owner who scrolls past an embedded page has not understood
   // that it is live; one deliberate tap is what turns a picture into a product.
@@ -132,7 +134,6 @@ export function PreviewClient(props: PreviewClientProps) {
 
   const design = useMemo(() => designByKey(designKey), [designKey]);
   const copy = useMemo(() => copyFor(design.copy), [design]);
-  const options = useMemo<CardDesign[]>(() => offeredDesigns(), []);
   const days = useMemo(() => nextDays(PREVIEW_DAY.count), []);
 
   useEffect(() => {
@@ -473,38 +474,19 @@ export function PreviewClient(props: PreviewClientProps) {
           <ScanHand design={design} />
         </div>
 
-        {/* ‼️ THE SHORTCUT SITS WITH THE LINE ABOUT THEIR DOMAIN, WHICH IS WHERE HE PUT IT, AND
-            the two belong together: that sentence is the first thing on the page that is about
+        {/* ‼️ THE SHORTCUT SITS WITH THE LINE ABOUT THEIR OWN PAGE, which is where he put it, and
+            the two belong together: that sentence is the first thing on the screen that is about
             THEIR setup rather than about the card, so it is the moment somebody who has already
-            understood the product stops reading and wants to start. */}
-        <p className="cp-note">
-          {PREVIEW_SCAN.qrNote}{" "}
-          <button type="button" className="cp-mini" onClick={() => setScreen("chat")}>
-            {PREVIEW_SCAN.skipToChat}
-          </button>
-        </p>
+            understood the product stops reading and wants to start. It sits UNDER the sentence
+            and smaller than it, because it is an escape and not an instruction.
 
-        <div className="cp-designs" role="group" aria-label={PREVIEW_SCAN.pickLabel}>
-          <span className="cp-designs-label">{PREVIEW_SCAN.pickLabel}</span>
-          <div className="cp-swatches">
-            {options.map((d) => (
-              <button
-                key={d.key}
-                type="button"
-                className={`cp-swatch${d.key === design.key ? " is-on" : ""}`}
-                aria-pressed={d.key === design.key}
-                onClick={() => setDesignKey(d.key)}
-              >
-                <span
-                  className="cp-chip"
-                  style={{ background: d.ground, boxShadow: `inset 0 0 0 2px ${d.accent}` }}
-                  aria-hidden="true"
-                />
-                {d.label}
-              </button>
-            ))}
-          </div>
-        </div>
+            ‼️ AND THE TWO SWATCHES THAT WERE HERE ARE GONE. "remove the option to look at 2
+            previews 2 squares". There is one card now, so a picker under it was a question with
+            one answer, and it turned a demonstration into a form. */}
+        <p className="cp-note">{PREVIEW_SCAN.qrNote}</p>
+        <button type="button" className="cp-mini cp-skip" onClick={() => setScreen("chat")}>
+          {PREVIEW_SCAN.skipToChat}
+        </button>
 
         <button type="button" className="cd-primary cp-cta" onClick={() => setScreen("inside")}>
           {PREVIEW_SCAN.cta}

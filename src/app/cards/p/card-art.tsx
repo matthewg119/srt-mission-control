@@ -6,11 +6,17 @@
 // what stops the preview and the printer drifting apart.
 // scripts/_probe-card-preview.ts fails the build if a sentence appears in this file.
 //
-// ‼️ THREE LAYOUTS, TWO COPY SETS, AND THE TWO AXES ARE SEPARATE ON PURPOSE.
-// src/config/card-designs.ts owns the palettes and names both the arrangement and the copy KEY;
+// ‼️ ONE LAYOUT AND ONE DESIGN SINCE 2026-10-09, AND THE TWO AXES ARE STILL SEPARATE ON PURPOSE.
+// src/config/card-designs.ts owns the palette and names both the arrangement and the copy KEY;
 // src/config/card-preview.ts owns what those keys resolve to. A design can pick a wording and can
-// never invent one. Read CARD_COPY_SETS before adding a third: the `offer` set reverses a rule
+// never invent one. Read CARD_COPY_SETS before adding a second: the `offer` set reverses a rule
 // that the rest of this lane is built on, and its header says what that costs.
+//
+// ‼️ THE `band` AND `edge` BRANCHES WERE DELETED WITH THE DESIGNS THAT USED THEM. Matthew picked
+// the blush card carrying the offer words and asked for the picker to go, so two of the three
+// arrangements became unreachable in the same message. An unreachable renderer is not free: it
+// goes stale silently and the next person to need it finds it broken. The LAYOUT AXIS survives in
+// the type, so a second arrangement is a branch and an entry rather than a rewrite.
 //
 // ‼️ WHY INLINE STYLES AND NOT CLASSES. Six of the values are data: a design is a palette, and a
 // palette in a stylesheet would mean three near-identical blocks of CSS that have to be edited
@@ -70,69 +76,8 @@ export function CardFront({ design, copy, clinicName, qrDataUrl, reviewsHost }: 
     </p>
   ) : null;
 
-  if (design.layout === "band") {
-    return (
-      <article
-        className="cpc-card is-band"
-        style={{ background: design.ground, color: design.ink }}
-        aria-label={`${clinicName} review card`}
-      >
-        <header
-          className="cpc-band"
-          style={{ background: design.accent, color: design.onAccent, fontFamily: nameFont }}
-        >
-          {clinicName}
-        </header>
-        <div className="cpc-body">
-          {promise}
-          {code("58%")}
-          {scanLine}
-          {host}
-        </div>
-      </article>
-    );
-  }
-
-  if (design.layout === "edge") {
-    return (
-      <article
-        className="cpc-card is-edge"
-        style={{
-          background: design.ground,
-          color: design.ink,
-          // The hairline frame is this layout's whole structure, so it is drawn from the accent
-          // at low opacity rather than from a grey that belongs to no palette.
-          boxShadow: `inset 0 0 0 1px ${design.accent}55`,
-        }}
-        aria-label={`${clinicName} review card`}
-      >
-        {/* ‼️ TWO CHILDREN, NOT THREE, AND THAT IS THE WHOLE LAYOUT. This body is
-            space-between on a 5:7 card, so leaving the name and the promise as separate children
-            spread THREE blocks evenly down a tall card and opened two holes big enough to read as
-            a rendering fault. Grouped, the words sit at the top and the code sits on the floor,
-            which is what the arrangement was for. */}
-        <div className="cpc-body is-left">
-          <div className="cpc-edge-head">
-            <h3 className="cpc-name" style={{ fontFamily: nameFont, color: design.ink }}>
-              {clinicName}
-            </h3>
-            {promise}
-          </div>
-          {/* Larger than the other two layouts' codes on purpose: this one is the only weight at
-              the bottom of a tall card, and at 46% the foot read as an afterthought under a void. */}
-          <div className="cpc-edge-foot">
-            {code("55%")}
-            <div className="cpc-edge-words">
-              {scanLine}
-              {host}
-            </div>
-          </div>
-        </div>
-      </article>
-    );
-  }
-
-  // stack: the printed card's own order, centred.
+  // stack, and currently the only one: the printed card's own order, centred. The clinic's name
+  // sits directly over the line that sells, which is the thing Matthew picked it for.
   return (
     <article
       className="cpc-card is-stack"

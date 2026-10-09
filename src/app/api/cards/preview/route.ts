@@ -34,6 +34,7 @@ import {
 } from "@/config/card-preview";
 import { designByKey } from "@/config/card-designs";
 import { leadFromCardToken } from "@/lib/cards/preview-link";
+import { sendPreviewEmail } from "@/lib/cards/preview-email";
 
 export const dynamic = "force-dynamic";
 
@@ -115,7 +116,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     detailLines: [
       // Loud and first, because it is the only line with a clock on it: they were told the card
       // is coming and nothing in this lane renders or sends one yet.
-      "⚠️ THEY ARE OWED A PDF CARD BY EMAIL. Nothing was sent automatically.",
+      // Replaced "nothing was sent automatically" on 2026-10-09: a confirmation goes out now,
+      // and what is still owed is the FILE. The two were worth telling apart on the card, because
+      // one of them means the clinic has heard nothing at all.
+      "⚠️ THEY ARE OWED THE PDF ITSELF. They have had the confirmation email; the card is yours to make.",
       customDesign
         ? `${PREVIEW_CUSTOM.flag} They did not like either card and were told a few options are coming within 2 hours.`
         : "",
@@ -156,6 +160,34 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // thread is told where its lead went. Best effort, and never fatal: the lead is already saved.
   if (fromLead && fromLead.contactId !== result.contactId) {
     await crossPost(fromLead.contactId, leadName, email).catch(() => {});
+  }
+
+  // ‼️ AFTER THE LEAD IS SAVED AND NEVER BEFORE, and awaited rather than fired and forgotten.
+  // Awaited because this route is the only thing that knows the send failed, and a failure is
+  // worth a line in the lead's own thread: the clinic was told on screen that an email is coming,
+  // so silence from us is a promise broken in a place nobody is watching. It cannot throw.
+  const mail = await sendPreviewEmail(email, {
+    firstName,
+    businessName: business || null,
+    copy,
+    topProduct,
+    referralOffer,
+    wantsCustom: customDesign,
+  });
+  // ‼️ THE CHANNEL COMES FROM THE ENV AND NOT FROM result. IngestLeadResult carries a contact id
+  // and a thread ts and nothing else; reaching for a channel on it typechecked as `any` in an
+  // earlier draft only because the object was indexed loosely. This is the same fallback
+  // postOrThreadLeadUpdate uses to choose where to post in the first place.
+  const hotLeads = process.env.SLACK_HOT_LEADS_CHANNEL || "";
+  if (!mail.sent && result.threadTs && hotLeads) {
+    await slack
+      .postThreadReply(
+        hotLeads,
+        result.threadTs,
+        `:warning: The confirmation email to ${email} did NOT send (${mail.error ?? "unknown"}). ` +
+          "They were told on screen that one is coming, so this one needs sending by hand."
+      )
+      .catch(() => {});
   }
 
   // ‼️ SHAPED FOR AN INLINE EMBED, NOT A LINK OUT, and null is a fine answer. With Calendly

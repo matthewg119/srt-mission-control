@@ -56,13 +56,20 @@
 }
 .cp-mini:hover { background: rgba(255, 255, 255, 0.11); color: var(--cd-ink); }
 
+/* ‼️ SMALLER THAN THE SENTENCE IT SITS UNDER, which is what Matthew asked for and is also what
+   makes it read as an escape rather than a second instruction. .cp-note is 13px; this is 12. */
+.cp-skip {
+  align-self: flex-start;
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+}
+
 .cp-note {
   margin: 1rem 0 0;
   font-size: 0.8125rem;
   line-height: 1.6;
   color: var(--cd-faint);
 }
-.cp-link { color: var(--cd-accent); }
 
 /* ── The stage: the card, and the hand reaching for it ───────────────────── */
 
@@ -144,7 +151,6 @@
   gap: 0.75em;
   padding: 1.75em 1.5em;
 }
-.cpc-body.is-left { align-items: flex-start; text-align: left; }
 
 .cpc-name {
   margin: 0;
@@ -180,32 +186,6 @@
   letter-spacing: 0.01em;
   word-break: break-all;
 }
-
-/* band: the name in an accent strip across the top. */
-.cpc-band {
-  padding: 0.9em 1em;
-  font-size: 1.4em;
-  font-weight: 700;
-  line-height: 1.2;
-}
-.is-band .cpc-body { padding-top: 1.25em; }
-
-/* edge: left aligned inside a hairline, the words at the top and the code on the floor. */
-.is-edge .cpc-body { justify-content: space-between; gap: 1em; }
-.cpc-edge-head {
-  display: flex;
-  flex-direction: column;
-  gap: 0.6em;
-  width: 100%;
-}
-.cpc-edge-foot {
-  display: flex;
-  align-items: flex-end;
-  gap: 0.9em;
-  width: 100%;
-}
-.cpc-edge-words { text-align: left; }
-.is-edge .cpc-scan { margin-bottom: 0.3em; }
 
 /* ── The phone frame on screen two ───────────────────────────────────────── */
 
@@ -262,44 +242,6 @@
   );
 }
 .cp-veil .cp-tap { position: static; transform: none; }
-
-/* ── The design picker ───────────────────────────────────────────────────── */
-
-.cp-designs { margin-top: 2.25rem; }
-.cp-designs-label {
-  display: block;
-  margin-bottom: 0.625rem;
-  font-size: 0.8125rem;
-  color: var(--cd-faint);
-}
-.cp-swatches { display: flex; gap: 0.5rem; }
-
-.cp-swatch {
-  flex: 1 1 0;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font: inherit;
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: var(--cd-mut);
-  background: transparent;
-  border: 1px solid var(--cd-line);
-  border-radius: 12px;
-  padding: 0.6rem 0.75rem;
-  cursor: pointer;
-}
-.cp-swatch.is-on {
-  color: var(--cd-ink);
-  border-color: var(--cd-accent);
-  background: rgba(60, 198, 168, 0.08);
-}
-.cp-chip {
-  width: 1.125rem;
-  height: 1.125rem;
-  flex: 0 0 auto;
-  border-radius: 5px;
-}
 
 @media (max-width: 24rem) {
   .cp-stage { padding-right: 16%; }
