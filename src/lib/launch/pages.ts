@@ -76,6 +76,16 @@ export interface LaunchPlanPage {
   hasBody: boolean;
   /** The three candidates written for this page, in pick order. Empty until headlines run. */
   headlineOptions: string[];
+  /**
+   * What this page argues, once somebody has picked its idea. Null while it still needs one.
+   *
+   * ‼️ READ FROM THE ANGLE, NOT FROM page_plan.angle. That column holds the idea text copied onto
+   * the row, and it is also written by the planner for rows that never had an angle at all, so it
+   * cannot answer "has anybody decided what this page argues".
+   */
+  angle: string | null;
+  /** The three ideas written for this page, in pick order. Empty until angles run. */
+  angleOptions: string[];
 }
 
 export interface LaunchLadderRung {
@@ -104,8 +114,12 @@ export interface LaunchPagesState {
   plan: LaunchPlanPage[];
   proposed: number;
   approved: number;
+  /** Ranks of pages with no picked idea. headlines_write refuses while this is non-empty. */
+  needAngle: number[];
   needHeadline: number[];
   needSkeleton: number[];
+  /** Ranks of pages with a skeleton that have not said how they hand over. */
+  needHandover: number[];
   drafted: number;
   /** Rows that still want a body. The Draft button stays live while this is above zero. */
   outstanding: number;
@@ -121,7 +135,13 @@ export interface LaunchPagesState {
   day0ArchivedAt: string | null;
 }
 
-function toPage(row: PlanRow, batch: BatchState | null, options: Map<string, string[]>): LaunchPlanPage {
+function toPage(
+  row: PlanRow,
+  batch: BatchState | null,
+  options: Map<string, string[]>,
+  angles: Map<string, { picked: string | null; options: string[] }>
+): LaunchPlanPage {
+  const angle = angles.get(row.id) ?? null;
   return {
     id: row.id,
     rank: row.rank,
@@ -138,7 +158,39 @@ function toPage(row: PlanRow, batch: BatchState | null, options: Map<string, str
     hasOutline: Boolean(batch?.outlines.get(row.id)),
     hasBody: Boolean(batch?.drafted.some((d) => d.id === row.id)),
     headlineOptions: options.get(row.id) ?? [],
+    angle: angle?.picked ?? null,
+    angleOptions: angle?.options ?? [],
   };
+}
+
+/**
+ * The ideas written for each planned page, and which one was picked.
+ *
+ * ‼️ THE OPTION NUMBERS ARE OVER EVERY ANGLE ON THE PAGE, which is what `angle 3 pick 2` means on
+ * the Slack door too. anglesFor returns them oldest first and the order is stable, so a number
+ * beside an idea here is the same number tomorrow.
+ */
+async function angleOptionsFor(
+  clientId: string,
+  rows: readonly PlanRow[]
+): Promise<Map<string, { picked: string | null; options: string[] }>> {
+  const out = new Map<string, { picked: string | null; options: string[] }>();
+  try {
+    const { anglesFor } = await import("@/lib/clients/page-angles");
+    const all = await anglesFor(clientId);
+    for (const row of rows) {
+      const mine = all.filter((a) => a.planId === row.id);
+      out.set(row.id, {
+        picked: mine.find((a) => a.status === "approved")?.idea ?? null,
+        options: mine.map((a) => a.idea),
+      });
+    }
+  } catch (e) {
+    // The panel losing the ideas is worth far less than the panel going dark, and readBatch has
+    // already decided the gate separately. Same posture as optionsFor's own failure path.
+    console.error(`[launch-pages] angle read failed: ${(e as Error).message}`);
+  }
+  return out;
 }
 
 /** The ladder, each rung marked with whether its anchor can actually be picked. */
@@ -193,6 +245,7 @@ export async function launchPagesState(clientId: string): Promise<LaunchPagesSta
   // Only the pre-call rows. A row with no role belongs to the other lane's page studio.
   const rows = plan.rows.filter((r) => r.role).sort((a, b) => a.rank - b.rank);
   const options = rows.length ? await optionsFor(clientId, rows) : new Map<string, string[]>();
+  const angles = rows.length ? await angleOptionsFor(clientId, rows) : new Map<string, { picked: string | null; options: string[] }>();
 
   const outstanding = rows.filter(
     (r) =>
@@ -205,11 +258,13 @@ export async function launchPagesState(clientId: string): Promise<LaunchPagesSta
     stageText: batchState ? stageLine(batchState) : "error" in batch ? batch.error : "No plan yet.",
     ready: fc.ok,
     missing: fc.ok ? [] : fc.missing,
-    plan: rows.map((r) => toPage(r, batchState, options)),
+    plan: rows.map((r) => toPage(r, batchState, options, angles)),
     proposed: rows.filter((r) => r.status === "proposed").length,
     approved: rows.filter((r) => r.status === "approved" || r.status === "claimed").length,
+    needAngle: (batchState?.needAngle ?? []).map((r) => r.rank),
     needHeadline: (batchState?.needHeadline ?? []).map((r) => r.rank),
     needSkeleton: (batchState?.needSkeleton ?? []).map((r) => r.rank),
+    needHandover: (batchState?.needHandover ?? []).map((r) => r.rank),
     drafted: batchState?.drafted.length ?? 0,
     outstanding,
     ladder: ladderBits?.rungs ?? null,
@@ -249,12 +304,19 @@ export async function pageRunText(clientId: string): Promise<string> {
   const shown = st.plan.slice(0, CAP);
   const lines = shown.map((p) => {
     const has = [
+      p.angle ? "idea" : null,
       p.headline ? "headline" : null,
       p.hasOutline ? "skeleton" : null,
+      p.ctaLine ? "cta" : null,
       p.hasBody ? "body" : null,
       p.pageStatus === "published" ? "LIVE" : null,
     ].filter(Boolean);
-    return `    ${p.rank}. [${p.role}] ${p.headline ?? p.workingTitle} <- ${p.targetKeyword} (${p.status}${has.length ? ", " + has.join(", ") : ", nothing written yet"})`;
+    return [
+      `    ${p.rank}. [${p.role}] ${p.headline ?? p.workingTitle} <- ${p.targetKeyword} (${p.status}${has.length ? ", " + has.join(", ") : ", nothing written yet"})`,
+      // The idea is what the headline and the skeleton are both written from, so it belongs on the
+      // page's own line rather than being something the chat has to go and ask for.
+      ...(p.angle ? [`         argues: ${p.angle}`] : []),
+    ].join("\n");
   });
 
   return [
@@ -267,8 +329,16 @@ export async function pageRunText(clientId: string): Promise<string> {
     ...(st.plan.length > shown.length
       ? [`    ...and ${st.plan.length - shown.length} more not listed. Say so rather than implying this is all of them.`]
       : []),
+    ...(st.needAngle.length
+      ? [
+          `  still need an IDEA: ${st.needAngle.join(", ")}`,
+          "  ‼️ headlines_write REFUSES while any page has no idea. Run angles_write, then angle_pick",
+          "  for each page. A headline written before the idea is a line about a phrase.",
+        ]
+      : []),
     ...(st.needHeadline.length ? [`  still need a headline: ${st.needHeadline.join(", ")}`] : []),
     ...(st.needSkeleton.length ? [`  still need a skeleton: ${st.needSkeleton.join(", ")}`] : []),
+    ...(st.needHandover.length ? [`  still need a handover (plan_cta, or tool_pick for one of them): ${st.needHandover.join(", ")}`] : []),
     "  ‼️ THE WORKING TITLES ARE WRITTEN AT PLAN TIME AND THE KEYWORDS ARE HIS OWN PICKS. If he does",
     "  not recognise a title, that is the title being new, not the keyword being wrong.",
   ].join("\n");
@@ -292,9 +362,17 @@ export const LAUNCH_PAGE_ACTIONS = [
   "plan_swap",
   "plan_edit",
   "plan_cta",
+  // ‼️ THE IDEA COMES BEFORE THE LINE, AND LISTING THEM IN THIS ORDER IS HALF OF WHY. The chat is
+  // handed this array as the stages it may run, so the order it reads in is the order it teaches.
+  // Angles were missing from this lane entirely until now: the plan was approved and a headline was
+  // asked for straight away, which is the failure page-angles.ts opens on.
+  "angles_write",
+  "angle_pick",
   "headlines_write",
   "headline_pick",
   "skeletons_write",
+  "tool_options",
+  "tool_pick",
   "research_prompt",
   "research_file",
   "draft_wave",
@@ -649,11 +727,125 @@ export async function runLaunchPagesAction(input: LaunchPagesInput): Promise<Lau
     }
 
     // ── The batch: headline, then skeleton, then research, then draft ──────────
+    // ─────────────────────────────────────────────────────────────────────
+    // The idea, which is the layer this lane was missing
+    //
+    // ‼️ IT WRAPS page-angles.ts AND REIMPLEMENTS NOTHING, the same rule the rest of this file
+    // keeps. The Slack door reaches the identical functions through handlePageAngleThreadReply,
+    // so `angle 3 pick 2` cannot come to mean two things.
+    // ─────────────────────────────────────────────────────────────────────
+
+    case "angles_write": {
+      const rows = await planRows(clientId);
+      if ("error" in rows) return { ok: false, error: rows.error };
+      if (!rows.length) {
+        return { ok: false, error: "No planned pages yet. Propose the plan and approve it first." };
+      }
+
+      const { generateAnglesForPlan, anglesFor } = await import("@/lib/clients/page-angles");
+
+      // ‼️ A RANK COMES IN AND A POSITION GOES OUT. generateAnglesForPlan's `only` is a position on
+      // the rank-ordered card; every number this lane takes is a RANK, as the panel prints it.
+      // Passing the number straight through would name the wrong page the moment a drop has left a
+      // gap in the ranks, and it would do it silently.
+      let only: number | undefined;
+      if (input.rank) {
+        const at = rows.findIndex((r) => r.rank === Number(input.rank));
+        if (at < 0) {
+          return { ok: false, error: `There is no page ${input.rank} in this plan. There are ${rows.length}.` };
+        }
+        only = at + 1;
+      }
+
+      const res = await generateAnglesForPlan({ clientId, by: actor, only });
+
+      // The options come back with the result, for the reason headlines_write states below: a count
+      // is a true sentence that answers nothing, in front of somebody whose next move is to pick one.
+      const angles = await anglesFor(clientId);
+      const lines = rows.flatMap((row) => {
+        const mine = angles.filter((a) => a.planId === row.id);
+        if (!mine.length) return [`${row.rank}. ${row.targetKeyword} — no ideas written`];
+        const picked = mine.find((a) => a.status === "approved");
+        return [
+          `${row.rank}. ${row.targetKeyword}${picked ? ` — picked: ${picked.idea}` : ""}`,
+          ...(picked ? [] : mine.map((a, i) => `     option ${i + 1}: ${a.idea}`)),
+        ];
+      });
+
+      if (!res.ok && !res.drafted) {
+        return { ok: false, error: res.lines.join(" ").replace(/:warning:\s*/g, "") };
+      }
+
+      return {
+        ok: true,
+        message: [
+          res.drafted
+            ? `Wrote three ideas for ${res.drafted} page${res.drafted === 1 ? "" : "s"}.`
+            : "Every page already had its ideas.",
+          ...(res.failed ? [`${res.failed} failed.`] : []),
+          "Show these to him verbatim and ask which idea he wants per page:",
+          ...lines,
+        ].join("\n"),
+      };
+    }
+
+    case "angle_pick": {
+      const rows = await planRows(clientId);
+      if ("error" in rows) return { ok: false, error: rows.error };
+      const row = atRank(rows, input.rank);
+      if (!row) {
+        return { ok: false, error: `There is no page ${input.rank} in this plan. There are ${rows.length}.` };
+      }
+
+      const { anglesFor, pickAngle } = await import("@/lib/clients/page-angles");
+
+      // ‼️ INDEXED OVER EVERY ANGLE ON THE PAGE, NOT OVER THE DRAFTS, and that matches the Slack
+      // door exactly. Numbering the drafts alone would renumber the list the moment one was picked.
+      const mine = (await anglesFor(clientId)).filter((a) => a.planId === row.id);
+      const choice = mine[Number(input.pick) - 1];
+      if (!choice) {
+        return {
+          ok: false,
+          error: `Page ${row.rank} has ${mine.length} idea${mine.length === 1 ? "" : "s"} on file, so there is no option ${input.pick}.`,
+        };
+      }
+
+      const res = await pickAngle({ clientId, angleId: choice.id, by: actor });
+      if (!res.ok) return { ok: false, error: res.error };
+
+      const after = await readBatch(clientId);
+      const left = "error" in after ? 0 : after.needAngle.length;
+
+      return {
+        ok: true,
+        message: [
+          `Page ${row.rank} argues: ${res.angle.idea}`,
+          ...(res.angle.indoctrination ? [`The belief it installs: ${res.angle.indoctrination}`] : []),
+          "The other two are kept as rejected, which is what teaches the next set.",
+          left
+            ? `${left} page${left === 1 ? "" : "s"} still need an idea.`
+            : "Every page has its idea. Headlines next, and they are written from these rather than from the keyword alone.",
+        ].join("\n"),
+      };
+    }
+
     case "headlines_write": {
       const batch = await readBatch(clientId);
       if ("error" in batch) return { ok: false, error: batch.error };
       if (!batch.rows.length) {
         return { ok: false, error: "No approved pages yet. Approve the plan first." };
+      }
+      // ‼️ THE IDEA COMES BEFORE THE LINE, AND THIS IS THE GATE THAT WAS MISSING. Without it the
+      // generator is asked to write a line about a phrase, and thirty three candidates come back
+      // reading as thirty three ways of saying the phrase out loud. Same shape as the skeleton
+      // gate below: it refuses on the condition, and the condition is read back out of readBatch.
+      if (batch.needAngle.length) {
+        return {
+          ok: false,
+          error:
+            `${batch.needAngle.length} page${batch.needAngle.length === 1 ? "" : "s"} still need an idea. ` +
+            "Run the angles first: a headline written before anybody decided what the page argues is a line about a phrase.",
+        };
       }
 
       const existing = await optionsFor(clientId, batch.rows);
@@ -757,6 +949,81 @@ export async function runLaunchPagesAction(input: LaunchPagesInput): Promise<Lau
 
     // ‼️ IT HANDS BACK A PROMPT AND STOPS, WHICH IS THE WHOLE DESIGN OF THIS STAGE (D10). One
     // prompt for the batch, run wherever the research is actually done, pasted back below.
+    // ─────────────────────────────────────────────────────────────────────
+    // How a page hands over
+    //
+    // ‼️ ONE TOOL PER CLIENT, AND THIS DOES NOT CHANGE THAT. tool-lane.ts calls the tool "the
+    // eighth page, its own slot beside the seven", and client_assets carries a unique index
+    // allowing one not-dropped row each. What was missing was never a second tool, it was the
+    // writer that puts the one tool ON a page. Every other page hands over with `plan_cta`.
+    // ─────────────────────────────────────────────────────────────────────
+
+    case "tool_options": {
+      const { toolOptions, clientTool } = await import("@/lib/clients/tool-lane");
+      const options = await toolOptions(clientId);
+      if (!options.length) {
+        return { ok: false, error: "There are no tools in the registry that suit this client yet." };
+      }
+      const current = await clientTool(clientId);
+
+      return {
+        ok: true,
+        message: [
+          "One page of the build is a thing the reader uses rather than reads. These are the ones that suit this client:",
+          ...options.flatMap((o, i) => [
+            `${i + 1}. ${o.component.label}${o.existingAssetId ? "  (already in the library for this vertical)" : ""}`,
+            `     it answers: ${o.component.answers}`,
+            `     it is wrong when: ${o.component.limits}`,
+            ...(o.because ? [`     they rank for: ${o.because}`] : []),
+          ]),
+          current
+            ? `Picked already: ${current.componentKey}${current.pageId ? ", and it is on a page." : ", but it is not on a page yet."}`
+            : "Nothing picked yet. Say which one, and which page it goes on.",
+        ].join("\n"),
+      };
+    }
+
+    case "tool_pick": {
+      const rows = await planRows(clientId);
+      if ("error" in rows) return { ok: false, error: rows.error };
+      const row = atRank(rows, input.rank);
+      if (!row) {
+        return { ok: false, error: `There is no page ${input.rank} in this plan. There are ${rows.length}.` };
+      }
+      // A tool renders INSIDE a page, so the page has to exist. It does not exist until the
+      // skeleton stage opens one, which is the same ordering every other stage here keeps.
+      if (!row.pageId) {
+        return {
+          ok: false,
+          error: `Page ${row.rank} has no page yet, and a tool renders inside one. Write its skeleton first.`,
+        };
+      }
+
+      const { pickTool, bindToolToPage, clientTool } = await import("@/lib/clients/tool-lane");
+
+      // Choosing is optional here: the tool is normally picked at step twelve, in front of the
+      // keyword evidence, and this stage is only being asked WHICH page it goes on.
+      if (input.pick) {
+        const picked = await pickTool(clientId, Number(input.pick), actor);
+        if (!picked.ok) return { ok: false, error: picked.error };
+      } else if (!(await clientTool(clientId))) {
+        return {
+          ok: false,
+          error: "No tool has been picked for this client yet. Ask for the tool options first, then say which one.",
+        };
+      }
+
+      const bound = await bindToolToPage({ clientId, pageId: row.pageId, by: actor });
+      if (!bound.ok) return { ok: false, error: bound.error };
+
+      return {
+        ok: true,
+        message:
+          `Page ${row.rank} is the tool page: ${bound.componentKey} renders inside it. ` +
+          "It hands over by being used, so it needs no cta line.",
+      };
+    }
+
     case "research_prompt": {
       const { buildBatchPrompt } = await import("@/lib/clients/page-batch");
       const built = await buildBatchPrompt(clientId);

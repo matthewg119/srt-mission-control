@@ -884,7 +884,7 @@ Seven pages drafted before the call, one pillar and six supports, plus the tool 
 | [Done] reads | no table |
 | Dataset fields | 3 needed, 7 wanted |
 | Feeds | nothing: the drafts are client_pages rows, and the gate reads them by body hash within the publishing step rather than through a column a later step names |
-| Downstream | step 22 `call_sheet` declares it waits on this; `client_pages` is selected in 17 other file(s), e.g. `src/app/api/clients/[id]/hub/route.ts`, `src/app/dashboard/clients/[id]/page.tsx`, `src/lib/clients/client-reads.ts`; `page_plan` is selected in 14 other file(s), e.g. `src/lib/clients/artifacts/call-sheet.ts`, `src/lib/clients/batch-research.ts`, `src/lib/clients/client-headlines.ts` |
+| Downstream | step 22 `call_sheet` declares it waits on this; `client_pages` is selected in 18 other file(s), e.g. `src/app/api/clients/[id]/hub/route.ts`, `src/app/dashboard/clients/[id]/page.tsx`, `src/lib/clients/client-reads.ts`; `page_plan` is selected in 14 other file(s), e.g. `src/lib/clients/artifacts/call-sheet.ts`, `src/lib/clients/batch-research.ts`, `src/lib/clients/client-headlines.ts` |
 
 **[Done] refuses on:**
 

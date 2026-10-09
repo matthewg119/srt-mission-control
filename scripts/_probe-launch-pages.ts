@@ -66,6 +66,22 @@ function code(file: string): string {
 
 const squish = (s: string): string => s.replace(/\s+/g, " ");
 
+/**
+ * One `case "name":` branch, ending at whichever case comes next.
+ *
+ * ‼️ IT FINDS ITS OWN END RATHER THAN BEING GIVEN THE NEXT CASE BY NAME, and the version that was
+ * given one went quietly wrong the moment a stage was inserted between the two. Slicing
+ * skeletons_write to research_prompt swallowed every branch added in between, so a guard planted in
+ * ANY of them satisfied the check for the one being tested. The branch has to be the branch.
+ */
+function caseBody(src: string, name: string): string {
+  const from = src.indexOf(`case "${name}"`);
+  if (from < 0) return "";
+  const rest = src.slice(from + `case "${name}"`.length);
+  const next = rest.search(/\bcase "/);
+  return squish(next < 0 ? rest : rest.slice(0, next));
+}
+
 const MODULE = "src/lib/launch/pages.ts";
 const CHAT = "src/lib/launch/conversation.ts";
 const FACTS = "src/lib/launch/publishing-facts.ts";
@@ -119,16 +135,26 @@ for (const [file, src] of [
 // there, in the sentence explaining a refusal that no longer happened. Measured by planting exactly
 // that. Whitespace is squashed first so wrapping the condition over two lines is not a failure.
 
-const skeletonCase = squish(
-  mod.slice(mod.indexOf('case "skeletons_write"'), mod.indexOf('case "research_prompt"'))
+// ‼️ THE IDEA COMES BEFORE THE LINE, AND THIS IS THE GATE THAT WAS MISSING UNTIL 2026-10-06. The
+// lane ran plan -> approve -> headlines with nothing in between deciding what each page ARGUES, so
+// the generator was asked to write a line about a phrase and thirty three candidates came back
+// reading as thirty three ways of saying the phrase out loud (page-angles.ts opens on exactly this).
+// Matched on the CONDITION for the same reason the two below are.
+const headlineCase = caseBody(mod, "headlines_write");
+check(
+  headlineCase.length > 0 && /if \(\s*batch\.needAngle\.length\s*\)/.test(headlineCase),
+  "writing headlines is GUARDED on any page still needing an idea",
+  "a headline written before anybody decided what the page argues is a line about a phrase"
 );
+
+const skeletonCase = caseBody(mod, "skeletons_write");
 check(
   skeletonCase.length > 0 && /if \(\s*batch\.needHeadline\.length\s*\)/.test(skeletonCase),
   "writing skeletons is GUARDED on any page still needing a headline",
   "a skeleton written before its headline is an outline for a page that does not know what it promises"
 );
 
-const draftCase = squish(mod.slice(mod.indexOf('case "draft_wave"'), mod.indexOf('case "publish"')));
+const draftCase = caseBody(mod, "draft_wave");
 check(
   draftCase.length > 0 &&
     /readBatch\(/.test(draftCase) &&

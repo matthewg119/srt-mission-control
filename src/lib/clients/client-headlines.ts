@@ -580,6 +580,16 @@ export async function generateKeywordHeadlines(args: {
    * headline from isQueryShaped or from any other rule above.
    */
   postFormat?: PostFormatId | null;
+  /**
+   * What this page ARGUES, once somebody has picked its angle.
+   *
+   * ‼️ OPTIONAL FOR THE SAME REASON postFormat IS, AND OMITTING IT IS THE OLD BEHAVIOUR EXACTLY.
+   * Headlines can legitimately be asked for before an angle exists, so this adds a block to the
+   * brief rather than becoming a precondition. With it, three headlines are three doors into ONE
+   * argument; without it, the generator can only write about a phrase, which is precisely what
+   * page-angles.ts was built to stop ("thirty-three ways of saying the phrase out loud").
+   */
+  angle?: { idea: string; indoctrination: string | null; narrative: string | null } | null;
 }): Promise<{ ok: true; headlines: string[]; audienceId: string | null } | { ok: false; error: string }> {
   const count = args.count ?? 3;
   const keyword = args.keyword.trim();
@@ -617,7 +627,22 @@ export async function generateKeywordHeadlines(args: {
         "one that answers it. What you may not do is write three headlines about the topic in",
         "general and leave the phrase out. This is checked in code.",
         "",
-        `Give ${count} genuinely different angles on it, not ${count} rewrites of one line.`,
+        ...(args.angle
+          ? [
+              "",
+              "WHAT THIS PAGE ARGUES, WHICH IS WHAT THESE HEADLINES ARE FOR",
+              `  the idea: ${args.angle.idea}`,
+              ...(args.angle.indoctrination ? [`  the belief it installs: ${args.angle.indoctrination}`] : []),
+              ...(args.angle.narrative ? [`  the story it runs on: ${args.angle.narrative}`] : []),
+              "",
+              "Every one of these is a door into THAT argument. Write them so the page underneath is the",
+              "only thing that could follow. A line that could sit above any page on this phrase is a line",
+              "about a phrase rather than about an idea, and it is the thing being replaced here.",
+              "",
+              `Give ${count} genuinely different ways INTO that one argument. Not ${count} rewrites of one`,
+              `line, and not ${count} separate arguments: the idea is already decided.`,
+            ]
+          : [`Give ${count} genuinely different angles on it, not ${count} rewrites of one line.`]),
         ...(shapeLine
           ? [
               "",
