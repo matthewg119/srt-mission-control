@@ -68,6 +68,7 @@ import {
   qualifyTally,
   tierTally,
   applyFreeRules,
+  recordCallList,
   recordCatchallRecheck,
   recordEnrichment,
   recordSuppression,
@@ -2989,9 +2990,27 @@ async function publishSendable(batch: BatchRow): Promise<void> {
   // reach this line (startRun refuses without an ICP), but if one ever did, an unlabelled handoff is
   // a row suppression can still read and a funnel that is merely ugly. A null campaign is a row the
   // digest skips.
-  const campaign =
-    campaignFor((await getRun(runId))?.vertical_slug) ?? batch.batch_label ?? batch.file_name;
+  const runVertical = (await getRun(runId))?.vertical_slug;
+  const campaign = campaignFor(runVertical) ?? batch.batch_label ?? batch.file_name;
   const handoff = await recordHandoff(runId, rows, campaign);
+
+  // ‼️ AND THE CALL LIST GOES TO THE CRM, BY DEFAULT, ON EVERY RUN. Matthew, 2026-10-09: "please
+  // make sure all of them pulled ones go to mission control and from now on on default when we pull
+  // to call those leads". Until this line, /dashboard/worklist could not see a single business this
+  // lane found: 323 phone numbers sat in raw_leads with nothing to dial them.
+  //
+  // ‼️ IT IS NOT BEHIND ITS OWN REACTION, AND THAT IS DELIBERATE RATHER THAN AN OVERSIGHT. Two
+  // gates already stand in front of this point, both of them human: the drop-review check mark and
+  // the MillionVerifier one. A third card asking "and shall I also put the callable ones on the
+  // board" is a card that gets ticked every time without being read, which is worse than no card.
+  // Writing to our own CRM costs nothing and sends nothing; the spend gates guard spending.
+  //
+  // ‼️ IT RUNS BESIDE recordHandoff RATHER THAN AT THE DROP REVIEW, where the call list is first
+  // KNOWN. Earlier would get the numbers on the board sooner, and it would also put them there
+  // before `applyFreeRejects` has had a chance to route the no-MX domains to 'call', so the board
+  // would be missing the rows whose email turned out to be undeliverable. One place, at the end,
+  // after every router has had its say.
+  const calls = await recordCallList(runId, runVertical);
 
   await updateRun(runId, {
     stage: "done",
@@ -3033,6 +3052,32 @@ async function publishSendable(batch: BatchRow): Promise<void> {
                 "on either way.",
           ]
         : []),
+      // ‼️ THE CALL LIST IS REPORTED EVEN WHEN NOTHING WAS ADDED, because "0 added, 46 already
+      // there" and silence look identical on a card and mean opposite things. The second is the
+      // lane working; the first, unexplained, is the lane looking broken.
+      ...(calls.error
+        ? [
+            "",
+            ":rotating_light: *The call list did not reach the CRM:* " + calls.error +
+              "  Those businesses are still in `raw_leads` with `route = call`, so nothing is lost. " +
+              "`bun run scripts/backfill-call-list.ts --write` puts them on the board.",
+          ]
+        : calls.added || calls.alreadyKnown || calls.noPhone
+          ? [
+              "",
+              ":telephone_receiver: *" + calls.added + " callable businesses added to the CRM* and " +
+                "they are on " + "`/dashboard/worklist` now." +
+                (calls.alreadyKnown ? "  " + calls.alreadyKnown + " were already in there." : "") +
+                (calls.noPhone
+                  ? "  " + calls.noPhone + " have no phone number on the listing and were left off " +
+                    "the board rather than added as rows nobody can dial; they are still in " +
+                    "`dropped.csv` and in the cold-call export."
+                  : ""),
+              "_These are the ones with no email route at all: no website, a booking page or social " +
+                "profile instead of a domain, a domain that cannot receive mail, or Tier C. For a " +
+                "three-person clinic a call often beats a cold email._",
+            ]
+          : []),
       "",
       "_Upload `sendable.csv` to ReachInbox. Split on `email_status` if you want the catch-alls in " +
         "their own campaign._",

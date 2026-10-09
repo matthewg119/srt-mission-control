@@ -83,6 +83,23 @@ export interface VerticalDef {
    */
   campaign: string;
   /**
+   * The exact `contacts.source` the call list is written under.
+   *
+   * ‼️ A CONTROLLED VOCABULARY, MATCHED EXACTLY, AND NOT DERIVED FROM `label`. The leads page
+   * filters on this column with `eq`, and its own comment says why: a substring match would merge
+   * "Med Spa Scrape" with "Med Spa Scrape - No Website", which are the email list and the call
+   * list, two different jobs. Deriving it from `label` produced
+   * "Med spa and aesthetics Scrape - No Website" on the first run of the backfill: 253 contacts in
+   * a fifth bucket that no filter on the page knows about.
+   *
+   * ‼️ AND IT KEEPS THE "- No Website" SUFFIX EVEN THOUGH THE CALL LIST IS NOW WIDER THAN THAT.
+   * Four things route here: no website, a platform-only domain, a domain with no MX, and Tier C.
+   * The suffix is no longer a precise description, and it IS the string 92 existing rows and the
+   * page's filter already use. Renaming it would split one list in two to win an adjective. The
+   * actual reason per lead is on the row, in `next_action_reason`.
+   */
+  crmSource: string;
+  /**
    * What a judged business is worth, and the vocabulary the model may answer with.
    *
    * ‼️ TIER C IS LISTED, NOT OMITTED. A band we never email still has to be NAMED, or the model has
@@ -130,6 +147,7 @@ const MEDSPA: VerticalDef = {
     "IV therapy",
   ],
   campaign: "medspa-front-desk",
+  crmSource: "Med Spa Scrape - No Website",
   tiers: [
     {
       tier: "A",
@@ -169,6 +187,7 @@ const DENTIST: VerticalDef = {
   dfsCategories: ["dentist", "cosmetic_dentist"],
   searchQueries: ["dentist", "cosmetic dentist", "family dentistry", "orthodontist", "dental implants"],
   campaign: "dentist-ai-visibility",
+  crmSource: "Dentist Scrape - No Website",
   tiers: [
     {
       tier: "A",
@@ -210,6 +229,16 @@ export function categoriesFor(slug: string | null | undefined): readonly string[
 /** The ReachInbox campaign for a vertical, or null when the vertical is unknown. */
 export function campaignFor(slug: string | null | undefined): string | null {
   return verticalDef(slug)?.campaign ?? null;
+}
+
+/**
+ * The `contacts.source` this vertical's call list is written under, or null.
+ *
+ * ‼️ NULL RATHER THAN A GUESSED STRING, for the reason verticalDef states. A call list written
+ * under an invented source is a call list that exists in the table and on no filter.
+ */
+export function crmSourceFor(slug: string | null | undefined): string | null {
+  return verticalDef(slug)?.crmSource ?? null;
 }
 
 /**

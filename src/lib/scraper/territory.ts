@@ -78,24 +78,56 @@ export const DOT_GRID = { national: 0.5, metro: 0 } as const;
 /** Hard cap on DOTS returned, never on leads counted. `n` stays true whatever the cap does. */
 export const DOT_LIMIT = 4000;
 
+/**
+ * How many rows PostgREST will return from one request, whatever anybody asks for.
+ *
+ * ‼️ MEASURED, AND IT SILENTLY TRUNCATED THE MAP. Supabase sets `db-max-rows` to 1000 and the
+ * cap is applied by the SERVER: the function was asked for 4,000 rows, returned 1,546, and
+ * supabase-js handed back exactly 1,000. `.range(0, 3999)` does not lift it either, measured.
+ *
+ * ‼️ AND THE FAILURE WAS INVISIBLE, WHICH IS THE PART WORTH REMEMBERING. `territory_dots` orders
+ * by cluster size descending, so the 1,000 rows that came back were the BIGGEST ones: the map
+ * looked full, the dots were in the right places, and 546 businesses were missing from the quiet
+ * edges of the metro, which is exactly where "unworked" is read off. The page's own capped warning
+ * could not fire either, because it compares the row count against DOT_LIMIT and 1,000 is not 4,000.
+ * Caught by the probe asserting that clustering must not change the LEAD total: 1,204 against 1,750.
+ */
+const POSTGREST_MAX_ROWS = 1000;
+
 export async function territoryDots(vertical: string, round: number): Promise<TerritoryDot[]> {
-  const { data, error } = await supabaseAdmin.rpc("territory_dots", {
-    p_vertical: vertical,
-    p_round: round,
-    p_limit: DOT_LIMIT,
-  });
-  if (error) {
-    throw new Error(
-      "territory_dots: " + error.message +
-        ". If that names the function, docs/2026-10-08-territory-rollups.sql has not been run."
-    );
+  const out: TerritoryDot[] = [];
+
+  // ‼️ PAGED WITH .range(), WHICH IS THE ONE THING THAT DOES WORK. An explicit range cannot
+  // exceed the server cap but it can MOVE, so the rows come back a thousand at a time. The server
+  // side `p_limit` still bounds the total, so this loop is bounded by DOT_LIMIT rather than by the
+  // data: a vertical with a million leads returns DOT_LIMIT rows and the page says it capped.
+  for (let from = 0; from < DOT_LIMIT; from += POSTGREST_MAX_ROWS) {
+    const to = Math.min(from + POSTGREST_MAX_ROWS, DOT_LIMIT) - 1;
+    const { data, error } = await supabaseAdmin
+      .rpc("territory_dots", { p_vertical: vertical, p_round: round, p_limit: DOT_LIMIT })
+      .range(from, to);
+    if (error) {
+      throw new Error(
+        "territory_dots: " + error.message +
+          ". If that names the function, docs/2026-10-08-territory-rollups.sql has not been run."
+      );
+    }
+    const rows = (data ?? []) as Array<Record<string, unknown>>;
+    for (const r of rows) {
+      out.push({
+        lat: Number(r.lat),
+        lon: Number(r.lon),
+        stage: String(r.stage) as Stage,
+        n: Number(r.n),
+      });
+    }
+    // A short page is the last page. Checked against the window actually asked for, not against
+    // POSTGREST_MAX_ROWS, because the final window is narrower when DOT_LIMIT is not a round
+    // multiple of it.
+    if (rows.length < to - from + 1) break;
   }
-  return (data ?? []).map((r: Record<string, unknown>) => ({
-    lat: Number(r.lat),
-    lon: Number(r.lon),
-    stage: String(r.stage) as Stage,
-    n: Number(r.n),
-  }));
+
+  return out;
 }
 
 export async function metroRows(vertical: string): Promise<MetroRow[]> {

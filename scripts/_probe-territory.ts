@@ -19,6 +19,8 @@
 import { SQL } from "bun";
 import { supabaseAdmin } from "@/lib/db";
 import { sendableRows } from "@/lib/scraper/listprep";
+import { buildWorklist } from "@/lib/worklist";
+import { crmSourceFor, verticalSlugs } from "@/lib/scraper/verticals";
 import { projectUs, regionOf } from "@/lib/geo/us-albers";
 import { US_FIT, US_STATES, US_VIEWBOX } from "@/data/us-outline";
 import {
@@ -320,6 +322,96 @@ check("they name the vertical and a real anchor city", cmds[0].includes("medspa"
 // that always started at 0 would re-buy the top of a metro it had already paid for.
 const resume = pullCommands(def, "Dallas-Fort Worth", 550);
 check("a part-pulled metro resumes rather than re-buying", resume[0].includes("offset 550"), JSON.stringify(resume));
+
+// ── 5b. the call list actually reaches the CRM ──────────────────────────────────────────────────
+
+console.log("\n5b. the call list, which is the wire that was never there");
+
+// ‼️ THE SOURCE IS A CONTROLLED VOCABULARY MATCHED WITH eq, NOT A SUBSTRING. The leads page says so
+// in its own comment: a substring match merges "Med Spa Scrape" with "Med Spa Scrape - No Website",
+// which are the email list and the call list. Deriving the string from `label` put 253 contacts
+// under "Med spa and aesthetics Scrape - No Website", a bucket no filter on the page knows about.
+for (const v of verticalSlugs()) {
+  check("`" + v + "` has a CRM source registered", Boolean(crmSourceFor(v)), String(crmSourceFor(v)));
+}
+check(
+  "the med spa call list writes the string the 92 existing rows already use",
+  crmSourceFor("medspa") === "Med Spa Scrape - No Website",
+  String(crmSourceFor("medspa"))
+);
+check("an unknown vertical has no CRM source rather than an invented one", crmSourceFor("plumber") === null);
+
+const crmSources = (await sql.unsafe(`
+  select source, count(*) as n,
+         count(*) filter (where phone_last10 is not null and length(phone_last10) = 10) as dialable,
+         count(*) filter (where working_state = 'closed') as closed,
+         count(*) filter (where do_not_contact) as dnc
+  from contacts
+  where source = 'Med Spa Scrape - No Website'
+  group by source
+`)) as Array<Record<string, unknown>>;
+
+const crm = crmSources[0];
+check("the call list exists in contacts at all", Boolean(crm), "no rows under the med spa call-list source");
+if (crm) {
+  // ‼️ EVERY ROW MUST BE DIALABLE, because that is the one promise this list makes. recordCallList
+  // refuses a row whose phone has fewer than ten digits rather than adding a contact nobody can
+  // ring, and phone_last10 is GENERATED from `phone`, so a row that is not dialable here means the
+  // phone column was written empty.
+  check(
+    "every contact on the call list has a real ten digit number",
+    Number(crm.n) === Number(crm.dialable),
+    crm.n + " rows, " + crm.dialable + " dialable"
+  );
+  check("none of them are closed, or the board would not show them", Number(crm.closed) === 0, String(crm.closed));
+  check("none of them are marked do-not-contact", Number(crm.dnc) === 0, String(crm.dnc));
+}
+
+// ‼️ THE REAL TEST: IS IT ON THE BOARD. Every check above could pass while fetchCandidates still
+// filtered them out, because the board's eligibility rule lives in worklist.ts and not in the
+// columns. This asks the same function the page calls.
+const board = await buildWorklist({ limit: 5000 });
+const onBoard = board.filter((b) => b.businessName && b.phone).length;
+check("the worklist returns rows at all", board.length > 0, String(board.length));
+const callListNames = new Set(
+  ((await sql.unsafe(`
+     select business_name from contacts
+     where source = 'Med Spa Scrape - No Website' and business_name is not null
+   `)) as Array<Record<string, unknown>>).map((r) => String(r.business_name))
+);
+const reached = board.filter((b) => b.businessName && callListNames.has(b.businessName)).length;
+check(
+  "scraped call-list businesses are actually ON /dashboard/worklist",
+  reached > 0,
+  reached + " of " + callListNames.size + " reached the board, " + onBoard + " board rows have a name and a phone"
+);
+
+// ‼️ AND THEY CARRY THE REASON, which is what makes the board usable rather than a wall of names.
+const withReason = (await sql.unsafe(`
+  select count(*) as n from contacts
+  where source = 'Med Spa Scrape - No Website' and next_action_reason is not null
+`)) as Array<Record<string, unknown>>;
+check(
+  "the row says why it is being called",
+  Number(withReason[0].n) > 0,
+  withReason[0].n + " carry a next_action_reason"
+);
+
+// ‼️ NOTHING ON THE CALL LIST IS ALSO ON THE EMAIL LIST. A business cannot be both: route is one
+// column with one value, and a clinic that got a cold email AND a cold call from us in the same
+// week is the complaint this separation exists to prevent.
+const bothWays = (await sql.unsafe(`
+  select count(*) as n
+  from raw_leads l
+  join sendable_leads s on s.raw_lead_id = l.id
+  where l.route = 'call'
+    and sendable_lead_ships(s.provider, s.email_status, s.suppressed_reason)
+`)) as Array<Record<string, unknown>>;
+check(
+  "no business is on the call list AND the send list at once",
+  Number(bothWays[0].n) === 0,
+  bothWays[0].n + " are on both"
+);
 
 // ── 6. nothing on the page needs a table that does not exist ────────────────────────────────────
 

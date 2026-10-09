@@ -783,9 +783,38 @@ async function main() {
   check("the handoff carries the run, so a send can be attributed to the list that made it",
     /run_id: runId,/.test(lpsrc));
 
+  // ‼️ ORDERING IS ASSERTED BY COMPARING POSITIONS, NOT BY A CHARACTER WINDOW. This used to be
+  // /recordHandoff[\s\S]{0,400}status: "done"/, which is a proxy for "before" that measures
+  // DISTANCE. Adding a paragraph of comment between the two broke it while the ordering it exists
+  // to protect was untouched, so the probe went red for a reason that had nothing to do with the
+  // rule. A window also passes when the two are adjacent and in the WRONG order, which is the
+  // failure it is supposed to catch. Index comparison says what is meant and cannot be moved by a
+  // comment.
+  const laneOrder = normalize(readFileSync("src/lib/scraper/lane.ts", "utf8"));
+  const atHandoff = laneOrder.indexOf("recordHandoff(runId");
+  const atCallList = laneOrder.indexOf("recordCallList(runId");
+  const atDone = laneOrder.indexOf("updateBatch(batch.id, { status: \"done\" })", atHandoff);
+  check("the lane calls recordHandoff at all", atHandoff > -1);
+  check("the lane marks the batch done at all", atDone > -1);
   check(
     "the lane records the handoff before it calls the batch done",
-    /recordHandoff[\s\S]{0,400}status: "done"/.test(normalize(readFileSync("src/lib/scraper/lane.ts", "utf8")))
+    atHandoff > -1 && atDone > atHandoff,
+    "handoff at " + atHandoff + ", done at " + atDone
+  );
+
+  // ‼️ AND THE CALL LIST GOES TO THE CRM BEFORE THE BATCH IS DONE, for the same reason: after
+  // `done` the cron never looks at this batch again, so a write placed below it is a write that
+  // only ever happens on the tick that got that far. Measured 2026-10-09, before this wire existed:
+  // 376 businesses with no website and 323 phone numbers sat in raw_leads with nothing to dial them.
+  check("the lane writes the call list to the CRM", atCallList > -1);
+  check(
+    "and it does so before the batch is marked done",
+    atCallList > -1 && atDone > atCallList,
+    "call list at " + atCallList + ", done at " + atDone
+  );
+  check(
+    "the CRM source comes from the registry, never from a label",
+    !/" Scrape - No Website"/.test(normalize(readFileSync("src/lib/scraper/listprep.ts", "utf8")))
   );
 
   // A real lookup against production, read only. An unknown address must not be suppressed.

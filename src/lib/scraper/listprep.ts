@@ -16,6 +16,7 @@ import type { EnrichAttempt, EnrichHit } from "./enrich";
 import type { QualifyCandidate, TierTally, Verdict } from "./qualify";
 import { domainKey, isCrossRunIdentity } from "./dedup";
 import { freeVerdict, type LeadRoute } from "./tiering";
+import { crmSourceFor } from "./verticals";
 import type { Funnel } from "./pull";
 
 export type RunStage =
@@ -1080,6 +1081,178 @@ export async function funnelFor(runId: string): Promise<Funnel> {
 }
 
 // --- Stage 8: the handoff record ----------------------------------------------------------------
+
+/**
+ * Put the call list into the CRM, so somebody can actually dial it.
+ *
+ * ‼️ THE WIRE THAT WAS NEVER THERE. /dashboard/worklist reads `contacts`, and Workflow C has
+ * never written a row to it. Measured 2026-10-09: 376 businesses in raw_leads have no website, 323
+ * of them have a phone number, and only 106 appear in `contacts` at all, every one of those from
+ * the OLD med spa pipeline rather than from this lane. So the lane has been finding callable
+ * businesses for three weeks and dropping them somewhere nothing dials.
+ *
+ * ‼️ IT READS `route`, NOT `website is null`, WHICH IS WHY IT WAITED FOR THE ROUTE COLUMN. Four
+ * different things land on the call list and only one of them is "no website": an Instagram or
+ * Vagaro-only presence, a domain with no MX record that can never receive mail, and Tier C. A
+ * `website is null` query would find the first and silently miss the other three.
+ *
+ * ‼️ THE SHAPE MATCHES THE 92 ROWS THE OLD PIPELINE ALREADY LEFT HERE: source
+ * "<Label> Scrape - No Website", working_state 'new', application_stage 'New Lead'. Matching it is
+ * not cosmetic. `fetchCandidates` in src/lib/worklist.ts selects on `working_state <> 'closed'` and
+ * `do_not_contact` false, and the leads page filters on `source`, so a row in a different shape is
+ * a row that is in the table and not on the board.
+ *
+ * ‼️ phone_last10 IS NEVER WRITTEN, AND THAT IS THE OPPOSITE OF WHAT IT LOOKS LIKE. Every dedupe
+ * in this codebase keys on that column, which reads as "so be sure to set it". It is a GENERATED
+ * ALWAYS column:
+ *
+ *   right(regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g'), 10)
+ *
+ * Postgres computes it from `phone` on every insert and REFUSES any value you send
+ * ("cannot insert a non-DEFAULT value into column phone_last10"), which is how this was found: the
+ * first run of the backfill failed on all six runs at once. Looking for a trigger finds nothing and
+ * is misleading; a generated column needs no trigger. Set `phone` and the key appears.
+ *
+ * ‼️ A ROW WITH NO PHONE IS REPORTED AND NOT INSERTED. This is the one place that rule differs
+ * from the CSV export, which keeps them and marks them "NO PHONE - look it up". A spreadsheet can
+ * carry a row somebody has to research; a CALL LIST cannot, and 53 un-dialable contacts on the
+ * board is how a board stops being read. They stay in raw_leads and in the CSV.
+ */
+export async function recordCallList(
+  runId: string,
+  verticalSlug: string | null | undefined
+): Promise<{ added: number; alreadyKnown: number; noPhone: number; error: string | null }> {
+  // ‼️ IT REFUSES RATHER THAN INVENTING A SOURCE. Writing these rows under a string the leads
+  // page does not filter on puts them in the table and on no list, which looks exactly like
+  // success. The first run of the backfill did that to 253 contacts.
+  const source = crmSourceFor(verticalSlug);
+  if (!source) {
+    return {
+      added: 0,
+      alreadyKnown: 0,
+      noPhone: 0,
+      error:
+        "there is no CRM source registered for the vertical `" + String(verticalSlug) + "`, so " +
+        "these leads would land under a name nothing filters on. Add `crmSource` in " +
+        "src/lib/scraper/verticals.ts.",
+    };
+  }
+  const { data, error } = await supabaseAdmin
+    .from("raw_leads")
+    .select("id, business_name, phone, website, city, state, postal_code, full_address, place_id, instagram_handle, qualify_reason, review_count, rating, owner_name")
+    .eq("run_id", runId)
+    .eq("route", "call");
+  if (error) return { added: 0, alreadyKnown: 0, noPhone: 0, error: "reading the call list failed: " + error.message };
+
+  const rows = (data ?? []).map((r) => r as Record<string, unknown>);
+  if (!rows.length) return { added: 0, alreadyKnown: 0, noPhone: 0, error: null };
+
+  const last10 = (phone: unknown): string | null => {
+    const digits = String(phone ?? "").replace(/\D/g, "");
+    if (digits.length < 10) return null;
+    const ten = digits.slice(-10);
+    // 0000000000 / 5555555555: placeholder cells, not numbers, and they collide everything.
+    return /^(\d)\1{9}$/.test(ten) ? null : ten;
+  };
+
+  const callable = rows.filter((r) => last10(r.phone) !== null);
+  const noPhone = rows.length - callable.length;
+  if (!callable.length) return { added: 0, alreadyKnown: 0, noPhone, error: null };
+
+  // ‼️ DEDUPED ON BOTH place_id AND phone_last10, AND NEITHER ALONE IS ENOUGH. A Google place id
+  // is per LOCATION and is the only key that tells two sites of one group apart, but the 531
+  // contacts the old pipeline left behind carry no place id at all. The last ten digits catch those;
+  // the place id catches a business that has since changed its number.
+  const placeIds = [...new Set(callable.map((r) => String(r.place_id ?? "")).filter(Boolean))];
+  const phones = [...new Set(callable.map((r) => last10(r.phone)!).filter(Boolean))];
+
+  const knownPlaces = new Set<string>();
+  const knownPhones = new Set<string>();
+  for (let i = 0; i < placeIds.length; i += IN_CHUNK) {
+    const { data: hit, error: e } = await supabaseAdmin
+      .from("contacts")
+      .select("google_place_id")
+      .in("google_place_id", placeIds.slice(i, i + IN_CHUNK));
+    if (e) return { added: 0, alreadyKnown: 0, noPhone, error: "reading the CRM failed: " + e.message };
+    for (const h of hit ?? []) knownPlaces.add(String((h as Record<string, unknown>).google_place_id ?? ""));
+  }
+  for (let i = 0; i < phones.length; i += IN_CHUNK) {
+    const { data: hit, error: e } = await supabaseAdmin
+      .from("contacts")
+      .select("phone_last10")
+      .in("phone_last10", phones.slice(i, i + IN_CHUNK));
+    if (e) return { added: 0, alreadyKnown: 0, noPhone, error: "reading the CRM failed: " + e.message };
+    for (const h of hit ?? []) knownPhones.add(String((h as Record<string, unknown>).phone_last10 ?? ""));
+  }
+
+  // ‼️ DEDUPED WITHIN THE BATCH TOO. Overlapping cells deliver the same clinic under several
+  // runs, and dropCrossRunDuplicates only catches the ones it reaches before the model does. Two
+  // rows for one phone number in the same insert would both land, because there is no unique index
+  // on contacts.phone_last10 to stop them.
+  const seen = new Set<string>();
+  const fresh: Array<Record<string, unknown>> = [];
+  let alreadyKnown = 0;
+
+  for (const r of callable) {
+    const phoneKey = last10(r.phone)!;
+    const placeKey = String(r.place_id ?? "");
+    if (knownPhones.has(phoneKey) || (placeKey && knownPlaces.has(placeKey))) {
+      alreadyKnown += 1;
+      continue;
+    }
+    if (seen.has(phoneKey)) continue;
+    seen.add(phoneKey);
+
+    fresh.push({
+      business_name: String(r.business_name ?? ""),
+      // ‼️ THE OWNER NAME IS CARRIED WHEN THE CRAWL FOUND ONE AND LEFT BLANK OTHERWISE. A call
+      // list where every row says "there" is worse than one that admits it does not know.
+      first_name: String(r.owner_name ?? "").split(/\s+/)[0] || null,
+      // phone_last10 is GENERATED ALWAYS from this column. See the header: sending it is an error.
+      phone: String(r.phone ?? ""),
+      website: (r.website as string | null) ?? null,
+      // ‼️ biz_*, NOT city/state/zip/address, AND THIS HAS BITTEN THIS CODEBASE BEFORE. There is
+      // no `contacts.city`: the CRM workflow buttons shipped a query against one and found nothing.
+      // The business location columns are biz_city, biz_state, biz_zip and biz_address, and
+      // home_address is a different thing belonging to the funding side.
+      biz_city: (r.city as string | null) ?? null,
+      biz_state: (r.state as string | null) ?? null,
+      biz_zip: (r.postal_code as string | null) ?? null,
+      biz_address: (r.full_address as string | null) ?? null,
+      google_place_id: placeKey || null,
+      instagram_handle: (r.instagram_handle as string | null) ?? null,
+      // The shape the board reads. See the comment above: this is not cosmetic.
+      source,
+      source_system: "mission_control",
+      working_state: "new",
+      application_stage: "New Lead",
+      do_not_contact: false,
+      // ‼️ WHY THEY ARE BEING CALLED, ON THE CARD. The worklist renders next_action_reason, and
+      // "Instagram only, no own domain" tells the person dialling what the opener is before they
+      // pick up the phone. next_action_at is left NULL on purpose: that puts them in the "No
+      // follow-up" bucket, which is true, rather than inventing a due date nobody agreed to.
+      next_action_reason: String(r.qualify_reason ?? "scraped, no email route"),
+    });
+  }
+
+  if (!fresh.length) return { added: 0, alreadyKnown, noPhone, error: null };
+
+  let added = 0;
+  for (let i = 0; i < fresh.length; i += INSERT_CHUNK) {
+    const { data: wrote, error: e } = await supabaseAdmin
+      .from("contacts")
+      .insert(fresh.slice(i, i + INSERT_CHUNK))
+      .select("id");
+    if (e) {
+      // Partial success is reported as such, the same way storeRawLeads reports it: the rows
+      // already committed are real, and a caller told "0" would insert them all again.
+      return { added, alreadyKnown, noPhone, error: "writing to the CRM failed: " + e.message };
+    }
+    added += wrote?.length ?? 0;
+  }
+
+  return { added, alreadyKnown, noPhone, error: null };
+}
 
 /**
  * Write down that this run's addresses have been handed off for sending.
