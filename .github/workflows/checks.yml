@@ -70,6 +70,22 @@ jobs:
       - name: Virtual Agent grammar probe (one agent, two surfaces)
         run: bun --no-env-file run scripts/_probe-virtual-agent-grammar.ts
 
+      # ‼️ THE IN-CLINIC REFERRAL (v5, 2026-10-05) PUT A THIRD PARTY'S PHONE NUMBER INTO THE
+      # CUSTOMER-FACING WALK, which is the first time that has ever been true. Two rules that only
+      # a probe can hold: SRT is not the sender (the module returns an href and has no network
+      # call in it), and a friend's contact lives in exactly one table. The FTC-shaped half, that
+      # the offer is never consideration for a review, is asserted in the gating probe above.
+      - name: Referral invite probe (she sends it, and it expires)
+        run: bun --no-env-file run scripts/_probe-referral-invite.ts
+
+      # ‼️ THE FORK AT THE END OF /cards IS EXCLUSIVE AND ONLY A PROBE CAN HOLD THAT. Booking the
+      # setup call must not also pre-set the review platform, or the call opens by undoing the
+      # clinic's guesses. It also holds the rule that this funnel sells nothing (it is reached
+      # from an email that already promised a free batch of cards) and that nothing in it is
+      # labelled HIPAA, which is a reason to talk, not a lever.
+      - name: Cards funnel probe (one fork, two ways out)
+        run: bun --no-env-file run scripts/_probe-cards-funnel.ts
+
       # The launcher was unclickable for nine days and no check in this file noticed, because the
       # only thing that could have noticed was somebody tapping it. See the probe's own header for
       # why it asserts a shape rather than simulating a tap.

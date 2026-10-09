@@ -479,6 +479,13 @@ export const microsoft = {
    * Otherwise → POST /users/{mailbox}/sendMail so the message originates from a
    * shared mailbox the signed-in user has Send-As / Mail.Send.Shared on
    * (e.g. submissions@srtagency.com).
+   *
+   * ‼️ `replyTo` IS NOT A WAY TO SEND AS SOMEBODY ELSE, AND THE DIFFERENCE MATTERS WHEREVER IT
+   * IS USED. The envelope sender is still an SRT mailbox: /users/{mailbox}/sendMail only works
+   * for mailboxes inside this tenant that the delegated token holds Send-As on, so a client's
+   * own address can never be the sender here. What replyTo buys is that the REPLY lands with
+   * them. Added 2026-10-05 for the referral emails, where SRT sends on a clinic's behalf and a
+   * patient answering the message has to reach the clinic and not us.
    */
   async sendMail(params: {
     to: string | string[];
@@ -489,6 +496,7 @@ export const microsoft = {
     isHtml?: boolean;
     attachments?: Array<{ name: string; contentType: string; contentBytes: string; isInline?: boolean; contentId?: string | null }>;
     fromMailbox?: string;
+    replyTo?: string | string[];
   }): Promise<void> {
     const token = await getValidAccessToken();
 
@@ -506,6 +514,8 @@ export const microsoft = {
     if (cc.length > 0) message.ccRecipients = cc;
     const bcc = toGraphRecipients(params.bcc);
     if (bcc.length > 0) message.bccRecipients = bcc;
+    const replyTo = toGraphRecipients(params.replyTo);
+    if (replyTo.length > 0) message.replyTo = replyTo;
 
     if (params.attachments && params.attachments.length > 0) {
       message.attachments = params.attachments.map((a) => {

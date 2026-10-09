@@ -48,13 +48,41 @@ export const HUB_SLUG = /^\/[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$/;
 export const HUB_ANSWER = /^\/answers(?:\/[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?)?$/;
 
 /**
- * The only API route reachable on a client-controlled hostname.
+ * The referral claim form: /r/{CODE}, and nothing else under /r.
  *
- * ‼️ A NAME, NOT A PREFIX, AND IT STAYS THAT WAY. Turning this into a startsWith on "/api/hub/"
+ * ‼️ TWO SEGMENTS WITH A LITERAL FIRST ONE, EXACTLY THE SHAPE HUB_ANSWER IS ALLOWED TO BE, and
+ * for the same reason: the first segment is the fixed word `r`, so nothing under /api, /dashboard,
+ * /hub or /_next can match and neither can /r/../anything. The second segment is a referral code
+ * and is therefore MUCH narrower than a slug: upper-case letters and digits only, 4 to 12 of
+ * them. No dot, no hyphen, no slash, no lower case.
+ *
+ * ‼️ A PUBLIC FORM ON EVERY CLIENT HOSTNAME IS A REAL SURFACE, so what it can do is the thing to
+ * check rather than this pattern. The page behind it resolves the code WITHIN the host's own
+ * client, so a code from one clinic cannot be claimed on another's domain, and the form takes a
+ * name and a number and writes them to the one row that code names. It reads nothing else and it
+ * is not a session.
+ */
+export const HUB_CLAIM = /^\/r\/[A-Z0-9]{4,12}$/;
+
+/**
+ * The only API routes reachable on a client-controlled hostname.
+ *
+ * ‼️ NAMES, NOT A PREFIX, AND IT STAYS THAT WAY. Turning this into a startsWith on "/api/hub/"
  * would publish every present and future route under that folder on every hostname a client's
  * registrar points at us. The hit log deliberately lives outside that folder for the same reason.
+ *
+ * ‼️ IT BECAME A SET OF TWO ON 2026-10-05 AND THAT IS NOT A RELAXATION. The referral invite is a
+ * second write the customer-facing walk has to make, and the alternative to listing it here was
+ * folding it into the submit route, which would have put a friend's phone number in the same
+ * request body that writes review_tool_submissions. Keeping them two routes is what keeps them
+ * two tables. Every addition to this set is a new public surface on dozens of domains we do not
+ * control, so add one only when the customer-facing walk genuinely cannot work without it.
  */
-export const HUB_API = "/api/hub/reviews/submit";
+export const HUB_API: ReadonlySet<string> = new Set([
+  "/api/hub/reviews/submit",
+  "/api/hub/reviews/invite",
+  "/api/hub/reviews/claim",
+]);
 
 /**
  * Does this path SHAPE look like a hub page?
@@ -65,7 +93,13 @@ export const HUB_API = "/api/hub/reviews/submit";
  * see externalPathDecision() below, which is the whole decision and the thing to call.
  */
 export function isHubShape(path: string): boolean {
-  return path === "/" || HUB_FILES.has(path) || HUB_SLUG.test(path) || HUB_ANSWER.test(path);
+  return (
+    path === "/" ||
+    HUB_FILES.has(path) ||
+    HUB_SLUG.test(path) ||
+    HUB_ANSWER.test(path) ||
+    HUB_CLAIM.test(path)
+  );
 }
 
 /**
@@ -106,7 +140,7 @@ export function externalPathDecision(path: string): ExternalPathDecision {
   // The AI Referral Engine's submit endpoint. The host travels as a request header rather than
   // in the path: an API route has no full-route cache to key, so there is nothing for a header
   // to leak across.
-  if (path === HUB_API) return "forward_api";
+  if (HUB_API.has(path)) return "forward_api";
 
   return isHubShape(path) ? "rewrite" : "refuse";
 }

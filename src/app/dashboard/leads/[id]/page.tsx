@@ -238,6 +238,9 @@ export default async function LeadDetailPage({
             contactId={id}
             leadName={displayName}
             defaultFollowUpDays={cadenceFor(status).repeatDays}
+            // Mobile first when there is one: it is the number that gets answered. The contact
+            // panel still carries both, so a deliberate choice between them is one click away.
+            phone={(lead.mobile_phone as string | null) || (lead.phone as string | null)}
           />
           <div>
             <p className="mb-3 text-[10px] uppercase tracking-widest text-[rgba(255,255,255,0.3)]">

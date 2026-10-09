@@ -90,6 +90,41 @@ export function formatPhoneUS(input: string): string {
   return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
 }
 
+/**
+ * What goes in a `tel:` href, which is not what goes on the screen.
+ *
+ * `formatPhoneUS` above formats for a HUMAN mid-typing and deliberately drops the country code.
+ * A dialler needs the opposite: the country code present and every separator gone. So these are
+ * two functions rather than one with a flag, the same split that file header already describes.
+ *
+ * ‼️ IT NORMALISES RATHER THAN TRUSTING THE STORED VALUE, AND THE WINDOW IS SMALL BUT REAL. A
+ * saved phone IS E.164: the CRM's PATCH route runs it through normalizeLeadPhone, the one door
+ * every inbound funnel uses. But an editable row holds the value optimistically between the save
+ * and the refresh, and in that moment it is whatever was typed, separators and all. A dialler
+ * handed "(214) 532-7263" with the brackets may dial nothing and say nothing about why.
+ *
+ * ‼️ ONE IMPLEMENTATION, EVERY CALL BUTTON. There are three places a person can start a call from
+ * a lead and they must agree about what a number means. Returns null rather than guessing when
+ * there are too few digits, so a half-typed number gets no button instead of a wrong call.
+ */
+export function telHref(value: string | null | undefined): string | null {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) return null;
+
+  if (trimmed.startsWith("+")) {
+    const rest = trimmed.slice(1).replace(/\D/g, "");
+    return rest.length >= 10 ? `tel:+${rest}` : null;
+  }
+
+  const digits = trimmed.replace(/\D/g, "");
+  // +1 only on a bare ten digits, which is the one case where the country is not a guess.
+  if (digits.length === 10) return `tel:+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `tel:+${digits}`;
+  // More than eleven with no plus is a country code somebody typed without one. Eight to ten
+  // without one is not enough to guess from.
+  return digits.length > 11 ? `tel:+${digits}` : null;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Address normalization
 // ─────────────────────────────────────────────────────────────────────────────

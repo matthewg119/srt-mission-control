@@ -1,0 +1,409 @@
+/* /cards, and nothing else.
+ *
+ * ‼️ ITS OWN STYLESHEET WITH ITS OWN `cd-` PREFIX, SHARING NOTHING WITH hub.css. The hub's
+ * tokens belong to a page rendered on a CLIENT's domain and carrying a CLIENT's accent; this is
+ * SRT's own funnel on SRT's own host. Reaching for --hub-* here would mean a page whose colours
+ * depend on a client record it has no client for, and _probe-virtual-agent-grammar.ts polices the
+ * other direction of exactly that boundary.
+ *
+ * ‼️ AND NOT TAILWIND, unlike the dashboard. This file is layout for one funnel; a utility soup in
+ * the markup would make the chat bubbles unreadable in review, which is the one thing about this
+ * page somebody will actually argue about.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════════════════════════
+ * ‼️ REBUILT 2026-10-07 TO MATTHEW'S OWN REFERENCE SCREENS. He walked the old opening card and
+ * said so plainly: "this build my referral engine i dont like it", then sent five phone screens he
+ * had designed and asked for the built pages to match them.
+ *
+ * What the old card was doing wrong, and what every value below is answering:
+ *
+ *   ONE SECTION, NOT A BOX ON A PAGE. The card was a bordered panel floating on the page ground,
+ *   and tapping it swapped that panel for a second bordered panel holding the chat. Two boxes
+ *   where there is one thing happening. The page IS the section now: no border, no panel fill, no
+ *   radius, and the lockup at the top stays put while the content underneath it changes.
+ *
+ *   ONE BLOCK OF COPY, NOT TWO WITH A RULE BETWEEN THEM. .cd-open-promise, .cd-open-sub and
+ *   .cd-open-rule are gone with their elements. A hairline between two headlines in one box is
+ *   what you reach for when the box is saying two things, and the fix was to say one.
+ *
+ *   A DISPLAY FACE ON THE LINE THAT SELLS. DM Serif Display over DM Sans, self-hosted by
+ *   next/font in page.tsx, which is what the reference screens are set in.
+ *
+ * The palette is the reference's dark screen, not the old near-black: #111413 has a green cast
+ * that belongs with the accent, where #0b0b0c belonged with nothing. ═══════════════════════════ */
+
+.cd-page {
+  --cd-bg: #111413;
+  --cd-ink: #f3efe9;
+  /* Two muteds, like the reference: the body sits one step down from the ink, the small print two.
+     One grey for both is how a footnote ends up shouting as loud as a lede. */
+  --cd-mut: #c2bdb5;
+  --cd-faint: #a39e96;
+  --cd-line: rgba(243, 239, 233, 0.14);
+  --cd-accent: #3cc6a8;
+  --cd-on-accent: #0b1f1a;
+  --cd-them: #1c2120;
+  --cd-me: #3cc6a8;
+
+  /* ‼️ ONE WIDTH FOR THE WHOLE FUNNEL. The opening screen used to be 34rem and so did the chat,
+     which was right; what was wrong was that 34rem is a laptop window and this is met on a phone
+     at a front desk. 26rem is the width the review walk's frame carries, so the two front doors
+     of one product are finally the same size. */
+  --cd-frame-w: 26rem;
+
+  min-height: 100vh;
+  margin: 0;
+  padding: 2.5rem 1.5rem 2.25rem;
+  background: var(--cd-bg);
+  color: var(--cd-ink);
+  /* next/font sets --cd-text and --cd-display on this element. The fallbacks are real stacks, so
+     a dropped class degrades to a system sans and a system serif rather than to nothing. */
+  font-family: var(--cd-text, ui-sans-serif), system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+/* ── The lockup ──────────────────────────────────────────────────────────────
+   ‼️ RENDERED IN BOTH STATES, WHICH IS WHAT MAKES THE CHAT THE SAME SECTION. The old chat panel
+   had a header of its own, a dot and the word SRT, so tapping the button replaced one identity
+   with another. This one does not move: the content under it changes and the name above it does
+   not, exactly as the review walk's clinic mark behaves. */
+.cd-id {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: 0 0 auto;
+  margin: 0 0 2.25rem;
+}
+.cd-mark {
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--cd-accent);
+  color: var(--cd-on-accent);
+  font-family: var(--cd-display, Georgia), "Times New Roman", serif;
+  font-size: 1.375rem;
+  line-height: 1;
+}
+.cd-who { display: flex; flex-direction: column; gap: 0.125rem; line-height: 1.3; }
+.cd-name { font-size: 0.9375rem; font-weight: 600; letter-spacing: 0.02em; }
+.cd-what { font-size: 0.8125rem; color: var(--cd-faint); }
+
+/* ── The opening screen ──────────────────────────────────────────────────────
+   The reference's shape: the copy takes whatever height is left and centres itself in it, and the
+   button sits on the floor. On a phone that is a screen with a thumb-high call to action; on a
+   laptop it is the same screen, not a short card adrift in a metre of empty page. */
+.cd-open {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: var(--cd-frame-w);
+  /* The page's own padding, subtracted, so this fills exactly what is left of the screen and the
+     button lands on its floor rather than below the fold. */
+  min-height: calc(100vh - 4.75rem);
+  margin: 0 auto;
+}
+.cd-open-body {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.cd-open-eyebrow {
+  margin: 0 0 1.25rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--cd-accent);
+}
+
+/* ‼️ WEIGHT 400, WHICH ONLY WORKS BECAUSE THE FACE IS A DISPLAY SERIF. The old title was 1.6rem of
+   700 sans, which is a heading; this is the line the page is selling with. It clamps because 44px
+   of serif inside 390px is three words a line and the headline must not wrap to four. */
+.cd-open-title {
+  margin: 0 0 1.25rem;
+  font-family: var(--cd-display, Georgia), "Times New Roman", serif;
+  font-weight: 400;
+  font-size: clamp(2.25rem, 10vw, 2.875rem);
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+  color: var(--cd-ink);
+}
+
+.cd-open-lede {
+  margin: 0;
+  font-size: 1.0625rem;
+  line-height: 1.55;
+  color: var(--cd-mut);
+}
+
+/* ‼️ ICONS, NOT BULLETS, AND THAT IS NOT DECORATION. The old list drew a "\2022" through ::before,
+   which is one character that cannot say anything. Three stroked marks carry the three wins in the
+   same glance the words take, which is what the reference screens do and the only reason a row of
+   fifteen-pixel text earns its space. */
+.cd-open-facts {
+  margin: 1.5rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.cd-open-facts li {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.9375rem;
+  color: var(--cd-mut);
+}
+.cd-open-facts svg { flex: 0 0 auto; color: var(--cd-accent); }
+
+.cd-open-cta {
+  width: 100%;
+  margin-top: 2rem;
+}
+
+/* The line under the button. It says what the tap costs and what comes with it, in the smallest
+   type on the page, because somebody who has already decided does not read it. */
+.cd-open-foot {
+  margin: 0.875rem 0 0;
+  text-align: center;
+  font-size: 0.8125rem;
+  color: var(--cd-faint);
+}
+
+/* ── The chat ────────────────────────────────────────────────────────────────
+   ‼️ FLAT, ON THE PAGE, UNDER THE SAME LOCKUP. It used to be a panel: a fill, a border, a 16px
+   radius and a header bar, dropped onto a page that already had an identity at the top of it. The
+   same double stacking Matthew called out on the review walk, on the other front door.
+
+   What is left is the width and the scroll. The bubbles still have grounds of their own, because
+   two people talking need two grounds; nothing around them does. */
+.cd-shell {
+  width: 100%;
+  max-width: var(--cd-frame-w);
+  margin: 0 auto;
+}
+
+.cd-msgs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  /* Tall enough that the walk does not jump as bubbles land, short enough to keep the composer
+     on screen on a phone. */
+  min-height: 15rem;
+  max-height: 24rem;
+  overflow-y: auto;
+  padding-bottom: 1rem;
+}
+
+.cd-msg {
+  max-width: 85%;
+  padding: 0.6rem 0.8rem;
+  border-radius: 14px;
+  white-space: pre-wrap;
+}
+.cd-msg.is-them {
+  align-self: flex-start;
+  background: var(--cd-them);
+  border-bottom-left-radius: 4px;
+}
+.cd-msg.is-me {
+  align-self: flex-end;
+  background: var(--cd-me);
+  color: var(--cd-on-accent);
+  font-weight: 600;
+  border-bottom-right-radius: 4px;
+}
+
+/* Three dots. Never a sentence claiming something is thinking, because nothing is: the whole
+   script is in the bundle. Same rule the Virtual Agent's panel follows. */
+.cd-typing {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+.cd-typing span {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--cd-faint);
+  animation: cdBlink 1.2s infinite ease-in-out;
+}
+.cd-typing span:nth-child(2) { animation-delay: 0.15s; }
+.cd-typing span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes cdBlink {
+  0%, 80%, 100% { opacity: 0.25; }
+  40% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cd-typing span { animation: none; opacity: 0.5; }
+}
+
+/* ‼️ NO SIDE PADDING ANYWHERE BELOW. Every row in the walk used to pad itself to 1rem inside a
+   panel that was already inset from the page. With the panel gone the page's own padding is the
+   only gutter, and a second one is the thing an eye reads as a container. */
+.cd-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.cd-bar {
+  display: flex;
+  gap: 0.5rem;
+}
+.cd-bar input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  /* 16px on the control itself, or iOS zooms the page on focus. */
+  font-size: 16px;
+  color: var(--cd-ink);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--cd-line);
+  border-radius: 12px;
+  padding: 0.75rem 0.85rem;
+}
+.cd-bar input::placeholder { color: var(--cd-faint); }
+
+/* The one button shape in the funnel, and it is the reference's: 56px tall, a 16px corner, 17px
+   of semibold. A pill would be a chip that happens to be wide. */
+.cd-bar button,
+.cd-primary {
+  font: inherit;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  min-height: 3.5rem;
+  color: var(--cd-on-accent);
+  background: var(--cd-accent);
+  border: none;
+  border-radius: 16px;
+  padding: 0.75rem 1.25rem;
+  cursor: pointer;
+  text-align: center;
+  text-decoration: none;
+}
+.cd-primary { display: block; }
+.cd-bar button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.cd-skip {
+  align-self: flex-start;
+  font: inherit;
+  font-size: 0.875rem;
+  color: var(--cd-faint);
+  background: transparent;
+  border: none;
+  padding: 0.25rem 0;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.cd-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.cd-chips.is-pair { flex-direction: row; }
+/* The two openings stack, because a time is read left to right and two of them side by side on a
+   phone wrap into something that looks like four. */
+.cd-chips.is-stack { flex-direction: column; }
+.cd-chips button {
+  flex: 1 1 auto;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  color: var(--cd-accent);
+  background: transparent;
+  border: 1px solid var(--cd-accent);
+  border-radius: 12px;
+  padding: 0.8rem 1rem;
+  cursor: pointer;
+}
+.cd-chips.is-pair button { text-align: center; border-radius: 999px; }
+.cd-chips button:hover { background: rgba(60, 198, 168, 0.1); }
+
+/* The fork. Two cards rather than two chips, because each needs a sentence of its own: the
+   difference between them is what gets decided and by whom, which does not fit on a chip.
+
+   ‼️ THE ONE PLACE A BORDER SURVIVED THE REBUILD, and it is doing work the flat page cannot: two
+   choices side by side have to be two things, and whitespace alone does not say which words
+   belong to which tap. */
+.cd-fork {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.cd-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  text-align: left;
+  font: inherit;
+  color: var(--cd-ink);
+  background: transparent;
+  border: 1px solid var(--cd-line);
+  border-radius: 16px;
+  padding: 1rem 1.1rem;
+  cursor: pointer;
+}
+.cd-choice.is-primary {
+  border-color: var(--cd-accent);
+}
+.cd-choice:hover { background: rgba(255, 255, 255, 0.03); }
+.cd-choice:disabled { opacity: 0.5; cursor: not-allowed; }
+/* ‼️ VISIBLY CLOSED, not quietly inert. It reads as an option that exists and is not open yet,
+   which is what it is; styling it identically to the live one would be the page implying a
+   choice the code refuses. */
+.cd-choice.is-closed {
+  opacity: 0.45;
+  cursor: not-allowed;
+  border-style: dashed;
+}
+.cd-choice.is-closed:hover { background: transparent; }
+.cd-choice-label {
+  font-weight: 700;
+}
+.cd-choice-note {
+  font-size: 0.875rem;
+  color: var(--cd-mut);
+}
+
+/* The inline calendar. Tall enough that Calendly's month grid is not itself scrolling inside a
+   scroller, which is the thing that makes an embedded booker feel broken on a laptop.
+
+   ‼️ AND THE ONE ELEMENT ALLOWED OUT OF THE COLUMN. The funnel narrowed to 26rem so its two
+   front doors would be the same phone-shaped screen; a month grid at 26rem is the scroller inside
+   a scroller this comment already warns about. It centres on the PAGE rather than on the column
+   and clamps to the viewport, so it can never open a sideways scroll on a phone. */
+.cd-cal {
+  width: min(34rem, calc(100vw - 3rem));
+  margin-left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 1rem;
+  /* ‼️ TALL, AND 34rem WAS NOT. Matthew, on the live page: "i still cant see the call
+     button". At this width Calendly stacks the month grid ABOVE the times instead of beside them,
+     so the day picker alone fills 34rem and the times and the confirm button are below the fold of
+     an iframe that scrolls inside a page that also scrolls. It takes the screen now and the page
+     carries the scroll, which is the arrangement the rest of this funnel already uses. */
+  height: clamp(36rem, 92vh, 52rem);
+  border-radius: 16px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.cd-booked {
+  margin: 0;
+  font-weight: 700;
+  color: var(--cd-accent);
+}
+
+.cd-error {
+  margin: 0;
+  font-size: 0.875rem;
+  color: #f8a4a4;
+}

@@ -1037,6 +1037,25 @@ const AWAITING_CODE: Record<string, string> = {
  * A NEW dead wire is in neither map and still fails, which is the property that matters.
  */
 const OWED: Record<string, string> = {
+  // ── THE IN-CLINIC REFERRAL, 2026-10-05 ───────────────────────────────────
+  // docs/2026-10-05-referral-invites.sql and docs/2026-10-05-referral-emails.sql. These columns
+  // were red from the day the migration was written and nobody noticed, because the branch landed
+  // without this probe being run: the baseline carries no referral_invites entry at all.
+  //
+  // ‼️ WHAT IS OWED IS THE LAUNCH-LANE PANEL, which is already on the list of things this lane
+  // still owes. `reviews_live` has no panel and no API route, so there is nowhere in Mission
+  // Control that lists a clinic's referrals. The emails added today read the invite row and tell
+  // the clinic at the moment it happens, which is why friend_name, friend_contact, service_label,
+  // mode and referrer_email came OFF this list; an email is not a record you can come back to a
+  // week later, so the panel is still the thing that closes these.
+  "referral_invites.channel": "how the message was opened: sms, whatsapp or copy. Owed the panel, and it is the measurement that decides whether the whatsapp button is worth keeping, since only sms is genuinely three-way.",
+  "referral_invites.sent_at": "when she got as far as her own keyboard. NOT a delivery confirmation, because we are not the sender and cannot know. Owed the panel.",
+  "referral_invites.submission_id": "the review she went on to write, when there is one. Owed the panel that would show a referral beside it; null is ordinary, because the referral is settled before the questions are asked.",
+  "referral_invites.claimed_name": "what the FRIEND typed, as against what the patient said. Emailed to the clinic the moment it is claimed, so it is not lost; owed the panel, because a mismatch between the two names is worth seeing later and not only once.",
+  "referral_invites.claimed_contact": "how the friend asked to be reached. Emailed to the clinic on the claim; owed the panel for the same reason as claimed_name.",
+  "referral_invites.claimed_email": "the friend's own address, used to send THEM the confirmation in the same request that stores it. Owed the panel; nothing re-reads it afterwards and nothing may, because one message is all they agreed to.",
+  "referral_invites.claimed_service": "what the friend said they wanted. Emailed to the clinic on the claim; owed the panel.",
+
   // ── THE DOMAIN PURCHASE, 2026-10-01 ───────────────────────────────────────
   // docs/2026-09-30-launch-lane.sql. Every one of these is written by the Vercel registrar call and
   // read by nothing, because there is no order-history screen yet. They are the receipt for the one

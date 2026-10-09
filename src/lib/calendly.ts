@@ -63,6 +63,53 @@ export function bookingPageUrl(kind: EventKind): string | null {
   return raw || process.env.NEXT_PUBLIC_CALENDLY_URL || null;
 }
 
+/**
+ * A booking page URL shaped for an INLINE EMBED, with whatever we already know prefilled.
+ *
+ * ‼️ `embed_type=Inline` IS WHAT MAKES CALENDLY POST event_scheduled TO THE PARENT WINDOW, AND
+ * WITHOUT IT A BOOKING SILENTLY DEAD-ENDS. A plain <iframe src="https://calendly.com/..."> is a
+ * perfectly good booking page that emits NOTHING: the visitor books, Calendly renders its own
+ * "You are scheduled!" panel inside the frame, and the surface around it never finds out. That is
+ * a real bug this repo has already hit once, in the onboarding2 chat.
+ *
+ * ‼️ `embed_domain` IS DELIBERATELY NOT SET HERE. It has to be the host the BROWSER is on, and
+ * this runs on the server for a request that could be the apex, mission.srtagency.com or a
+ * *.vercel.app preview. The client appends it from window.location.hostname immediately before
+ * mounting the frame; guessing it from an env var is how a preview quietly stops emitting events.
+ *
+ * Extracted from src/lib/onboarding2/booking.ts on 2026-10-05, when /cards needed the same four
+ * parameters. That file still shapes its own URL from a lead row; this is the shared shaping so a
+ * third caller does not rediscover `embed_type` the hard way.
+ */
+export function calendlyEmbedUrl(
+  base: string | null,
+  prefill?: { name?: string | null; email?: string | null; date?: string | null }
+): string | null {
+  if (!base) return null;
+  let url: URL;
+  try {
+    url = new URL(base);
+  } catch {
+    // A malformed env var is worth surfacing as "no calendar" rather than as a broken iframe.
+    return null;
+  }
+
+  if (prefill?.name) url.searchParams.set("name", prefill.name);
+  if (prefill?.email) url.searchParams.set("email", prefill.email);
+  // Calendly hides its own cookie banner inside an embed when asked.
+  url.searchParams.set("hide_gdpr_banner", "1");
+  url.searchParams.set("embed_type", "Inline");
+
+  // YYYY-MM-DD only. Anything else is dropped rather than passed through, because a bad `date`
+  // makes Calendly render its error page inside our frame.
+  if (prefill?.date && /^\d{4}-\d{2}-\d{2}$/.test(prefill.date)) {
+    url.searchParams.set("month", prefill.date.slice(0, 7));
+    url.searchParams.set("date", prefill.date);
+  }
+
+  return url.toString();
+}
+
 export function isCalendlyConfigured(kind: EventKind): boolean {
   return Boolean(token() && eventTypeUri(kind));
 }

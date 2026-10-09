@@ -39,13 +39,7 @@ import { hostsFor } from "@/lib/hub/vercel-domains";
 import { HubIndexBody, HubAnswerBody } from "@/components/hub/hub-bodies";
 import { themeStyle } from "@/lib/hub/theme";
 import { EMPTY_SKIN, skinStyle, hubRootClass } from "@/lib/hub/skin";
-import {
-  ReferralEngine,
-  readEngine,
-  readLook,
-  type ReviewEngine,
-} from "@/app/hub/[host]/reviews/referral-engine";
-import type { ChatLook } from "@/app/hub/[host]/reviews/referral-engine-client";
+import { ReferralEngine } from "@/app/hub/[host]/reviews/referral-engine";
 import { loadCandidates } from "@/lib/clients/hub-skin";
 import {
   brandFromReference,
@@ -80,8 +74,7 @@ interface Props {
   searchParams: {
     kind?: string;
     look?: string;
-    engine?: string;
-    candidate?: string;
+      candidate?: string;
     universe?: string;
   };
 }
@@ -114,13 +107,9 @@ export default async function HubPreview({ params, searchParams }: Props) {
   });
 
   const kind = searchParams.kind === "reviews" ? "reviews" : "hub";
-  // ‼️ THE ONLY PLACE THE CHAT LOOK CAN BE CHOSEN, AND IT IS BEHIND auth(). The three
-  // variations exist so Matthew can pick one; a client host has no way to pass this and always
-  // renders the default. readLook() validates rather than interpolates, because the value ends
-  // up in a class attribute.
-  const look = readLook(searchParams.look);
-  // Which review flow. A separate axis from `look`: see readEngine in referral-engine.tsx.
-  const engine = readEngine(searchParams.engine);
+  // ‼️ THE LOOK AND ENGINE PICKERS WENT WITH v1 ON 2026-10-05. There was one axis for three CSS
+  // skins and another for which chat existed at all, both built to be compared and then
+  // collapsed. Matthew picked; there is one design now. See the banner in referral-engine.tsx.
 
   // ‼️ A CANDIDATE IS RENDERED, NEVER STORED, AND THAT IS THE WHOLE POINT OF THE THREE.
   //
@@ -178,8 +167,6 @@ export default async function HubPreview({ params, searchParams }: Props) {
         kind={kind}
         host={host}
         slug={slug}
-        look={look}
-        engine={engine}
         candidateSet={candidateSet}
         candidateSlot={candidate?.slot ?? null}
         universe={universeParam}
@@ -196,7 +183,7 @@ export default async function HubPreview({ params, searchParams }: Props) {
       />
       <div className="hub-wrap">
         {kind === "reviews" ? (
-          <ReferralEngine client={client} look={look} engine={engine} />
+          <ReferralEngine client={client} />
         ) : slug ? (
           <PreviewAnswer clientId={params.id} destination={subdomainDestination(client.id, host)} slug={slug} client={client} />
         ) : (
@@ -287,8 +274,6 @@ function PreviewBanner({
   kind,
   host,
   slug,
-  look,
-  engine,
   candidateSet,
   candidateSlot,
   reviewDestinations,
@@ -298,8 +283,6 @@ function PreviewBanner({
   kind: "hub" | "reviews";
   host: string;
   slug?: string;
-  look: ChatLook;
-  engine: ReviewEngine;
   candidateSet: SkinCandidateSet | null;
   candidateSlot: number | null;
   reviewDestinations: ReturnType<typeof destinationState>;
@@ -307,15 +290,10 @@ function PreviewBanner({
 }) {
   const other = kind === "reviews" ? "hub" : "reviews";
 
-  // ‼️ EVERY SURFACE THAT STARTS SOMETHING PRINTS WHAT CAN BE DONE NEXT. Matthew's acceptance
-  // criterion, and the shape is copied from step 15's card, which offers its four templates,
-  // the screenshot lane, the preview link and the confirm link in one place. A preview that
-  // shows three possible looks and gives you no way to see the other two is the bug.
-  const looks: ReadonlyArray<{ key: ChatLook; label: string }> = [
-    { key: "a", label: "bubbles" },
-    { key: "b", label: "editorial" },
-    { key: "c", label: "compact" },
-  ];
+  // ‼️ THE "review flow" AND "chat look" PICKERS WERE HERE AND WENT WITH v1 ON 2026-10-05.
+  // Three CSS skins over the old chat's markup, plus a switch between that chat and the Virtual
+  // Agent. Both were built to be compared and then collapsed; Matthew picked, so what is left is
+  // one design with nothing to choose between. See the banner in referral-engine.tsx.
 
   return (
     <div
@@ -402,51 +380,6 @@ function PreviewBanner({
       {kind === "reviews" && (
         <span style={{ color: "rgba(255,255,255,0.5)" }}>
           Type into it freely. Submissions from here are discarded, not stored.
-        </span>
-      )}
-      {kind === "reviews" && (
-        <span style={{ display: "flex", gap: "8px", alignItems: "baseline" }}>
-          <span style={{ color: "rgba(255,255,255,0.5)" }}>review flow:</span>
-          {[
-            { key: "panel" as const, label: "Virtual Agent" },
-            { key: "v1" as const, label: "what it replaced" },
-          ].map((option) => (
-            <a
-              key={option.key}
-              href={`/dashboard/clients/${clientId}/preview?kind=reviews&engine=${option.key}&look=${look}`}
-              style={{
-                color: option.key === engine ? "#fff" : "#F5A623",
-                fontWeight: option.key === engine ? 700 : 400,
-                textDecoration: option.key === engine ? "none" : "underline",
-              }}
-            >
-              {option.label}
-            </a>
-          ))}
-        </span>
-      )}
-      {/*
-        ‼️ THE THREE CHAT SKINS BELONG TO v1 AND ARE HIDDEN FOR THE OTHER TWO. They are CSS over
-        the v1 chat markup, so on an agent flow they are three links that change a class nothing
-        renders. A control that does nothing is the bug the comment over `looks` complains about,
-        one level up.
-      */}
-      {kind === "reviews" && engine === "v1" && (
-        <span style={{ display: "flex", gap: "8px", alignItems: "baseline" }}>
-          <span style={{ color: "rgba(255,255,255,0.5)" }}>chat look:</span>
-          {looks.map((option) => (
-            <a
-              key={option.key}
-              href={`/dashboard/clients/${clientId}/preview?kind=reviews&engine=${engine}&look=${option.key}`}
-              style={{
-                color: option.key === look ? "#fff" : "#F5A623",
-                fontWeight: option.key === look ? 700 : 400,
-                textDecoration: option.key === look ? "none" : "underline",
-              }}
-            >
-              {option.label}
-            </a>
-          ))}
         </span>
       )}
       {kind === "reviews" && (

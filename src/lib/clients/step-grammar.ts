@@ -684,6 +684,87 @@ const REVIEW_PLATFORM: CommandSpec = {
   implementedIn: "src/lib/clients/review-link.ts",
 };
 
+// ── The in-clinic referral (v5, 2026-10-05) ──────────────────────────────────
+//
+// ‼️ THESE THREE EXIST SO THE CARD CAN SAY WHAT THE THREAD TAKES. Everything they write is also
+// on the Review handover panel under id="referral-offer"; the thread is here because the setup
+// happens on a call with the clinic and typing one line is faster than finding a panel.
+
+const CHARGE: CommandSpec = {
+  label: "charge: after",
+  test: /^\s*[`*_]*charge\s*:\s*(before|after|both)\s*[`*_]*\s*$/i,
+  unmistakable: /^\s*[`*_]*charge\s*:/i,
+  pointAt: "review_handover",
+  what: "When the front desk hands the card over",
+  implementedIn: "src/lib/clients/referral-setup.ts",
+};
+
+const SERVICE_OFFER: CommandSpec = {
+  // ‼️ THE SEPARATOR IS `=` AND NOT A COMMA, because every real answer has a comma in it
+  // ("80% off the first month, then $299"). A comma would cut the deal in half.
+  label: "service offer: Botox = 80% off their first visit",
+  test: /^\s*[`*_]*service\s+offer\s*:\s*[^=]+=\s*\S+/i,
+  unmistakable: /^\s*[`*_]*service\s+offer\s*:/i,
+  pointAt: "review_handover",
+  what: "What a referred friend gets, per service",
+  implementedIn: "src/lib/clients/referral-setup.ts",
+};
+
+const DEFAULT_OFFER: CommandSpec = {
+  label: "default offer: <what their friend gets>",
+  test: /^\s*[`*_]*default\s+offer\s*:\s*\S+/i,
+  unmistakable: /^\s*[`*_]*default\s+offer\s*:/i,
+  pointAt: "review_handover",
+  what: "What a referred friend gets, per service",
+  implementedIn: "src/lib/clients/referral-setup.ts",
+};
+
+/**
+ * The other half of the two-sided deal (2026-10-05).
+ *
+ * ‼️ A SEPARATE COMMAND FROM `service offer:` AND NOT A SECOND ARGUMENT TO IT. Setting what the
+ * friend gets and what she gets are two decisions a clinic makes at different times, and one
+ * command taking both would mean restating the friend's deal every time her thank-you changed.
+ * Both patterns end in "offer:", so each is anchored on its own full first word.
+ */
+const REFERRER_OFFER: CommandSpec = {
+  label: "referrer offer: Botox = 20% off your next session",
+  test: /^\s*[`*_]*referrer\s+offer\s*:\s*[^=]+=\s*\S+/i,
+  unmistakable: /^\s*[`*_]*referrer\s+offer\s*:/i,
+  pointAt: "review_handover",
+  what: "What a referred friend gets, per service",
+  implementedIn: "src/lib/clients/referral-setup.ts",
+};
+
+const DEFAULT_REWARD: CommandSpec = {
+  label: "default reward: <what she gets>",
+  test: /^\s*[`*_]*default\s+reward\s*:\s*\S+/i,
+  unmistakable: /^\s*[`*_]*default\s+reward\s*:/i,
+  pointAt: "review_handover",
+  what: "What a referred friend gets, per service",
+  implementedIn: "src/lib/clients/referral-setup.ts",
+};
+
+/**
+ * The emails (2026-10-05).
+ *
+ * ‼️ ONE COMMAND WITH A SUB-GRAMMAR, NOT SIX. `on`, `off`, `friend on|off`, `patient on|off`,
+ * `clinic on|off`, `notify <address>`, `reply <address>` and `from <mailbox>` all arrive through
+ * this one prefix, and an unrecognised form saves nothing and prints the whole grammar back. Six
+ * near-identical prefixes competing for the same first word is how `service offer:` nearly
+ * shadowed `referrer offer:` above.
+ *
+ * ‼️ ANCHORED ON `referral`, WHICH IS NOT `referrer`. Both begin "refer".
+ */
+const REFERRAL_EMAIL: CommandSpec = {
+  label: "referral email: notify front-desk@clinic.com",
+  test: /^\s*[`*_]*referral\s+email\s*:\s*\S+/i,
+  unmistakable: /^\s*[`*_]*referral\s+email\s*:/i,
+  pointAt: "review_handover",
+  what: "Who hears about a referral by email",
+  implementedIn: "src/lib/clients/referral-setup.ts",
+};
+
 // ── Step 21: the ladder, the angles, the headlines, the plan ─────────────────
 
 const LADDER: CommandSpec = {
@@ -895,7 +976,7 @@ export const STEP_COMMANDS: Record<StepKey, readonly CommandSpec[]> = {
   page_candidates: [],
   offsite_target_list: [],
   hub_preview: [TEMPLATE, TEMPLATE_RESET, TEMPLATE_PICK],
-  referral_engine_preview: [TEMPLATE, TEMPLATE_RESET, TEMPLATE_PICK, REVIEW_LINK, REVIEW_PLATFORM],
+  referral_engine_preview: [TEMPLATE, TEMPLATE_RESET, TEMPLATE_PICK, REVIEW_LINK, REVIEW_PLATFORM, CHARGE, SERVICE_OFFER, REFERRER_OFFER, DEFAULT_OFFER, DEFAULT_REWARD, REFERRAL_EMAIL],
   concierge_preview: [MASCOT, MASCOT_CONCEPTS, MASCOT_PICK, MASCOT_SKIP, MASCOT_CORNER, MASCOT_KEEP],
   site_replica: [TEMPLATE, TEMPLATE_RESET, TEMPLATE_PICK],
   review_card_pdf: [REVIEW_LINK, REVIEW_PLATFORM],
@@ -936,7 +1017,7 @@ export const STEP_COMMANDS: Record<StepKey, readonly CommandSpec[]> = {
   subdomain_live: [],
   first_page: [],
   cards_printed: [],
-  review_handover: [REVIEW_LINK, REVIEW_PLATFORM],
+  review_handover: [REVIEW_LINK, REVIEW_PLATFORM, CHARGE, SERVICE_OFFER, REFERRER_OFFER, DEFAULT_OFFER, DEFAULT_REWARD, REFERRAL_EMAIL],
   concierge_live: [],
   tracking_installed: [],
   self_report_field: [],

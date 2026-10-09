@@ -51,7 +51,20 @@ export interface ReviewQuestion {
     | "improve"
     | "expectations"
     | "concerns"
-    | "fears";
+    | "fears"
+    // v5 (2026-10-05). The in-clinic walk. Also a sentence she typed.
+    //
+    // ‼️ `provider` IS A STAFF NAME IN A PUBLIC REVIEW AND THAT IS A REVERSAL. The comment on
+    // REVIEW_QUESTIONS below says "NOT ASKED, EVER: who treated her", because Google forbids a
+    // merchant soliciting specific review content and names staff names as an example. Matthew
+    // decided on 2026-10-05 that it is asked and that it reaches the review text. Recorded as
+    // his decision; the exposure sits on the clinic's Google profile, not on this tool's FTC
+    // position, which is about GENERATED content and is untouched by it.
+    //
+    // ‼️ IT IS NOT PATIENT PII. The name is a member of the clinic's staff, so
+    // review_tool_submissions still holds nothing that identifies HER, which is what that
+    // table's no-column rule has always been about.
+    | "provider";
   /** What she is asked. */
   prompt: string;
   /** The label shown beside her sentence ON SCREEN only. Never copied. */
@@ -152,19 +165,54 @@ export const REVIEW_QUESTIONS_V4: ReviewQuestion[] = [
 ];
 
 /**
- * Assembly order for BOTH sets, and the reason nothing migrates.
+ * The v5 addition (2026-10-05), asked at the counter with the front desk beside her.
+ *
+ * ‼️ IT ASKS FOR A NAME AGAIN, BECAUSE THE LEAD LINE MADE THAT SAFE. For half a day this read
+ * "Who took care of you today, and how were they?", purely to stop a one-word answer assembling
+ * into the review line `Sarah.` That is a two-part question at a desk where somebody is reading
+ * it out loud, and it existed to work around the assembler rather than to ask anything better.
+ *
+ * assembleLead() consumes this key into "Got {service} with {provider}.", so a bare name is now
+ * the RIGHT answer and the question is the one the front desk actually says. An answer that is a
+ * sentence still works: "Sarah, she was great" gives "Got lip filler with Sarah, she was great."
+ */
+export const REVIEW_QUESTIONS_V5: ReviewQuestion[] = [
+  {
+    key: "provider",
+    prompt: "Who took care of you today?",
+    label: "Who took care of me",
+  },
+];
+
+/**
+ * Assembly order for ALL sets, and the reason nothing migrates.
  *
  * ‼️ THE ORDER OF THIS SPREAD IS LOAD BEARING AND IS PINNED BY A TEST. assembleLabelled and
  * assemblePlain iterate it, so it decides the order of the sentences she copies. No stored row has
  * ever held one v3 key and one v4 key, so a v3 row comes out byte for byte what it produced before
  * v4 existed. Reordering this would re-assemble stored reviews in an order the customer who wrote
  * them never saw, which is a thing she cannot be asked to check.
+ *
+ * ‼️ v5 IS APPENDED, NEVER INSERTED, AND THE READ ORDER WAS THE DECIDING ARGUMENT. `provider`
+ * would read most naturally second, right after the service, but putting it there would mean
+ * splitting the v4 spread in half around it, and the next person to add a question would have a
+ * four-part expression to reason about instead of a list. Appended, every stored v3 and v4 row
+ * comes out byte for byte unchanged (they hold no `provider` value, so they contribute no extra
+ * bullet), and a v5 review ends by naming the person who did the work, which is a good last line
+ * rather than a compromise.
  */
-export const ALL_REVIEW_QUESTIONS: ReviewQuestion[] = [...REVIEW_QUESTIONS, ...REVIEW_QUESTIONS_V4];
+export const ALL_REVIEW_QUESTIONS: ReviewQuestion[] = [
+  ...REVIEW_QUESTIONS,
+  ...REVIEW_QUESTIONS_V4,
+  ...REVIEW_QUESTIONS_V5,
+];
 
 
 /** The stamp a v4 row carries. v3 rows keep QUESTION_SET_VERSION above and nothing rewrites them. */
 export const QUESTION_SET_VERSION_V4 = "v4";
+
+/** The stamp a v5 row carries. Nothing rewrites a v3 or a v4 row. */
+export const QUESTION_SET_VERSION_V5 = "v5";
 
 /**
  * Which set was walked, read off the request body.
@@ -173,10 +221,95 @@ export const QUESTION_SET_VERSION_V4 = "v4";
  * not-null text column, so it is narrowed here rather than trusted.
  */
 export function readQuestionSetVersion(raw: unknown): string {
+  if (raw === QUESTION_SET_VERSION_V5) return QUESTION_SET_VERSION_V5;
   return raw === QUESTION_SET_VERSION_V4 ? QUESTION_SET_VERSION_V4 : QUESTION_SET_VERSION;
 }
 
 export type ReviewAnswers = Partial<Record<ReviewQuestion["key"], string>>;
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// THE LEAD LINE (v5, 2026-10-05), AND THE RULE IT BENDS
+//
+// ‼️ THIS IS SRT-AUTHORED TEXT INSIDE WHAT SHE COPIES, AND NOTHING ELSE IN THIS FILE IS.
+// assemblePlain's own docstring says the labels are kept out so that "what gets posted to Google
+// is one hundred percent her own words, with no SRT-authored text in it at all". Two words of
+// ours now travel with it: "Got" and "with". Matthew's call, 2026-10-05, and the reasoning is
+// his: the reviews worth having name the treatment, which is the whole pitch in the cold email
+// ("Got Botox here, looks so natural"), and a patient at a counter answers "who took care of
+// you?" with one word.
+//
+// ‼️ IT ALSO FIXES A REAL DEFECT RATHER THAN ONLY ADDING A FEATURE. Without it, `provider` had to
+// be its own bullet, so "Sarah" assembled into the review line `Sarah.` To avoid that the
+// question had to ask "and how were they?", which is a two-part question at a desk where the
+// front desk is reading it out loud. The template lets the question be the one the front desk
+// actually asks.
+//
+// ‼️ WHAT THE TEMPLATE MAY CONTAIN IS FENCED, AND THE FENCE IS THE DEFENCE. Connective words
+// around facts she typed, and nothing else. No adjective, no adverb, no sentiment, no claim about
+// a result, no business name, no superlative. "Got {service} with {provider}." states two things
+// she stated. "Had an amazing {service} with the wonderful {provider}" would be us writing her
+// review, which is the Rytr fact pattern and is what FTC 16 CFR Part 465 reaches.
+// scripts/_probe-review-gating.ts holds that fence against a word list.
+//
+// ‼️ AND SHE SEES IT BEFORE IT GOES ANYWHERE. The lead line lands in the same editable box as the
+// rest, above the same attestation and the same copy button, so the last hand on the text is
+// hers. That is the mitigation that makes two function words defensible where a generated
+// sentence would not be.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Both halves of the lead line. A full stop belongs to the template, not to her fragment.
+ *
+ * ‼️ "today" IS A FACT AND NOT A FLOURISH, which is the only reason it is allowed in here. She
+ * is answering this at the counter on the day of the visit, so it is true by construction. It
+ * earns its place because it is what makes the line read as somebody talking rather than as a
+ * form: "Got lip filler with Sarah today" is a sentence, "Got lip filler with Sarah" is a label.
+ * Nothing else may be added on that argument: every other candidate is an adjective.
+ */
+export const LEAD_WITH_PROVIDER = "Got {service} with {provider} today.";
+export const LEAD_SERVICE_ONLY = "Got {service} today.";
+
+/**
+ * The keys the lead line consumes, so they are not also emitted as their own bullets.
+ *
+ * ‼️ CONSUMED, NOT DUPLICATED. Without this, a v5 review would open "Got lip filler with Sarah."
+ * and then repeat "Lip filler." and "Sarah." as the next two lines.
+ */
+export const LEAD_KEYS: ReadonlyArray<ReviewQuestion["key"]> = ["service", "provider"];
+
+/**
+ * Her words, prepared to sit INSIDE a sentence rather than to be one.
+ *
+ * Differs from assembleBullet in exactly two ways, both because of where it lands: it does NOT
+ * capitalise (the word is mid-sentence) and it strips a trailing full stop rather than adding one
+ * (the template owns the punctuation). Everything else is the same single transformation: trim
+ * and collapse whitespace. No spelling correction, no grammar, no reordering, no words added.
+ *
+ * ‼️ IT CANNOT RESCUE A SENTENCE-SHAPED ANSWER, AND IT MUST NOT TRY. A patient who answers "I got
+ * lip filler" produces "Got I got lip filler with Sarah." That is a wart, it is visible in the
+ * editable box, and she can fix it in one tap. The alternative is this function detecting and
+ * rewriting her phrasing, which is the line the whole file refuses to cross for a cosmetic win.
+ */
+export function assembleFragment(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const collapsed = raw.replace(/\s+/g, " ").trim().replace(/[.]+$/, "").trim();
+  return collapsed || null;
+}
+
+/**
+ * The opening line of a v5 review, or null when there is no service to name.
+ *
+ * No service means no lead line at all and her answers assemble exactly as they did before, which
+ * is also why v1 and every stored v3 row are untouched by this: they have no `service` key.
+ */
+export function assembleLead(answers: ReviewAnswers): string | null {
+  const service = assembleFragment(answers.service);
+  if (!service) return null;
+  const provider = assembleFragment(answers.provider);
+  return provider
+    ? LEAD_WITH_PROVIDER.replace("{service}", service).replace("{provider}", provider)
+    : LEAD_SERVICE_ONLY.replace("{service}", service);
+}
 
 /**
  * The entire transformation, and nothing else.
@@ -237,13 +370,33 @@ export function assembleLabelled(answers: ReviewAnswers): LabelledBullet[] {
  * means what gets posted to Google is one hundred percent her own words, with no
  * SRT-authored text in it at all.
  */
-export function assemblePlain(answers: ReviewAnswers): string {
+export function assemblePlain(answers: ReviewAnswers, opts?: { lead?: boolean }): string {
   const lines: string[] = [];
+
+  // ‼️ OPT IN, AND THE DEFAULT IS THE OLD BEHAVIOUR BYTE FOR BYTE. Only the v5 walk passes
+  // `lead`. v1 calls this with no options, so the four-question chat is untouched, and so is any
+  // future reader that assembles a stored row: a v3 or v4 row read back comes out exactly what
+  // its author saw and approved. The flag lives at the call site rather than being inferred from
+  // the presence of a key, so "which flow was this" is a decision somebody wrote down.
+  const lead = opts?.lead ? assembleLead(answers) : null;
+  if (lead) lines.push(lead);
+
   for (const question of ALL_REVIEW_QUESTIONS) {
+    // The lead line already said these two. Skipped only when it actually rendered.
+    if (lead && LEAD_KEYS.includes(question.key)) continue;
     const text = assembleBullet(answers[question.key]);
     if (text) lines.push(text);
   }
-  return lines.join("\n");
+  // ‼️ v5 IS ONE PARAGRAPH AND v3/v4 ARE STILL ONE LINE EACH. Matthew, 2026-10-05, wrote out what
+  // he wanted it to look like and it was prose: "Got lip filler with sarah today I loved how
+  // natural it looks, nobody could tell. I was worried It would look overdone." A column of
+  // sentences on separate lines reads as a form somebody filled in, which is exactly how it looks
+  // on a Google profile beside reviews people actually typed.
+  //
+  // Tied to the SAME flag as the lead line rather than to a second option, because they are one
+  // decision: v5 produces a paragraph, and everything before it produces the lines its author
+  // already saw and approved.
+  return lines.join(opts?.lead ? " " : "\n");
 }
 
 /** Nothing typed in any of the four. */

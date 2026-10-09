@@ -96,6 +96,10 @@ const CALLERS = [
   // before an offer is chosen, so an abandoner is somebody we can still call. It is handed a
   // sourcePage by the route, so it answers the question below.
   "src/lib/onboarding2/progress.ts",
+  // Added 2026-10-05. The fourteenth: /cards is the back half of the QR-card outbound sequence,
+  // and it is the only funnel whose lead is already a yes when it arrives. It passes
+  // pageFromRequest(req, "/cards"), so it answers the question below.
+  "src/app/api/cards/route.ts",
   "src/app/api/lhr/optin/route.ts",
   "src/app/api/medspa/optin/route.ts",
   "src/lib/clients/provision.ts",

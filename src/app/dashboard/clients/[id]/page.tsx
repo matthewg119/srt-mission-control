@@ -5,7 +5,7 @@
 
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { BarChart3, Network } from "lucide-react";
+import { BarChart3, MessageSquare, Network } from "lucide-react";
 import { supabaseAdmin } from "@/lib/db";
 import { BASELINE_ONLY } from "@/lib/audit-engine/run-labels";
 import { INTAKE_STEPS } from "@/config/client-intake";
@@ -17,6 +17,8 @@ import { DRAFT_COPY, isUnwritten } from "@/config/client-messages";
 import { reportsOutstanding } from "@/lib/clients/report-reminders";
 import { DNS_RECORDS, fqdn } from "@/lib/clients/dns-records";
 import { subdomainLabel } from "@/lib/clients/normalize";
+import { listConversations } from "@/lib/launch/conversation";
+import { ClientConversations, type ClientThreadView } from "./conversations";
 import { TimeLogForm } from "./time-log-form";
 import { DeliveryChecklistForm } from "./delivery-checklist-form";
 import { DraftsForm, type DraftRow } from "./drafts-form";
@@ -52,6 +54,7 @@ import { readSkin } from "@/lib/hub/skin";
 import { listOnboardingDocs } from "@/lib/clients/onboarding-docs";
 import { stepByKey } from "@/lib/clients/delivery-checklist";
 import { hostsFor, vercelConfig } from "@/lib/hub/vercel-domains";
+import { allowedMailboxes } from "@/lib/hub/referral-config";
 
 /**
  * Tokens a human types on the board. Everything else on a draft is derived from the
@@ -168,6 +171,11 @@ export default async function ClientDetailPage({
     ]);
 
   const docs = await listOnboardingDocs(id);
+  // ‼️ READ ALONGSIDE docs AND NOT INSIDE THE Promise.all ABOVE, which destructures every entry
+  // as { data }. This returns a plain array; folding it in would mean a slot that does not match
+  // its neighbours, for one indexed select on client_id that answers empty for a Slack board
+  // client anyway.
+  const threads: ClientThreadView[] = await listConversations(id);
 
   // The offers a page for this client can be written toward. Empty when the concierge was never
   // provisioned, and the panel says so rather than hiding the control.
@@ -236,6 +244,32 @@ export default async function ClientDetailPage({
   const reviewsHostRow = (hostRows ?? []).find(
     (r) => r.kind === "reviews" && Boolean(r.vercel_attached_at)
   );
+
+  const referralOfferBag = (reviewWorkflowBag.referral_offer ?? {}) as Record<string, unknown>;
+  const referralEmailBag = (reviewWorkflowBag.referral_email ?? {}) as Record<string, unknown>;
+
+  // ‼️ A FAILED READ IS AN EMPTY GRID, NOT A BROKEN BOARD. PostgREST answers 42P01 until
+  // docs/2026-10-05-referral-invites.sql is run, and this panel is one of nineteen on a page that
+  // has to render either way. The save route says plainly when the table is missing; a client
+  // board that 500s because one panel's migration is pending would be the worse failure.
+  const { data: serviceOfferData } = await supabaseAdmin
+    .from("client_service_offers")
+    .select("service_label, price_label, offer_text, referrer_offer_text, excluded")
+    .eq("client_id", id)
+    .order("sort_order", { ascending: true });
+
+  const serviceOfferRows = (serviceOfferData ?? []).map((row) => {
+    const r = row as Record<string, unknown>;
+    return {
+      serviceLabel: typeof r.service_label === "string" ? r.service_label : "",
+      priceLabel: typeof r.price_label === "string" ? r.price_label : null,
+      offerText: typeof r.offer_text === "string" ? r.offer_text : null,
+      referrerOfferText:
+        typeof r.referrer_offer_text === "string" ? r.referrer_offer_text : null,
+      excluded: r.excluded === true,
+    };
+  });
+
   const reviewWorkflowView: ReviewWorkflowView = {
     mode: (client.review_request_mode as ReviewWorkflowView["mode"]) ?? null,
     ownerName: (client.review_owner_name as string | null) ?? null,
@@ -247,6 +281,42 @@ export default async function ClientDetailPage({
     bookingSoftware: (client.booking_software as string | null) ?? null,
     reviewsHost: (reviewsHostRow?.host as string | undefined) ?? null,
     previewUrl: `/dashboard/clients/${id}/preview?kind=reviews`,
+
+    // ── The in-clinic referral (v5, 2026-10-05) ───────────────────────────────
+    //
+    // Five single values off the same bag, plus one table. See referral-config.ts for why the
+    // per-service deals are rows: the panel edits them one at a time and "excluded" is a state.
+    chargeTiming: typeof reviewWorkflowBag.charge_timing === "string" ? reviewWorkflowBag.charge_timing : null,
+    frontDeskCount:
+      typeof reviewWorkflowBag.front_desk_count === "number" ? reviewWorkflowBag.front_desk_count : null,
+    privateFeedbackTo:
+      typeof reviewWorkflowBag.private_feedback_to === "string"
+        ? reviewWorkflowBag.private_feedback_to
+        : null,
+    defaultOffer: typeof referralOfferBag.default_offer === "string" ? referralOfferBag.default_offer : null,
+    defaultReferrerOffer:
+      typeof referralOfferBag.default_referrer_offer === "string"
+        ? referralOfferBag.default_referrer_offer
+        : null,
+    inviteMode: typeof referralOfferBag.mode === "string" ? referralOfferBag.mode : null,
+
+    // ── The referral emails (2026-10-05) ─────────────────────────────────
+    //
+    // ‼️ READ WITH `=== true`, NOT FOR TRUTHINESS, which is the same comparison
+    // referralEmailConfig() makes on the serving side. A bag with no referral_email object at
+    // all has to come back as four falses, because every one of these is a thing we would
+    // otherwise start doing to a clinic's patients without being asked.
+    emailEnabled: referralEmailBag.enabled === true,
+    notifyClinic: referralEmailBag.notify_clinic === true,
+    emailFriend: referralEmailBag.email_friend === true,
+    emailReferrer: referralEmailBag.email_referrer === true,
+    notifyTo: typeof referralEmailBag.notify_to === "string" ? referralEmailBag.notify_to : null,
+    fromMailbox:
+      typeof referralEmailBag.from_mailbox === "string" ? referralEmailBag.from_mailbox : null,
+    replyTo: typeof referralEmailBag.reply_to === "string" ? referralEmailBag.reply_to : null,
+    mailboxOptions: allowedMailboxes(),
+    clientEmail: (client.email as string | null) ?? null,
+    serviceOffers: serviceOfferRows,
   };
 
   // What unlocks delivery step 21. `clients.select("*")` already carries the four columns, so
@@ -506,6 +576,21 @@ export default async function ClientDetailPage({
         <div className="flex items-center justify-between gap-3">
           <h1 className="text-xl font-medium text-white">{name}</h1>
           <div className="flex items-center gap-2">
+          {/*
+            The conversation, from the top of the page as well as from the panel below it. One
+            client page is long and the thing somebody came here to do should not need a scroll.
+          */}
+          {client.onboarding_lane === "launch" && (
+            <Link
+              href={`/dashboard/launch/${id}/chat`}
+              title="Onboarding chat"
+              aria-label="Onboarding chat"
+              className="flex items-center gap-1.5 rounded-lg border border-[rgba(0,201,167,0.45)] bg-[rgba(0,201,167,0.12)] px-2.5 py-1.5 text-xs font-medium text-[#00C9A7] transition-colors hover:bg-[rgba(0,201,167,0.22)] hover:text-white"
+            >
+              <MessageSquare className="h-4 w-4" aria-hidden />
+              Chat
+            </Link>
+          )}
           {/* The plan as a picture: pillar in the middle, supports around it. Shared on the call. */}
           <Link
             href={`/dashboard/clients/${id}/plan`}
@@ -595,6 +680,20 @@ export default async function ClientDetailPage({
           );
         })}
       </div>
+
+      {/*
+        ‼️ ABOVE THE CHECKLIST ON PURPOSE. Matthew, 2026-10-08, after clicking a client out of
+        the list and meeting the thirty-seven step board: "I want to be able to see the new UI where
+        we can see previous conversations regarding that client or start a new one to complete
+        onboarding or unfinished tasks in that client." The board is the thing he GLANCES at and the
+        conversation is the thing he WORKS in, which is the same split the chat page's own header
+        states, so the way in sits before the thing it is a way past.
+      */}
+      <ClientConversations
+        clientId={id}
+        lane={client.onboarding_lane === "launch" ? "launch" : "slack"}
+        threads={threads}
+      />
 
       {/* ── The internal delivery checklist ── */}
       <div className="mb-8 rounded-xl border border-[rgba(255,255,255,0.07)] bg-[rgba(255,255,255,0.02)] p-5">

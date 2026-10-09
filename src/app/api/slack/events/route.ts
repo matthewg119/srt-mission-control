@@ -1255,6 +1255,25 @@ export async function POST(request: NextRequest) {
           }
         }
 
+        // ‼️ BEFORE THE OFFER HANDLER, AND THE TWO CANNOT COLLIDE. This one gates on
+        // {review_handover, referral_engine_preview} and the offer handler on
+        // {offer_locked, pre_call_pages}, so no thread reaches both; the order is only so that a
+        // referral command never falls through to the general assistant, which is the failure
+        // step-grammar.ts's own header was written about.
+        if (client && parentThreadTs && userText.trim().length > 0) {
+          const { handleReferralThreadReply } = await import("@/lib/clients/referral-setup");
+          const referral = await handleReferralThreadReply({
+            clientId: client.id,
+            stepKey: client.stepKey,
+            text: userText,
+          });
+          if (referral) {
+            const posted = await slack.postThreadReply(channel, parentThreadTs, referral.message);
+            if (!slackOk(posted)) console.error("[slack/events] referral reply failed");
+            return NextResponse.json({ ok: true });
+          }
+        }
+
         if (client && parentThreadTs && userText.trim().length > 0) {
           const { handleOfferThreadReply } = await import("@/lib/clients/offers");
           const locked = await handleOfferThreadReply({
