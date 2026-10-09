@@ -460,6 +460,12 @@ export const LAUNCH_PAGE_ACTIONS = [
   "page_title",
   "page_title_pick",
   "page_ads",
+  // ‼️ THE SECOND DOOR ONTO THE SAME TWO CONTRACTS, AND IT RUNS NO MODEL. Matthew, 2026-10-09:
+  // "just tell it to give me a prompt i can run in claude... i copy that paste in claude and come
+  // back with the selected ones". Same shape as research_prompt and research_file one block down,
+  // and chosen by the same person for the same reason: he reads every answer and picks from it.
+  "headlines_brief",
+  "headlines_paste",
   // ─────────────────────────────────────────────────────────────────────────
   // ‼️ THE IDEA COMES BEFORE THE LINE, AND LISTING THEM IN THIS ORDER IS HALF OF WHY. The chat is
   // handed this array as the stages it may run, so the order it reads in is the order it teaches.
@@ -1300,6 +1306,74 @@ export async function runLaunchPagesAction(input: LaunchPagesInput): Promise<Lau
       const res = await pickForStage(clientId, row, Number(input.pick), actor, batch);
       if (!res.ok) return { ok: false, error: res.error };
       return { ok: true, message: res.lines.join("\n") };
+    }
+
+    // ‼️ IT HANDS BACK A PROMPT AND RUNS NOTHING, the rule buildBatchPrompt states for research.
+    case "headlines_brief": {
+      const {
+        buildHeadlineBrief,
+        parseKeywordList,
+        BRIEF_PER_FORMAT,
+        BRIEF_MAX_KEYWORDS,
+      } = await import("@/lib/clients/headline-brief");
+      const { headlineContext } = await import("@/lib/clients/client-headlines");
+
+      // Whatever he pasted, else every keyword the plan already aims at. A keyword does NOT have
+      // to be in the plan: he may be briefing a page that does not exist yet.
+      let keywords = parseKeywordList(input.text ?? "");
+      if (!keywords.length) {
+        const rows = await planRows(clientId);
+        // A plan that cannot be read is not a refusal here: he may have pasted nothing because
+        // there is nothing to paste yet, and the error below names what is actually missing.
+        if (!("error" in rows)) keywords = rows.map((r) => r.targetKeyword ?? "").filter(Boolean);
+      }
+      if (!keywords.length) {
+        return {
+          ok: false,
+          error: "No keywords. Paste them one per line, or approve a plan first and I will use its keywords.",
+        };
+      }
+
+      const trimmed = keywords.slice(0, BRIEF_MAX_KEYWORDS);
+      const ctx = await headlineContext(clientId);
+      if (!ctx.ok) return { ok: false, error: ctx.error };
+
+      const over = keywords.length - trimmed.length;
+      return {
+        ok: true,
+        message:
+          `A brief for ${trimmed.length} keyword${trimmed.length === 1 ? "" : "s"}: ` +
+          `${BRIEF_PER_FORMAT} AEO H1s and ${BRIEF_PER_FORMAT} SEO title tags each, which is ` +
+          `${trimmed.length * BRIEF_PER_FORMAT * 2} lines. Run it, then paste the WHOLE answer back here.` +
+          (over > 0
+            ? ` ${over} more keyword${over === 1 ? " was" : "s were"} left out: past ${BRIEF_MAX_KEYWORDS} the answer is too long to read in one sitting, so do them in batches.`
+            : ""),
+        prompt: buildHeadlineBrief({ ctx: ctx.ctx, keywords: trimmed }),
+      };
+    }
+
+    case "headlines_paste": {
+      const { parseHeadlinePaste, fileHeadlinePaste, filedLines } = await import(
+        "@/lib/clients/headline-brief"
+      );
+      const blocks = parseHeadlinePaste(input.text ?? "");
+      if (!blocks.length) {
+        return {
+          ok: false,
+          error:
+            "Nothing in that paste read as a headline answer. It has to carry the markers the " +
+            'brief asked for, starting with "=== KEYWORD: <keyword> ===". Paste the whole answer.',
+        };
+      }
+
+      const { loadOffer } = await import("@/lib/clients/offers");
+      const offer = await loadOffer(clientId).catch(() => null);
+      const res = await fileHeadlinePaste({
+        clientId,
+        blocks,
+        audienceId: offer?.audienceId ?? null,
+      });
+      return { ok: true, message: filedLines(res).join("\n") };
     }
 
     case "page_title": {

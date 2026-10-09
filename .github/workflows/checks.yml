@@ -171,3 +171,4 @@ jobs:
           bun --no-env-file run scripts/_probe-dr-headlines.ts
           bun --no-env-file run scripts/_probe-headline-page.ts
           bun --no-env-file run scripts/_probe-headline-first.ts
+          bun --no-env-file run scripts/_probe-headline-brief.ts
