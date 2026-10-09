@@ -1,0 +1,308 @@
+/* /cards/p, and nothing else.
+ *
+ * ‼️ IT LOADS cards.css AND ADDS TO IT RATHER THAN RESTATING IT. The lockup, the chat bubbles,
+ * the composer, the chips, the primary button and the inline calendar are all the same objects on
+ * the same funnel, and a second copy of them here is two funnels that look alike until somebody
+ * edits one. Everything below is what this page has and /cards does not: the card artwork, the
+ * phone frame, and the two screens that hold them.
+ *
+ * Three prefixes, and the split is deliberate:
+ *   cd-   from cards.css. The funnel's own tokens and furniture. Not redefined here.
+ *   cp-   this page's screens: the stage, the swatches, the phone.
+ *   cpc-  the printed card itself, drawn by card-art.tsx.
+ *
+ * ‼️ cpc- CARRIES NO COLOUR. A card's palette is data (src/config/card-designs.ts) and arrives as
+ * inline style; this file owns the geometry only. Three designs' worth of near-identical colour
+ * blocks in here is what makes a fourth design a stylesheet edit instead of six values. */
+
+/* ── The screens ─────────────────────────────────────────────────────────── */
+
+.cp-screen {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: var(--cd-frame-w);
+  margin: 0 auto;
+}
+
+/* One step down from .cd-open-title, because these screens carry a picture under the headline and
+   the picture is the thing being looked at. 44px of serif over a card would be two headlines. */
+.cp-title {
+  margin: 0 0 1rem;
+  font-family: var(--cd-display, Georgia), "Times New Roman", serif;
+  font-weight: 400;
+  font-size: clamp(1.875rem, 8vw, 2.25rem);
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+  color: var(--cd-ink);
+}
+
+.cp-cta { margin-top: 1.75rem; }
+
+/* The grey one, where "Open it full screen" used to be.
+   ‼️ GREY AND SMALL ON PURPOSE. It is a real door further into the funnel, so it is a button and
+   not a link, but it sits beside a 56px green call to action and must not compete with it: a
+   clinic that likes the card should never have to decide between two things that look equal. */
+.cp-mini {
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--cd-mut);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--cd-line);
+  border-radius: 999px;
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+}
+.cp-mini:hover { background: rgba(255, 255, 255, 0.11); color: var(--cd-ink); }
+
+.cp-note {
+  margin: 1rem 0 0;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--cd-faint);
+}
+.cp-link { color: var(--cd-accent); }
+
+/* ── The stage: the card, and the hand reaching for it ───────────────────── */
+
+.cp-stage {
+  position: relative;
+  margin-top: 1.75rem;
+  /* Room on the right for the hand, which overhangs the card rather than sitting beside it.
+     A scanning phone that does not overlap what it is scanning reads as two unrelated objects. */
+  padding-right: 22%;
+}
+
+.cp-cardtap {
+  display: block;
+  position: relative;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  /* ‼️ THE CARD'S TYPE IS SIZED OFF THIS BOX AND NOT OFF THE VIEWPORT. A printed card's
+     proportions do not change with the window, so every size inside .cpc-card is in `em` against
+     a font-size in container units. Without this the headline on a phone would be relatively
+     twice the size it is on a laptop, which is the one thing that would stop it reading as a
+     photograph of an object. */
+  container-type: inline-size;
+}
+.cp-cardtap:focus-visible { outline: 2px solid var(--cd-accent); outline-offset: 6px; }
+
+/* The pill over the artwork. Colour comes from the design, so only the shape is here. */
+.cp-tap {
+  position: absolute;
+  left: 50%;
+  bottom: -0.875rem;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  padding: 0.5rem 0.9rem;
+  border-radius: 999px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+
+.cpc-hand {
+  position: absolute;
+  right: 0;
+  bottom: -4%;
+  width: 34%;
+  height: auto;
+  pointer-events: none;
+  filter: drop-shadow(0 10px 24px rgba(0, 0, 0, 0.45));
+}
+
+/* ── The card ────────────────────────────────────────────────────────────── */
+
+.cpc-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* A portrait card, which is the shape the printer actually produces: review-card.ts lays the
+     front out down a portrait page. */
+  aspect-ratio: 5 / 7;
+  border-radius: 14px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  text-align: center;
+  /* The px value is the floor for anything without container queries; cqw is the real rule. */
+  font-size: 12px;
+  font-size: 4.3cqw;
+  line-height: 1.5;
+}
+
+.cpc-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75em;
+  padding: 1.75em 1.5em;
+}
+.cpc-body.is-left { align-items: flex-start; text-align: left; }
+
+.cpc-name {
+  margin: 0;
+  font-size: 1.65em;
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+
+.cpc-promise {
+  margin: 0;
+  font-size: 1.05em;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+/* ‼️ ALWAYS A LIGHT PLATE, ON EVERY DESIGN INCLUDING THE DARK ONE. A QR needs light quiet zones
+   to scan at all, which is why the printed card draws one even though that page is midnight. A
+   design that skipped it would photograph beautifully and not work. */
+.cpc-plate {
+  display: block;
+  margin: 0.25em 0;
+  padding: 0.5em;
+  border-radius: 0.5em;
+  aspect-ratio: 1;
+}
+.cpc-qr { display: block; width: 100%; height: 100%; }
+
+.cpc-scan { margin: 0; font-size: 0.95em; font-style: italic; }
+.cpc-host {
+  margin: 0;
+  font-size: 0.72em;
+  letter-spacing: 0.01em;
+  word-break: break-all;
+}
+
+/* band: the name in an accent strip across the top. */
+.cpc-band {
+  padding: 0.9em 1em;
+  font-size: 1.4em;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.is-band .cpc-body { padding-top: 1.25em; }
+
+/* edge: left aligned inside a hairline, the words at the top and the code on the floor. */
+.is-edge .cpc-body { justify-content: space-between; gap: 1em; }
+.cpc-edge-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6em;
+  width: 100%;
+}
+.cpc-edge-foot {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.9em;
+  width: 100%;
+}
+.cpc-edge-words { text-align: left; }
+.is-edge .cpc-scan { margin-bottom: 0.3em; }
+
+/* ── The phone frame on screen two ───────────────────────────────────────── */
+
+.cp-phone {
+  display: flex;
+  justify-content: center;
+  margin-top: 1.75rem;
+}
+
+/* A fixed phone, because it is a phone. The logical page inside is 420px wide and scaled to fit,
+   so the walkthrough renders at its real proportions rather than reflowing into a narrow column
+   that no patient would ever see. */
+.cp-phone-screen {
+  position: relative;
+  width: 17.5rem;
+  height: 32rem;
+  overflow: hidden;
+  border-radius: 28px;
+  background: #fff;
+  box-shadow:
+    0 0 0 8px #24292b,
+    0 0 0 9px rgba(255, 255, 255, 0.12),
+    0 24px 50px rgba(0, 0, 0, 0.5);
+}
+
+.cp-frame {
+  width: 420px;
+  height: 768px;
+  border: 0;
+  transform: scale(0.6667);
+  transform-origin: top left;
+}
+
+/* ‼️ THE VEIL IS WHAT MAKES THE FRAME INERT, not an attribute. It covers the iframe, so a tap
+   anywhere on the phone is a tap on this button and the embedded page cannot be scrolled past
+   without a decision. Removing it is the decision. */
+.cp-veil {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  /* ‼️ THE PILL SITS LOW RATHER THAN DEAD CENTRE, so the embedded page's own headline is still
+     readable behind it. Centred, it landed across the first line of the patient's walk and hid
+     the one sentence that makes the frame worth looking at. */
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 3.25rem;
+  border: 0;
+  cursor: pointer;
+  background: linear-gradient(
+    180deg,
+    rgba(17, 20, 19, 0.08) 0%,
+    rgba(17, 20, 19, 0.45) 55%,
+    rgba(17, 20, 19, 0.72) 100%
+  );
+}
+.cp-veil .cp-tap { position: static; transform: none; }
+
+/* ── The design picker ───────────────────────────────────────────────────── */
+
+.cp-designs { margin-top: 2.25rem; }
+.cp-designs-label {
+  display: block;
+  margin-bottom: 0.625rem;
+  font-size: 0.8125rem;
+  color: var(--cd-faint);
+}
+.cp-swatches { display: flex; gap: 0.5rem; }
+
+.cp-swatch {
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--cd-mut);
+  background: transparent;
+  border: 1px solid var(--cd-line);
+  border-radius: 12px;
+  padding: 0.6rem 0.75rem;
+  cursor: pointer;
+}
+.cp-swatch.is-on {
+  color: var(--cd-ink);
+  border-color: var(--cd-accent);
+  background: rgba(60, 198, 168, 0.08);
+}
+.cp-chip {
+  width: 1.125rem;
+  height: 1.125rem;
+  flex: 0 0 auto;
+  border-radius: 5px;
+}
+
+@media (max-width: 24rem) {
+  .cp-stage { padding-right: 16%; }
+  .cp-phone-screen { width: 15.5rem; height: 29rem; }
+  .cp-frame { transform: scale(0.5905); }
+}

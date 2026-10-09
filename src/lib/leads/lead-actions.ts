@@ -25,6 +25,7 @@ import { addNote } from "@/lib/crm";
 import { runAuditPipeline, RUN_IN_FLIGHT_MINUTES } from "@/lib/audit-engine/run-audit-pipeline";
 import { handleAuditThreadReply } from "@/lib/audit-engine/thread-assistant";
 import { bookingUrlForReport } from "@/lib/onboarding2-link";
+import { cardPreviewUrl, genericPreviewUrl } from "@/lib/cards/preview-link";
 
 /** Columns the lane reads. Narrow on purpose: select("*") on contacts drags ~90 columns
  *  through every message typed in #hot-leads. */
@@ -425,6 +426,69 @@ export async function postBookingLink(args: {
       url,
       "",
       "This is the /onboarding2 funnel, not a bare Calendly page. They pick one of the two plans and book, and that booking is what opens their channel and their board. Nothing is provisioned until they do.",
+    ].join("\n")
+  );
+  return true;
+}
+
+/**
+ * The card preview link for this lead. `card`.
+ *
+ * ‼️ THIS IS THE ANSWER TO A REPLY, AND THAT IS THE WHOLE SHAPE OF IT. A clinic emails back "yes,
+ * I would be interested" and the next thing they should receive is the card, not a form. Typing
+ * `card` in their own thread mints a link wearing their business name and hands it over ready to
+ * paste. Nothing is sent from here: Matthew is the one in the email conversation, and a message
+ * from us arriving in the middle of it would be a second voice in a thread they think is one
+ * person.
+ *
+ * ‼️ IT PROVISIONS NOTHING AND WRITES NOTHING, the same rule postBookingLink carries. No client
+ * row, no board, no `contacts` update. The link is a signed read of the row that already exists.
+ *
+ * ‼️ AND IT REFUSES RATHER THAN POSTING A BROKEN LINK. Signing needs CLIENT_LINK_SECRET, which is
+ * genuinely unset on a fresh environment, and a URL in #hot-leads that 404s when a prospect opens
+ * it is worse than a line saying it could not be minted. The generic preview still works with no
+ * secret at all, so that is offered instead of nothing.
+ */
+export async function postCardPreview(args: {
+  contact: LeadRow;
+  channel: string;
+  threadTs: string;
+}): Promise<boolean> {
+  const { contact, channel, threadTs } = args;
+  const url = cardPreviewUrl(contact.id);
+  const generic = genericPreviewUrl();
+
+  if (!url) {
+    await slack.postThreadReply(
+      channel,
+      threadTs,
+      [
+        ":warning: I cannot mint a personalised card link: `CLIENT_LINK_SECRET` is unset on this environment, and an unsigned link would be a contact id in a URL anybody could walk.",
+        `The generic preview works and names no business: ${generic}`,
+      ].join("\n")
+    );
+    return false;
+  }
+
+  const who = contact.business_name?.trim() || leadName(contact);
+  const site = contact.website?.trim();
+
+  await slack.postThreadReply(
+    channel,
+    threadTs,
+    [
+      `:card_index: Card preview for *${who}*:`,
+      url,
+      "",
+      "Two screens. The card their patients scan, with their name on it and a code that really " +
+        "resolves, then the page a patient lands on, live in a phone frame. The button at the end " +
+        "asks for the email, the name, their best seller and what a referred friend gets, then " +
+        "offers two real openings off your calendar.",
+      site
+        ? `The card prints \`reviews.${site.replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0]}\` under the code, which is what their real one will say.`
+        : ":grey_exclamation: No website on this contact, so the card shows no address under the code. Add one and ask me again if you want it on there.",
+      "",
+      `:warning: Finishing it does NOT send a PDF. The thread gets a card saying they are owed one, and you send it. Generic version for recordings: ${generic}`,
     ].join("\n")
   );
   return true;

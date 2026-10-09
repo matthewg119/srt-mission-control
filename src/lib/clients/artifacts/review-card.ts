@@ -41,28 +41,14 @@
 import QRCode from "qrcode";
 import { supabaseAdmin } from "@/lib/db";
 import { CARD_QUESTIONS, fillBusiness } from "@/lib/hub/review-script";
-
-const COUNT_WORDS = [
-  "No",
-  "One",
-  "Two",
-  "Three",
-  "Four",
-  "Five",
-  "Six",
-  "Seven",
-  "Eight",
-];
-
-/**
- * How many questions the card says there are.
- *
- * ‼️ DERIVED, BECAUSE THE CARD IS PRINTED AND THE WALK IS NOT. This said "Four questions" in
- * two places while the set was four long. The moment LIVE_QUESTIONS moves to the v4 six, a
- * hardcoded four is a stack of card stock in a clinic promising something the page does not do,
- * and card stock cannot be redeployed.
- */
-const QUESTION_COUNT = COUNT_WORDS[CARD_QUESTIONS.length] ?? String(CARD_QUESTIONS.length);
+// ‼️ EVERY SENTENCE THIS FILE PRINTS, AND THE QUESTION COUNT WITH THEM, MOVED OUT ON 2026-10-09.
+// They were literals inside the jsPDF calls below, which was fine while exactly one thing drew a
+// card. /cards/p now draws the same card on a screen so a clinic can approve it before it goes to
+// a printer, and a preview whose wording has drifted from the card stock is worse than no preview:
+// they approve one object and a different one arrives in the post. review-card-copy.ts is the one
+// copy of both now, it derives the count from CARD_QUESTIONS exactly as the local COUNT_WORDS list
+// here used to, and it imports nothing that cannot reach a browser bundle.
+import { REVIEW_CARD_COPY } from "@/lib/hub/review-card-copy";
 import { readTheme, activeTheme } from "@/lib/hub/theme";
 import {
   startDoc,
@@ -143,7 +129,7 @@ export async function renderReviewCard(input: ReviewCardInput): Promise<Buffer> 
   doc.setFontSize(15);
   doc.setFont("helvetica", "bold");
   setColor(doc, "text", input.accent);
-  doc.text(`${QUESTION_COUNT} questions. Ninety seconds. Your words.`, PAGE_W / 2, state.y, {
+  doc.text(REVIEW_CARD_COPY.promise, PAGE_W / 2, state.y, {
     align: "center",
   });
   state.y += 16;
@@ -160,7 +146,7 @@ export async function renderReviewCard(input: ReviewCardInput): Promise<Buffer> 
   doc.setFontSize(12);
   doc.setFont("helvetica", "italic");
   setColor(doc, "text", WHITE);
-  doc.text("Scan when you are home.", PAGE_W / 2, state.y, { align: "center" });
+  doc.text(REVIEW_CARD_COPY.scanLine, PAGE_W / 2, state.y, { align: "center" });
   state.y += 10;
 
   doc.setFontSize(8.5);
@@ -175,7 +161,7 @@ export async function renderReviewCard(input: ReviewCardInput): Promise<Buffer> 
   doc.setFontSize(14);
   doc.setFont("helvetica", "bold");
   setColor(doc, "text", input.accent);
-  doc.text(`${QUESTION_COUNT} questions`, PAGE_W / 2, state.y, { align: "center" });
+  doc.text(REVIEW_CARD_COPY.backHeading, PAGE_W / 2, state.y, { align: "center" });
   state.y += 14;
 
   CARD_QUESTIONS.forEach((prompt, i) => {
@@ -199,9 +185,9 @@ export async function renderReviewCard(input: ReviewCardInput): Promise<Buffer> 
   doc.setFontSize(10.5);
   doc.setFont("helvetica", "italic");
   setColor(doc, "text", WHITE);
-  doc.text("Answer in your own words.", PAGE_W / 2, state.y, { align: "center" });
+  doc.text(REVIEW_CARD_COPY.ownWords, PAGE_W / 2, state.y, { align: "center" });
   state.y += 7;
-  doc.text("Nothing is posted unless you post it.", PAGE_W / 2, state.y, { align: "center" });
+  doc.text(REVIEW_CARD_COPY.notPosted, PAGE_W / 2, state.y, { align: "center" });
   state.y += 16;
 
   drawBrandIcon(doc, PAGE_W / 2 - 3.2, state.y, 1.2);
