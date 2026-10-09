@@ -473,7 +473,16 @@ export function PreviewClient(props: PreviewClientProps) {
           <ScanHand design={design} />
         </div>
 
-        <p className="cp-note">{PREVIEW_SCAN.qrNote}</p>
+        {/* ‼️ THE SHORTCUT SITS WITH THE LINE ABOUT THEIR DOMAIN, WHICH IS WHERE HE PUT IT, AND
+            the two belong together: that sentence is the first thing on the page that is about
+            THEIR setup rather than about the card, so it is the moment somebody who has already
+            understood the product stops reading and wants to start. */}
+        <p className="cp-note">
+          {PREVIEW_SCAN.qrNote}{" "}
+          <button type="button" className="cp-mini" onClick={() => setScreen("chat")}>
+            {PREVIEW_SCAN.skipToChat}
+          </button>
+        </p>
 
         <div className="cp-designs" role="group" aria-label={PREVIEW_SCAN.pickLabel}>
           <span className="cp-designs-label">{PREVIEW_SCAN.pickLabel}</span>

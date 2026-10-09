@@ -411,6 +411,27 @@ check(
   /cp-mini/.test(clientSrc) && /setWantsCustom/.test(clientSrc),
   "it is a button into the funnel rather than a link out of it"
 );
+// The shortcut past the walkthrough, for somebody who already understands the product.
+check(
+  Boolean(PREVIEW_SCAN.skipToChat),
+  "screen one offers a way straight to the chat",
+  PREVIEW_SCAN.skipToChat
+);
+check(
+  clientSrc.includes("PREVIEW_SCAN.skipToChat"),
+  "and it is rendered on screen one, beside the line about their own domain"
+);
+// ‼️ IT MUST NOT SET wantsCustom. Skipping the demo is not the same statement as disliking
+// the card, and a shortcut that silently promised somebody a custom design within two hours would
+// be a debt nobody in the channel could see the reason for.
+{
+  const skipBtn = clientSrc.match(/onClick=\{\(\) => setScreen\("chat"\)\}/g) ?? [];
+  check(
+    skipBtn.length >= 1,
+    "and it goes straight to the chat without claiming anything",
+    "no opener bubble: taking a shortcut is not a different conversation"
+  );
+}
 for (const gone of ["insideHref", "openOut", "altCta", "cp-back"]) {
   check(
     !clientSrc.includes(gone),

@@ -165,6 +165,20 @@ export const PREVIEW_SCAN = {
     "On your printed cards this code points at your own page, on your own domain."
   ),
   cta: guard("preview scan cta", "Show me what they see"),
+  /**
+   * The way past screen two, beside the line about their own domain.
+   *
+   * ‼️ IT IS NOT A SECOND CALL TO ACTION, IT IS AN EXIT FROM A DEMO SOMEBODY HAS ALREADY
+   * UNDERSTOOD. Matthew, 2026-10-09: "a small button for the smart people to skip step 2". The
+   * walkthrough exists to answer "what is actually behind the code", and a clinic that already
+   * knows is being made to sit through an answer they did not ask for. Grey and small for the
+   * same reason the custom-design door is: the green button is still the path.
+   *
+   * ‼️ AND IT LANDS ON THE SAME FIRST QUESTION, with no opener of its own. Taking a shortcut
+   * is not a different conversation, and a bubble acknowledging the skip would be the funnel
+   * talking about itself.
+   */
+  skipToChat: guard("preview scan skip", "Skip the preview and set up your domain"),
   /** Which of the designs is on screen, above the toggle. */
   pickLabel: guard("preview scan pick", "Two designs. Pick the one you like."),
 } as const;
