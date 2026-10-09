@@ -248,3 +248,9 @@
   .cp-phone-screen { width: 15.5rem; height: 29rem; }
   .cp-frame { transform: scale(0.5905); }
 }
+
+/* The download, once the card exists. It sits in the transcript rather than under it, so it
+   scrolls away with the message that announced it instead of pinning to the bottom of a screen
+   that is still asking questions. */
+.cp-download { margin: 0.25rem 0 1.25rem; }
+.cp-download .cd-primary { text-decoration: none; }

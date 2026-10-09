@@ -49,6 +49,7 @@ import { CARD_QUESTIONS, fillBusiness } from "@/lib/hub/review-script";
 // copy of both now, it derives the count from CARD_QUESTIONS exactly as the local COUNT_WORDS list
 // here used to, and it imports nothing that cannot reach a browser bundle.
 import { REVIEW_CARD_COPY } from "@/lib/hub/review-card-copy";
+import type { CardCopySet } from "@/config/card-preview";
 import { readTheme, activeTheme } from "@/lib/hub/theme";
 import {
   startDoc,
@@ -83,6 +84,20 @@ export interface ReviewCardInput {
   clinicName: string;
   reviewsUrl: string;
   accent: RGB;
+  /**
+   * Which wording the FRONT carries. Defaults to the printed card's own, so every existing
+   * caller renders byte for byte what it always did.
+   *
+   * ‼️ THE FRONT ONLY. The back is the questions, and those are the walk's, derived from
+   * CARD_QUESTIONS and identical for every clinic no matter which front they picked. A copy set
+   * that could change the QUESTIONS would be the thing this whole lane refuses.
+   *
+   * ‼️ AND IT EXISTS BECAUSE THE PREVIEW SHOWS AN OFFER CARD. /cards/p offers exactly one card
+   * and it is the offer one, so without this parameter every clinic would approve a card on
+   * screen and be sent a different one by this generator. Read CARD_COPY_SETS before adding a
+   * third: the offer set reverses a rule the rest of this lane is built on.
+   */
+  copy?: CardCopySet;
 }
 
 /**
@@ -129,7 +144,8 @@ export async function renderReviewCard(input: ReviewCardInput): Promise<Buffer> 
   doc.setFontSize(15);
   doc.setFont("helvetica", "bold");
   setColor(doc, "text", input.accent);
-  doc.text(REVIEW_CARD_COPY.promise, PAGE_W / 2, state.y, {
+  const copy = input.copy ?? REVIEW_CARD_COPY;
+  doc.text(copy.promise, PAGE_W / 2, state.y, {
     align: "center",
   });
   state.y += 16;
@@ -146,7 +162,7 @@ export async function renderReviewCard(input: ReviewCardInput): Promise<Buffer> 
   doc.setFontSize(12);
   doc.setFont("helvetica", "italic");
   setColor(doc, "text", WHITE);
-  doc.text(REVIEW_CARD_COPY.scanLine, PAGE_W / 2, state.y, { align: "center" });
+  doc.text(copy.scanLine, PAGE_W / 2, state.y, { align: "center" });
   state.y += 10;
 
   doc.setFontSize(8.5);

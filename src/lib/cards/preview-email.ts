@@ -5,11 +5,14 @@
 // has been given a reason to assume the thing is not real. The #hot-leads card has shouted
 // "OWES THEM THE PDF" since the lane shipped, but that is a note to Matthew, not an answer to them.
 //
-// ‼️ IT DOES NOT CARRY THE CARD AND DOES NOT PRETEND TO. There is no generator for the card they
-// actually picked (review-card.ts renders the neutral wording only, and the preview now shows the
-// offer one), so every PDF in this lane is made by a person. This email says what was captured,
-// what happens next and roughly when, which is the honest version of "shortly". The moment a
-// generator exists, the attachment goes on this message and the copy below loses one sentence.
+// ‼️ IT CARRIES THE CARD SINCE 2026-10-09, AND THE COPY MOVED WITH IT. It used to promise a PDF
+// "shortly", made by a person, because renderReviewCard could only produce the neutral wording and
+// the preview shows the offer one. That renderer takes a copy set now, so the real card, with
+// their name and a code that opens their own page, is attached to this message. The sentence that
+// said a person was making it is gone: it would be the one line in here that is no longer true.
+//
+// ‼️ THE ATTACHMENT IS OPTIONAL AND ITS ABSENCE IS NOT FATAL. A render failure must not cost the
+// clinic the whole email, so the caller passes what it has and the copy below branches once.
 //
 // ‼️ SRT IS THE SENDER AND THERE IS NO PER-CLIENT FROM. Same position referral-emails.ts takes:
 // /users/{mailbox}/sendMail only works for mailboxes in our own tenant, so a "from the clinic"
@@ -45,6 +48,8 @@ export interface PreviewEmailFacts {
   referralOffer: string;
   /** They pressed the grey button, so a few design options are owed within two hours. */
   wantsCustom: boolean;
+  /** True when the printable card is attached. False degrades the copy, never the send. */
+  hasCard: boolean;
 }
 
 /**
@@ -79,8 +84,11 @@ export function previewEmailHtml(facts: PreviewEmailFacts): string {
     `<div style="font:16px/1.6 ${FONT};color:#14181f">` +
     p(`Hi ${name},`) +
     p(
-      "Thanks for taking a look. Your QR referral card is being put together now and it will be " +
-        "in your inbox as a print ready PDF shortly, from a person rather than a robot."
+      facts.hasCard
+        ? "Thanks for taking a look. Your QR referral card is attached, print ready. Print it " +
+          "double sided on card stock and start handing it out."
+        : "Thanks for taking a look. Your QR referral card is being put together and it will be " +
+          "in your inbox as a print ready PDF shortly."
     ) +
     p("Here is what we have against your clinic:") +
     `<table style="border-collapse:collapse;margin:0 0 16px;font:15px/1.5 ${FONT}">${rows.join("")}</table>` +
@@ -93,6 +101,14 @@ export function previewEmailHtml(facts: PreviewEmailFacts): string {
     p(
       "Hand the card to every patient. They scan it at home, on their own phone, and answer a few " +
         "questions in their own words. Nothing is posted anywhere unless they post it."
+    ) +
+    // ‼️ SAID PLAINLY, BECAUSE A PRINTED CODE CANNOT BE CHANGED. The code on this card opens a
+    // page on OUR host carrying their name. Once their own domain is pointed at us it moves to
+    // reviews.{theirdomain} and that batch needs reprinting. A clinic that printed a thousand
+    // without being told would have a right to be annoyed.
+    p(
+      "The code on this card opens your page on our address. On the setup call we point it at " +
+        "your own domain, and that is the version to print in bulk."
     ) +
     // ‼️ THE CALL IS DESCRIBED, NOT CLAIMED. Whether they actually booked is Calendly's to know,
     // and this email is sent the moment the questions are answered, which is before the calendar
@@ -115,7 +131,8 @@ export function previewEmailHtml(facts: PreviewEmailFacts): string {
  */
 export async function sendPreviewEmail(
   to: string,
-  facts: PreviewEmailFacts
+  facts: PreviewEmailFacts,
+  card?: { filename: string; bytes: Buffer } | null
 ): Promise<{ sent: boolean; error?: string }> {
   if (!to) return { sent: false, error: "no address" };
   try {
@@ -125,6 +142,15 @@ export async function sendPreviewEmail(
       body: previewEmailHtml(facts),
       isHtml: true,
       fromMailbox: connectedMailbox(),
+      attachments: card
+        ? [
+            {
+              name: card.filename,
+              contentType: "application/pdf",
+              contentBytes: card.bytes.toString("base64"),
+            },
+          ]
+        : undefined,
     });
     return { sent: true };
   } catch (e) {
