@@ -1321,7 +1321,7 @@ export async function runLaunchPagesAction(input: LaunchPagesInput): Promise<Lau
       const {
         buildHeadlineBrief,
         parseKeywordList,
-        BRIEF_PER_FORMAT,
+        BRIEF_TOTAL_PER_FORMAT,
         BRIEF_MAX_KEYWORDS,
       } = await import("@/lib/clients/headline-brief");
       const { headlineContext } = await import("@/lib/clients/client-headlines");
@@ -1346,15 +1346,20 @@ export async function runLaunchPagesAction(input: LaunchPagesInput): Promise<Lau
       const ctx = await headlineContext(clientId);
       if (!ctx.ok) return { ok: false, error: ctx.error };
 
+      // ‼️ ONE PROMPT FOR THE WHOLE PILE, AND THE COUNTS ARE TOTALS. Matthew, 2026-10-09: "i sent
+      // a bunch of keywords i wanted it to pile them keywords and generate one final prompt to run
+      // a batch of 100 variations". So the answer is the same size whatever the keyword count,
+      // and the only reason to split is the cap below.
       const over = keywords.length - trimmed.length;
       return {
         ok: true,
         message:
-          `A brief for ${trimmed.length} keyword${trimmed.length === 1 ? "" : "s"}: ` +
-          `${BRIEF_PER_FORMAT} AEO H1s and ${BRIEF_PER_FORMAT} SEO title tags each, which is ` +
-          `${trimmed.length * BRIEF_PER_FORMAT * 2} lines. Run it, then paste the WHOLE answer back here.` +
+          `One brief, ${trimmed.length} keyword${trimmed.length === 1 ? "" : "s"} piled together: ` +
+          `${BRIEF_TOTAL_PER_FORMAT} AEO H1s and ${BRIEF_TOTAL_PER_FORMAT} SEO title tags, ` +
+          `${BRIEF_TOTAL_PER_FORMAT * 2} lines in total spread across them. ` +
+          "Run it, then paste the WHOLE answer back here." +
           (over > 0
-            ? ` ${over} more keyword${over === 1 ? " was" : "s were"} left out: past ${BRIEF_MAX_KEYWORDS} the answer is too long to read in one sitting, so do them in batches.`
+            ? ` ${over} more keyword${over === 1 ? " was" : "s were"} left out: ${BRIEF_MAX_KEYWORDS} is the most one brief takes, so run a second for the rest.`
             : ""),
         prompt: buildHeadlineBrief({ ctx: ctx.ctx, keywords: trimmed }),
       };

@@ -42,17 +42,27 @@ import {
 import { seoTitleFaults, seoTitleWarnings, SEO_ORIGIN } from "./page-seo-titles";
 import { supabaseAdmin } from "@/lib/db";
 
-/** How many of each format the brief asks for, per keyword. Matthew: "20 AEO and 20 SEO". */
-export const BRIEF_PER_FORMAT = 20;
+/**
+ * How many of each format the brief asks for, ACROSS THE WHOLE KEYWORD SET.
+ *
+ * ‼️ A TOTAL, NOT A PER-KEYWORD COUNT, AND IT WAS PER-KEYWORD FOR ONE DAY. Matthew, 2026-10-09:
+ * "i sent a bunch of keywords i wanted it to pile them keywords and generate one final prompt to
+ * run a batch of 100 variations 50 seo and 50 aeo headlines". Twenty per keyword over eleven
+ * keywords is four hundred and forty lines, which is not a batch he can read, and it is not what
+ * he asked for. Fifty of each spread across the pile is one hundred variations in one answer.
+ */
+export const BRIEF_TOTAL_PER_FORMAT = 50;
 
 /**
- * The most keywords worth putting in one brief.
+ * The most keywords worth piling into one brief.
  *
- * Twenty of each per keyword means forty lines per keyword, so five keywords is already a two
- * hundred line answer. Past that the model thins out and he cannot read it in one sitting, which
- * is the same reason MAX_QUOTES exists one file over.
+ * ‼️ RAISED FROM FIVE TO FIFTEEN WHEN THE COUNTS BECAME TOTALS. At twenty per keyword, five was
+ * already a two hundred line answer and the cap was protecting him from the size. With fifty of
+ * each spread across the pile, the answer is one hundred lines whatever the keyword count, so the
+ * cap now only has to cover his eleven planned pages with room to spare. The brief does get
+ * thinner per keyword as the pile grows, which the prompt says out loud rather than hiding.
  */
-export const BRIEF_MAX_KEYWORDS = 5;
+export const BRIEF_MAX_KEYWORDS = 15;
 
 /**
  * The markers the brief asks for, and the paste-back parses. One shape, declared once.
@@ -103,7 +113,9 @@ export function buildHeadlineBrief(args: {
   perFormat?: number;
 }): string {
   const { ctx, keywords } = args;
-  const n = args.perFormat ?? BRIEF_PER_FORMAT;
+  const total = args.perFormat ?? BRIEF_TOTAL_PER_FORMAT;
+  // Rounded UP, so the per-keyword floor never multiplies out to less than the total asked for.
+  const each = Math.max(1, Math.ceil(total / Math.max(1, keywords.length)));
   const who = [ctx.businessType, ctx.city ? `in ${ctx.city}` : null].filter(Boolean).join(" ");
 
   return [
@@ -115,8 +127,13 @@ export function buildHeadlineBrief(args: {
     ctx.treatment ? `- What they sell: ${ctx.treatment}` : "",
     ctx.positioning ? `- How they position it: ${ctx.positioning}` : "",
     "",
-    "THE KEYWORDS. One page per keyword. Do all of them:",
+    `THE ${keywords.length} KEYWORDS. One page per keyword. Every one of them gets lines:`,
     ...keywords.map((k, i) => `  ${i + 1}. ${k}`),
+    "",
+    `THE SIZE OF THE JOB: ${total} AEO H1s and ${total} SEO title tags, ${total * 2} lines in total,`,
+    `spread across those ${keywords.length} keyword${keywords.length === 1 ? "" : "s"}. That is about ${each} of each per keyword.`,
+    "Spread them by how much there is to say: a keyword somebody buys on deserves more than one",
+    "they only research. Never fewer than two of each for any keyword, and never skip one.",
     "",
     vocBlock({ voc_quotes: ctx.quotes }) ||
       "NO CUSTOMER QUOTES ARE ON FILE. Write from the buyer and the offer alone, in her plain words.",
@@ -128,7 +145,7 @@ export function buildHeadlineBrief(args: {
     "Write PART A completely, then start PART B from scratch. Do not reuse a line between them.",
     "",
     "═══════════════════════════════════════════════════════════════════════",
-    `PART A. ${n} AEO H1s PER KEYWORD.`,
+    `PART A. ${total} AEO H1s IN TOTAL, across every keyword above.`,
     "═══════════════════════════════════════════════════════════════════════",
     "",
     "This is the question a buyer TYPES into ChatGPT or Perplexity. It is what the engine matches",
@@ -141,7 +158,7 @@ export function buildHeadlineBrief(args: {
     AEO_HEADLINE_ENGINE,
     "",
     "═══════════════════════════════════════════════════════════════════════",
-    `PART B. ${n} SEO TITLE TAGS PER KEYWORD.`,
+    `PART B. ${total} SEO TITLE TAGS IN TOTAL, across every keyword above.`,
     "═══════════════════════════════════════════════════════════════════════",
     "",
     "This is the line Google PRINTS in a results list, read beside nine competitors. It is measured",
@@ -161,10 +178,10 @@ export function buildHeadlineBrief(args: {
     `${KEYWORD_MARK} <the keyword, copied exactly as given above> ===`,
     AEO_MARK,
     "1. <h1>",
-    `...through ${n}`,
+    `... about ${each} for this keyword`,
     SEO_MARK,
     "1. <title tag>  (<character count>)",
-    `...through ${n}`,
+    `... about ${each} for this keyword`,
     "",
     "Put the character count in parentheses after every title tag, so I can see the budget at a",
     "glance. No preamble, no commentary between blocks, no markdown headings of your own.",
