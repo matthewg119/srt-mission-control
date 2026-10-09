@@ -169,6 +169,169 @@ export function carriesAnyKeyword(
   return variants.some((v) => v.trim() && carriesKeyword(text, v));
 }
 
+/**
+ * The same keyword with its ordinary English inflections, as variants for `carriesAnyKeyword`.
+ *
+ * ‼️ A FAMILY GENERATOR, NOT A CHANGE TO carriesKeyword, AND THE DISTINCTION IS THE WHOLE REASON
+ * THIS EXISTS. Measured on 2026-10-08 against Matthew's own ten worked headlines:
+ * `carriesKeyword` refused three of his five H1s and one of his five title tags, almost all of it
+ * morphology. "How ChatGPT Ranks Local Businesses (2026)" does not carry `chatgpt local business
+ * ranking` because "Businesses" is not "business" and "Ranks" is not "ranking". "Why Facebook Ads
+ * Stop Working for Med Spas" does not carry `... for med spa` because "Spas" is not "spa".
+ *
+ * Teaching `carriesKeyword` to stem would have been the obvious fix and it is the wrong one:
+ * _probe-headline-page.ts states that function must stay unchanged because it is the hard hinge
+ * between a kept headline and its keyword row, and its "a prefix is not a match" case is what
+ * stops "spa" matching "spacious". So the shape of the answer here is the one the file already
+ * chose for synonyms: hand `carriesAnyKeyword` more strings to try.
+ *
+ * Morphology ONLY. A synonym is a different question with a different answer: `pricing` does not
+ * become `cost` here, and the lane that wants that latitude says so by warning rather than
+ * refusing. Pure, and the probe asserts both halves.
+ */
+/**
+ * The words of a keyword that actually distinguish it, in order.
+ *
+ * The same stripping `carriesKeyword` and `keywordSlug` do, exported because the title-tag lane
+ * needs to know WHERE the keyword starts in a line and cannot answer that from a boolean. An
+ * all-stopword keyword returns its words unstripped, matching `keywordSlug`'s own fallback.
+ */
+export function keywordContentWords(keyword: string): string[] {
+  const all = flat(keyword)
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .split(" ")
+    .filter(Boolean);
+  const kept = all.filter((w) => !CONTENT_NOISE.has(w));
+  return kept.length ? kept : all;
+}
+
+/**
+ * How many of the keyword's content words the text carries, counting inflections as the word.
+ *
+ * ‼️ A MEASURE, NOT A VERDICT, AND THAT IS WHY IT IS SEPARATE FROM carriesKeyword. The H1 lane
+ * needs three answers from one question and a boolean only gives it two: a headline carrying
+ * every word is clean, one carrying SOME is the right headline phrased naturally and is worth a
+ * note, and one carrying NONE is about a different page. Measured on Matthew's own five H1s,
+ * `present < total` is the normal case for a good headline, which is exactly why this lane
+ * reports it instead of refusing it. See client-headlines.ts's own note at `faultsFor`.
+ */
+export function keywordOverlap(text: string | null | undefined, keyword: string): { present: number; total: number } {
+  const haystack = flat(text);
+  const content = keywordContentWords(keyword);
+  if (!haystack || !content.length) return { present: 0, total: content.length };
+
+  let present = 0;
+  for (const w of content) {
+    const hit = wordForms(w).some((form) =>
+      new RegExp(`\\b${form.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(haystack)
+    );
+    if (hit) present++;
+  }
+  return { present, total: content.length };
+}
+
+export function wordForms(word: string): string[] {
+  const w = flat(word);
+  if (!w) return [];
+  const out = new Set<string>([w]);
+
+  // Plurals, both directions. "spas" <-> "spa", "businesses" <-> "business",
+  // "agencies" <-> "agency".
+  if (w.endsWith("ies") && w.length > 4) out.add(`${w.slice(0, -3)}y`);
+  if (w.endsWith("es") && w.length > 3) out.add(w.slice(0, -2));
+  if (w.endsWith("s") && !w.endsWith("ss") && w.length > 3) out.add(w.slice(0, -1));
+  // ‼️ THE "ss" CASE IS SPELLED OUT, AND MISSING IT COST A REAL HEADLINE. A word ending in a
+  // double s already ends in "s", so a guard reading `!w.endsWith("s")` skips it and "business"
+  // never reaches "businesses". That is precisely the miss that refused "How ChatGPT Ranks Local
+  // Businesses (2026)" for the keyword `chatgpt local business ranking`.
+  if (/(?:ss|sh|ch|x|z)$/.test(w)) out.add(`${w}es`);
+  if (!w.endsWith("s")) {
+    out.add(`${w}s`);
+    if (w.endsWith("y") && w.length > 3) out.add(`${w.slice(0, -1)}ies`);
+  }
+  // The verb and gerund a keyword and a headline disagree about. "ranking" <-> "ranks".
+  if (w.endsWith("ing") && w.length > 5) {
+    const stem = w.slice(0, -3);
+    for (const f of [stem, `${stem}s`, `${stem}e`, `${stem}es`]) out.add(f);
+  }
+  // ‼️ THE IRREGULARS, BECAUSE NO SUFFIX RULE REACHES THEM AND ONE COST A REAL TITLE. Matthew's
+  // own "How to Get Your Business Found on ChatGPT" was refused for the keyword `clients find my
+  // business on chatgpt` (2026-10-09): "found" is not "find" plus any ending, so the keyword read
+  // as absent. A closed list, kept to the verbs that actually appear in search phrases.
+  for (const group of IRREGULARS) {
+    if (group.includes(w)) for (const f of group) out.add(f);
+  }
+  return [...out];
+}
+
+/**
+ * Verbs whose forms no suffix rule produces. Each group is one verb, all its forms.
+ *
+ * Deliberately short. This is not an English lexicon: it is the handful of irregulars that turn up
+ * in the keywords this repo actually targets, and every entry widens the SPELLING of a word and
+ * never its meaning. A synonym does not belong here, which is the same line `keywordFamily` draws.
+ */
+const IRREGULARS: ReadonlyArray<readonly string[]> = [
+  ["find", "finds", "finding", "found"],
+  ["get", "gets", "getting", "got", "gotten"],
+  ["grow", "grows", "growing", "grew", "grown"],
+  ["choose", "chooses", "choosing", "chose", "chosen"],
+  ["buy", "buys", "buying", "bought"],
+  ["pay", "pays", "paying", "paid"],
+  ["spend", "spends", "spending", "spent"],
+  ["bring", "brings", "bringing", "brought"],
+  ["lose", "loses", "losing", "lost"],
+  ["keep", "keeps", "keeping", "kept"],
+  ["sell", "sells", "selling", "sold"],
+  ["tell", "tells", "telling", "told"],
+  ["win", "wins", "winning", "won"],
+  ["cost", "costs", "costing"],
+  ["show", "shows", "showing", "showed", "shown"],
+  ["rise", "rises", "rising", "rose", "risen"],
+  ["write", "writes", "writing", "wrote", "written"],
+  ["take", "takes", "taking", "took", "taken"],
+  ["make", "makes", "making", "made"],
+  ["see", "sees", "seeing", "saw", "seen"],
+  ["rank", "ranks", "ranking", "ranked"],
+];
+
+/** The most phrase variants worth generating. A cap, so a long keyword cannot explode. */
+const MAX_FAMILY = 240;
+
+export function keywordFamily(keyword: string): string[] {
+  const words = flat(keyword)
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .split(" ")
+    .filter(Boolean);
+  if (!words.length || words.length > 8) return [];
+
+  // ‼️ THE CROSS PRODUCT, NOT ONE SWAP AT A TIME, AND A REAL HEADLINE IS WHY. "How ChatGPT Ranks
+  // Local Businesses (2026)" disagrees with `chatgpt local business ranking` in TWO words at
+  // once, so a family that swaps a single word per variant never reaches it. The cap below is
+  // what keeps that honest: every variant still has to match every word of the phrase, so this
+  // widens the spelling and never the meaning.
+  let phrases: string[][] = [[]];
+  for (const w of words) {
+    const next: string[][] = [];
+    for (const prefix of phrases) {
+      for (const form of wordForms(w)) {
+        next.push([...prefix, form]);
+        if (next.length >= MAX_FAMILY) break;
+      }
+      if (next.length >= MAX_FAMILY) break;
+    }
+    phrases = next;
+  }
+
+  const original = words.join(" ");
+  const out = new Set<string>();
+  for (const p of phrases) {
+    const joined = p.join(" ");
+    if (joined !== original) out.add(joined);
+  }
+  return [...out];
+}
+
 /** The first sentence of the body, skipping any heading. */
 export function firstSentence(answerMd: string): string {
   const prose = answerMd

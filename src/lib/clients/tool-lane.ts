@@ -228,6 +228,74 @@ export async function clientTool(
   return { componentKey: asset.component_key, status: row.status, pageId: row.page_id };
 }
 
+/**
+ * Put this client's tool ON a page, which is the half of the lane that was owed.
+ *
+ * ‼️ THIS IS THE WRITER THE LANE WAS MISSING, AND ITS ABSENCE WAS VISIBLE FROM BOTH ENDS.
+ * _probe-dead-wires.ts recorded client_assets.page_id and client_pages.component_key as written
+ * nowhere ("the lane is half built ... what is owed is the renderer that serves the asset"), and
+ * step twenty one refused with "the tool is picked but has no page yet. Draft its page in the page
+ * studio and set its component key" against a setter that did not exist. A tool picked at step
+ * twelve could therefore never reach a page at all.
+ *
+ * ‼️ BOTH COLUMNS OR NEITHER. client_pages.component_key is what the renderer reads and
+ * client_assets.page_id is what the verifier and the card read, so one without the other is a
+ * tool that renders with nothing knowing where it went, or a pointer at a page that renders
+ * nothing. The page write goes first because it is the one that can fail on a CHECK: the column
+ * is constrained to a component-key shape, and a key not in the registry renders nothing by
+ * design.
+ *
+ * ‼️ IT NEVER PICKS THE TOOL. Which tool a client gets is pickTool's decision at step twelve,
+ * made in front of the keyword evidence. This only answers WHERE it goes.
+ */
+export async function bindToolToPage(args: {
+  clientId: string;
+  pageId: string;
+  by: string;
+}): Promise<{ ok: true; componentKey: string } | { ok: false; error: string }> {
+  const tool = await clientTool(args.clientId);
+  if (!tool) {
+    return {
+      ok: false,
+      error: "No tool has been picked for this client yet. `tools` lists them and `tool pick <n>` chooses one.",
+    };
+  }
+  if (!getToolComponent(tool.componentKey)) {
+    return {
+      ok: false,
+      error:
+        `\`${tool.componentKey}\` is not in the component registry, so it would render nothing. ` +
+        "Pick again with `tool pick <n>`.",
+    };
+  }
+
+  const { error: pageErr } = await supabaseAdmin
+    .from("client_pages")
+    .update({ component_key: tool.componentKey, updated_at: new Date().toISOString() })
+    .eq("id", args.pageId)
+    .eq("client_id", args.clientId);
+
+  if (pageErr) {
+    return { ok: false, error: `The page did not take the component key: ${pageErr.message}` };
+  }
+
+  // ‼️ SCOPED TO THE NOT-DROPPED ROW, which the unique index guarantees is at most one. Writing by
+  // client_id alone would also stamp the rows a previous pick dropped, and those point at whatever
+  // page that earlier tool was on.
+  const { error: assetErr } = await supabaseAdmin
+    .from("client_assets")
+    .update({ page_id: args.pageId, status: "ready", updated_at: new Date().toISOString() })
+    .eq("client_id", args.clientId)
+    .neq("status", "dropped");
+
+  if (assetErr) {
+    return { ok: false, error: `The page was set but the asset did not record it: ${assetErr.message}` };
+  }
+
+  console.log(`[tool-lane] ${tool.componentKey} bound to page ${args.pageId} by ${args.by}`);
+  return { ok: true, componentKey: tool.componentKey };
+}
+
 const TOOLS = /^\s*[`*_]*tools?[`*_]*\s*$/i;
 const PICK = /^\s*[`*_]*tool\s+pick\s+(\d{1,2})[`*_]*\s*$/i;
 

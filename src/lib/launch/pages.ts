@@ -43,13 +43,19 @@ import {
 } from "@/lib/clients/page-plan";
 import {
   optionsFor,
+  pageAtRank,
+  pageStage,
+  pageWalkLines,
+  pickForStage,
   pickHeadlineFor,
   readBatch,
   stageLine,
+  writeForStage,
   writeHeadlinesFor,
   writeSkeletonsFor,
   type BatchStage,
   type BatchState,
+  type PageStage,
 } from "@/lib/clients/page-batch";
 import { draftWave, frameContext, offerPool, proposePreCallPlan } from "@/lib/clients/pre-call-pages";
 import { publishPage, type PublishRefusal } from "@/lib/hub/publish-page";
@@ -76,6 +82,25 @@ export interface LaunchPlanPage {
   hasBody: boolean;
   /** The three candidates written for this page, in pick order. Empty until headlines run. */
   headlineOptions: string[];
+  /**
+   * What this page argues, once somebody has picked its idea. Null while it still needs one.
+   *
+   * ‼️ READ FROM THE ANGLE, NOT FROM page_plan.angle. That column holds the idea text copied onto
+   * the row, and it is also written by the planner for rows that never had an angle at all, so it
+   * cannot answer "has anybody decided what this page argues".
+   */
+  angle: string | null;
+  /** The three ideas written for this page, in pick order. Empty until angles run. */
+  angleOptions: string[];
+  /**
+   * Where THIS page has got to, which is not where the batch has got to.
+   *
+   * ‼️ THE WHOLE REASON A PER-PAGE STAGE IS SURFACED. With one stage for eleven pages the panel and
+   * the chat could only say "the batch needs headlines", so a person working page 4 and page 7 at
+   * two different stages was reading a sentence that was true of neither. Null only when readBatch
+   * itself failed, or when the row is not in the batch yet (a proposed row awaiting approval).
+   */
+  stage: PageStage | null;
 }
 
 export interface LaunchLadderRung {
@@ -104,8 +129,12 @@ export interface LaunchPagesState {
   plan: LaunchPlanPage[];
   proposed: number;
   approved: number;
+  /** Ranks of pages with no picked idea. headlines_write refuses while this is non-empty. */
+  needAngle: number[];
   needHeadline: number[];
   needSkeleton: number[];
+  /** Ranks of pages with a skeleton that have not said how they hand over. */
+  needHandover: number[];
   drafted: number;
   /** Rows that still want a body. The Draft button stays live while this is above zero. */
   outstanding: number;
@@ -121,7 +150,13 @@ export interface LaunchPagesState {
   day0ArchivedAt: string | null;
 }
 
-function toPage(row: PlanRow, batch: BatchState | null, options: Map<string, string[]>): LaunchPlanPage {
+function toPage(
+  row: PlanRow,
+  batch: BatchState | null,
+  options: Map<string, string[]>,
+  angles: Map<string, { picked: string | null; options: string[] }>
+): LaunchPlanPage {
+  const angle = angles.get(row.id) ?? null;
   return {
     id: row.id,
     rank: row.rank,
@@ -138,7 +173,42 @@ function toPage(row: PlanRow, batch: BatchState | null, options: Map<string, str
     hasOutline: Boolean(batch?.outlines.get(row.id)),
     hasBody: Boolean(batch?.drafted.some((d) => d.id === row.id)),
     headlineOptions: options.get(row.id) ?? [],
+    angle: angle?.picked ?? null,
+    angleOptions: angle?.options ?? [],
+    // Derived, not stored, and only for rows the batch actually holds: pageStage reads membership
+    // in readBatch's need-lists, and a proposed row is in none of them.
+    stage: batch && batch.rows.some((r) => r.id === row.id) ? pageStage(batch, row) : null,
   };
+}
+
+/**
+ * The ideas written for each planned page, and which one was picked.
+ *
+ * ‼️ THE OPTION NUMBERS ARE OVER EVERY ANGLE ON THE PAGE, which is what `angle 3 pick 2` means on
+ * the Slack door too. anglesFor returns them oldest first and the order is stable, so a number
+ * beside an idea here is the same number tomorrow.
+ */
+async function angleOptionsFor(
+  clientId: string,
+  rows: readonly PlanRow[]
+): Promise<Map<string, { picked: string | null; options: string[] }>> {
+  const out = new Map<string, { picked: string | null; options: string[] }>();
+  try {
+    const { anglesFor } = await import("@/lib/clients/page-angles");
+    const all = await anglesFor(clientId);
+    for (const row of rows) {
+      const mine = all.filter((a) => a.planId === row.id);
+      out.set(row.id, {
+        picked: mine.find((a) => a.status === "approved")?.idea ?? null,
+        options: mine.map((a) => a.idea),
+      });
+    }
+  } catch (e) {
+    // The panel losing the ideas is worth far less than the panel going dark, and readBatch has
+    // already decided the gate separately. Same posture as optionsFor's own failure path.
+    console.error(`[launch-pages] angle read failed: ${(e as Error).message}`);
+  }
+  return out;
 }
 
 /** The ladder, each rung marked with whether its anchor can actually be picked. */
@@ -193,6 +263,7 @@ export async function launchPagesState(clientId: string): Promise<LaunchPagesSta
   // Only the pre-call rows. A row with no role belongs to the other lane's page studio.
   const rows = plan.rows.filter((r) => r.role).sort((a, b) => a.rank - b.rank);
   const options = rows.length ? await optionsFor(clientId, rows) : new Map<string, string[]>();
+  const angles = rows.length ? await angleOptionsFor(clientId, rows) : new Map<string, { picked: string | null; options: string[] }>();
 
   const outstanding = rows.filter(
     (r) =>
@@ -205,11 +276,13 @@ export async function launchPagesState(clientId: string): Promise<LaunchPagesSta
     stageText: batchState ? stageLine(batchState) : "error" in batch ? batch.error : "No plan yet.",
     ready: fc.ok,
     missing: fc.ok ? [] : fc.missing,
-    plan: rows.map((r) => toPage(r, batchState, options)),
+    plan: rows.map((r) => toPage(r, batchState, options, angles)),
     proposed: rows.filter((r) => r.status === "proposed").length,
     approved: rows.filter((r) => r.status === "approved" || r.status === "claimed").length,
+    needAngle: (batchState?.needAngle ?? []).map((r) => r.rank),
     needHeadline: (batchState?.needHeadline ?? []).map((r) => r.rank),
     needSkeleton: (batchState?.needSkeleton ?? []).map((r) => r.rank),
+    needHandover: (batchState?.needHandover ?? []).map((r) => r.rank),
     drafted: batchState?.drafted.length ?? 0,
     outstanding,
     ladder: ladderBits?.rungs ?? null,
@@ -249,12 +322,19 @@ export async function pageRunText(clientId: string): Promise<string> {
   const shown = st.plan.slice(0, CAP);
   const lines = shown.map((p) => {
     const has = [
+      p.angle ? "idea" : null,
       p.headline ? "headline" : null,
       p.hasOutline ? "skeleton" : null,
+      p.ctaLine ? "cta" : null,
       p.hasBody ? "body" : null,
       p.pageStatus === "published" ? "LIVE" : null,
     ].filter(Boolean);
-    return `    ${p.rank}. [${p.role}] ${p.headline ?? p.workingTitle} <- ${p.targetKeyword} (${p.status}${has.length ? ", " + has.join(", ") : ", nothing written yet"})`;
+    return [
+      `    ${p.rank}. [${p.role}]${p.stage ? ` {${p.stage}}` : ""} ${p.headline ?? p.workingTitle} <- ${p.targetKeyword} (${p.status}${has.length ? ", " + has.join(", ") : ", nothing written yet"})`,
+      // The idea is what the headline and the skeleton are both written from, so it belongs on the
+      // page's own line rather than being something the chat has to go and ask for.
+      ...(p.angle ? [`         argues: ${p.angle}`] : []),
+    ].join("\n");
   });
 
   return [
@@ -262,16 +342,80 @@ export async function pageRunText(clientId: string): Promise<string> {
     `  ‼️ ${st.plan.length} page(s) ARE PLANNED. A plan exists before any page does, so "0 drafted" never means "nothing has started".`,
     `  ${st.proposed} proposed, ${st.approved} approved, ${st.drafted} with a body, ${st.outstanding} still to draft.`,
     `  stage: ${st.stageText}`,
-    "  the planned pages, and the keyword each one aims at:",
+    "  the planned pages, the stage each one is at in {braces}, and the keyword each aims at:",
+    "  ‼️ EACH PAGE HAS ITS OWN STAGE AND THEY ARE MEANT TO DIFFER. page_write and page_pick work",
+    "  ONE page at whatever stage it is at, so several can be in flight at once. Never tell him the",
+    "  run is at one stage when the braces below disagree.",
     ...lines,
     ...(st.plan.length > shown.length
       ? [`    ...and ${st.plan.length - shown.length} more not listed. Say so rather than implying this is all of them.`]
       : []),
+    ...(st.needAngle.length
+      ? [
+          `  still need an IDEA: ${st.needAngle.join(", ")}`,
+          "  ‼️ headlines_write REFUSES while any page has no idea. Run angles_write, then angle_pick",
+          "  for each page. A headline written before the idea is a line about a phrase.",
+        ]
+      : []),
     ...(st.needHeadline.length ? [`  still need a headline: ${st.needHeadline.join(", ")}`] : []),
     ...(st.needSkeleton.length ? [`  still need a skeleton: ${st.needSkeleton.join(", ")}`] : []),
+    ...(st.needHandover.length ? [`  still need a handover (plan_cta, or tool_pick for one of them): ${st.needHandover.join(", ")}`] : []),
     "  ‼️ THE WORKING TITLES ARE WRITTEN AT PLAN TIME AND THE KEYWORDS ARE HIS OWN PICKS. If he does",
     "  not recognise a title, that is the title being new, not the keyword being wrong.",
   ].join("\n");
+}
+
+/**
+ * ONE page, its stage and the options for it, as text for the conversation.
+ *
+ * ‼️ A READ, AND IT IS FREE ON PURPOSE. Every per-page verb that writes or spends sits behind the
+ * confidence bar, which is right: they cost model calls and they change decisions. Looking at one
+ * page must not, or "show me page 4" becomes a thing the chat declines to do while it is sure
+ * enough to rewrite page 4's ideas. It is served through read_pages, which is already in
+ * SELF_PROVING, rather than becoming a fifth page action that would have to be exempted by hand.
+ *
+ * ‼️ IT RENDERS THROUGH pageWalkLines, THE SAME BUILDER THE SLACK CARD USES. A second renderer here
+ * is how the two doors start describing the same page differently, which is the failure the whole
+ * walk is shaped to avoid.
+ */
+export async function pageWalkText(clientId: string, rank: number): Promise<string> {
+  const batch = await readBatch(clientId);
+  if ("error" in batch) return `Page ${rank} could not be read just now. Say so rather than guessing.`;
+
+  const row = pageAtRank(batch, rank);
+  if (!row) {
+    return batch.rows.length
+      ? `There is no page ${rank} in this batch. There are ${batch.rows.length}, ranked ${batch.rows.map((r) => r.rank).join(", ")}.`
+      : "No approved pages yet, so there is no page to look at. The plan has to be proposed and approved first.";
+  }
+
+  const [options, angles] = await Promise.all([
+    optionsFor(clientId, [row]).then((m) => m.get(row.id) ?? []),
+    // A failed angle read costs the card its ideas, never the page: same posture as the gate.
+    import("@/lib/clients/page-angles")
+      .then((m) => m.anglesFor(clientId))
+      .then((all) => all.filter((a) => a.planId === row.id))
+      .catch(() => [] as Array<{ idea: string; status: string }>),
+  ]);
+
+  // The handover stage is the only one whose options are not on the page itself, so it is the only
+  // one that costs two more reads, and they are only taken when it is the stage in play.
+  let tools: Array<{ label: string; answers: string }> | undefined;
+  let toolOnOtherPage: { componentKey: string; rank: number } | null = null;
+  if (pageStage(batch, row) === "handover") {
+    const { toolOptions, clientTool } = await import("@/lib/clients/tool-lane");
+    const [opts, current] = await Promise.all([
+      toolOptions(clientId).catch(() => []),
+      clientTool(clientId).catch(() => null),
+    ]);
+    tools = opts.map((o) => ({ label: o.component.label, answers: o.component.answers }));
+    if (current?.pageId && current.pageId !== row.pageId) {
+      const other = batch.rows.find((r) => r.pageId === current.pageId);
+      toolOnOtherPage = { componentKey: current.componentKey, rank: other?.rank ?? 0 };
+    }
+  }
+
+  return pageWalkLines({ state: batch, row, options, angles, tools, toolOnOtherPage }).join("\n");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -292,9 +436,42 @@ export const LAUNCH_PAGE_ACTIONS = [
   "plan_swap",
   "plan_edit",
   "plan_cta",
+  // ─────────────────────────────────────────────────────────────────────────
+  // The per-page walk: ONE page, through whatever stage it is at
+  //
+  // ‼️ THESE SIT ABOVE THE BATCH VERBS BECAUSE THE ORDER IN THIS ARRAY IS WHAT TEACHES. A person
+  // working an onboarding works one keyword at a time and leaves several in flight at different
+  // stages; the batch verbs are the same work asked of every page at once. Both are real and
+  // neither replaces the other, so the narrower one is listed first.
+  //
+  // ‼️ THERE ARE TWO ANGLE GATES AND THEY ARE NOT TWO IMPLEMENTATIONS OF ONE RULE. The batch verb
+  // below refuses while ANY page has no idea, which is the right question to ask of a batch about
+  // to spend eleven model calls. writeForStage asks the narrower one: do not write page 3's
+  // headline until page 3 has an idea. Collapsing them gives either a batch verb that half-runs or
+  // a page verb that refuses over a decision owed on a different page.
+  "page_write",
+  "page_pick",
+  "page_draft",
+  "page_check",
+  // The other two of the three artifacts every page carries. See the three-format split in
+  // docs/prompts/2026-10-07-three-headline-formats.md: the H1 above is the question an engine
+  // matches, the title tag is what Google prints, the ad hooks are what stop a scroll. One page,
+  // three lines, and neither of these replaces the H1.
+  "page_title",
+  "page_title_pick",
+  "page_ads",
+  // ─────────────────────────────────────────────────────────────────────────
+  // ‼️ THE IDEA COMES BEFORE THE LINE, AND LISTING THEM IN THIS ORDER IS HALF OF WHY. The chat is
+  // handed this array as the stages it may run, so the order it reads in is the order it teaches.
+  // Angles were missing from this lane entirely until now: the plan was approved and a headline was
+  // asked for straight away, which is the failure page-angles.ts opens on.
+  "angles_write",
+  "angle_pick",
   "headlines_write",
   "headline_pick",
   "skeletons_write",
+  "tool_options",
+  "tool_pick",
   "research_prompt",
   "research_file",
   "draft_wave",
@@ -557,11 +734,40 @@ export async function runLaunchPagesAction(input: LaunchPagesInput): Promise<Lau
     }
 
     // ── The plan ──────────────────────────────────────────────────────────────
+    // ‼️ THE CARD IS APPENDED HERE, AND WITHOUT IT THIS REPLY NAMED NOTHING. `res.note` ends with
+    // "Read the card below", which is true in the Slack door where refreshCard() posts one next.
+    // In the chat there is no card and no pages panel, so the entire answer to "propose a plan"
+    // was a count and a promise of rows that never arrived: nothing numbered, nothing to reply
+    // with. Matthew, 2026-10-07: "plan_new's card prints NO numbers or letters, so there is
+    // nothing to reply with."
+    //
+    // `formatPlan` is the renderer the Slack card already uses, so the two doors print the same
+    // rows rather than a second renderer drifting from the first. It numbers by RANK, which is
+    // the number every other page verb takes.
     case "plan_new": {
       const fc = await frameContext(clientId);
       if (!fc.ok) return { ok: false, error: `Not yet. Waiting on: ${fc.missing.join("; ")}.` };
       const res = await proposePreCallPlan(clientId, fc.ctx);
-      return res.ok ? { ok: true, message: res.note } : { ok: false, error: res.error };
+      if (!res.ok) return { ok: false, error: res.error };
+
+      const { loadPlan, formatPlan } = await import("@/lib/clients/page-plan");
+      const plan = await loadPlan(clientId);
+      if ("error" in plan) {
+        return { ok: true, message: `${res.note}\n\n(the rows could not be read back: ${plan.error})` };
+      }
+
+      return {
+        ok: true,
+        message: [
+          res.note,
+          "",
+          "Show him every row below, numbered exactly as they are numbered here:",
+          formatPlan(plan.rows, null),
+          "",
+          "Each number is the page's RANK and it is what every page verb takes: reply `plan approve` to",
+          "lock them all in, or name a rank to change one first.",
+        ].join("\n"),
+      };
     }
 
     case "plan_approve": {
@@ -649,17 +855,144 @@ export async function runLaunchPagesAction(input: LaunchPagesInput): Promise<Lau
     }
 
     // ── The batch: headline, then skeleton, then research, then draft ──────────
+    // ─────────────────────────────────────────────────────────────────────
+    // The idea, which is the layer this lane was missing
+    //
+    // ‼️ IT WRAPS page-angles.ts AND REIMPLEMENTS NOTHING, the same rule the rest of this file
+    // keeps. The Slack door reaches the identical functions through handlePageAngleThreadReply,
+    // so `angle 3 pick 2` cannot come to mean two things.
+    // ─────────────────────────────────────────────────────────────────────
+
+    case "angles_write": {
+      const rows = await planRows(clientId);
+      if ("error" in rows) return { ok: false, error: rows.error };
+      if (!rows.length) {
+        return { ok: false, error: "No planned pages yet. Propose the plan and approve it first." };
+      }
+
+      const { generateAnglesForPlan, anglesFor } = await import("@/lib/clients/page-angles");
+
+      // ‼️ THE ROW'S ID, NOT A POSITION, AND THIS USED TO BE NINE LINES OF INDEX ARITHMETIC UNDER A
+      // COMMENT EXPLAINING THE TRAP. generateAnglesForPlan's `only` is a position on the
+      // rank-ordered card and every number this lane takes is a RANK, so the conversion had to
+      // happen somewhere, and anywhere it happens it can name the wrong page after a drop leaves a
+      // gap. It now takes `rowId`, so there is nothing to convert and nothing to get wrong.
+      let rowId: string | undefined;
+      if (input.rank) {
+        const named = atRank(rows, input.rank);
+        if (!named) {
+          return { ok: false, error: `There is no page ${input.rank} in this plan. There are ${rows.length}.` };
+        }
+        rowId = named.id;
+      }
+
+      const res = await generateAnglesForPlan({ clientId, by: actor, rowId });
+
+      // The options come back with the result, for the reason headlines_write states below: a count
+      // is a true sentence that answers nothing, in front of somebody whose next move is to pick one.
+      const angles = await anglesFor(clientId);
+      const lines = rows.flatMap((row) => {
+        const mine = angles.filter((a) => a.planId === row.id);
+        if (!mine.length) return [`${row.rank}. ${row.targetKeyword}: no ideas written`];
+        const picked = mine.find((a) => a.status === "approved");
+        return [
+          `${row.rank}. ${row.targetKeyword}${picked ? `: picked ${picked.idea}` : ""}`,
+          ...(picked ? [] : mine.map((a, i) => `     option ${i + 1}: ${a.idea}`)),
+        ];
+      });
+
+      if (!res.ok && !res.drafted) {
+        return { ok: false, error: res.lines.join(" ").replace(/:warning:\s*/g, "") };
+      }
+
+      return {
+        ok: true,
+        message: [
+          res.drafted
+            ? `Wrote three ideas for ${res.drafted} page${res.drafted === 1 ? "" : "s"}.`
+            : "Every page already had its ideas.",
+          ...(res.failed ? [`${res.failed} failed.`] : []),
+          "Show these to him verbatim and ask which idea he wants per page:",
+          ...lines,
+        ].join("\n"),
+      };
+    }
+
+    case "angle_pick": {
+      const rows = await planRows(clientId);
+      if ("error" in rows) return { ok: false, error: rows.error };
+      const row = atRank(rows, input.rank);
+      if (!row) {
+        return { ok: false, error: `There is no page ${input.rank} in this plan. There are ${rows.length}.` };
+      }
+
+      const { anglesFor, pickAngle } = await import("@/lib/clients/page-angles");
+
+      // ‼️ INDEXED OVER EVERY ANGLE ON THE PAGE, NOT OVER THE DRAFTS, and that matches the Slack
+      // door exactly. Numbering the drafts alone would renumber the list the moment one was picked.
+      const mine = (await anglesFor(clientId)).filter((a) => a.planId === row.id);
+      const choice = mine[Number(input.pick) - 1];
+      if (!choice) {
+        return {
+          ok: false,
+          error: `Page ${row.rank} has ${mine.length} idea${mine.length === 1 ? "" : "s"} on file, so there is no option ${input.pick}.`,
+        };
+      }
+
+      const res = await pickAngle({ clientId, angleId: choice.id, by: actor });
+      if (!res.ok) return { ok: false, error: res.error };
+
+      const after = await readBatch(clientId);
+      const left = "error" in after ? 0 : after.needAngle.length;
+
+      return {
+        ok: true,
+        message: [
+          `Page ${row.rank} argues: ${res.angle.idea}`,
+          ...(res.angle.indoctrination ? [`The belief it installs: ${res.angle.indoctrination}`] : []),
+          "The other two are kept as rejected, which is what teaches the next set.",
+          left
+            ? `${left} page${left === 1 ? "" : "s"} still need an idea.`
+            : "Every page has its idea. Headlines next, and they are written from these rather than from the keyword alone.",
+        ].join("\n"),
+      };
+    }
+
     case "headlines_write": {
       const batch = await readBatch(clientId);
       if ("error" in batch) return { ok: false, error: batch.error };
       if (!batch.rows.length) {
         return { ok: false, error: "No approved pages yet. Approve the plan first." };
       }
+      // ‼️ THE IDEA COMES BEFORE THE LINE, AND THIS IS THE GATE THAT WAS MISSING. Without it the
+      // generator is asked to write a line about a phrase, and thirty three candidates come back
+      // reading as thirty three ways of saying the phrase out loud. Same shape as the skeleton
+      // gate below: it refuses on the condition, and the condition is read back out of readBatch.
+      if (batch.needAngle.length) {
+        return {
+          ok: false,
+          error:
+            `${batch.needAngle.length} page${batch.needAngle.length === 1 ? "" : "s"} still need an idea. ` +
+            "Run the angles first: a headline written before anybody decided what the page argues is a line about a phrase.",
+        };
+      }
 
-      const existing = await optionsFor(clientId, batch.rows);
+      // ‼️ NARROWED AFTER THE GATE AND NEVER INSIDE IT. The gate above refuses on the BATCH and
+      // its condition is read character for character by _probe-launch-pages.ts; adding
+      // `&& !input.rank` to it would make a per-page press skip the batch question entirely, which
+      // is how eleven pages get headlines written off one page's idea. The per-page question is
+      // asked by writeForStage, reached through page_write.
+      const targets = input.rank
+        ? [atRank(batch.rows, input.rank)].filter((r): r is PlanRow => Boolean(r))
+        : batch.rows;
+      if (!targets.length) {
+        return { ok: false, error: `There is no page ${input.rank} in this batch. There are ${batch.rows.length}.` };
+      }
+
+      const existing = await optionsFor(clientId, targets);
       const failures: string[] = [];
       let written = 0;
-      for (const row of batch.rows) {
+      for (const row of targets) {
         // ‼️ SKIPPED WHEN OPTIONS ALREADY EXIST, so pressing again after a partial failure does not
         // bury the three somebody has already read under three more.
         if ((existing.get(row.id) ?? []).length) continue;
@@ -672,11 +1005,11 @@ export async function runLaunchPagesAction(input: LaunchPagesInput): Promise<Lau
       // Asked to show the headline options the chat ran this, got "Every page already had its three
       // options", and stopped: a true sentence that answers nothing, in front of a person whose next
       // move is to pick one. Whichever verb the model reaches for, the candidates come back with it.
-      const after = await optionsFor(clientId, batch.rows);
-      const lines = batch.rows.flatMap((row) => {
+      const after = await optionsFor(clientId, targets);
+      const lines = targets.flatMap((row) => {
         const opts = after.get(row.id) ?? [];
-        if (row.headline) return [`${row.rank}. ${row.targetKeyword} — picked: ${row.headline}`];
-        if (!opts.length) return [`${row.rank}. ${row.targetKeyword} — no options written`];
+        if (row.headline) return [`${row.rank}. ${row.targetKeyword}: picked ${row.headline}`];
+        if (!opts.length) return [`${row.rank}. ${row.targetKeyword}: no options written`];
         return [
           `${row.rank}. ${row.targetKeyword}`,
           ...opts.map((h, i) => `     option ${i + 1}: ${h}`),
@@ -757,6 +1090,81 @@ export async function runLaunchPagesAction(input: LaunchPagesInput): Promise<Lau
 
     // ‼️ IT HANDS BACK A PROMPT AND STOPS, WHICH IS THE WHOLE DESIGN OF THIS STAGE (D10). One
     // prompt for the batch, run wherever the research is actually done, pasted back below.
+    // ─────────────────────────────────────────────────────────────────────
+    // How a page hands over
+    //
+    // ‼️ ONE TOOL PER CLIENT, AND THIS DOES NOT CHANGE THAT. tool-lane.ts calls the tool "the
+    // eighth page, its own slot beside the seven", and client_assets carries a unique index
+    // allowing one not-dropped row each. What was missing was never a second tool, it was the
+    // writer that puts the one tool ON a page. Every other page hands over with `plan_cta`.
+    // ─────────────────────────────────────────────────────────────────────
+
+    case "tool_options": {
+      const { toolOptions, clientTool } = await import("@/lib/clients/tool-lane");
+      const options = await toolOptions(clientId);
+      if (!options.length) {
+        return { ok: false, error: "There are no tools in the registry that suit this client yet." };
+      }
+      const current = await clientTool(clientId);
+
+      return {
+        ok: true,
+        message: [
+          "One page of the build is a thing the reader uses rather than reads. These are the ones that suit this client:",
+          ...options.flatMap((o, i) => [
+            `${i + 1}. ${o.component.label}${o.existingAssetId ? "  (already in the library for this vertical)" : ""}`,
+            `     it answers: ${o.component.answers}`,
+            `     it is wrong when: ${o.component.limits}`,
+            ...(o.because ? [`     they rank for: ${o.because}`] : []),
+          ]),
+          current
+            ? `Picked already: ${current.componentKey}${current.pageId ? ", and it is on a page." : ", but it is not on a page yet."}`
+            : "Nothing picked yet. Say which one, and which page it goes on.",
+        ].join("\n"),
+      };
+    }
+
+    case "tool_pick": {
+      const rows = await planRows(clientId);
+      if ("error" in rows) return { ok: false, error: rows.error };
+      const row = atRank(rows, input.rank);
+      if (!row) {
+        return { ok: false, error: `There is no page ${input.rank} in this plan. There are ${rows.length}.` };
+      }
+      // A tool renders INSIDE a page, so the page has to exist. It does not exist until the
+      // skeleton stage opens one, which is the same ordering every other stage here keeps.
+      if (!row.pageId) {
+        return {
+          ok: false,
+          error: `Page ${row.rank} has no page yet, and a tool renders inside one. Write its skeleton first.`,
+        };
+      }
+
+      const { pickTool, bindToolToPage, clientTool } = await import("@/lib/clients/tool-lane");
+
+      // Choosing is optional here: the tool is normally picked at step twelve, in front of the
+      // keyword evidence, and this stage is only being asked WHICH page it goes on.
+      if (input.pick) {
+        const picked = await pickTool(clientId, Number(input.pick), actor);
+        if (!picked.ok) return { ok: false, error: picked.error };
+      } else if (!(await clientTool(clientId))) {
+        return {
+          ok: false,
+          error: "No tool has been picked for this client yet. Ask for the tool options first, then say which one.",
+        };
+      }
+
+      const bound = await bindToolToPage({ clientId, pageId: row.pageId, by: actor });
+      if (!bound.ok) return { ok: false, error: bound.error };
+
+      return {
+        ok: true,
+        message:
+          `Page ${row.rank} is the tool page: ${bound.componentKey} renders inside it. ` +
+          "It hands over by being used, so it needs no cta line.",
+      };
+    }
+
     case "research_prompt": {
       const { buildBatchPrompt } = await import("@/lib/clients/page-batch");
       const built = await buildBatchPrompt(clientId);
@@ -806,9 +1214,12 @@ export async function runLaunchPagesAction(input: LaunchPagesInput): Promise<Lau
     case "draft_wave": {
       const batch = await readBatch(clientId);
       if ("error" in batch) return { ok: false, error: batch.error };
-      if (batch.needHeadline.length || batch.needSkeleton.length) {
+      if (batch.needHeadline.length || batch.needFormats.length || batch.needSkeleton.length) {
         const parts: string[] = [];
         if (batch.needHeadline.length) parts.push(`${batch.needHeadline.length} need a headline`);
+        if (batch.needFormats.length) {
+          parts.push(`${batch.needFormats.length} need a title tag or their ad headlines`);
+        }
         if (batch.needSkeleton.length) parts.push(`${batch.needSkeleton.length} need a skeleton`);
         return {
           ok: false,
@@ -840,6 +1251,253 @@ export async function runLaunchPagesAction(input: LaunchPagesInput): Promise<Lau
           ...failed.map((o) => `Page ${o.rank} was not drafted: ${o.detail}`),
           ...notes.map((o) => `Page ${o.rank}: ${o.detail}`),
         ].join(" "),
+      };
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // The per-page walk
+    //
+    // ‼️ IT WRAPS page-batch.ts AND REIMPLEMENTS NOTHING, the same rule the rest of this file
+    // keeps. writeForStage and pickForStage own which stage a page is at and what a number means
+    // there; the Slack door reaches the identical two functions through handlePreCallThreadReply,
+    // so `page 3 pick 2` cannot come to mean two things.
+    //
+    // ‼️ THE RANK IS RESOLVED HERE AND THE DIGIT IS NEVER GUESSED. In this door a model reads the
+    // transcript and sends an explicit rank, which is the one thing that differs from the Slack
+    // door: there the grammar carries the page. Both arrive at the same (row, option) pair.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    case "page_write": {
+      const batch = await readBatch(clientId);
+      if ("error" in batch) return { ok: false, error: batch.error };
+      const row = atRank(batch.rows, input.rank);
+      if (!row) {
+        return {
+          ok: false,
+          error: `There is no page ${input.rank} in this batch. There are ${batch.rows.length}.`,
+        };
+      }
+
+      const res = await writeForStage(clientId, row, actor, batch);
+      if (!res.ok) return { ok: false, error: res.error };
+      return { ok: true, message: ["Show these to him verbatim:", ...res.lines].join("\n") };
+    }
+
+    case "page_pick": {
+      const batch = await readBatch(clientId);
+      if ("error" in batch) return { ok: false, error: batch.error };
+      const row = atRank(batch.rows, input.rank);
+      if (!row) {
+        return {
+          ok: false,
+          error: `There is no page ${input.rank} in this batch. There are ${batch.rows.length}.`,
+        };
+      }
+      if (!input.pick) {
+        return { ok: false, error: `Which option for page ${row.rank}?` };
+      }
+
+      const res = await pickForStage(clientId, row, Number(input.pick), actor, batch);
+      if (!res.ok) return { ok: false, error: res.error };
+      return { ok: true, message: res.lines.join("\n") };
+    }
+
+    case "page_title": {
+      const batch = await readBatch(clientId);
+      if ("error" in batch) return { ok: false, error: batch.error };
+      const row = atRank(batch.rows, input.rank);
+      if (!row) {
+        return {
+          ok: false,
+          error: `There is no page ${input.rank} in this batch. There are ${batch.rows.length}.`,
+        };
+      }
+
+      const { showTitlesForPage } = await import("@/lib/clients/page-batch");
+      const res = await showTitlesForPage(clientId, row);
+      if (!res.ok) return { ok: false, error: res.error };
+      return { ok: true, message: ["Show these to him verbatim and ask which:", ...res.lines].join("\n") };
+    }
+
+    case "page_title_pick": {
+      const batch = await readBatch(clientId);
+      if ("error" in batch) return { ok: false, error: batch.error };
+      const row = atRank(batch.rows, input.rank);
+      if (!row) {
+        return {
+          ok: false,
+          error: `There is no page ${input.rank} in this batch. There are ${batch.rows.length}.`,
+        };
+      }
+      if (!input.pick) {
+        return { ok: false, error: `Which title tag for page ${row.rank}?` };
+      }
+
+      const { pickTitleForPage } = await import("@/lib/clients/page-batch");
+      const res = await pickTitleForPage(clientId, row, Number(input.pick), actor);
+      if (!res.ok) return { ok: false, error: res.error };
+      return { ok: true, message: res.lines.join("\n") };
+    }
+
+    // ‼️ ONE PAGE, AND IT IS A SEPARATE VERB FROM draft_wave RATHER THAN A FLAG ON IT. A wave runs
+    // to a 240 s budget inside a route that allows 300, and a per-page press is about eighty
+    // seconds: the two have different shapes and a caller choosing between them is choosing how
+    // long to wait. The per-row lease in draftOne is what makes them safe side by side, so a wave
+    // and a press cannot both write the same page.
+    case "page_draft": {
+      const batch = await readBatch(clientId);
+      if ("error" in batch) return { ok: false, error: batch.error };
+      const row = atRank(batch.rows, input.rank);
+      if (!row) {
+        return {
+          ok: false,
+          error: `There is no page ${input.rank} in this batch. There are ${batch.rows.length}.`,
+        };
+      }
+
+      // ‼️ GATED ON THIS PAGE AND NOT ON THE BATCH, which is the whole point of a per-page draft:
+      // ten pages owing a headline must not stop the eleventh being written. Same two conditions
+      // draft_wave refuses on, asked of one row, and read off the same readBatch.
+      if (batch.needHeadline.some((r) => r.id === row.id) || batch.needSkeleton.some((r) => r.id === row.id)) {
+        return {
+          ok: false,
+          error: `Page ${row.rank} is not ready: a page drafted off no headline or no outline is a page written from nothing.`,
+        };
+      }
+
+      const { draftOnePage } = await import("@/lib/clients/pre-call-pages");
+      const out = await draftOnePage(clientId, row, actor);
+      if ("error" in out) return { ok: false, error: out.error };
+
+      // The step is ticked off what EXISTS, through the verifier, exactly as draft_wave does it.
+      if (out.status === "drafted") await autoCompleteLaunchStep(clientId, "pages_drafted", actor);
+
+      const after = await readBatch(clientId);
+      const left = "error" in after ? 0 : after.rows.length - after.drafted.length;
+      return {
+        ok: true,
+        remaining: left,
+        message: [
+          out.status === "drafted"
+            ? `Page ${row.rank} has a body.`
+            : out.status === "skipped"
+              ? `Page ${row.rank} was not drafted: ${out.detail}.`
+              : `Page ${row.rank} failed: ${out.detail}`,
+          out.status === "drafted"
+            ? `Read it, then \`page_check\` on ${row.rank} reads it against the evidence and Google's guidance.`
+            : "",
+          left ? `${left} page${left === 1 ? "" : "s"} still want a body.` : "Every page has a body.",
+        ]
+          .filter(Boolean)
+          .join(" "),
+      };
+    }
+
+    // ‼️ THIS IS THE CHECK THE LANE HAD NO DOOR TO, AND WITHOUT IT PUBLISHING WAS UNREACHABLE.
+    // assertGatePassed refuses a page whose gate has never run, and `never_run` is deliberately NOT
+    // waivable because the answer is to press Check rather than to sign a waiver. The press existed
+    // on /dashboard/clients/[id] and in the page studio thread, which are two surfaces this lane
+    // does not have, so a launch publish refused and named nowhere to go.
+    //
+    // ‼️ IT CALLS runGate AND NEVER assertGatePassed. test-onboarding-artifacts.ts asserts
+    // assertGatePassed has exactly ONE call site and that it is inside publishPage; a second would
+    // put a hole in both rails at once. This records a verdict and publishes nothing, and
+    // publishPage still re-reads and re-hashes the body itself.
+    //
+    // ‼️ IT OFFERS NO WAIVER, for the reason stated at the top of this file.
+    case "page_check": {
+      const rows = await planRows(clientId);
+      if ("error" in rows) return { ok: false, error: rows.error };
+      const row = atRank(rows, input.rank);
+      if (!row) {
+        return { ok: false, error: `There is no page ${input.rank} in this plan. There are ${rows.length}.` };
+      }
+      if (!row.pageId) {
+        return {
+          ok: false,
+          error: `Page ${row.rank} has no body yet, so there is nothing to check. Draft it first.`,
+        };
+      }
+
+      const { runGate } = await import("@/lib/hub/page-gate");
+      const res = await runGate(clientId, row.pageId, { runBy: actor });
+      if (!res.ok) return { ok: false, error: res.error };
+
+      // What the card counts. Its own select, in this path only and never in readBatch, because
+      // readBatch runs on every turn and a body is the largest column on the row.
+      const { data: page } = await supabaseAdmin
+        .from("client_pages")
+        .select("slug, answer_md")
+        .eq("id", row.pageId)
+        .eq("client_id", clientId)
+        .maybeSingle();
+
+      const body = String((page as { answer_md?: string | null } | null)?.answer_md ?? "");
+      const { bodySections } = await import("@/lib/hub/draft-page");
+      const sections = bodySections(body).filter((s) => s.heading);
+
+      const { loadNumberedEvidence, isFirstParty } = await import("@/lib/clients/page-evidence");
+      const refs = await loadNumberedEvidence(clientId, row.pageId).catch(() => []);
+
+      const { pageReviewLines } = await import("@/lib/clients/page-batch");
+      return {
+        ok: true,
+        message: pageReviewLines({
+          row,
+          slug: ((page as { slug?: string | null } | null)?.slug as string | null) ?? row.slug,
+          words: body.split(/\s+/).filter(Boolean).length,
+          headings: sections.map((s) => s.heading),
+          citations: refs.length
+            ? { total: refs.length, firstParty: refs.filter((r) => isFirstParty(r.type)).length }
+            : null,
+          verdict: res.run.verdict,
+          checks: res.run.checks,
+          ranAt: res.run.createdAt,
+        }).join("\n"),
+      };
+    }
+
+    // ‼️ THE OTHER HEADLINE, AND THE TWO ARE NOT COMPETING DRAFTS OF ONE LINE. The page's H1 is a
+    // question a buyer types, because being cited when she types it is the mechanism this lane
+    // sells. These are the ad, the advertorial and the VSL headlines that send her to the page,
+    // which it cannot generate for itself. Written from the SAME angle, so they argue one thing.
+    case "page_ads": {
+      const rows = await planRows(clientId);
+      if ("error" in rows) return { ok: false, error: rows.error };
+      const row = atRank(rows, input.rank);
+      if (!row) {
+        return { ok: false, error: `There is no page ${input.rank} in this plan. There are ${rows.length}.` };
+      }
+
+      const { generateDrHeadlinesForPage, storeDrHeadlines, drHeadlinesFor, drHeadlineLines } =
+        await import("@/lib/clients/page-dr-headlines");
+
+      // ‼️ ALREADY-WRITTEN ONES COME BACK RATHER THAN BEING BURIED UNDER TWENTY MORE, the rule
+      // headlines_write keeps. Asking twice is usually asking to see them again.
+      const existing = (await drHeadlinesFor(clientId, [row.id])).get(row.id) ?? [];
+      if (existing.length) {
+        return { ok: true, message: drHeadlineLines(row, existing).join("\n") };
+      }
+
+      const got = await generateDrHeadlinesForPage({ clientId, row });
+      if (!got.ok) return { ok: false, error: got.error };
+
+      const { loadOffer } = await import("@/lib/clients/offers");
+      const offer = await loadOffer(clientId).catch(() => null);
+      const stored = await storeDrHeadlines({
+        clientId,
+        planId: row.id,
+        headlines: got.headlines,
+        audienceId: offer?.audienceId ?? null,
+      });
+      if (!stored.ok) return { ok: false, error: stored.error };
+
+      return {
+        ok: true,
+        message: [
+          ...drHeadlineLines(row, got.headlines),
+          ...(got.dropped.length ? ["", `${got.dropped.length} were refused by the rules and dropped.`] : []),
+        ].join("\n"),
       };
     }
 

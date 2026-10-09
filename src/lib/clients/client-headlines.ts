@@ -23,7 +23,12 @@ import { stripEmDashes } from "@/lib/reel/text";
 import { vocBlock } from "@/lib/reel/voc-quotes";
 import { loadAeoHeadlineEngine } from "@/data/reel/aeo-headline-engine";
 import { approvedNumbersBlock, repeatedOpenings } from "@/lib/reel/creative-director";
-import { carriesKeyword } from "@/lib/hub/keyword-placement";
+import {
+  carriesAnyKeyword,
+  carriesKeyword,
+  keywordFamily,
+  keywordOverlap,
+} from "@/lib/hub/keyword-placement";
 import { getPostFormat, type PostFormatId } from "@/config/post-formats";
 import { audienceFor, sharedBankFor } from "./audiences";
 
@@ -88,6 +93,17 @@ function model(): ClaudeModel {
 export const WEEKLY_HEADLINES = 20;
 
 /**
+ * How many H1 candidates one planned page gets.
+ *
+ * ‼️ SIX, RAISED FROM THREE ON 2026-10-08. Matthew: "works ONE page at a time to at least 6
+ * concepts in all three formats before that page moves on". Three was calibrated for a card
+ * offering a quick pick; six is what a page gets when the walk stops on it until it is decided.
+ * `SEO_TITLES_PER_PAGE` is the same number for the same reason. The ad hooks stay at twenty,
+ * because those are a bank rather than a shortlist.
+ */
+export const AEO_HEADLINES_PER_PAGE = 6;
+
+/**
  * The most quotes worth putting in one prompt.
  *
  * Twenty is already more heat than a model can use in one pass and the bank grows forever,
@@ -150,9 +166,37 @@ export function unbackedNumbers(headline: string, haystack: string): string[] {
     const bare = m[0].replace(/[,$%]/g, "");
     if (bare.length < 2) continue;
     if (/^(?:19|20)\d{2}$/.test(bare)) continue;
+    if (isStructuralCount(m[0], headline.slice((m.index ?? 0) + m[0].length))) continue;
     if (!hay.includes(bare)) out.push(m[0]);
   }
   return [...new Set(out)];
+}
+
+/**
+ * Is this figure counting what the PAGE contains, rather than claiming something about the world?
+ *
+ * ‼️ A THIRD EXEMPTION, AND IT IS THE NARROWEST ONE IN THIS FILE ON PURPOSE. The format suffix
+ * the 2026-10-08 engine asks for puts a number in almost every headline Matthew wrote: "A 30-Day
+ * Plan", "5 Differences That Affect Your Bookings". Both were REFUSED by this function before the
+ * exemption existed, because 30 is two digits and nothing on file says it, so his own quality bar
+ * could not survive its own validator.
+ *
+ * The distinction is the one law 5 of the engine already draws. "A 30-Day Plan" is a promise
+ * about the page, and the page keeps it by containing a thirty day plan. "Ranked within 90 days"
+ * is a promise about her business, and nothing can keep that.
+ *
+ * ‼️ SO THE STRUCTURAL NOUN IS REQUIRED AND A BARE TIME UNIT IS NOT ENOUGH, which is what keeps
+ * the live failure refused. "within 90 days" has a time unit and no structural noun after it, so
+ * it is still an unbacked figure. "45%" carries a percent sign and can never reach here at all.
+ * If this list ever grows, the test to keep passing is that "within 90 days" and "45% of local
+ * searches" are both still flagged: those are the two strings that cost real money.
+ */
+function isStructuralCount(matched: string, after: string): boolean {
+  // A percentage or an amount of money is a claim about the world, never a count of sections.
+  if (/[%$]/.test(matched)) return false;
+  return /^[\s-]*(?:day|week|month|minute|hour)?[\s-]*(?:plan|step|steps|differences|ways|reasons|mistakes|things|questions|signs|checks|rules|examples|tips|lessons|parts|stages)\b/i.test(
+    after
+  );
 }
 
 /**
@@ -163,14 +207,103 @@ function hasBannedDash(text: string): boolean {
   return /[—–]|--/.test(text);
 }
 
-/** Roughly "does this read like something a person would type into a search box?" */
+// ─────────────────────────────────────────────────────────────────────────────
+// Rule 1 and rule 3b, in code: the shape, and the length this lane never had
+//
+// ‼️ THE WHOLE SECTION EXISTS BECAUSE A PROMPT EDIT COULD NOT HAVE FIXED THE BUG. Matthew,
+// 2026-10-07, on the card for SRT's own pages: "nobody would actually google this, or search it
+// like that, this sounds too ai". The line was 21 words of first-person confession, and it was
+// LEGAL: isQueryShaped's one non-question door was the confession, and there was no length rule
+// in this file or in the engine. Changing the engine's prose alone would have left both doors
+// open, because these functions are what decides which lines survive.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The word band for the typed-query core, decided with Matthew on 2026-10-08.
+ *
+ * ‼️ MEASURED ON THE CORE, NOT ON THE WHOLE LINE, AND HIS OWN EXAMPLES ARE WHY. His five worked
+ * H1s run 13, 16, 11, 9 and 13 words end to end, so a hard 12-word cap on the full string
+ * rejects three of the five. Measured as a core they are 10, 9, 5, 9 and 8, and all five pass.
+ * The core is what somebody types; the suffix is the promise of the answer's shape.
+ *
+ * ‼️ AND 13 TO 15 WARNS RATHER THAN REFUSES. A hard refusal at 12 also rejected 13 of the 20
+ * headlines he wrote on 2026-09-12, and this probe's own doctrine is that a rule rejecting one of
+ * his is the wrong rule. The warn tier keeps 4 to 12 as the target, reports 13 to 15, and refuses
+ * above 15. The 21-word line that started all of this is refused either way, which is the test
+ * that mattered.
+ */
+export const QUERY_CORE_MIN_WORDS = 4;
+export const QUERY_CORE_TARGET_WORDS = 12;
+export const QUERY_CORE_MAX_WORDS = 15;
+/** The whole line, format suffix included. */
+export const HEADLINE_MAX_WORDS = 18;
+
+/**
+ * The part of a headline somebody would actually type, which is the part the band is measured on.
+ *
+ * Everything up to the first question mark, colon, or ", and". Those three are the only ways a
+ * format suffix is attached in his examples:
+ *   "How Do I Get My Med Spa Recommended by ChatGPT? A 30-Day Plan"      -> the question mark
+ *   "AI Search vs Google Search: 5 Differences That Affect Your Bookings" -> the colon
+ *   "Why Facebook Ads Stop Working for Med Spas, and What to Do Instead"  -> the ", and"
+ *
+ * A line with none of the three IS its own core, which is why a bare 21-word confession cannot
+ * hide behind this function.
+ *
+ * PURE, so the probe can assert the band offline.
+ */
+export function typedQueryCore(headline: string): string {
+  const t = headline.trim();
+  const m = t.match(/^([\s\S]*?)(?:\?|:|,\s+and\b)/i);
+  return (m ? m[1] : t).trim();
+}
+
+/** Words in a string, by whitespace. */
+function wordCount(text: string): number {
+  return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+/** The two counts the band is judged on. Exported for the card and the probe. */
+export function headlineLength(headline: string): { core: number; full: number } {
+  return { core: wordCount(typedQueryCore(headline)), full: wordCount(headline) };
+}
+
+/**
+ * Does this read like something a person would type into a search box?
+ *
+ * ‼️ REBUILT 2026-10-08, AND NARROWING THE OLD ONE WOULD NOT HAVE WORKED. It used to accept a
+ * line only if it ended in "?" or opened with i / i'm / my / we / our / am i / does anyone /
+ * is anyone / nobody / no one. That second clause IS the confessional door the diagnosis orders
+ * closed, so removing it leaves "ends with ?", which rejects three of Matthew's own five
+ * examples: the mid-string question mark in "...by ChatGPT? A 30-Day Plan", the colon form in
+ * "AI Search vs Google Search: 5 Differences...", and the comma form in "Why Facebook Ads Stop
+ * Working for Med Spas, and What to Do Instead".
+ *
+ * So there are now three doors, and all three are shapes somebody types:
+ *   1. a question mark ANYWHERE in the line, which lets a format suffix follow it
+ *   2. a question-word opener, which is what a voice or chat query looks like without the mark
+ *   3. a comparison or a count with a colon, which is the one declarative people really type
+ *
+ * First person is not banned as vocabulary: "Why isn't my med spa showing up in ChatGPT?" opens
+ * with "why" and is correct. What is gone is the bare statement that confesses instead of asking.
+ */
 export function isQueryShaped(headline: string): boolean {
   const t = headline.trim();
   if (!t) return false;
-  // A question is always query-shaped. A statement is allowed only as a first-person
-  // confession, which is rule 1's one non-question door ("My med spa is invisible in ChatGPT.").
-  if (t.endsWith("?")) return true;
-  return /^(?:i|i'm|im|my|we|our|am i|does anyone|is anyone|nobody|no one)\b/i.test(t);
+
+  // 1. A question, with or without a format suffix after it.
+  if (t.includes("?")) return true;
+
+  // 2. The openers of a typed or spoken query. No first-person pronouns in this list on
+  //    purpose: "my med spa is invisible" is a statement, "why is my med spa invisible" is a
+  //    query, and the difference is exactly this word.
+  if (/^(?:how|why|what|whats|what's|when|where|which|who|whose|do|does|did|is|are|am|can|could|should|will|would|if)\b/i.test(t)) {
+    return true;
+  }
+
+  // 3. "X vs Y: ..." and "N things that ...": a colon carrying a comparison or a count. The
+  //    colon is required, because without it this door would accept any statement at all.
+  return /^[^:]{3,}:\s*\S/.test(t) && /\bvs\.?\b|\bversus\b|^\s*\d+\s|\:\s*\d+\s/i.test(t);
 }
 
 export interface HeadlineFault {
@@ -212,12 +345,36 @@ export function headlineFaults(
   }
   for (const h of headlines) {
     const promise = promiseFault(h);
+    const len = headlineLength(h);
     if (promise) out.push({ headline: h, why: `${promise}, which nothing on file can back` });
     else if (hasBannedDash(h)) out.push({ headline: h, why: "an em dash, en dash or double hyphen" });
     else if (!isQueryShaped(h)) {
       out.push({
         headline: h,
-        why: "not query shaped: it is neither a question nor a first-person confession",
+        why:
+          "not query shaped: it is neither a question nor a comparison somebody would type. A " +
+          "statement that confesses instead of asking is the shape this refuses",
+      });
+    } else if (len.core > QUERY_CORE_MAX_WORDS) {
+      out.push({
+        headline: h,
+        why:
+          `a ${len.core} word query, and nobody types that. The part before the question mark, the ` +
+          `colon or the ", and" has to be ${QUERY_CORE_MIN_WORDS} to ${QUERY_CORE_TARGET_WORDS} words ` +
+          `(${QUERY_CORE_MAX_WORDS} at the absolute outside). Ask the shorter question`,
+      });
+    } else if (len.core < QUERY_CORE_MIN_WORDS) {
+      out.push({
+        headline: h,
+        why: `only ${len.core} word${len.core === 1 ? "" : "s"} before the break, which is a phrase rather than a question`,
+      });
+    } else if (len.full > HEADLINE_MAX_WORDS) {
+      out.push({
+        headline: h,
+        why:
+          `${len.full} words end to end. The question is short enough but what follows it is not: a ` +
+          `format suffix names the shape of the answer in a few words, so keep the whole line to ` +
+          `${HEADLINE_MAX_WORDS}`,
       });
     } else {
       const bad = unbackedNumbers(h, numberHaystack);
@@ -236,6 +393,49 @@ export function headlineFaults(
       headline: "",
       why: `"${opening}" opens more than ${maxPerOpening} headlines, which rule 5 forbids`,
     });
+  }
+  return out;
+}
+
+/**
+ * What is worth saying about a headline that is still legal. Rendered on the card, never refused.
+ *
+ * ‼️ A SECOND FUNCTION RATHER THAN A FLAG ON HeadlineFault, BECAUSE A FAULT IS A REJECTION. Every
+ * caller of `headlineFaults` treats a non-empty result as "throw this batch back at the model":
+ * `isHeadlines` validates on `.length === 0`, and precall-headlines.ts drops the line. A warning
+ * pushed into that list would silently become a refusal, which is the opposite of the warn tier
+ * Matthew asked for on 2026-10-08.
+ *
+ * PURE, so the card and the probe read the same answer.
+ */
+export function headlineWarnings(headlines: readonly string[], keyword = ""): HeadlineFault[] {
+  const out: HeadlineFault[] = [];
+  const family = keyword ? keywordFamily(keyword) : [];
+  for (const h of headlines) {
+    const { core } = headlineLength(h);
+    if (core > QUERY_CORE_TARGET_WORDS && core <= QUERY_CORE_MAX_WORDS) {
+      out.push({
+        headline: h,
+        why: `${core} words, which is long for something somebody types. It is allowed, and shorter lands better`,
+      });
+    }
+    // ‼️ ONLY WHEN THE OVERLAP IS ACTUALLY THIN, AND WARNING ON EVERY PARTIAL WAS NOISE. Measured
+    // against Matthew's eleven worked H1s on 2026-10-09: warning whenever a headline dropped any
+    // keyword word flagged SEVEN of the eleven, which is a note on most of a card and therefore a
+    // note nobody reads. His page rule 3 asks the H1 only for "the question the user would type"
+    // and sets no keyword requirement at all, so a natural question that drops a qualifier is the
+    // NORMAL case here, not a defect. Below half the phrase is a different question.
+    if (keyword && !carriesAnyKeyword(h, keyword, family)) {
+      const { present, total } = keywordOverlap(h, keyword);
+      if (present > 0 && present * 2 < total) {
+        out.push({
+          headline: h,
+          why:
+            `only ${present} of the ${total} words in "${keyword}", so an engine has little to ` +
+            "match. Fine for an H1 if it is the question she types; the title tag is where the phrase has to be exact",
+        });
+      }
+    }
   }
   return out;
 }
@@ -580,8 +780,18 @@ export async function generateKeywordHeadlines(args: {
    * headline from isQueryShaped or from any other rule above.
    */
   postFormat?: PostFormatId | null;
+  /**
+   * What this page ARGUES, once somebody has picked its angle.
+   *
+   * ‼️ OPTIONAL FOR THE SAME REASON postFormat IS, AND OMITTING IT IS THE OLD BEHAVIOUR EXACTLY.
+   * Headlines can legitimately be asked for before an angle exists, so this adds a block to the
+   * brief rather than becoming a precondition. With it, three headlines are three doors into ONE
+   * argument; without it, the generator can only write about a phrase, which is precisely what
+   * page-angles.ts was built to stop ("thirty-three ways of saying the phrase out loud").
+   */
+  angle?: { idea: string; indoctrination: string | null; narrative: string | null } | null;
 }): Promise<{ ok: true; headlines: string[]; audienceId: string | null } | { ok: false; error: string }> {
-  const count = args.count ?? 3;
+  const count = args.count ?? AEO_HEADLINES_PER_PAGE;
   const keyword = args.keyword.trim();
   if (!keyword) return { ok: false, error: "No keyword was given, so there is nothing to aim the headlines at." };
 
@@ -591,13 +801,39 @@ export async function generateKeywordHeadlines(args: {
 
   const numberHaystack = [...ctx.approvedNumbers, ...ctx.quotes.map((q) => q.text)].join(" ");
   const shapeLine = headlineShapeLine(args.postFormat);
+  const family = keywordFamily(keyword);
 
   const faultsFor = (headlines: string[]): string[] => {
     const out = headlineFaults(headlines, count, numberHaystack).map((f) =>
       f.headline ? `"${f.headline}" has ${f.why}` : f.why
     );
+    // ‼️ THE KEYWORD IS NO LONGER A HARD REFUSAL HERE, AND MATTHEW'S OWN RULES ARE WHY. His page
+    // rule 2 puts the keyword requirement on the TITLE TAG ("keyword in the first 3-5 words",
+    // enforced hard in page-seo-titles.ts). His rule 3 asks the H1 for "the question the user
+    // would type" and sets no keyword requirement at all, because a 4 to 12 word natural question
+    // cannot always carry every content word of its phrase.
+    //
+    // Measured on 2026-10-08: carriesKeyword refused THREE of his five worked H1s. "How Much Does
+    // AEO Cost for a Med Spa" misses `pricing` in `aeo agency pricing`; "How Does ChatGPT Decide
+    // Which Local Business to Recommend?" misses `ranking`; "Why Facebook Ads Stop Working for Med
+    // Spas" misses the literal `not`. All three are the right headline for the page, so refusing
+    // them was the wrong rule. `keywordFamily` closes the morphology half of that gap and the
+    // remainder is reported rather than refused.
+    //
+    // The hinge the old comment worried about is kept elsewhere: a headline is bound to its
+    // keyword by `client_headlines.keyword_id` and `used_page_id`, not by its own wording.
+    //
+    // What stays a REFUSAL is zero overlap. A headline sharing not one content word with the
+    // phrase is not a naturally phrased version of it, it is a headline for another page.
     for (const h of headlines) {
-      if (!carriesKeyword(h, keyword)) out.push(`"${h}" does not carry "${keyword}". Every one of them must.`);
+      if (carriesAnyKeyword(h, keyword, family)) continue;
+      const { present, total } = keywordOverlap(h, keyword);
+      if (present === 0 && total > 0) {
+        out.push(
+          `"${h}" never mentions "${keyword}" or any part of it, so it is a headline for a ` +
+            "different page. Write it about THAT phrase, in her words rather than welded in whole."
+        );
+      }
     }
     return out;
   };
@@ -614,10 +850,34 @@ export async function generateKeywordHeadlines(args: {
         "That phrase is what a person typed to arrive at this page, so the headline has to be",
         "recognisably about it. Use its words. You may reorder them and you may write around them,",
         "and you should: a headline that reads like the phrase pasted into a sentence is worse than",
-        "one that answers it. What you may not do is write three headlines about the topic in",
+        `one that answers it. What you may not do is write ${count} headlines about the topic in`,
         "general and leave the phrase out. This is checked in code.",
         "",
-        `Give ${count} genuinely different angles on it, not ${count} rewrites of one line.`,
+        "You do NOT have to carry every word of the phrase. A natural question that drops one of",
+        `its words is better than an unnatural one that keeps them all: "${keyword}" phrased the`,
+        "way she would actually ask it is the target. What is refused is a headline with no part of",
+        "the phrase in it at all.",
+        "",
+        `‼️ LENGTH, AND IT IS CHECKED IN CODE. ${QUERY_CORE_MIN_WORDS} to ${QUERY_CORE_TARGET_WORDS} words up to the question mark, the`,
+        `colon, or the ", and". ${QUERY_CORE_MAX_WORDS} is the absolute ceiling and anything longer is refused outright.`,
+        `The whole line including any format suffix stays under ${HEADLINE_MAX_WORDS} words. Count before you answer.`,
+        "",
+        ...(args.angle
+          ? [
+              "",
+              "WHAT THIS PAGE ARGUES, WHICH IS WHAT THESE HEADLINES ARE FOR",
+              `  the idea: ${args.angle.idea}`,
+              ...(args.angle.indoctrination ? [`  the belief it installs: ${args.angle.indoctrination}`] : []),
+              ...(args.angle.narrative ? [`  the story it runs on: ${args.angle.narrative}`] : []),
+              "",
+              "Every one of these is a door into THAT argument. Write them so the page underneath is the",
+              "only thing that could follow. A line that could sit above any page on this phrase is a line",
+              "about a phrase rather than about an idea, and it is the thing being replaced here.",
+              "",
+              `Give ${count} genuinely different ways INTO that one argument. Not ${count} rewrites of one`,
+              `line, and not ${count} separate arguments: the idea is already decided.`,
+            ]
+          : [`Give ${count} genuinely different angles on it, not ${count} rewrites of one line.`]),
         ...(shapeLine
           ? [
               "",
@@ -671,9 +931,31 @@ export async function generateKeywordHeadlines(args: {
 // phrasing per client FOREVER, which is what stops week six re-proposing week two's line.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Where a headline came from. Matches the check constraint on client_headlines.origin. */
-/** `framework`: a headline idea from the short offer pasted at step 11 (docs/2026-09-15-offers-and-framework.sql). */
-export type HeadlineOrigin = "weekly" | "pre_call" | "manual" | "keyword" | "framework";
+/**
+ * Where a headline came from. Matches the check constraint on client_headlines.origin.
+ *
+ * `framework`: a headline idea from the short offer pasted at step 11
+ *   (docs/2026-09-15-offers-and-framework.sql).
+ *
+ * ‼️ TWO OF THESE ARE NOT H1 CANDIDATES AND NOTHING IN THE TYPE SAYS SO, which is why the
+ * column comment in docs/2026-10-08-page-headline-formats.sql says it instead. `weekly`,
+ * `pre_call`, `manual`, `keyword` and `framework` are all query-shaped page H1s. `dr_ad` and
+ * `seo_title` are the other two artifacts of the three-format split, held against
+ * `used_page_id`, and `optionsFor` filters origin='keyword' so neither can ever be offered as
+ * a page title. Each lane also declares its own const (DR_ORIGIN, SEO_ORIGIN) because each
+ * writes through its own file.
+ *
+ * `dr_ad` was missing from this union until 2026-10-08 even though the value shipped, so the
+ * one thing this type was for was not true of it.
+ */
+export type HeadlineOrigin =
+  | "weekly"
+  | "pre_call"
+  | "manual"
+  | "keyword"
+  | "framework"
+  | "dr_ad"
+  | "seo_title";
 
 export interface StoredHeadline {
   id: string;

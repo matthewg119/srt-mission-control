@@ -165,8 +165,35 @@ jobs:
       - name: Step re-run grammar, and the generated docs still describe the board
         run: bun --no-env-file run scripts/_probe-step-rerun.ts
 
+      # ‼️ THE TWO CHECKS GUARDING THE ENTIRE LAUNCH LANE, AND NEITHER WAS IN THIS FILE. Both
+      # have existed since the lane did, both are offline by construction, and both were run only
+      # when somebody remembered to. That is the exact failure this workflow's own header is about.
+      # The isolation one is the load-bearing half: the whole value of a second lane is that
+      # editing one cannot change the other, and no type defends that property.
+      - name: Launch lane isolation (the Slack engine stays out of it)
+        run: bun --no-env-file run scripts/_probe-launch-isolation.ts
+
+      - name: Launch lane page run (the stage gates, and the rails inside publishPage)
+        run: bun --no-env-file run scripts/_probe-launch-pages.ts
+
+      # The per-page walk's grammar runs in a thread that also takes dictation, research pastes and
+      # call notes, so a verb one character too loose files somebody's sentence as a decision.
+      - name: Page walk (a page's own stage, and no bare digit is a command)
+        run: bun --no-env-file run scripts/_probe-page-walk.ts
+
+      # ‼️ FOUR ARTIFACTS, FOUR LENGTH CONTRACTS, AND THE REGRESSION IS THEM CONVERGING. A reel
+      # title is 8 words or fewer, an ad hook is 12 to 45 words, a page H1 is a 4 to 12 word query
+      # core and a title tag is 50 to 60 CHARACTERS. They reach prompts through shared blocks, and
+      # in one prompt the shortest rule silently wins every run, which is why each has its own
+      # engine constant and why the aeo and seo probes assert the ABSENCE of each other's band.
+      #
+      # _probe-headline-first.ts was in neither this file nor package.json until 2026-10-08, so
+      # nothing ran it. It is offline by construction and it guards the pre-call lane's command
+      # grammar, which the three-format change reaches.
       - name: Headline probes
         run: |
           bun --no-env-file run scripts/_probe-aeo-headlines.ts
+          bun --no-env-file run scripts/_probe-seo-titles.ts
           bun --no-env-file run scripts/_probe-dr-headlines.ts
           bun --no-env-file run scripts/_probe-headline-page.ts
+          bun --no-env-file run scripts/_probe-headline-first.ts

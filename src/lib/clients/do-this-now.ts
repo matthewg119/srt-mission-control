@@ -214,7 +214,9 @@ export const STEP_ACTIONS: Record<StepKey, StepAction> = {
     bullets: [
       "`ladder` writes a rung per awareness stage, `ladder pick 4` anchors the offer at one.",
       "`pillar: 7` sets the offer page by its keyword number, `supports auto` takes the top six.",
-      "`angles auto` gives each page three ideas, `angle 3 pick 2` keeps one. The idea comes before the line.",
+      "`angles auto` gives each page three ideas, `angle 3 pick 2` keeps one. The idea comes before the line. " +
+        "One page at a time instead: `page 3` shows what it needs next, `page 3 pick 2` takes an option, " +
+        "then `page 3 draft` and `page 3 check`.",
       "`cta 3: <sentence>` sets the one line page 3 hands over with. Left alone it uses the house offer's own label. Offers are not written per page any more, so `magnets` refuses.",
       "`headlines` lists the candidates, `headlines pick 4, 9, 12` keeps seven.",
       "Then press Done. Nothing here publishes.",

@@ -60,6 +60,7 @@ import {
   isLaunchPageAction,
   launchPagesState,
   pageRunText,
+  pageWalkText,
   runLaunchPagesAction,
 } from "./pages";
 
@@ -137,6 +138,17 @@ export const ACTION_KINDS = [
   // 'manual_step', which day-zero.ts defines as an assertion that the archive happened rather than
   // proof of it, and no artifact may call a manual_step stamp a photograph.
   "file_evidence",
+  // ‼️ THE PASTE DOOR FOR CUSTOMER PAIN, AND IT IS A VERB RATHER THAN A SNIFFER. Matthew,
+  // 2026-10-07: he wants to paste Reddit-style phrases and have them "recognised, filed as VOC,
+  // and crumbled down into what somebody would actually type into ChatGPT". Neither file_document
+  // nor file_evidence takes them: the first accepts only the four foundation kinds and the second
+  // is step evidence.
+  //
+  // The reason it is an explicit kind and not a classifier on arriving text is the rule
+  // research-intake.ts states: a paste counts as research only when it says so, because sniffing
+  // for one "would eventually swallow somebody thinking out loud". This surface also takes
+  // dictation and call notes.
+  "file_voc",
 ] as const;
 
 export type ActionKind = (typeof ACTION_KINDS)[number];
@@ -164,7 +176,7 @@ export interface LaunchAction {
   which?: string;
   /** run_pages: which stage of the page run. One of PAGE_RUN_STAGES. */
   stage?: string;
-  /** run_pages: which planned page, by the rank the plan shows. */
+  /** run_pages and read_pages: which planned page, by the rank the plan shows. */
   rank?: number;
   /** run_pages stage=headline_pick: which of the three candidates, 1 to 3. */
   pick?: number;
@@ -329,6 +341,15 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "- You MAY publish, with publish_page. It still goes through publishPage(), so the Day-0 wall,",
     "  the quality gate and the destination question all still apply and you cannot talk past any",
     "  of them. Never publish unless he asked for it in this turn or the one before.",
+    "- ‼️ WHEN HE IS WORKING ONE PAGE, USE THE PER-PAGE VERBS, NOT THE BATCH ONES. page_write and",
+    "  page_pick act on a single rank and leave every other page where it is, which is what lets him",
+    "  keep several in flight at different stages. The batch verbs (angles_write, headlines_write,",
+    "  skeletons_write, draft_wave) act on ALL of them, so reach for one only when he asked for all.",
+    "- ‼️ A BARE NUMBER FROM HIM IS AN OPTION ON THE PAGE YOU JUST SHOWED HIM, and resolving it is",
+    "  YOUR job, not the server's. Read back which page the last card was about, and send page_pick",
+    "  with that rank and that pick. If the last card covered several pages, or you cannot tell which",
+    "  one he means, ASK which page rather than guessing: a pick against the wrong rank decides",
+    "  something on a page he was not looking at, and the other two options are thrown away.",
     "- You may change keywords and the strategy map, but ONLY when he says so in words. Never as a",
     "  tidy-up, never as a side effect of a question, and never a phrase he did not name.",
     "- Never touch the concierge without him saying yes in words.",
@@ -422,16 +443,55 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "THE PAGE RUN, WHICH IS HOW A KEYWORD BECOMES A LIVE PAGE:",
     "- ‼️ THE ORDER IS THE WHOLE DIFFICULTY AND IT CANNOT BE SHORTCUT. Approving the plan STOPPED",
     "  drafting on 2026-09-14, on purpose, so that every decision lands before a word is written:",
-    "    plan_new -> plan_approve -> headlines_write -> headline_pick (one per page)",
-    "    -> skeletons_write -> research_prompt -> research_file -> draft_wave -> publish_page",
+    "    plan_new -> plan_approve -> angles_write -> angle_pick (one per page)",
+    "    -> headlines_write -> headline_pick (one per page) -> skeletons_write",
+    "    -> tool_pick or plan_cta (how each page hands over)",
+    "    -> research_prompt -> research_file -> draft_wave -> publish_page",
     "  client_pages rows, the only thing publishable, appear at draft_wave and not before.",
+    "- ‼️ THE IDEA COMES BEFORE THE LINE, AND THAT IS WHAT THE ANGLE STAGE IS. An angle is what a",
+    "  page ARGUES: its idea, the story it runs on and the belief it installs. Until one is picked,",
+    "  a headline can only be a line about a phrase, and headlines_write now refuses while any page",
+    "  has no idea. Do not read that refusal as a bug and do not try to route around it.",
     "- Run ONE stage per turn and say what came back. Do not chain the whole run in one plan: each",
     "  stage is a decision he may want to look at, and several of them are model calls.",
-    "- headline_pick needs rank and pick. Every page needs its own pick before skeletons_write.",
+    "- angle_pick and headline_pick need rank and pick. He will often answer with a bare number:",
+    "  that is the OPTION for the page you just showed him, so send rank for that page and pick for",
+    "  his number. If several pages are open at once and the number is ambiguous, ask which page.",
+    "- He may build several pages at once, at different stages. That is supported: each page's stage",
+    "  is worked out from what it already has, so there is no order to keep them in. THE PAGE RUN",
+    "  BLOCK ABOVE PRINTS EACH PAGE'S OWN STAGE IN {braces}, so read those rather than describing",
+    "  the run as though it were at one stage.",
+    "- ‼️ THE SAME CHAIN HAS A SECOND SHAPE, AND IT IS THE ONE HE USUALLY WANTS. The arrows above",
+    "  are the whole batch moving together. page_write and page_pick walk ONE page down exactly that",
+    "  chain instead, taking the stage from what the page has rather than from you:",
+    "    read_pages rank=4 -> page_write 4 -> page_pick 4 -> page_write 4 -> page_pick 4 -> ...",
+    "  until that page is decided end to end. Then the batch rejoins: ONE research_prompt for all of",
+    "  them, research_file, and then page_draft, page_check and publish_page one page at a time.",
+    "- ‼️ WHEN HE ASKS FOR HEADLINES WITHOUT NAMING A PAGE, ASK WHICH KEYWORD FIRST. Do not run the",
+    "  batch verb to cover the ambiguity: headlines_write spends a model call on every page in the",
+    "  plan, and he asked about one. Call read_pages, show him the ranks with their keywords, and ask",
+    "  which. Then walk THAT page with page_write and page_pick until it is decided, and only move to",
+    "  the next page when he says so.",
+    "- ‼️ EVERY PAGE CARRIES THREE HEADLINE ARTIFACTS AND page_write WRITES ALL THREE. Six H1",
+    "  candidates (the question an engine matches), six title tags (what Google prints), and twenty",
+    "  ad hooks (what stops a scroll). They are three different artifacts for three different readers,",
+    "  they are tracked separately, and none of them replaces another. When you show a headline card,",
+    "  name which of the three each block is. If one of them is reported missing in the notes, say so",
+    "  rather than presenting the page as finished.",
+    "- Every page hands over to something. plan_cta sets the sentence a page offers the house offer",
+    "  with. ONE page may be the tool page instead: tool_options lists what suits this client and",
+    "  tool_pick needs the rank of the page it goes on. There is one tool per client, never one per",
+    "  page, and a tool needs its skeleton written first because it renders inside that page.",
     "- research_prompt hands back a prompt. He runs it elsewhere and pastes the answer, and you file",
     "  that with research_file and text. You never do the research yourself.",
     "- draft_wave writes one pass and tells you how many are left. If any are left, say so and offer",
     "  to run it again. That is the design, not a failure: a page with a body is never rewritten.",
+    "  page_draft is the same work for ONE page, which is what he means by writing them one at a",
+    "  time. Either way a drafted page is never redrafted, so pressing again is how you resume.",
+    "- ‼️ AFTER A DRAFT, THE PAGE IS NOT FINISHED: page_check READS IT AND publish_page SENDS IT",
+    "  LIVE. The check runs the quality gate, which reads the page against its own evidence AND",
+    "  against Google's published guidance, and publishing is refused outright until it has run.",
+    "  Show him the verdict in full. A warning is a judgement for him to make; only a block stops it.",
     "- Before the plan exists, the strategy map is what to talk about: one pillar and six supports,",
     "  listed under PUBLISHING. Changing them with strategy_set changes every page that follows, so",
     "  re-propose the plan after.",
@@ -460,12 +520,46 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "  read_pages           where the page run stands: every planned page, the keyword it aims at,",
     "                       and what each one still needs. Free and read only. Use it before",
     "                       answering anything about the pages, and before publishing.",
+    "                       WITH A RANK it is ONE page: its stage, and the options to choose between",
+    "                       at that stage, numbered. That is the read to use when he is working a",
+    "                       single page, and it is free, so use it rather than guessing from above.",
     "  run_pages            needs stage, one of the stages listed above. Also takes rank and pick",
-    "                       (headline_pick), rank (plan_drop, plan_swap, plan_edit, plan_cta),",
+    "                       (angle_pick, headline_pick, tool_pick), rank alone (angles_write for",
+    "                       one page), rank (plan_drop, plan_swap, plan_edit, plan_cta),",
     "                       text (plan_edit, plan_cta, research_file), rung (ladder_pick),",
     "                       phrases (keywords_add, keywords_drop, keywords_select,",
     "                       keywords_unselect), category (keywords_add), and pillar plus supports",
     "                       (strategy_set).",
+    "",
+    "THE PER-PAGE VERBS, WHICH ARE THE SAME WORK ASKED OF ONE PAGE:",
+    "  page_write           needs rank. Writes whatever that ONE page needs next, worked out from",
+    "                       what it already has: its three ideas, or its six headlines plus its",
+    "                       title tags and ad hooks, or its skeleton, or the tool options. You do",
+    "                       not say which; the page's stage decides, and the result comes back with",
+    "                       the options to show him.",
+    "  page_pick            needs rank and pick. Takes one of the options the card just printed for",
+    "                       that page, at whatever stage it is at. The page then moves on by itself.",
+    "                       ‼️ IT ALWAYS MEANS THE H1, never the title tag. Use page_title_pick for",
+    "                       that one: two artifacts on one page are pickable and a bare pick is the",
+    "                       H1's, which is what every card and every earlier thread teaches.",
+    "  page_title           needs rank. The TITLE TAG candidates for that page, numbered, written",
+    "                       if none exist yet. This is the line Google prints in a results list:",
+    "                       50 to 60 characters, keyword in the first few words, no hype.",
+    "                       ‼️ IT IS NOT THE H1 AND IT DOES NOT REPLACE ONE. A page carries both.",
+    "  page_title_pick      needs rank and pick. Takes one title tag. It lands on the page, or on",
+    "                       the page the moment its skeleton creates one.",
+    "  page_draft           needs rank. Writes the body of ONE page. It takes about eighty seconds,",
+    "                       so run it ALONE in a turn and say nothing else is happening.",
+    "  page_check           needs rank. Runs the quality gate on one drafted page and reports the",
+    "                       verdict: the evidence checks, and the four read against Google's",
+    "                       published guidance. ‼️ A PAGE CANNOT BE PUBLISHED UNTIL THIS HAS RUN.",
+    "  page_ads             needs rank. Twenty DIRECT-RESPONSE headlines for that page: the ad,",
+    "                       the advertorial and the VSL lines that send a buyer to it.",
+    "                       ‼️ THESE ARE NOT THE PAGE'S H1 AND THEY NEVER REPLACE IT. The H1 is",
+    "                       the question she types, which is how an engine finds the page; these",
+    "                       are what stops her scrolling past an ad for it. Written from the same",
+    "                       picked angle, so the two argue one thing. Show them in full: they are",
+    "                       a bank to use across ads, not a shortlist, so never ask him to pick.",
     "",
     "THE FOUR KEYWORD VERBS, WHICH ARE FOUR DIFFERENT DECISIONS. Do not use one for another:",
     "  keywords_add         MINTS phrases that do not exist yet, approves them and puts them in the",
@@ -481,6 +575,9 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "                       Day 0 not archived, the quality gate, or more than one destination wired",
     "                       and none chosen. The last one is a QUESTION: it comes back with the list,",
     "                       you show him both and he picks, then you pass destinationId.",
+    "                       ‼️ A GATE REFUSAL SAYING THE PAGE HAS NOT BEEN CHECKED IS ANSWERED BY",
+    "                       page_check ON THAT RANK, and nothing else. A refusal that says the gate",
+    "                       BLOCKED it is answered by getting a source, never from this surface.",
     "  unpublish_page       needs rank. Taking a page down is never gated: it is the remedy.",
     "  file_evidence        needs stepKey and text: an artifact he has pasted, filed against a step",
     "                       whose evidence is something a person produces (the Day-0 scan, GBP",
@@ -497,6 +594,15 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "                       prompt you handed him, and saying 'thanks, I have filed that' without",
     "                       this action is a lie about work he just did. If you cannot tell which",
     "                       kind it is, ask in one line rather than filing it as the wrong one.",
+    "  file_voc             needs text: customer phrases he has pasted, in their own words. Reddit",
+    "                       posts, review quotes, things a patient said on a call. It files them as",
+    "                       this client's own voice-of-customer evidence, which every later headline",
+    "                       run reads FIRST, and it crumbles each one into what somebody would",
+    "                       actually TYPE into ChatGPT to find that answer.",
+    "                       ‼️ USE IT WHEN HE PASTES CUSTOMER PAIN, and say what came back. A quote",
+    "                       is evidence and never a headline: the whole point of the crumble is that",
+    "                       nobody types a confession into a search box. The queries it returns are",
+    "                       candidates for keywords_add, so offer them and let him choose.",
     "",
     ctx.text,
     "",
@@ -813,6 +919,17 @@ ${body}`,
     };
   }
 
+  if (kind === "file_voc") {
+    const { fileVocPaste, vocIntakeLines } = await import("@/lib/clients/voc-intake");
+    const res = await fileVocPaste({ clientId, raw: action.text ?? "", by: actor });
+    if (!res.ok) return { kind, ok: false, detail: res.error };
+    return {
+      kind,
+      ok: true,
+      detail: vocIntakeLines({ filed: res.filed, crumbled: res.crumbled, notes: res.notes }).join("\n"),
+    };
+  }
+
   if (kind === "file_document") {
     const which = (action.which ?? "").trim();
     if (!isFoundationKind(which)) {
@@ -886,6 +1003,16 @@ ${body}`,
   }
 
   if (kind === "read_pages") {
+    // ‼️ WITH A RANK IT IS ONE PAGE, AND THIS IS THE FREE HALF OF THE PER-PAGE WALK. Every verb
+    // that writes or spends sits behind the confidence bar, correctly. Looking at one page must
+    // not, or "show me page 4" becomes a thing the chat declines while it is sure enough to
+    // rewrite page 4's ideas. Served here rather than as a fifth page action precisely because
+    // read_pages is already in SELF_PROVING and would otherwise need a hand-written exemption.
+    if (action.rank) {
+      const text = await pageWalkText(clientId, Number(action.rank));
+      return { kind, ok: true, detail: text };
+    }
+
     const state = await launchPagesState(clientId);
     if ("error" in state) return { kind, ok: false, detail: state.error };
 
@@ -906,17 +1033,27 @@ ${body}`,
     // the answer and does not say it is the same failure as not having it.
     const rows = state.plan.flatMap((p) => {
       const marks = [
+        p.angle ? "idea" : null,
         p.headline ? "headline" : null,
         p.hasOutline ? "skeleton" : null,
+        p.ctaLine ? "cta" : null,
         p.hasBody ? "body" : null,
         p.pageStatus === "published" ? "LIVE" : null,
       ].filter(Boolean);
       const head = `  ${p.rank}. [${p.role}] ${p.headline ?? p.workingTitle} <- ${p.targetKeyword} (${p.status}${marks.length ? ", " + marks.join(", ") : ""})`;
 
-      // Only where the decision is still open. A page whose headline is picked needs the pick shown,
-      // not the three it was picked from.
-      if (p.headline || !p.headlineOptions.length) return [head];
-      return [head, ...p.headlineOptions.map((h, i) => `       option ${i + 1}: ${h}`)];
+      // ‼️ THE OPEN DECISION IS PRINTED, AND ONLY THE OPEN ONE. A page with no idea is at the idea
+      // stage, so its three IDEAS are what he has to choose between; printing headline options
+      // beside them would offer a decision that cannot be made yet. Same rule one layer down as
+      // the headline note above.
+      if (!p.angle && p.angleOptions.length) {
+        return [head, ...p.angleOptions.map((a, i) => `       idea ${i + 1}: ${a}`)];
+      }
+      const argues = p.angle ? [`       argues: ${p.angle}`] : [];
+
+      // A page whose headline is picked needs the pick shown, not the three it was picked from.
+      if (p.headline || !p.headlineOptions.length) return [head, ...argues];
+      return [head, ...argues, ...p.headlineOptions.map((h, i) => `       option ${i + 1}: ${h}`)];
     });
 
     return {
@@ -925,10 +1062,16 @@ ${body}`,
       detail: [
         `${state.stageText} ${state.proposed} proposed, ${state.approved} approved, ${state.drafted} with a body, ${state.outstanding} still to draft.`,
         ...rows,
+        state.needAngle.length
+          ? `still need an IDEA: ${state.needAngle.join(", ")}. The three ideas for each are listed above: show them to him verbatim and ask which, then run_pages stage=angle_pick with rank and pick. headlines_write refuses until every page has one.`
+          : "",
         state.needHeadline.length
           ? `still need a headline: ${state.needHeadline.join(", ")}. The three options for each are listed above: show them to him verbatim and ask which, then run_pages stage=headline_pick with rank and pick.`
           : "",
         state.needSkeleton.length ? `still need a skeleton: ${state.needSkeleton.join(", ")}` : "",
+        state.needHandover.length
+          ? `still need a handover: ${state.needHandover.join(", ")}. plan_cta sets the sentence, or tool_pick makes ONE of them the tool page.`
+          : "",
         state.day0ArchivedAt ? "" : "Day 0 is not archived, so publishing will refuse. Drafting is not gated.",
       ]
         .filter(Boolean)

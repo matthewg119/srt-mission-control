@@ -16,6 +16,7 @@ import {
   PhoneCall,
   Sunrise,
   Rocket,
+  Map,
 } from "lucide-react";
 
 export interface NavSection {
@@ -47,6 +48,11 @@ export const navSections: NavSection[] = [
       { label: "Vektor", href: "/dashboard/assistant", icon: MessageSquare },
       { label: "Call list", href: "/dashboard/worklist", icon: PhoneCall },
       { label: "Leads", href: "/dashboard/leads", icon: Users },
+      // ‼️ NEXT TO LEADS, BECAUSE IT IS THE QUESTION ASKED JUST BEFORE THE LIST IS BUILT. Leads is
+      // what we have; Territory is where to go and get more, and the operating procedure says to
+      // read it before every pull. A link in the chrome is what makes "never from memory" possible:
+      // /dashboard/launch spent weeks reachable only by typing the URL.
+      { label: "Territory", href: "/dashboard/territory", icon: Map },
       // Clients we deliver for. Not /dashboard/onboarding, which is our own
       // team-member setup checklist and a different thing entirely.
       { label: "Clients", href: "/dashboard/clients", icon: Building2 },

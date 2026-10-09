@@ -66,6 +66,22 @@ function code(file: string): string {
 
 const squish = (s: string): string => s.replace(/\s+/g, " ");
 
+/**
+ * One `case "name":` branch, ending at whichever case comes next.
+ *
+ * ‼️ IT FINDS ITS OWN END RATHER THAN BEING GIVEN THE NEXT CASE BY NAME, and the version that was
+ * given one went quietly wrong the moment a stage was inserted between the two. Slicing
+ * skeletons_write to research_prompt swallowed every branch added in between, so a guard planted in
+ * ANY of them satisfied the check for the one being tested. The branch has to be the branch.
+ */
+function caseBody(src: string, name: string): string {
+  const from = src.indexOf(`case "${name}"`);
+  if (from < 0) return "";
+  const rest = src.slice(from + `case "${name}"`.length);
+  const next = rest.search(/\bcase "/);
+  return squish(next < 0 ? rest : rest.slice(0, next));
+}
+
 const MODULE = "src/lib/launch/pages.ts";
 const CHAT = "src/lib/launch/conversation.ts";
 const FACTS = "src/lib/launch/publishing-facts.ts";
@@ -119,27 +135,149 @@ for (const [file, src] of [
 // there, in the sentence explaining a refusal that no longer happened. Measured by planting exactly
 // that. Whitespace is squashed first so wrapping the condition over two lines is not a failure.
 
-const skeletonCase = squish(
-  mod.slice(mod.indexOf('case "skeletons_write"'), mod.indexOf('case "research_prompt"'))
+// ‼️ THE IDEA COMES BEFORE THE LINE, AND THIS IS THE GATE THAT WAS MISSING UNTIL 2026-10-06. The
+// lane ran plan -> approve -> headlines with nothing in between deciding what each page ARGUES, so
+// the generator was asked to write a line about a phrase and thirty three candidates came back
+// reading as thirty three ways of saying the phrase out loud (page-angles.ts opens on exactly this).
+// Matched on the CONDITION for the same reason the two below are.
+const headlineCase = caseBody(mod, "headlines_write");
+check(
+  headlineCase.length > 0 && /if \(\s*batch\.needAngle\.length\s*\)/.test(headlineCase),
+  "writing headlines is GUARDED on any page still needing an idea",
+  "a headline written before anybody decided what the page argues is a line about a phrase"
 );
+
+const skeletonCase = caseBody(mod, "skeletons_write");
 check(
   skeletonCase.length > 0 && /if \(\s*batch\.needHeadline\.length\s*\)/.test(skeletonCase),
   "writing skeletons is GUARDED on any page still needing a headline",
   "a skeleton written before its headline is an outline for a page that does not know what it promises"
 );
 
-const draftCase = squish(mod.slice(mod.indexOf('case "draft_wave"'), mod.indexOf('case "publish"')));
+// ‼️ needFormats JOINED THIS GUARD ON 2026-10-08 AND needSkeleton MUST STILL BE IN IT. The three
+// lists are independent facts about a row, and for one edit needSkeleton was narrowed to exclude
+// format-incomplete rows, which put a page with an H1, no title tags and no outline in NEITHER
+// list and walked it straight past this guard into a draft off no skeleton at all. So this
+// asserts all three terms are present rather than matching the condition as one string.
+const draftCase = caseBody(mod, "draft_wave");
 check(
   draftCase.length > 0 &&
     /readBatch\(/.test(draftCase) &&
-    /if \(\s*batch\.needHeadline\.length\s*\|\|\s*batch\.needSkeleton\.length\s*\)/.test(draftCase),
-  "drafting is GUARDED on any page lacking a headline or a skeleton",
+    /if \(\s*batch\.needHeadline\.length\s*\|\|[\s\S]{0,80}?batch\.needSkeleton\.length\s*\)/.test(draftCase) &&
+    /batch\.needFormats\.length/.test(draftCase),
+  "drafting is GUARDED on any page lacking a headline, a format or a skeleton",
   "this is the refusal `plan draft` gives in the thread, read off the same readBatch"
 );
 check(
   /autoCompleteLaunchStep\(/.test(draftCase),
   "a drafting pass ticks pages_drafted through the verifier",
   "a runner believing it succeeded is not evidence that it did"
+);
+
+// ‼️ THE THREE-FORMAT GATE IS SCOPED TO PAGES THAT ARE NOT YET OUTLINED, AND THAT TERM IS THE
+// DIFFERENCE BETWEEN A GATE AND A WALL. The question belongs between the headline and the
+// skeleton, so an already-outlined page is past it. Without the `!outlines` term every page of
+// every client mid-batch on the day this shipped would be dragged back and draft_wave would
+// refuse for all of them until two model calls had run per page. Read off page-batch.ts rather
+// than this module, because that is where the list is derived.
+const batchSrc = read("src/lib/clients/page-batch.ts");
+check(
+  /const needFormats = formats\.ok[\s\S]{0,200}?!outlines\.get\(r\.id\)[\s\S]{0,120}?!formats\.complete\.has\(r\.id\)/.test(
+    batchSrc
+  ),
+  "the formats gate only asks a page that is not yet outlined",
+  "a gate on new work must not present as a wall across work already in flight"
+);
+
+// ── 3b. The per-page walk keeps the same rails, asked of one page ────────────
+//
+// ‼️ THE PER-PAGE GATE IS A DIFFERENT GATE FROM THE BATCH ONE ABOVE AND BOTH MUST EXIST. The batch
+// verb refuses while ANY page has no idea, which is the right question of a batch about to spend
+// eleven model calls. The walk asks the narrower one, in writeForStage: do not write page 3's
+// headline until page 3 has an idea. Collapsing them gives either a batch verb that half-runs or a
+// page verb that refuses over a decision owed on a different page, so this asserts the narrow one
+// lives in page-batch.ts and that the batch condition above was not weakened to make room for it.
+
+const walk = code("src/lib/clients/page-batch.ts");
+
+check(
+  /async function ideaDecided\(/.test(walk) && /anglesOnPlan\(\s*clientId\s*,\s*\[\s*row\.id\s*\]\s*\)/.test(walk),
+  "the per-page angle gate asks about ONE row, not the batch",
+  "writeForStage refuses a headline for a page with no idea, which is not the same refusal headlines_write gives"
+);
+check(
+  /angles\.ok \? angles\.picked\.has\(row\.id\) : true/.test(walk),
+  "a FAILED angle read opens the per-page gate rather than closing it",
+  "anglesOnPlan reports ok separately so a missing table cannot wedge every headline shut with no way through"
+);
+
+// ‼️ MATCHED ON THE CONDITION, exactly as section 3 is, and for the same measured reason: the
+// refusal quotes its own counts back, so a check for the words alone passes with `if (false)`.
+const pageWriteCase = caseBody(mod, "page_write");
+check(
+  pageWriteCase.length > 0 && /writeForStage\(/.test(pageWriteCase),
+  "page_write goes through writeForStage and does not re-implement a stage",
+  "the Slack door calls the same function, so `page 3 more` cannot come to mean two things"
+);
+
+const pagePickCase = caseBody(mod, "page_pick");
+check(
+  pagePickCase.length > 0 && /pickForStage\(/.test(pagePickCase),
+  "page_pick goes through pickForStage"
+);
+
+const pageDraftCase = caseBody(mod, "page_draft");
+check(
+  pageDraftCase.length > 0 &&
+    /readBatch\(/.test(pageDraftCase) &&
+    /batch\.needHeadline\.some\(/.test(pageDraftCase) &&
+    /batch\.needSkeleton\.some\(/.test(pageDraftCase),
+  "drafting ONE page is GUARDED on that page lacking a headline or a skeleton",
+  "the same two conditions draft_wave refuses on, asked of one row, so ten pages owing a headline cannot stop the eleventh"
+);
+check(
+  /autoCompleteLaunchStep\(/.test(pageDraftCase),
+  "a per-page draft ticks pages_drafted through the verifier too",
+  "a runner believing it succeeded is not evidence that it did, and this is a second runner"
+);
+
+// ‼️ THE GATE DOOR CALLS runGate AND NEVER assertGatePassed.
+// test-onboarding-artifacts.ts asserts assertGatePassed has exactly ONE call site and that it is
+// inside publishPage; a second would put a hole in both rails at once. setPublished is the other
+// one-caller rule and belongs to publishPage for the same reason.
+const pageCheckCase = caseBody(mod, "page_check");
+check(
+  pageCheckCase.length > 0 && /runGate\(/.test(pageCheckCase),
+  "page_check runs the gate, which is the press this lane had no door to",
+  "assertGatePassed refuses never_run and never_run is deliberately not waivable, so without this publishing was unreachable"
+);
+check(
+  !/assertGatePassed|setPublished/.test(pageCheckCase),
+  "page_check consults neither assertGatePassed nor setPublished",
+  "both are one-caller rules and both callers are inside publishPage"
+);
+
+// ‼️ THE BATCH VERB STAYED A BATCH VERB. Narrowing headlines_write to one rank is fine; moving its
+// gate behind that narrowing is not, because a per-page press would then skip the batch question
+// and eleven pages could get headlines written off one page's idea.
+check(
+  /const targets = input\.rank/.test(headlineCase),
+  "headlines_write can be narrowed to one page",
+  "the walk needs a per-page headline write, and this is the same shape skeletons_write already had"
+);
+check(
+  headlineCase.indexOf("needAngle.length") < headlineCase.indexOf("const targets"),
+  "its gate is asked BEFORE the narrowing, so a rank cannot skip the batch question"
+);
+
+// ‼️ THE RANK-TO-POSITION ARITHMETIC IS GONE RATHER THAN DOCUMENTED. generateAnglesForPlan now
+// takes a rowId, so there is nothing to convert; the old nine lines lived under a comment
+// explaining how they could silently name the wrong page after a drop left a gap in the ranks.
+const anglesCase = caseBody(mod, "angles_write");
+check(
+  /rowId/.test(anglesCase) && !/only\s*=\s*at \+ 1/.test(anglesCase),
+  "angles_write names the page by id, not by a position it computed",
+  "an id cannot name the wrong page, so it needs no comment explaining when it would"
 );
 
 // ── 4. Drafting is one wave per press, not a self-chaining job ───────────────
