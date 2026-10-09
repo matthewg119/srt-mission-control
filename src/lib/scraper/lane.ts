@@ -3085,9 +3085,14 @@ async function publishSendable(batch: BatchRow): Promise<void> {
   );
 }
 
+// ‼️ THE ORDER IS THE CSV'S COLUMN ORDER AND THE MERGE FIELDS GO LAST, so an existing
+// ReachInbox mapping keeps working when a column is appended. Inserting one in the middle would
+// shift every mapping to its right on the next upload, silently.
 const SENDABLE_HEADERS = [
   "email", "first_name", "last_name", "company", "owner_name", "website", "domain",
   "city", "state", "phone", "email_status", "provider", "qualify_reason",
+  // The opening line, from data bought with the record and free. See SendableExportRow.
+  "competitor_name", "competitor_rating", "competitor_reviews", "google_listing",
 ];
 
 /**

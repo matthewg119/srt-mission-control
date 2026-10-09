@@ -973,6 +973,24 @@ export interface SendableExportRow {
   email_status: string;
   provider: string;
   qualify_reason: string;
+  /**
+   * The merge variables the opening line is written from.
+   *
+   * ‼️ THEY ARE ON THE CSV BECAUSE THAT IS THE ONLY PLACE THEY CAN BE USED. ReachInbox merges
+   * from the uploaded columns; a fact that stays in `raw_leads` cannot reach a sequence, however
+   * well it was measured. Lifting is_claimed and the top competitor into columns bought nothing
+   * until this line, which is exactly what the dead-wires probe said when it failed the build:
+   * three columns backfilled over 1,582 rows and read by nothing.
+   *
+   * ‼️ AND THEY ARE STRINGS, EMPTY WHEN UNKNOWN, NEVER "0" OR "false". A sequence that writes
+   * "the clinic down the road has 0 reviews" because a number was missing is worse than one that
+   * skips the line. `competitor_reviews` empty is the signal to use a different opener.
+   */
+  competitor_name: string;
+  competitor_rating: string;
+  competitor_reviews: string;
+  /** "unclaimed" or empty. Never "claimed": the line only exists when the answer is the former. */
+  google_listing: string;
 }
 
 /** The send list. `suppressed_reason is null` is the sendable set. */
@@ -981,7 +999,8 @@ export async function sendableRows(runId: string): Promise<SendableExportRow[]> 
     .from("sendable_leads")
     .select(
       "email, first_name, last_name, provider, email_status, " +
-        "raw_leads!inner(business_name, owner_name, website, domain, city, state, phone, qualify_reason)"
+        "raw_leads!inner(business_name, owner_name, website, domain, city, state, phone, " +
+        "qualify_reason, competitor_name, competitor_rating, competitor_reviews, is_claimed)"
     )
     .eq("run_id", runId)
     .is("suppressed_reason", null)
@@ -1029,6 +1048,26 @@ export async function sendableRows(runId: string): Promise<SendableExportRow[]> 
       email_status: String(row.email_status ?? ""),
       provider: String(row.provider ?? ""),
       qualify_reason: String(j.qualify_reason ?? ""),
+      // ‼️ BOTH HALVES OR NEITHER. "Zuri Aesthetics" with no number and "310" with no name are
+      // each half a sentence, and a merge field that is sometimes half a sentence produces an email
+      // that is sometimes nonsense. Measured on the stored rows: 1,582 of 1,750 carry a competitor
+      // and 1,390 of those are out-reviewed by it, so the line is available on most of the list.
+      competitor_name: j.competitor_name && j.competitor_reviews ? String(j.competitor_name) : "",
+      competitor_reviews: j.competitor_name && j.competitor_reviews ? String(j.competitor_reviews) : "",
+      // ‼️ THE RATING RIDES ALONG RATHER THAN BEING DROPPED, AND THE PROBE IS WHY IT IS HERE AT
+      // ALL. It was the third column lifted out of `raw` and the only one still read by nothing
+      // after the other two were wired, which the dead-wires check failed the build over. The
+      // choice was a declaration saying "owed an opener that uses it" or one more CSV column. A
+      // column is cheaper than a promise, and "4.7 with 310 reviews" is a better sentence than
+      // "310 reviews". Gated on the same both-halves rule: a rating with no name is not a line.
+      competitor_rating:
+        j.competitor_name && j.competitor_reviews && j.competitor_rating
+          ? String(j.competitor_rating)
+          : "",
+      // ‼️ ONLY THE FALSE CASE IS CARRIED. 234 of 1,750 listings are unclaimed and that is the
+      // strongest "nobody is managing this" signal in the payload. "claimed" is not an opener and
+      // null means the source did not say, which must never be written as either.
+      google_listing: j.is_claimed === false ? "unclaimed" : "",
     };
   });
 }
