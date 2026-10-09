@@ -27,6 +27,7 @@ import {
   PREVIEW_CLOSE,
   PREVIEW_CUSTOM,
   PREVIEW_DAY,
+  PREVIEW_DOWNLOAD,
   PREVIEW_DAYPART,
   PREVIEW_INSIDE,
   PREVIEW_SCAN,
@@ -88,6 +89,8 @@ export interface PreviewClientProps {
   initialDesign: string;
   /** The link's own token, handed back on submit so the answers find the right thread. */
   token: string | null;
+  /** Where the printable card comes from. Relative, so it stays on the visitor's host. */
+  pdfPath: string;
 }
 
 export function PreviewClient(props: PreviewClientProps) {
@@ -116,6 +119,9 @@ export function PreviewClient(props: PreviewClientProps) {
   const [slots, setSlots] = useState<Slot[] | null>(null);
   const [bookingUrl, setBookingUrl] = useState<string | null>(null);
   const [booked, setBooked] = useState(false);
+  // ‼️ ONCE TRUE IT STAYS TRUE, so the download survives every beat that follows it. A button
+  // that vanishes when the next question lands is a card they meant to save and did not.
+  const [ready, setReady] = useState(false);
 
   // Refs, not state: the Calendly listener reads them from a closure set up once, so it has to
   // see the latest value rather than the one that existed when it subscribed. The same shape
@@ -320,8 +326,16 @@ export function PreviewClient(props: PreviewClientProps) {
         setTyping(true);
         later(() => {
           setTyping(false);
-          push("them", PREVIEW_CLOSE.ask);
-          setAwaiting("daypart");
+          // ‼️ THE CARD BEFORE THE CALENDAR. They came for the card; asking for fifteen minutes
+          // while the thing they asked for is still notional is the funnel taking before it gives.
+          push("them", PREVIEW_DOWNLOAD.ready);
+          setReady(true);
+          setTyping(true);
+          later(() => {
+            setTyping(false);
+            push("them", PREVIEW_CLOSE.ask);
+            setAwaiting("daypart");
+          }, GAP_MS.max);
         }, GAP_MS.max);
       }, GAP_MS.min);
     } catch {
@@ -604,6 +618,22 @@ export function PreviewClient(props: PreviewClientProps) {
           >
             Try that again
           </button>
+        </div>
+      )}
+
+      {/*
+        ‼️ AN ANCHOR WITH `download`, NOT A fetch AND A BLOB. The route sets
+        `content-disposition: attachment`, so the browser saves the file and the page never has to
+        hold the bytes, show a spinner or revoke an object URL. It also means a long press on a
+        phone offers Share, which is how a clinic owner actually gets this to whoever prints for
+        them.
+      */}
+      {ready && (
+        <div className="cd-composer cp-download">
+          <a className="cd-primary" href={props.pdfPath} download>
+            {PREVIEW_DOWNLOAD.cta}
+          </a>
+          <p className="cd-open-foot">{PREVIEW_DOWNLOAD.foot}</p>
         </div>
       )}
 

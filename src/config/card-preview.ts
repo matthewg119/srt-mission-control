@@ -200,7 +200,10 @@ export const PREVIEW_INSIDE = {
   tap: guard("preview inside tap", "Tap to try it yourself"),
   /** Once they have tapped. It is live from here, so the label stops claiming otherwise. */
   live: guard("preview inside live", "Live. Walk it like a patient would."),
-  cta: guard("preview inside cta", "Get my free AI Referral Engine"),
+  // ‼️ IT NAMES THE OBJECT NOW, NOT THE PRODUCT. "Get my free AI Referral Engine" asked a clinic
+  // to want a thing they had no word for; "Download my custom QR card" is the card they are
+  // looking at, with their name on it, and tapping it genuinely produces one. Matthew, 2026-10-09.
+  cta: guard("preview inside cta", "Download my custom QR card"),
   /**
    * The grey one, where "Open it full screen" used to be.
    *
@@ -340,14 +343,15 @@ export const PREVIEW_SCRIPT: readonly PreviewStep[] = [
  * instant email would be the one lie this page could tell that somebody sits and waits for.
  */
 export const PREVIEW_CLOSE = {
-  sent: guard(
-    "preview close sent",
-    "Perfect. We will send the email with your free PDF card shortly."
-  ),
+  /**
+   * ‼️ IT NO LONGER PROMISES ANYTHING, BECAUSE THE CARD ARRIVES A BEAT LATER. This said "we will
+   * send the email with your free PDF card shortly" for as long as nothing generated one. It does
+   * now: PREVIEW_DOWNLOAD.ready follows this bubble with a button that produces the real card, and
+   * the confirmation email carries the same bytes. Leaving "shortly" in would be the funnel
+   * promising later what it is about to hand over.
+   */
+  sent: guard("preview close sent", "Perfect, that is everything we needed."),
   /** The pivot into the booking, as its own bubble so it reads as a second thought. */
-  // ‼️ HIS WORDING, 2026-10-09, AND IT NAMES BOTH HALVES OF THE CALL ON PURPOSE. The old line
-  // asked for fifteen minutes to "set up the emails and texts", which is the part we do; it never
-  // said the clinic has to bring their offer, so the call opened by asking for it cold.
   ask: guard(
     "preview close ask",
     "One more thing. When do you have 15 minutes to share your offer with us, and set up the internal streams for the new patients (emails, text messages, etc)?"
@@ -415,6 +419,29 @@ export const PREVIEW_SLOTS = {
   ),
   booking: guard("preview slots booking", "Good. Confirm it here and you are done."),
   booked: guard("preview slots booked", "You are booked. We will see you then."),
+} as const;
+
+/**
+ * The download, once the questions are answered.
+ *
+ * ‼️ THE CARD IS REAL AND IT ARRIVES ON THE SPOT. Until now this funnel's whole promise was a
+ * PDF "shortly", made by a person, and a clinic had nothing in their hand at the end of it.
+ * /api/cards/pdf/<token> renders their name onto the same card the delivery board prints, with a
+ * code that opens their own page, so the thing they were shown is the thing they get.
+ */
+export const PREVIEW_DOWNLOAD = {
+  /** The button, under the closing line. */
+  cta: guard("preview download cta", "Download my card"),
+  /** Said once, as its own bubble, before the booking ask. */
+  ready: guard(
+    "preview download ready",
+    "Your card is ready. Download it now, and we will email you a copy too."
+  ),
+  /** Under the button, in the smallest type: what they are actually getting. */
+  foot: guard(
+    "preview download foot",
+    "Print double sided on card stock. The code opens your own page."
+  ),
 } as const;
 
 /** The step ids, for the probe. A walk whose ids drift is a walk whose analytics drift. */

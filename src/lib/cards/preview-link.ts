@@ -36,21 +36,32 @@ export function appUrl(): string {
 }
 
 /**
- * What the QR code in the preview resolves to.
+ * What the QR code on a lead's card resolves to.
  *
- * ‼️ THE SAME PAGE THE BUTTON OPENS, WHICH IS WHAT MAKES "click or scan here" TRUE. A preview
- * whose code goes nowhere is the thing every clinic has already been sent by somebody else; a
- * clinic owner holding a phone over their own laptop and landing on the walkthrough is the entire
- * demonstration. /demo/agent reaches no database and stores nothing, which is why it is safe to
- * put behind a code that strangers may scan.
+ * ‼️ A PAGE OF THEIR OWN AS SOON AS THERE IS A TOKEN, AND THE SHARED DEMO ONLY WITHOUT ONE.
+ * This code gets printed and handed to patients, so it has to open something wearing the clinic's
+ * name rather than "Clinic 123". `/c/<token>` is that page. With no token there is no clinic to
+ * name, and the demo is the right answer for the generic preview Matthew records his video
+ * against.
  *
- * ‼️ AND IT IS NOT WHAT A PRINTED CARD CARRIES. A real card's code points at the clinic's own
- * reviews host on their own domain, minted by review-card.ts off client_hosts. PREVIEW_SCAN.qrNote
- * says so on the screen, because an unsaid version of this is how somebody prints a thousand cards
- * pointing at our demo.
+ * ‼️ IT IS STILL NOT WHAT A FULLY PROVISIONED CLIENT'S CARD CARRIES. Once they are a client the
+ * code points at `reviews.{theirdomain}`, minted by review-card.ts off `client_hosts`, and that
+ * is the only path where a patient's answers are STORED. Read the header of /c/[token] for what
+ * this one does and does not keep, and why.
  */
-export function cardQrTarget(): string {
-  return `${appUrl()}/demo/agent?client=medspa123`;
+export function cardQrTarget(token?: string | null): string {
+  return token ? `${appUrl()}/c/${token}` : `${appUrl()}/demo/agent?client=medspa123`;
+}
+
+/**
+ * Where the printable card comes from.
+ *
+ * Relative, for the reason insideUrl is: the browser resolves it, so it must stay on whatever
+ * host the visitor is actually on. One token is all a lead ever needs; it addresses the preview,
+ * the PDF and the code's destination.
+ */
+export function cardPdfPath(token?: string | null): string {
+  return token ? `/api/cards/pdf/${token}` : "/api/cards/pdf";
 }
 
 /**

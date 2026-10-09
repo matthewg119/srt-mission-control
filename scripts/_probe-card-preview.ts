@@ -15,8 +15,8 @@
 //  5. The route validates what the client validates, because a browser check is not a boundary.
 //  6. The token is identity and not authority: its own scope, and every refusal looks the same.
 //  7. Every lead goes through ingestLead(), so Matthew is notified.
-//  8. Nothing claims a PDF was sent, because nothing sends one yet, and the two promises with a
-//     clock on them (the PDF, and the 2 hour custom design) both shout on the Slack card.
+//  8. The card is REAL: one renderer feeds both the download and the email attachment, the
+//     closing line promises no later delivery, and the Slack card only shouts when one is owed.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -28,6 +28,7 @@ import {
   PREVIEW_CUSTOM,
   PREVIEW_DAY,
   PREVIEW_DAYPART,
+  PREVIEW_DOWNLOAD,
   PREVIEW_IDS,
   PREVIEW_INSIDE,
   PREVIEW_OFFER_SAMPLE,
@@ -46,6 +47,7 @@ const ROUTE = "src/app/api/cards/preview/route.ts";
 const PAGE = "src/app/cards/p/[[...token]]/page.tsx";
 const LINK = "src/lib/cards/preview-link.ts";
 const PRINTER = "src/lib/clients/artifacts/review-card.ts";
+const PDF = "src/app/api/cards/pdf/[[...token]]/route.ts";
 
 let failures = 0;
 
@@ -75,6 +77,7 @@ const routeSrc = stripComments(read(ROUTE));
 const pageSrc = stripComments(read(PAGE));
 const linkSrc = stripComments(read(LINK));
 const printerSrc = stripComments(read(PRINTER));
+const pdfSrc = stripComments(read(PDF));
 
 // ── 1. A DESIGN IS A PALETTE, NEVER A WORDING. ──────────────────────────────
 //
@@ -359,15 +362,42 @@ check(
   routeSrc.includes("headline,") && routeSrc.includes("detailLines:"),
   "and it fills in the card"
 );
+// ‼️ THE CARD IS REAL NOW, AND THIS SECTION INVERTED WITH IT. It used to assert that nothing
+// claimed a PDF had been sent, because nothing generated one; renderCardForLead does, the route
+// attaches it and the page downloads it. What is checked instead is that the two consumers share
+// ONE renderer and that the warning only fires when something is genuinely owed.
 check(
-  routeSrc.includes("OWES THEM THE PDF"),
-  "the card shouts that a PDF is owed, because a person has to send it"
+  /renderCardForLead/.test(routeSrc) && /renderCardForLead/.test(pdfSrc),
+  "the email attachment and the download come from one renderer",
+  "two call sites assembling their own accent and copy set is how they stop being the same card"
 );
-// ‼️ "shortly" IS LOAD BEARING. Nothing in this lane renders or emails a card, so copy promising
-// an instant delivery is the one lie this page could tell that somebody sits and waits for.
 check(
-  /shortly/i.test(PREVIEW_CLOSE.sent) && !/now|instantly|check your inbox/i.test(PREVIEW_CLOSE.sent),
-  "and the closing line says shortly rather than now",
+  routeSrc.includes("CARD DID NOT RENDER") && !routeSrc.includes("OWES THEM THE PDF"),
+  "and the Slack card only shouts when a card is genuinely owed",
+  "a warning that fires on every lead is wallpaper"
+);
+check(
+  /download/i.test(PREVIEW_DOWNLOAD.cta) && /download/i.test(PREVIEW_INSIDE.cta),
+  "both calls to action name the download",
+  `${PREVIEW_INSIDE.cta} / ${PREVIEW_DOWNLOAD.cta}`
+);
+// ‼️ THE PRINTED CODE IS THE CLINIC'S OWN WHENEVER THERE IS A LEAD. A thousand cards carrying
+// our shared demo would be a thousand patients landing on "Clinic 123".
+check(
+  linkSrc.includes("/c/${token}") && linkSrc.includes("token ? "),
+  "a lead's card points its code at that lead's own page, and the demo only without one"
+);
+// The renderer defaults to the PRINTED copy, so the delivery board is untouched by all of this.
+check(
+  printerSrc.includes("input.copy ?? REVIEW_CARD_COPY"),
+  "the card generator still defaults to the printed wording",
+  "generateReviewCard(clientId) renders byte for byte what it always did"
+);
+// ‼️ AND THE CLOSING LINE MUST NOT PROMISE LATER WHAT IT IS ABOUT TO HAND OVER. The download
+// button lands one bubble after this one.
+check(
+  !/shortly|will send|in your inbox/i.test(PREVIEW_CLOSE.sent),
+  "the closing line promises no future delivery",
   PREVIEW_CLOSE.sent
 );
 

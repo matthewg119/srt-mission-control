@@ -24,7 +24,7 @@ import QRCode from "qrcode";
 
 import { OFFERED_DESIGNS, designByKey } from "@/config/card-designs";
 import { PREVIEW_FALLBACK_NAME } from "@/config/card-preview";
-import { cardQrTarget, insideUrl, leadFromCardToken } from "@/lib/cards/preview-link";
+import { cardPdfPath, cardQrTarget, insideUrl, leadFromCardToken } from "@/lib/cards/preview-link";
 import { Lockup } from "../../lockup";
 import { PreviewClient } from "../preview-client";
 import "../../cards.css";
@@ -83,20 +83,31 @@ function reviewsHostFor(website: string | null): string | null {
  * tint one to match, which is how a code stops scanning. See cardQrTarget for what it resolves to
  * and why that is not what a printed card carries.
  *
- * ‼️ AND IT IS MEMOISED, because the page is force-dynamic and the target is a constant. Without
- * this every visitor pays for an identical 600px PNG to be encoded from scratch. The settings are
- * review-card.ts's own, so the preview's code and the printed one are the same object: error
- * correction M with a quiet margin, which is what survives being scanned in bad light.
+ * ‼️ MEMOISED PER TARGET, because the page is force-dynamic and a clinic reloading it should not
+ * pay to encode the same 600px PNG twice. It was one cached promise while the target was a
+ * constant; since the code resolves to the LEAD'S OWN page it is keyed by URL, and a cache keyed
+ * on nothing would have served every clinic the first clinic's code.
+ *
+ * The settings are review-card.ts's own, so the code on screen and the code on the printed card
+ * are the same object: error correction M with a quiet margin, which is what survives being
+ * scanned in bad light.
  */
-let qrOnce: Promise<string> | null = null;
-function previewQr(): Promise<string> {
-  qrOnce ??= QRCode.toDataURL(cardQrTarget(), {
+const qrCache = new Map<string, Promise<string>>();
+function previewQr(token: string | null): Promise<string> {
+  const target = cardQrTarget(token);
+  const hit = qrCache.get(target);
+  if (hit) return hit;
+  const made = QRCode.toDataURL(target, {
     errorCorrectionLevel: "M",
     margin: 1,
     width: 600,
     color: { dark: "#0a0a0a", light: "#FFFFFF" },
   });
-  return qrOnce;
+  // Bounded, because the key is now per lead rather than a constant. A lambda that lived long
+  // enough to see thousands of leads would otherwise hold a PNG for every one of them.
+  if (qrCache.size > 200) qrCache.clear();
+  qrCache.set(target, made);
+  return made;
 }
 
 export default async function CardPreviewPage({
@@ -116,7 +127,7 @@ export default async function CardPreviewPage({
   const requested = typeof searchParams.d === "string" ? searchParams.d : OFFERED_DESIGNS[0];
   const design = designByKey(requested);
 
-  const qrDataUrl = await previewQr();
+  const qrDataUrl = await previewQr(lead ? token : null);
 
   return (
     <main className={`cd-page ${dmSans.variable} ${dmSerif.variable}`}>
@@ -128,6 +139,7 @@ export default async function CardPreviewPage({
         insideSrc={insideUrl(true)}
         initialDesign={design.key}
         token={token}
+        pdfPath={cardPdfPath(lead ? token : null)}
       />
     </main>
   );
