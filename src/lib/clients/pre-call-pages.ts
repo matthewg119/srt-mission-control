@@ -43,7 +43,7 @@ import {
   type PlanRow,
   type PoolItem,
 } from "./page-plan";
-import { HEADLINE_COMMAND, SKELETON_COMMAND } from "./page-batch";
+import { HEADLINE_COMMAND, SKELETON_COMMAND, parsePageWalk } from "./page-batch";
 import { categoryLabel, isRelevantKeyword, tierOf } from "./keyword-expansion";
 import { normalizePhrase } from "./phrase-quality";
 
@@ -587,7 +587,8 @@ async function approvedRows(clientId: string): Promise<PlanRow[] | { error: stri
   return plan.rows.filter((r) => r.role && (r.status === "approved" || r.status === "claimed"));
 }
 
-type DraftOutcome = { status: "drafted" | "skipped" | "failed"; rank: number; detail: string };
+/** What one row's draft attempt did. Exported for draftOnePage's callers, which get exactly one. */
+export type DraftOutcome = { status: "drafted" | "skipped" | "failed"; rank: number; detail: string };
 
 async function draftOne(
   clientId: string,
@@ -823,6 +824,49 @@ export async function draftWave(
 }
 
 /**
+ * Draft ONE page, named by its plan row.
+ *
+ * ‼️ A WRAPPER, AND draftOne STAYS PRIVATE, WHICH IS THE WHOLE POINT OF ADDING THIS. draftOne takes
+ * an `env` carrying the tier, the actor and a LEASE ID, which is wave bookkeeping: a caller that
+ * assembled its own would be deciding something about concurrency it has no way to reason about,
+ * and a caller that reused a lease id would hand itself another wave's lock. So the bookkeeping is
+ * minted here, once per page, and every rail inside draftOne is reached unchanged: the conditional
+ * lease, "a page with a body is never redrafted", the archived-page refusal, markClaimed, the
+ * evidence map and the capture.
+ *
+ * ‼️ draftWave IS UNTOUCHED AND THE TWO CANNOT COLLIDE. The lease is the reason: whichever of them
+ * takes it first drafts the row and the other is told "another pass is drafting it". That property
+ * belongs to draftOne and is not re-implemented here.
+ *
+ * ‼️ IT REACHES NEITHER SLACK SINK. `say` and `refreshCard` are the only two in this file and
+ * neither is reachable from draftOne, which is what lets the Launch Lane call this at all. See
+ * src/lib/launch/pages.ts's header and scripts/_probe-launch-isolation.ts.
+ *
+ * The caller decides what to say and whether to tick a step. One page is not a wave, so there is no
+ * budget to run out of and no hop to chain: at roughly eighty seconds this is one request's work.
+ */
+export async function draftOnePage(
+  clientId: string,
+  row: PlanRow,
+  by: string
+): Promise<DraftOutcome | { error: string }> {
+  const { data: client, error } = await supabaseAdmin
+    .from("clients")
+    .select("tier_scope")
+    .eq("id", clientId)
+    .maybeSingle();
+  if (error) return { error: error.message };
+
+  return draftOne(clientId, row, {
+    tier: ((client as { tier_scope?: string | null } | null)?.tier_scope ?? null) as string | null,
+    by,
+    // ‼️ ITS OWN LEASE ID, NEVER A SHARED CONSTANT. It is what the conditional release matches on,
+    // so two concurrent per-page drafts of DIFFERENT rows must not be able to release each other's.
+    leaseId: randomUUID(),
+  });
+}
+
+/**
  * Hand the rest to a fresh request.
  *
  * ‼️ AWAITED WITH A TIMEOUT, NOT FIRE AND FORGET. A fetch nobody awaits can be frozen with the
@@ -992,6 +1036,16 @@ export async function preCallPagesCardLines(clientId: string): Promise<string[]>
     // from the magnet's title, so every page on a hub asked in the same sentence. A count on the card is
     // what makes the gap visible: silently falling back is how the old behaviour survived unnoticed.
     ctaLines(rows),
+    "",
+    // ‼️ ONE PAGE AT A TIME, ON THE CARD, BECAUSE THE CARD IS WHERE THE GRAMMAR IS LEARNED.
+    // Everything above moves all eleven pages together, which is right when they are all at the
+    // same stage and wrong the moment they are not.
+    "*One page at a time:* `page 3` shows where page 3 is and what it has to choose between. " +
+      "`page 3 pick 2` takes an option, `page 3 more` writes new ones, `page 3 draft` writes its " +
+      "body and `page 3 check` reads that body against the evidence and Google's guidance. " +
+      "`page 3 ads` writes the twenty direct-response headlines for the ad that sends her there, " +
+      "which are a different artifact from the page's own H1 and never replace it. " +
+      "The number is the page's RANK, as printed above.",
     "_The pillar cannot be dropped, only swapped: every support links to it._",
   ];
 }
@@ -1168,6 +1222,196 @@ export async function handlePreCallThreadReply(input: {
   if (anchor) return anchorReply(input.clientId, anchor[1] ?? "");
 
   const { clientId, by } = input;
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // The per-page walk, in step 21's own thread
+  //
+  // ‼️ FIRST IN THIS HANDLER, AND THE HANDLER'S OWN PLACE IN THE CHAIN IS UNCHANGED. `page N` is
+  // its own first word and collides with nothing above it, so sitting at the top here is about
+  // reading rather than precedence: the walk is how a page is worked, and the older batch verbs
+  // below are the same work asked of all of them.
+  //
+  // ‼️ IT ADDRESSES BY RANK, AND `headline N` BELOW ADDRESSES BY POSITION. That divergence is real
+  // and is older than this walk: see the banner above pageAtRank. The new grammar takes the number
+  // the plan card prints, which is what every other typed verb in this lane already means.
+  //
+  // ‼️ NO BARE DIGIT, EVER. This thread also takes dictation, research pastes and call notes, and
+  // page-studio.ts records what a bare digit cost the last time one was claimed. The page is typed.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  const walk = parsePageWalk(command);
+  if (walk) {
+    const { readBatch, pageAtRank, pageWalkLines, pageStage, writeForStage, pickForStage, optionsFor } =
+      await import("./page-batch");
+
+    const state = await readBatch(clientId);
+    if ("error" in state) return { message: `:warning: ${state.error}` };
+
+    const row = pageAtRank(state, walk.page);
+    if (!row) {
+      return {
+        message: state.rows.length
+          ? `There is no page ${walk.page} in this batch. There are ${state.rows.length}, ranked ${state.rows.map((r) => r.rank).join(", ")}.`
+          : "No approved pages yet. `plan` proposes them and `plan approve` locks them in.",
+      };
+    }
+
+    // `page 3` on its own: show it. One read, no model call, so it answers inside the three
+    // seconds Slack allows rather than going through `after`.
+    if (walk.verb === "show") {
+      const { anglesFor } = await import("./page-angles");
+      const [options, angles] = await Promise.all([
+        optionsFor(clientId, [row]).then((m) => m.get(row.id) ?? []),
+        anglesFor(clientId)
+          .then((all) => all.filter((a) => a.planId === row.id))
+          .catch(() => [] as Array<{ idea: string; status: string }>),
+      ]);
+
+      let tools: Array<{ label: string; answers: string }> | undefined;
+      let toolOnOtherPage: { componentKey: string; rank: number } | null = null;
+      if (pageStage(state, row) === "handover") {
+        const { toolOptions, clientTool } = await import("./tool-lane");
+        const [opts, current] = await Promise.all([
+          toolOptions(clientId).catch(() => []),
+          clientTool(clientId).catch(() => null),
+        ]);
+        tools = opts.map((o) => ({ label: o.component.label, answers: o.component.answers }));
+        if (current?.pageId && current.pageId !== row.pageId) {
+          const other = state.rows.find((r) => r.pageId === current.pageId);
+          toolOnOtherPage = { componentKey: current.componentKey, rank: other?.rank ?? 0 };
+        }
+      }
+      return { message: pageWalkLines({ state, row, options, angles, tools, toolOnOtherPage }).join("\n") };
+    }
+
+    // ‼️ EVERYTHING BELOW RUNS IN `after`, FOR THE REASON handlePageAngleThreadReply STATES: Slack
+    // gives up after three seconds and these are model calls. The ack names what is happening, so
+    // a thread never goes quiet while eighty seconds of drafting runs.
+    if (walk.verb === "more") {
+      return {
+        message: `Writing what page ${row.rank} needs next. One moment.`,
+        after: async () => {
+          const fresh = await readBatch(clientId);
+          if ("error" in fresh) return void (await say(clientId, `:warning: ${fresh.error}`));
+          const target = pageAtRank(fresh, walk.page);
+          if (!target) return void (await say(clientId, `Page ${walk.page} has gone from this batch.`));
+          const res = await writeForStage(clientId, target, by, fresh);
+          await say(clientId, res.ok ? res.lines.join("\n") : `:warning: ${res.error}`);
+          await refreshCard(clientId);
+        },
+      };
+    }
+
+    if (walk.verb === "pick") {
+      return {
+        message: `Taking option ${walk.option} for page ${row.rank}.`,
+        after: async () => {
+          const fresh = await readBatch(clientId);
+          if ("error" in fresh) return void (await say(clientId, `:warning: ${fresh.error}`));
+          const target = pageAtRank(fresh, walk.page);
+          if (!target) return void (await say(clientId, `Page ${walk.page} has gone from this batch.`));
+          const res = await pickForStage(clientId, target, walk.option, by, fresh);
+          await say(clientId, res.ok ? res.lines.join("\n") : `:warning: ${res.error}`);
+          await refreshCard(clientId);
+        },
+      };
+    }
+
+    if (walk.verb === "draft") {
+      // Gated on THIS page, not on the batch: ten pages owing a headline must not stop the
+      // eleventh being written. Same two conditions the wave refuses on, asked of one row.
+      if (state.needHeadline.some((r) => r.id === row.id) || state.needSkeleton.some((r) => r.id === row.id)) {
+        return {
+          message: `Page ${row.rank} is not ready: a page drafted off no headline or no outline is a page written from nothing.`,
+        };
+      }
+      return {
+        message: `Drafting page ${row.rank}. It takes about a minute and a half.`,
+        after: async () => {
+          const out = await draftOnePage(clientId, row, by);
+          if ("error" in out) return void (await say(clientId, `:warning: ${out.error}`));
+          await say(
+            clientId,
+            out.status === "drafted"
+              ? `Page ${row.rank} has a body. \`page ${row.rank} check\` reads it before it can go live.`
+              : `Page ${row.rank} was not drafted: ${out.detail}`
+          );
+          await refreshCard(clientId);
+        },
+      };
+    }
+
+    if (walk.verb === "ads") {
+      return {
+        message: `Writing the ad headlines for page ${row.rank}. Twenty, and they take a moment.`,
+        after: async () => {
+          const { generateDrHeadlinesForPage, storeDrHeadlines, drHeadlinesFor, drHeadlineLines } =
+            await import("./page-dr-headlines");
+
+          const existing = (await drHeadlinesFor(clientId, [row.id])).get(row.id) ?? [];
+          if (existing.length) return void (await say(clientId, drHeadlineLines(row, existing).join("\n")));
+
+          const got = await generateDrHeadlinesForPage({ clientId, row });
+          if (!got.ok) return void (await say(clientId, `:warning: ${got.error}`));
+
+          const { loadOffer } = await import("./offers");
+          const offer = await loadOffer(clientId).catch(() => null);
+          const stored = await storeDrHeadlines({
+            clientId,
+            planId: row.id,
+            headlines: got.headlines,
+            audienceId: offer?.audienceId ?? null,
+          });
+          if (!stored.ok) return void (await say(clientId, `:warning: ${stored.error}`));
+
+          await say(clientId, drHeadlineLines(row, got.headlines).join("\n"));
+        },
+      };
+    }
+
+    // `page N check`: the gate, which is also what publishing refuses without.
+    if (!row.pageId) {
+      return { message: `Page ${row.rank} has no body yet, so there is nothing to check. \`page ${row.rank} draft\` writes one.` };
+    }
+    const pageId = row.pageId;
+    return {
+      message: `Checking page ${row.rank} against its evidence and Google's guidance.`,
+      after: async () => {
+        const { runGate } = await import("@/lib/hub/page-gate");
+        const res = await runGate(clientId, pageId, { runBy: by });
+        if (!res.ok) return void (await say(clientId, `:warning: ${res.error}`));
+
+        const { data: page } = await supabaseAdmin
+          .from("client_pages")
+          .select("slug, answer_md")
+          .eq("id", pageId)
+          .eq("client_id", clientId)
+          .maybeSingle();
+        const body = String((page as { answer_md?: string | null } | null)?.answer_md ?? "");
+        const { bodySections } = await import("@/lib/hub/draft-page");
+        const { loadNumberedEvidence, isFirstParty } = await import("./page-evidence");
+        const refs = await loadNumberedEvidence(clientId, pageId).catch(() => []);
+        const { pageReviewLines } = await import("./page-batch");
+
+        await say(
+          clientId,
+          pageReviewLines({
+            row,
+            slug: ((page as { slug?: string | null } | null)?.slug as string | null) ?? row.slug,
+            words: body.split(/\s+/).filter(Boolean).length,
+            headings: bodySections(body).filter((s) => s.heading).map((s) => s.heading),
+            citations: refs.length
+              ? { total: refs.length, firstParty: refs.filter((r) => isFirstParty(r.type)).length }
+              : null,
+            verdict: res.run.verdict,
+            checks: res.run.checks,
+            ranAt: res.run.createdAt,
+          }).join("\n")
+        );
+        await refreshCard(clientId);
+      },
+    };
+  }
 
   // ─────────────────────────────────────────────────────────────────────────
   // The batch, in step 21's own thread

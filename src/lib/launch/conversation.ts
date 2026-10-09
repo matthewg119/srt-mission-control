@@ -60,6 +60,7 @@ import {
   isLaunchPageAction,
   launchPagesState,
   pageRunText,
+  pageWalkText,
   runLaunchPagesAction,
 } from "./pages";
 
@@ -164,7 +165,7 @@ export interface LaunchAction {
   which?: string;
   /** run_pages: which stage of the page run. One of PAGE_RUN_STAGES. */
   stage?: string;
-  /** run_pages: which planned page, by the rank the plan shows. */
+  /** run_pages and read_pages: which planned page, by the rank the plan shows. */
   rank?: number;
   /** run_pages stage=headline_pick: which of the three candidates, 1 to 3. */
   pick?: number;
@@ -329,6 +330,15 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "- You MAY publish, with publish_page. It still goes through publishPage(), so the Day-0 wall,",
     "  the quality gate and the destination question all still apply and you cannot talk past any",
     "  of them. Never publish unless he asked for it in this turn or the one before.",
+    "- ‼️ WHEN HE IS WORKING ONE PAGE, USE THE PER-PAGE VERBS, NOT THE BATCH ONES. page_write and",
+    "  page_pick act on a single rank and leave every other page where it is, which is what lets him",
+    "  keep several in flight at different stages. The batch verbs (angles_write, headlines_write,",
+    "  skeletons_write, draft_wave) act on ALL of them, so reach for one only when he asked for all.",
+    "- ‼️ A BARE NUMBER FROM HIM IS AN OPTION ON THE PAGE YOU JUST SHOWED HIM, and resolving it is",
+    "  YOUR job, not the server's. Read back which page the last card was about, and send page_pick",
+    "  with that rank and that pick. If the last card covered several pages, or you cannot tell which",
+    "  one he means, ASK which page rather than guessing: a pick against the wrong rank decides",
+    "  something on a page he was not looking at, and the other two options are thrown away.",
     "- You may change keywords and the strategy map, but ONLY when he says so in words. Never as a",
     "  tidy-up, never as a side effect of a question, and never a phrase he did not name.",
     "- Never touch the concierge without him saying yes in words.",
@@ -437,7 +447,15 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "  that is the OPTION for the page you just showed him, so send rank for that page and pick for",
     "  his number. If several pages are open at once and the number is ambiguous, ask which page.",
     "- He may build several pages at once, at different stages. That is supported: each page's stage",
-    "  is worked out from what it already has, so there is no order to keep them in.",
+    "  is worked out from what it already has, so there is no order to keep them in. THE PAGE RUN",
+    "  BLOCK ABOVE PRINTS EACH PAGE'S OWN STAGE IN {braces}, so read those rather than describing",
+    "  the run as though it were at one stage.",
+    "- ‼️ THE SAME CHAIN HAS A SECOND SHAPE, AND IT IS THE ONE HE USUALLY WANTS. The arrows above",
+    "  are the whole batch moving together. page_write and page_pick walk ONE page down exactly that",
+    "  chain instead, taking the stage from what the page has rather than from you:",
+    "    read_pages rank=4 -> page_write 4 -> page_pick 4 -> page_write 4 -> page_pick 4 -> ...",
+    "  until that page is decided end to end. Then the batch rejoins: ONE research_prompt for all of",
+    "  them, research_file, and then page_draft, page_check and publish_page one page at a time.",
     "- Every page hands over to something. plan_cta sets the sentence a page offers the house offer",
     "  with. ONE page may be the tool page instead: tool_options lists what suits this client and",
     "  tool_pick needs the rank of the page it goes on. There is one tool per client, never one per",
@@ -446,6 +464,12 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "  that with research_file and text. You never do the research yourself.",
     "- draft_wave writes one pass and tells you how many are left. If any are left, say so and offer",
     "  to run it again. That is the design, not a failure: a page with a body is never rewritten.",
+    "  page_draft is the same work for ONE page, which is what he means by writing them one at a",
+    "  time. Either way a drafted page is never redrafted, so pressing again is how you resume.",
+    "- ‼️ AFTER A DRAFT, THE PAGE IS NOT FINISHED: page_check READS IT AND publish_page SENDS IT",
+    "  LIVE. The check runs the quality gate, which reads the page against its own evidence AND",
+    "  against Google's published guidance, and publishing is refused outright until it has run.",
+    "  Show him the verdict in full. A warning is a judgement for him to make; only a block stops it.",
     "- Before the plan exists, the strategy map is what to talk about: one pillar and six supports,",
     "  listed under PUBLISHING. Changing them with strategy_set changes every page that follows, so",
     "  re-propose the plan after.",
@@ -474,6 +498,9 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "  read_pages           where the page run stands: every planned page, the keyword it aims at,",
     "                       and what each one still needs. Free and read only. Use it before",
     "                       answering anything about the pages, and before publishing.",
+    "                       WITH A RANK it is ONE page: its stage, and the options to choose between",
+    "                       at that stage, numbered. That is the read to use when he is working a",
+    "                       single page, and it is free, so use it rather than guessing from above.",
     "  run_pages            needs stage, one of the stages listed above. Also takes rank and pick",
     "                       (angle_pick, headline_pick, tool_pick), rank alone (angles_write for",
     "                       one page), rank (plan_drop, plan_swap, plan_edit, plan_cta),",
@@ -481,6 +508,26 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "                       phrases (keywords_add, keywords_drop, keywords_select,",
     "                       keywords_unselect), category (keywords_add), and pillar plus supports",
     "                       (strategy_set).",
+    "",
+    "THE PER-PAGE VERBS, WHICH ARE THE SAME WORK ASKED OF ONE PAGE:",
+    "  page_write           needs rank. Writes whatever that ONE page needs next, worked out from",
+    "                       what it already has: its three ideas, or its three headlines, or its",
+    "                       skeleton, or the tool options. You do not say which; the page's stage",
+    "                       decides, and the result comes back with the options to show him.",
+    "  page_pick            needs rank and pick. Takes one of the options the card just printed for",
+    "                       that page, at whatever stage it is at. The page then moves on by itself.",
+    "  page_draft           needs rank. Writes the body of ONE page. It takes about eighty seconds,",
+    "                       so run it ALONE in a turn and say nothing else is happening.",
+    "  page_check           needs rank. Runs the quality gate on one drafted page and reports the",
+    "                       verdict: the evidence checks, and the four read against Google's",
+    "                       published guidance. ‼️ A PAGE CANNOT BE PUBLISHED UNTIL THIS HAS RUN.",
+    "  page_ads             needs rank. Twenty DIRECT-RESPONSE headlines for that page: the ad,",
+    "                       the advertorial and the VSL lines that send a buyer to it.",
+    "                       ‼️ THESE ARE NOT THE PAGE'S H1 AND THEY NEVER REPLACE IT. The H1 is",
+    "                       the question she types, which is how an engine finds the page; these",
+    "                       are what stops her scrolling past an ad for it. Written from the same",
+    "                       picked angle, so the two argue one thing. Show them in full: they are",
+    "                       a bank to use across ads, not a shortlist, so never ask him to pick.",
     "",
     "THE FOUR KEYWORD VERBS, WHICH ARE FOUR DIFFERENT DECISIONS. Do not use one for another:",
     "  keywords_add         MINTS phrases that do not exist yet, approves them and puts them in the",
@@ -496,6 +543,9 @@ function systemPrompt(ctx: BoardContext, clientName: string): string {
     "                       Day 0 not archived, the quality gate, or more than one destination wired",
     "                       and none chosen. The last one is a QUESTION: it comes back with the list,",
     "                       you show him both and he picks, then you pass destinationId.",
+    "                       ‼️ A GATE REFUSAL SAYING THE PAGE HAS NOT BEEN CHECKED IS ANSWERED BY",
+    "                       page_check ON THAT RANK, and nothing else. A refusal that says the gate",
+    "                       BLOCKED it is answered by getting a source, never from this surface.",
     "  unpublish_page       needs rank. Taking a page down is never gated: it is the remedy.",
     "  file_evidence        needs stepKey and text: an artifact he has pasted, filed against a step",
     "                       whose evidence is something a person produces (the Day-0 scan, GBP",
@@ -901,6 +951,16 @@ ${body}`,
   }
 
   if (kind === "read_pages") {
+    // ‼️ WITH A RANK IT IS ONE PAGE, AND THIS IS THE FREE HALF OF THE PER-PAGE WALK. Every verb
+    // that writes or spends sits behind the confidence bar, correctly. Looking at one page must
+    // not, or "show me page 4" becomes a thing the chat declines while it is sure enough to
+    // rewrite page 4's ideas. Served here rather than as a fifth page action precisely because
+    // read_pages is already in SELF_PROVING and would otherwise need a hand-written exemption.
+    if (action.rank) {
+      const text = await pageWalkText(clientId, Number(action.rank));
+      return { kind, ok: true, detail: text };
+    }
+
     const state = await launchPagesState(clientId);
     if ("error" in state) return { kind, ok: false, detail: state.error };
 

@@ -728,7 +728,7 @@ export interface AngleRunResult {
 }
 
 /**
- * Draft three angles for every planned page that has none, or for one page when `only` is given.
+ * Draft three angles for every planned page that has none, or for one page named by `rowId` or `only`.
  *
  * ‼️ A PAGE WITH AN APPROVED ANGLE IS SKIPPED UNLESS IT IS NAMED. `angles auto` after a pick must
  * not silently rewrite a decision somebody already made; `angle 3 more` is how you change one on
@@ -737,6 +737,18 @@ export interface AngleRunResult {
 export async function generateAnglesForPlan(args: {
   clientId: string;
   by: string;
+  /**
+   * The plan row itself, when the caller is holding one.
+   *
+   * ‼️ PREFERRED OVER `only`, AND THE DIFFERENCE IS A WHOLE CLASS OF SILENT WRONG PAGE. `only` is a
+   * POSITION on the rank-ordered card, which is the right shape for somebody typing what they read.
+   * A caller that already has the row had to work that position out, and every one of them did it
+   * with index arithmetic over a filtered list: src/lib/launch/pages.ts carried nine lines of it
+   * under a comment explaining the trap. An id cannot name the wrong page, so it needs no comment.
+   *
+   * Set both and this wins. Set neither and every page with no angle is drafted, unchanged.
+   */
+  rowId?: string;
   /** 1-based position on the card, as a person types it. */
   only?: number;
   /**
@@ -784,7 +796,20 @@ export async function generateAnglesForPlan(args: {
   const draftedBy = new Set(existing.filter((a) => a.status === "draft").map((a) => a.planId));
 
   let targets = pages;
-  if (args.only !== undefined) {
+  if (args.rowId) {
+    // Tested before `only` because it is the exact form: a caller that passed both knows which page
+    // it means, and a position is the guess.
+    const one = pages.find((p) => p.id === args.rowId);
+    if (!one) {
+      return {
+        ok: false,
+        drafted: 0,
+        failed: 0,
+        lines: [":warning: That page is not in this plan, or it has no role yet. `angles` lists the ones that are."],
+      };
+    }
+    targets = [one];
+  } else if (args.only !== undefined) {
     const one = pages[args.only - 1];
     if (!one) {
       return { ok: false, drafted: 0, failed: 0, lines: [`:warning: There is no page ${args.only}. \`angles\` lists them.`] };

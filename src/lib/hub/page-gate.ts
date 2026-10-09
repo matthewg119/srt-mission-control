@@ -51,7 +51,14 @@ import { GUIDELINE_RULES } from "@/config/guideline-rules";
  * Every path that consults this gate. Documentation, not enforcement: enforcement is the call
  * to assertGatePassed() inside each one.
  */
-export const GATED = ["POST /api/clients/[id]/hub  action=page_publish"] as const;
+export const GATED = [
+  // ‼️ THE FUNCTION, NOT THE ROUTE, AND THIS ENTRY WAS STALE. The grep above is on
+  // assertGatePassed, and its one call site moved into publishPage() when publishing became one
+  // function with two rails in a fixed order. The hub route still publishes, but it does it
+  // through publishPage, so the route is where a person presses and this is where the gate is.
+  "publishPage() in src/lib/hub/publish-page.ts",
+  "POST /api/clients/[id]/hub  action=page_publish  (through publishPage)",
+] as const;
 
 /**
  * Deliberately NOT gated, and why.
@@ -1148,7 +1155,8 @@ export async function assertGatePassed(clientId: string, pageId: string): Promis
   if (!run) {
     throw new GateBlockedError(
       "never_run",
-      "This page has not been checked. Press Check, or type `check` in the page studio thread."
+      "This page has not been checked. Press Check, type `check` in the page studio thread, or " +
+        "`page 3 check` in the onboarding thread. On the Launch Lane it is run_pages stage=page_check."
     );
   }
 

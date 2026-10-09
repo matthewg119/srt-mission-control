@@ -155,6 +155,22 @@ jobs:
       - name: Step re-run grammar, and the generated docs still describe the board
         run: bun --no-env-file run scripts/_probe-step-rerun.ts
 
+      # ‼️ THE TWO CHECKS GUARDING THE ENTIRE LAUNCH LANE, AND NEITHER WAS IN THIS FILE. Both
+      # have existed since the lane did, both are offline by construction, and both were run only
+      # when somebody remembered to. That is the exact failure this workflow's own header is about.
+      # The isolation one is the load-bearing half: the whole value of a second lane is that
+      # editing one cannot change the other, and no type defends that property.
+      - name: Launch lane isolation (the Slack engine stays out of it)
+        run: bun --no-env-file run scripts/_probe-launch-isolation.ts
+
+      - name: Launch lane page run (the stage gates, and the rails inside publishPage)
+        run: bun --no-env-file run scripts/_probe-launch-pages.ts
+
+      # The per-page walk's grammar runs in a thread that also takes dictation, research pastes and
+      # call notes, so a verb one character too loose files somebody's sentence as a decision.
+      - name: Page walk (a page's own stage, and no bare digit is a command)
+        run: bun --no-env-file run scripts/_probe-page-walk.ts
+
       - name: Headline probes
         run: |
           bun --no-env-file run scripts/_probe-aeo-headlines.ts
