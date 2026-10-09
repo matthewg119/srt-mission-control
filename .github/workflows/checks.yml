@@ -86,6 +86,16 @@ jobs:
       - name: Cards funnel probe (one fork, two ways out)
         run: bun --no-env-file run scripts/_probe-cards-funnel.ts
 
+      # ‼️ /cards/p LETS A CLINIC PICK A CARD DESIGN, AND ONLY A PROBE CAN STOP THAT BECOMING A
+      # CHOICE OF WORDING. "VISUAL THEME PER CLIENT. COPY IDENTICAL FOR EVERY CLIENT. FOREVER" is
+      # the rule the whole AI Referral Engine rests on, and a palette config that quietly grew a
+      # headline field would break it with nothing failing. This also holds that the preview and
+      # the printed PDF read one copy of the card's words, that no screen draws a star or offers
+      # anything for a review, and that the closing line says a PDF is coming "shortly" rather
+      # than claiming one was sent, because nothing in that lane sends one yet.
+      - name: Card preview probe (a design is a palette, not a wording)
+        run: bun --no-env-file run scripts/_probe-card-preview.ts
+
       # The launcher was unclickable for nine days and no check in this file noticed, because the
       # only thing that could have noticed was somebody tapping it. See the probe's own header for
       # why it asserts a shape rather than simulating a tap.

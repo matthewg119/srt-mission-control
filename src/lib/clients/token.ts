@@ -62,7 +62,12 @@ export function hashToken(token: string): string {
 // billing_status, and can be refused outright by the seat cap, none of which should happen
 // because somebody tapped a button on an ad page. The scope check is what stops a lead link
 // being pasted into /onboarding and reaching a real client's business data, and vice versa.
-export type TokenScope = "onboarding" | "preview" | "chatgpt_ads" | "resume";
+// ‼️ `card` CARRIES A `contacts` ID, NOT A CLIENT ID, and chatgpt_ads set that precedent above.
+// It is what /cards/p is addressed by: a lead who replied "yes I am interested" in an email thread
+// is not a client and has not been sold anything, so a scope that could reach a `clients` row would
+// be the wrong shape entirely. The scope check is what stops a card preview link being pasted into
+// /onboarding and vice versa; see leadFromCardToken in src/lib/cards/preview-link.ts.
+export type TokenScope = "onboarding" | "preview" | "chatgpt_ads" | "resume" | "card";
 
 // ‼️ `resume` CARRIES A concierge_sessions ID, NOT A CLIENT ID, and chatgpt_ads already set that
 // precedent: the id slot is an id, and the scope says what kind. It is what the welcome email's "carry on

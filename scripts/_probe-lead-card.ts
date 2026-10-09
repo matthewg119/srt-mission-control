@@ -100,6 +100,11 @@ const CALLERS = [
   // and it is the only funnel whose lead is already a yes when it arrives. It passes
   // pageFromRequest(req, "/cards"), so it answers the question below.
   "src/app/api/cards/route.ts",
+  // Added 2026-10-09. The fifteenth: /cards/p is one step EARLIER than /cards in the same
+  // outbound sequence. A clinic replies "yes I am interested" to the card email, Matthew types
+  // `card` in their #hot-leads thread, and this is what they open. It passes
+  // pageFromRequest(req, "/cards/p"), so it answers the question below.
+  "src/app/api/cards/preview/route.ts",
   "src/app/api/lhr/optin/route.ts",
   "src/app/api/medspa/optin/route.ts",
   "src/lib/clients/provision.ts",

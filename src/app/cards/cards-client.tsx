@@ -19,6 +19,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { calendlyEmbedUrl } from "@/lib/calendly";
+// ‼️ THE LOCKUP MOVED OUT ON 2026-10-09, when /cards/p needed the same two lines above the
+// same funnel one step earlier in the conversation. See src/app/cards/lockup.tsx.
+import { Lockup } from "./lockup";
 import { validEmail, validName } from "@/lib/medspa/validate";
 import {
   CARDS_CLOSE,
@@ -710,27 +713,6 @@ export function CardsClient() {
           <p className="cd-booked">You are booked. We will see you then.</p>
         </div>
       )}
-    </div>
-  );
-}
-
-/**
- * SRT's mark and what this is, at the top of both states.
- *
- * ‼️ IT IS THE SECTION'S IDENTITY AND THE SECTION DOES NOT CHANGE. The opening copy and the
- * chat swap underneath it; this does not move, which is the whole difference between one page that
- * progresses and two pages that replace each other.
- */
-function Lockup() {
-  return (
-    <div className="cd-id">
-      <span className="cd-mark" aria-hidden="true">
-        S
-      </span>
-      <span className="cd-who">
-        <span className="cd-name">{CARDS_HERO.brand}</span>
-        <span className="cd-what">{CARDS_HERO.product}</span>
-      </span>
     </div>
   );
 }

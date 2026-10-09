@@ -114,8 +114,12 @@ const DEMO_CLIENT: HubClient = {
 const MEDSPA_CLIENT: HubClient = {
   ...DEMO_CLIENT,
   id: "demo-medspa-123-not-a-real-client",
-  displayName: "Med Spa 123",
-  legalName: "Med Spa 123 LLC",
+  // ‼️ "Clinic 123" AND NOT "Med Spa 123" SINCE 2026-10-09, Matthew's call. The name is on
+  // screen in /cards/p's phone frame, which is now shown to leads in verticals that are not med
+  // spas, and a dentist looking at a demo wearing a med spa's name reads it as somebody else's
+  // product. The KEY stays `medspa123` because it is in links that have already been sent.
+  displayName: "Clinic 123",
+  legalName: "Clinic 123 LLC",
   city: "Miami",
   state: "FL",
   theme: { logoUrl: null, accent: "#d6809c", accentSoft: "#fdeef3", fontFamily: null },
@@ -200,7 +204,7 @@ function readMode(raw: string | string[] | undefined): DemoMode {
 /** Which fake clinic the demo is wearing. Narrowed, never interpolated. */
 const CLIENTS = [
   { key: "default", label: "Northlight (teal)", client: DEMO_CLIENT },
-  { key: "medspa123", label: "Med Spa 123 (pink)", client: MEDSPA_CLIENT },
+  { key: "medspa123", label: "Clinic 123 (pink)", client: MEDSPA_CLIENT },
 ] as const;
 
 type DemoClientKey = (typeof CLIENTS)[number]["key"];
@@ -217,11 +221,16 @@ function readClient(raw: string | string[] | undefined): DemoClientKey {
 export default function AgentDemo({
   searchParams,
 }: {
-  searchParams: { client?: string; mode?: string };
+  searchParams: { client?: string; mode?: string; bare?: string };
 }) {
   const clientKey = readClient(searchParams.client);
   const client = (CLIENTS.find((c) => c.key === clientKey) ?? CLIENTS[0]).client;
   const mode = readMode(searchParams.mode);
+  // ‼️ ?bare=1 DROPS THE RIBBON AND NOTHING ELSE. /cards/p embeds this page in a phone frame to
+  // show a clinic what a patient sees, and the switcher underneath it is OUR scaffolding: inside
+  // that frame it reads as part of the patient's page, which is the one thing the frame is there
+  // to disprove. The flow above it is untouched, so this is still one renderer and not two.
+  const bare = searchParams.bare === "1";
 
   return (
     <div
@@ -238,7 +247,7 @@ export default function AgentDemo({
           client={client}
           referral={{ ...DEMO_REFERRAL, clinicPhone: client.phone, mode }}
         />
-        <Ribbon clientKey={clientKey} mode={mode} />
+        {!bare && <Ribbon clientKey={clientKey} mode={mode} />}
       </div>
     </div>
   );

@@ -19,6 +19,7 @@ import {
   contactByThread,
   findUsableAudit,
   postBookingLink,
+  postCardPreview,
   postLeadStatus,
   proxyToAuditThread,
   runAuditForContact,
@@ -29,6 +30,20 @@ const AUDIT_RE = /^(run\s+(the\s+)?audit|audit|run\s+(the\s+)?scan|scan\s+them)\
 const STATUS_RE = /^(status|where\s+are\s+we)\s*\??$/i;
 const HELP_RE = /^(help|commands|\?)\s*$/i;
 const LINK_RE = /^((send\s+|booking\s+|the\s+)?link|book|booking)\s*$/i;
+/**
+ * `card`. The QR card preview, wearing this lead's name.
+ *
+ * ‼️ IT SITS ABOVE THE PROXY TABLE AND BELOW LINK_RE, which is where every other typed
+ * verb in this lane sits, and it matters: PROXY_VERBS are PREFIX matches forwarded to the audit
+ * thread, so a bare `card` falling through to them would reach a state machine that has never
+ * heard of it. This one answers here and returns.
+ *
+ * ‼️ AND IT NEEDS NO AUDIT, unlike `link`. The booking link carries a report slug because it
+ * attaches that audit to the client as a pre-call photograph; this link carries a contact id and
+ * shows them an object. A lead who replied to the card email and has never been scanned is
+ * exactly who this is for.
+ */
+const CARD_RE = /^(card|cards|card\s+preview|preview\s+card|show\s+(them\s+)?the\s+card)\s*$/i;
 
 /**
  * Verbs that mean something specific to handleAuditThreadReply, listed so the reply can name what
@@ -65,6 +80,7 @@ const HELP = [
   "*In a lead thread:*",
   "`run audit` the AI visibility audit on their site, linked to this lead. Four to six minutes, the score comes back here.",
   "`status` where this lead actually is  ·  `link` the /onboarding2 booking URL carrying their report",
+  "`card` the QR card preview, wearing their business name. What to send the moment they reply yes to the card email.",
   "",
   "*Once the audit is finished, this thread is a remote control for it:*",
   "*Paste what they emailed back* and I draft the answer  ·  `1` `2` `3` pick a draft, it goes to your Outlook",
@@ -105,6 +121,11 @@ export async function handleLeadThreadReply(args: {
 
   if (LINK_RE.test(text)) {
     await postBookingLink({ contact, channel: args.channel, threadTs: args.threadTs });
+    return true;
+  }
+
+  if (CARD_RE.test(text)) {
+    await postCardPreview({ contact, channel: args.channel, threadTs: args.threadTs });
     return true;
   }
 
