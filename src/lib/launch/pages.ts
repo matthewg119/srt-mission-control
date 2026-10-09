@@ -911,13 +911,21 @@ export async function runLaunchPagesAction(input: LaunchPagesInput): Promise<Lau
         return { ok: false, error: res.lines.join(" ").replace(/:warning:\s*/g, "") };
       }
 
+      // ‼️ THE REASONS COME WITH THE COUNT, AND DROPPING THEM COST A DAY. On 2026-10-09 this
+      // printed "Angles: 4 of 11 wrote. 7 failed with no ideas written" and nothing else, so the
+      // seven were unexplained and unfixable. generateAnglesForPlan had already returned a line
+      // per failure naming the page and the error; this arm kept only the NUMBER. A count of
+      // failures with no reason is the same dead end `headlines_write` records one case below,
+      // where returning only a count left a person with a true sentence that answers nothing.
+      const why = res.lines.slice(1).map((l) => l.replace(/^\s*[•\s]*/, "  ").replace(/:warning:\s*/g, ""));
+
       return {
         ok: true,
         message: [
           res.drafted
             ? `Wrote three ideas for ${res.drafted} page${res.drafted === 1 ? "" : "s"}.`
             : "Every page already had its ideas.",
-          ...(res.failed ? [`${res.failed} failed.`] : []),
+          ...(res.failed ? [`${res.failed} failed, and here is why each one did:`, ...why] : []),
           "Show these to him verbatim and ask which idea he wants per page:",
           ...lines,
         ].join("\n"),
