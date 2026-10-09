@@ -1245,7 +1245,18 @@ const READ_DYNAMICALLY: Record<string, string> = {
 // raw_leads.full_address and raw_leads.postal_code are now read by recordCallList and written to
 // contacts.biz_address and contacts.biz_zip, so a person dialling the call list can see where the
 // business is.
-const BOARD_BASELINE = 494;
+//
+// ‼️ 2026-10-09, later: 494 -> 493. raw_leads.vertical_slug stopped being dead. It was written on
+// every pulled row and read by nothing, which meant the lane recorded what each lead WAS and could
+// not then ask for the med spas. sweepCallListGap filters on it to reconcile one vertical's call
+// list against the CRM, and the get_call_list and get_territory tools scope on it.
+//
+// ‼️ AND THE THREE TABLES THE PULL PLANNER ADDED COST THIS NUMBER NOTHING, which is the point of
+// running this probe before pushing rather than after. It named two write-only columns on its first
+// run: scraper_metro_circles.run_id, which was deleted, and scraper_pull_plans.approved_by, which
+// was wired into `plan status` because "who authorised this list of purchases" is a real question
+// for the one gate in this lane that authorises more than one.
+const BOARD_BASELINE = 493;
 
 type Verdict = "write_only" | "never_touched";
 interface Finding {

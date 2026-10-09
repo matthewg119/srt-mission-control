@@ -23,6 +23,10 @@ import {
   SENDING,
   cellsMeasured,
   contactsPerDay,
+  dropRows,
+  groupDropRows,
+  metroCircleRows,
+  metroCircles,
   metroPlan,
   metroRows,
   pullCommands,
@@ -65,15 +69,30 @@ export default async function TerritoryPage({
 
   const grid = sp.zoom === "metro" ? DOT_GRID.metro : DOT_GRID.national;
 
-  const [dots, metros, states, cells] = await Promise.all([
+  const [dots, metros, states, cells, circles, drops, circleRows] = await Promise.all([
     territoryDots(vertical, grid),
     metroRows(vertical),
     stateRows(vertical),
     cellsMeasured(vertical),
+    metroCircles(vertical),
+    dropRows(vertical),
+    metroCircleRows(vertical),
   ]);
 
   const def = territoryVertical(vertical);
-  const plan = metroPlan(metros);
+  // ‼️ THE CIRCLES ARE PASSED IN, AND WITHOUT THEM FIFTEEN METROS READ AS "not measured" FOREVER.
+  // `territory_metro_rollup` derives a remainder by joining through raw_leads.run_id, so it can only
+  // answer for metros that have been PULLED. A metro measured on its own, which is what a plan's
+  // measure step buys, has no leads and therefore no row there.
+  const plan = metroPlan(metros, circles);
+  const metroDrops = groupDropRows(drops.rows);
+  // ‼️ WHEN A CIRCLE WAS COUNTED, NOT JUST WHAT IT HELD. The vendor's index is live: the same Dallas
+  // circle and the same five categories read 1,765 on 2026-09-28 and 1,990 ten days later, 12.7%
+  // growth. A remainder computed against an old count is not wrong, it is old, and a reader can only
+  // tell if the page says so.
+  const circleAge = new Map(circleRows.map((c) => [c.metroKey, c.measuredAt]));
+  const measuringSpend = circleRows.reduce((a, c) => a + c.costUsd, 0);
+  const dropTotal = metroDrops.reduce((a, m) => a + m.byRule + m.byModel, 0);
 
   const statePulled: Record<string, number> = {};
   for (const s of states.rows) statePulled[s.name] = s.pulled;
@@ -280,6 +299,149 @@ export default async function TerritoryPage({
         )}
       </section>
 
+      {/* ── what the ICP throws away ────────────────────────────────────────────────────────── */}
+      {/* ‼️ "NOT EMAILABLE", NOT "DROPPED", AND THE HEADING IS THE WHOLE POINT. `qualify_keep = false`
+          means a row is not going into enrichment, which is a statement about the EMAIL channel and
+          nothing else. Most of these rows have a phone number and a front desk, and printing them
+          under a word that reads like a wastebasket is how 416 dialable businesses get forgotten.
+          Tier C is not here at all: it is keep TRUE and lives on the call list. */}
+      <section>
+        <h2 className="mb-1 text-lg font-medium text-gray-900">What the profile does not email</h2>
+        <p className="mb-4 text-sm text-gray-500">
+          Every row the ICP did not route to enrichment, split by <strong>what judged it</strong> and
+          bucketed by why. A few thousand cut for ONE reason means the profile is wrong, not that the
+          list is bad, and that is only visible here.
+        </p>
+
+        {dropTotal === 0 ? (
+          <p className="rounded border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600">
+            Nothing has been judged and rejected for {def?.label ?? vertical} yet. If that is a
+            surprise, <code>docs/2026-10-09-drop-rollup.sql</code> may not have been run.
+          </p>
+        ) : (
+          <>
+            <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {[
+                {
+                  label: "by a free rule",
+                  n: metroDrops.reduce((a, m) => a + m.byRule, 0),
+                  note: "no website, platform only, chain",
+                },
+                {
+                  label: "by the model",
+                  n: metroDrops.reduce((a, m) => a + m.byModel, 0),
+                  note: "judged against the profile",
+                },
+                {
+                  label: "still callable",
+                  n: metroDrops.reduce((a, m) => a + m.called, 0),
+                  note: "a phone and a front desk",
+                },
+                {
+                  label: "actually binned",
+                  n: metroDrops.reduce((a, m) => a + m.binned, 0),
+                  note: "nobody there can buy",
+                },
+              ].map((s) => (
+                <div key={s.label} className="rounded-lg border border-gray-200 bg-white p-3">
+                  <div className="text-xs uppercase tracking-wide text-gray-500">{s.label}</div>
+                  <div className="mt-1 text-2xl font-semibold tabular-nums text-gray-900">
+                    {s.n.toLocaleString()}
+                  </div>
+                  <div className="mt-0.5 text-xs text-gray-400">{s.note}</div>
+                </div>
+              ))}
+            </div>
+
+            {drops.capped && (
+              <p className="mb-3 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                This is the {DOT_LIMIT.toLocaleString()} biggest buckets and there are more. The
+                counts shown are true; the tail is not listed.
+              </p>
+            )}
+
+            <div className="space-y-4">
+              {metroDrops.map((m) => (
+                <div key={m.metro} className="rounded-lg border border-gray-200 bg-white p-4">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <h3 className="text-sm font-medium text-gray-900">{m.metro}</h3>
+                    <div className="text-xs text-gray-500 tabular-nums">
+                      {(m.byRule + m.byModel).toLocaleString()} not emailed:{" "}
+                      <span className="text-gray-700">{m.byRule.toLocaleString()} free rule</span>,{" "}
+                      <span className="text-gray-700">{m.byModel.toLocaleString()} model</span>
+                      {" · "}
+                      <span className="text-amber-700">{m.called.toLocaleString()} still callable</span>,{" "}
+                      {m.binned.toLocaleString()} binned
+                    </div>
+                  </div>
+
+                  <div className="mt-3 grid gap-4 md:grid-cols-2">
+                    {[
+                      { title: "Free rules", buckets: m.ruleBuckets, hint: "answered from the row, no model asked" },
+                      { title: "The model", buckets: m.modelBuckets, hint: "judged against the written profile" },
+                    ].map((side) => (
+                      <div key={side.title}>
+                        <div className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                          {side.title}
+                        </div>
+                        <div className="text-[11px] text-gray-400">{side.hint}</div>
+                        {side.buckets.length === 0 ? (
+                          <p className="mt-2 text-xs text-gray-400">none</p>
+                        ) : (
+                          <ul className="mt-2 space-y-1">
+                            {side.buckets.slice(0, 12).map((b) => (
+                              <li key={b.label} className="flex items-baseline justify-between gap-3 text-xs">
+                                <span className="text-gray-700">
+                                  {b.label}
+                                  {/* ‼️ THE FOLD IS SHOWN RATHER THAN HIDDEN. "9 spellings" is the
+                                      evidence that this bucket is prose a model wrote, not a
+                                      category anything enforces. */}
+                                  {b.spellings > 1 && (
+                                    <span className="text-gray-400"> · {b.spellings} spellings</span>
+                                  )}
+                                </span>
+                                <span className="tabular-nums text-gray-900">{b.n.toLocaleString()}</span>
+                              </li>
+                            ))}
+                            {side.buckets.length > 12 && (
+                              <li className="text-xs text-gray-400">
+                                and {side.buckets.length - 12} more
+                              </li>
+                            )}
+                          </ul>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* ‼️ THE BUCKETS ARE PROSE AND THE PAGE SAYS SO. `judged_vertical` is written on every
+                KEPT row and is null on every dropped one by construction, so nothing here is a
+                controlled vocabulary. Grouping is `normalizeReason`, which sorts the significant
+                words of a reason and folds the result, and it is fuzzy. A reader who takes these
+                for categories will over-trust the long tail. */}
+            <p className="mt-3 text-xs text-gray-500">
+              These buckets are the model&apos;s own prose, folded by{" "}
+              <code>normalizeReason</code>, not a taxonomy.{" "}
+              {drops.rows.filter((r) => r.judgedVertical).length === 0 ? (
+                <>
+                  Every rejected row has a null <code>judged_vertical</code>, because the qualify
+                  prompt writes a vertical only on a KEEP. When a drop starts carrying one, these
+                  buckets switch to it automatically.
+                </>
+              ) : (
+                <>
+                  Rows carrying a <code>judged_vertical</code> are bucketed on that instead, which is
+                  the real answer where it exists.
+                </>
+              )}
+            </p>
+          </>
+        )}
+      </section>
+
       {/* ── the plan ────────────────────────────────────────────────────────────────────────── */}
       <section>
         <h2 className="mb-1 text-lg font-medium text-gray-900">The plan</h2>
@@ -287,6 +449,23 @@ export default async function TerritoryPage({
           Pick the next metro from here, never from memory. The order is{" "}
           <code>METROS</code> in <code>src/lib/trt.ts</code>: Sun Belt first.
         </p>
+
+        {/* ‼️ THE COMMAND THAT DOES ALL OF THIS FOR YOU IS NAMED AT THE TOP OF THE PLAN, because a
+            page that shows the arithmetic and leaves a person to do it by hand is how the four
+            2026-10-08 Dallas chunks got their offsets worked out against a stale circle size. The
+            generated commands further down are still here for when a specific slice is wanted. */}
+        <div className="mb-5 rounded-lg border border-gray-900 bg-gray-900 p-4 text-gray-100">
+          <div className="text-xs uppercase tracking-wide text-gray-400">
+            Or let it work out where
+          </div>
+          <code className="mt-1 block text-sm">pull 2000 {vertical}</code>
+          <p className="mt-2 text-xs text-gray-400">
+            In #srt-scraper. Reads this plan, skips finished metros, measures the next circle for
+            $0.0124 when nobody has counted it, and posts ONE card with the cost and what will be
+            left in each metro. Nothing is bought until you react, and the chunks then run one at a
+            time. <code>plan status {vertical}</code> and <code>stop plan {vertical}</code> drive it.
+          </p>
+        </div>
 
         <div className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <div className="rounded-lg border border-gray-200 bg-white p-3">
@@ -361,6 +540,11 @@ export default async function TerritoryPage({
                     <td className="px-3 py-2 text-right">{p.sendable.toLocaleString()}</td>
                     <td className="px-3 py-2 text-right">
                       <Num n={p.remaining} />
+                      {circleAge.get(p.key) && (
+                        <div className="text-[10px] text-gray-400">
+                          circle read {formatRelativeTime(circleAge.get(p.key)!)}
+                        </div>
+                      )}
                     </td>
                     <td className="px-3 py-2 text-right">
                       {p.daysOfSupply === null ? (
@@ -436,6 +620,13 @@ export default async function TerritoryPage({
       {/* ── the national cell crawl ─────────────────────────────────────────────────────────── */}
       <section>
         <h2 className="mb-2 text-lg font-medium text-gray-900">National coverage</h2>
+        {circleRows.length > 0 && (
+          <p className="mb-2 text-sm text-gray-600">
+            {circleRows.length} metro {circleRows.length === 1 ? "circle has" : "circles have"} been
+            counted on their own, for ${measuringSpend.toFixed(4)} in total. That is the metro layer,
+            which is separate from the quadtree below: a geocoded city centre is not a cell in it.
+          </p>
+        )}
         {cells === 0 ? (
           <p className="rounded border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600">
             <strong>No circles have been measured.</strong> The national cell crawl models US

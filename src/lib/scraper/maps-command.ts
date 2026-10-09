@@ -500,6 +500,11 @@ export function laneHelp(): string {
     "*Two ways to start.*",
     "",
     "*A. Pull businesses from Google Maps.* Nothing is bought until you react.",
+    "  `pull 2000 medspa`  THE ONE TO USE. Say how many records you want and it works out WHERE: " +
+      "reads the territory plan, skips metros that are finished, measures the next one for a penny " +
+      "if nobody has counted it, and posts ONE card with the cost. The check mark queues it and the " +
+      "cron runs the chunks one at a time.",
+    "  `plan status medspa` where that walk has got to. `stop plan medspa` cancels what has not run.",
     "  `cells medspa`  MEASURES the next circles: asks how many businesses are in each one, for about " +
       "a penny each, before buying any of them. Do this first.",
     "  `pull maps medspa | limit 500`  works the next measured circle, deepest-first, until the whole " +

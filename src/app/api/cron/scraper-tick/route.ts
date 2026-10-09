@@ -9,7 +9,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { activeBatches } from "@/lib/scraper/store";
-import { advanceBatch } from "@/lib/scraper/lane";
+import { advanceBatch, advancePullPlans, reconcileCallLists } from "@/lib/scraper/lane";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -25,8 +25,31 @@ async function handle(req: NextRequest) {
   if (!isAuthorized(req)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
   try {
+    // ‼️ THE PLAN WALK GOES FIRST, AND IT IS NOT AN ORDERING PREFERENCE. The batch drain below can
+    // legitimately consume the whole 240s budget on an MX sweep, so a plan stepped afterwards would
+    // be stepped on the ticks where there is nothing else to do and never on the busy ones, which is
+    // precisely backwards: a plan is only ever walking because a pull has just finished. It takes
+    // one step per plan and refuses to start anything while a pull is in flight, so it is cheap.
+    //
+    // ‼️ AND IT NEVER THROWS. advancePullPlans catches its own failures onto the plan row and into
+    // the thread, because a feature whose migration has not been run must not stop the lane.
+    const plans = await advancePullPlans();
+
     const batches = await activeBatches();
-    if (batches.length === 0) return NextResponse.json({ ok: true, batches: 0 });
+    if (batches.length === 0) {
+      // ‼️ THE QUIET TICK IS WHERE THE CALL LIST IS RECONCILED, AND IDLE IS A PRECONDITION RATHER
+      // THAN A COURTESY. A sweep run mid-pipeline reads rows the qualification pass has not finished
+      // routing and would insert a lead whose route is about to change. It also says nothing unless
+      // something was actually missing, so this is not a message every five minutes.
+      const synced = await reconcileCallLists();
+      return NextResponse.json({
+        ok: true,
+        batches: 0,
+        plans: plans.plans,
+        planSteps: plans.stepped,
+        callListAdded: synced,
+      });
+    }
 
     // One shared deadline across every batch, not one each. Two large pulls in flight would
     // otherwise each claim the full MX budget and the second would be killed mid-sweep, which is
@@ -42,7 +65,13 @@ async function handle(req: NextRequest) {
       moved.push(batch.id);
     }
 
-    return NextResponse.json({ ok: true, batches: batches.length, advanced: moved.length });
+    return NextResponse.json({
+      ok: true,
+      batches: batches.length,
+      advanced: moved.length,
+      plans: plans.plans,
+      planSteps: plans.stepped,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[cron/scraper-tick] failed:", message);
