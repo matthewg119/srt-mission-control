@@ -254,8 +254,46 @@ export function wordForms(word: string): string[] {
     const stem = w.slice(0, -3);
     for (const f of [stem, `${stem}s`, `${stem}e`, `${stem}es`]) out.add(f);
   }
+  // ‼️ THE IRREGULARS, BECAUSE NO SUFFIX RULE REACHES THEM AND ONE COST A REAL TITLE. Matthew's
+  // own "How to Get Your Business Found on ChatGPT" was refused for the keyword `clients find my
+  // business on chatgpt` (2026-10-09): "found" is not "find" plus any ending, so the keyword read
+  // as absent. A closed list, kept to the verbs that actually appear in search phrases.
+  for (const group of IRREGULARS) {
+    if (group.includes(w)) for (const f of group) out.add(f);
+  }
   return [...out];
 }
+
+/**
+ * Verbs whose forms no suffix rule produces. Each group is one verb, all its forms.
+ *
+ * Deliberately short. This is not an English lexicon: it is the handful of irregulars that turn up
+ * in the keywords this repo actually targets, and every entry widens the SPELLING of a word and
+ * never its meaning. A synonym does not belong here, which is the same line `keywordFamily` draws.
+ */
+const IRREGULARS: ReadonlyArray<readonly string[]> = [
+  ["find", "finds", "finding", "found"],
+  ["get", "gets", "getting", "got", "gotten"],
+  ["grow", "grows", "growing", "grew", "grown"],
+  ["choose", "chooses", "choosing", "chose", "chosen"],
+  ["buy", "buys", "buying", "bought"],
+  ["pay", "pays", "paying", "paid"],
+  ["spend", "spends", "spending", "spent"],
+  ["bring", "brings", "bringing", "brought"],
+  ["lose", "loses", "losing", "lost"],
+  ["keep", "keeps", "keeping", "kept"],
+  ["sell", "sells", "selling", "sold"],
+  ["tell", "tells", "telling", "told"],
+  ["win", "wins", "winning", "won"],
+  ["cost", "costs", "costing"],
+  ["show", "shows", "showing", "showed", "shown"],
+  ["rise", "rises", "rising", "rose", "risen"],
+  ["write", "writes", "writing", "wrote", "written"],
+  ["take", "takes", "taking", "took", "taken"],
+  ["make", "makes", "making", "made"],
+  ["see", "sees", "seeing", "saw", "seen"],
+  ["rank", "ranks", "ranking", "ranked"],
+];
 
 /** The most phrase variants worth generating. A cap, so a long keyword cannot explode. */
 const MAX_FAMILY = 240;

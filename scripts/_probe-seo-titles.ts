@@ -52,9 +52,19 @@ function check(name: string, ok: boolean, detail?: string) {
 const GOOD: Array<{ keyword: string; title: string }> = [
   { keyword: "how to get my med spa on chatgpt", title: "How to Get Your Med Spa on ChatGPT (2026 Guide)" },
   { keyword: "aeo agency pricing", title: "AEO Agency Pricing: What Med Spas Should Pay in 2026" },
+  { keyword: "how to fire your marketing agency", title: "How to Fire Your Marketing Agency (Without Losing Assets)" },
   { keyword: "ai search vs google search", title: "AI Search vs Google Search: What Changes for Med Spas" },
   { keyword: "chatgpt local business ranking", title: "How ChatGPT Ranks Local Businesses (2026)" },
+  { keyword: "how to get more botox clients", title: "How to Get More Botox Clients Without Discounts" },
   { keyword: "facebook ads not working for med spa", title: "Facebook Ads Not Working for Your Med Spa? Read This" },
+  { keyword: "more google reviews for my med spa", title: "How to Get More Google Reviews for Your Med Spa" },
+  { keyword: "ai search ranking factors", title: "AI Search Ranking Factors: 7 That Matter in 2026" },
+  { keyword: "med spa google ads too expensive", title: "Med Spa Google Ads Too Expensive? 5 Cheaper Options" },
+  // ‼️ THE ONE THAT CAUGHT A RULE OF MINE. It drops `clients` from the keyword, because "Your
+  // Business" already says it, and spells `find` as "Found". Before `carriesKeywordEnough` and
+  // the irregular verb forms, this was the single rejection out of his twenty-two worked
+  // examples (2026-10-09). A 60 character title cannot carry every word of a five word phrase.
+  { keyword: "clients find my business on chatgpt", title: "How to Get Your Business Found on ChatGPT" },
 ];
 
 console.log("\n1. Matthew's five title tags all pass");
@@ -255,7 +265,12 @@ check("      an absent label gets the engine as it is", loadSeoTitleEngine() ===
 console.log("\n7. The lane's own constants and card");
 check(`      six per page, the same number the H1 lane writes`, SEO_TITLES_PER_PAGE === 6);
 check(`      its own origin, so the H1 picker can never offer one`, SEO_ORIGIN === "seo_title");
-const card = seoTitleLines(ROW, [GOOD[1].title, GOOD[3].title]);
+// ‼️ PICKED BY LENGTH, NOT BY INDEX. This read GOOD[1] and GOOD[3] until the fixture grew from
+// five to eleven on 2026-10-09, at which point GOOD[3] was no longer a short title and the "it
+// carries the short note" check failed for a reason that had nothing to do with the code.
+const inBand = GOOD.find((g) => seoTitleLength(g.title) >= SEO_TITLE_TARGET_MIN)!;
+const short = GOOD.find((g) => seoTitleLength(g.title) < SEO_TITLE_TARGET_MIN)!;
+const card = seoTitleLines(ROW, [inBand.title, short.title]);
 check("      the card says which artifact these are", card.join("\n").includes("what Google prints"));
 check("      and that the page keeps its own H1", card.join("\n").includes("keeps its own H1"));
 check("      it numbers them", card.some((l) => /^\s+1\./.test(l)));

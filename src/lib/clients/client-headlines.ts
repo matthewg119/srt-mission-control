@@ -419,14 +419,20 @@ export function headlineWarnings(headlines: readonly string[], keyword = ""): He
         why: `${core} words, which is long for something somebody types. It is allowed, and shorter lands better`,
       });
     }
+    // ‼️ ONLY WHEN THE OVERLAP IS ACTUALLY THIN, AND WARNING ON EVERY PARTIAL WAS NOISE. Measured
+    // against Matthew's eleven worked H1s on 2026-10-09: warning whenever a headline dropped any
+    // keyword word flagged SEVEN of the eleven, which is a note on most of a card and therefore a
+    // note nobody reads. His page rule 3 asks the H1 only for "the question the user would type"
+    // and sets no keyword requirement at all, so a natural question that drops a qualifier is the
+    // NORMAL case here, not a defect. Below half the phrase is a different question.
     if (keyword && !carriesAnyKeyword(h, keyword, family)) {
       const { present, total } = keywordOverlap(h, keyword);
-      if (present > 0) {
+      if (present > 0 && present * 2 < total) {
         out.push({
           headline: h,
           why:
-            `${present} of the ${total} words in "${keyword}", so it reads naturally but an engine ` +
-            "has less to match. Fine for an H1; the title tag is where the phrase has to be exact",
+            `only ${present} of the ${total} words in "${keyword}", so an engine has little to ` +
+            "match. Fine for an H1 if it is the question she types; the title tag is where the phrase has to be exact",
         });
       }
     }

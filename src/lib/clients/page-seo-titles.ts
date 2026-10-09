@@ -33,7 +33,13 @@ import {
   SEO_TITLE_TARGET_MIN,
 } from "@/data/reel/seo-title-engine";
 import { approvedNumbersBlock } from "@/lib/reel/creative-director";
-import { carriesAnyKeyword, keywordContentWords, keywordFamily, wordForms } from "@/lib/hub/keyword-placement";
+import {
+  carriesAnyKeyword,
+  keywordContentWords,
+  keywordFamily,
+  keywordOverlap,
+  wordForms,
+} from "@/lib/hub/keyword-placement";
 import { headlineContext, normalizeHeadline, type HeadlineContext } from "./client-headlines";
 import type { PlanRow } from "./page-plan";
 
@@ -109,6 +115,29 @@ export function keywordStartsWithin(title: string, keyword: string, byWord = SEO
 }
 
 /**
+ * Does the title carry enough of the keyword to be about it?
+ *
+ * ‼️ EVERY CONTENT WORD FOR A SHORT KEYWORD, ONE MISS ALLOWED FOR A LONG ONE, AND A REAL TITLE OF
+ * MATTHEW'S IS WHY. A title tag has 60 characters. `clients find my business on chatgpt` has four
+ * content words, and his own "How to Get Your Business Found on ChatGPT" drops `clients` because
+ * "Your Business" already says it. Demanding all four refused the right title (measured
+ * 2026-10-09, the one rejection out of his twenty-two worked examples).
+ *
+ * ‼️ AND THE ALLOWANCE IS ONE WORD, NEVER A MAJORITY. A majority rule lets a title about the
+ * wrong page through: "Med Spa Google Reviews Guide" carries three of the five content words in
+ * `med spa google ads too expensive` and is a different page entirely. One miss out of four or
+ * more is a dropped qualifier; two is a different subject.
+ *
+ * The positional rule still applies on top of this: `keywordStartsWithin` decides whether the
+ * keyword LEADS, which is Matthew's page rule 2 and is not weakened here.
+ */
+function carriesKeywordEnough(title: string, keyword: string, family: readonly string[]): boolean {
+  if (carriesAnyKeyword(title, keyword, family)) return true;
+  const { present, total } = keywordOverlap(title, keyword);
+  return total >= 4 && present >= total - 1;
+}
+
+/**
  * Everything wrong with a batch of title tags, in words.
  *
  * ‼️ THE CEILING REFUSES AND THE FLOOR DOES NOT, decided with Matthew on 2026-10-08. Two of his
@@ -165,8 +194,8 @@ export function seoTitleFaults(
     }
 
     if (keyword) {
-      if (!carriesAnyKeyword(title, keyword, family)) {
-        out.push(`"${title}" does not carry "${keyword}". Every title must`);
+      if (!carriesKeywordEnough(title, keyword, family)) {
+        out.push(`"${title}" is not recognisably about "${keyword}". Every title has to be`);
         continue;
       }
       if (!keywordStartsWithin(title, keyword)) {

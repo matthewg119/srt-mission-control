@@ -81,15 +81,22 @@ const GOOD: string[] = [
   "Why isn't SEO working for my med spa anymore?",
   "How can I tell if my marketing agency is actually doing anything for my clinic?",
   "Why does every med spa on Instagram look busier than mine?",
-  // His five worked AEO H1s, 2026-10-07, which are the quality bar the rewrite aims at. Three of
-  // these were REJECTED by isQueryShaped before it was rebuilt: the mid-string question mark, the
-  // colon comparison, and the ", and" tail. One carries "A 30-Day Plan", whose 30 was refused by
-  // unbackedNumbers until structural counts were exempted.
+  // ‼️ ALL ELEVEN OF HIS WORKED AEO H1s, ONE PER PLANNED PAGE, pasted 2026-10-09. The doc in the
+  // repo carried only five of them, so the other six were never fixtures. These are the quality
+  // bar, not an illustration. Three were REJECTED by isQueryShaped before it was rebuilt (the
+  // mid-string question mark, the colon comparison, the ", and" tail), and "A 30-Day Plan" was
+  // refused by unbackedNumbers until structural counts were exempted.
   "How Do I Get My Med Spa Recommended by ChatGPT? A 30-Day Plan",
   "How Much Does AEO Cost for a Med Spa, and What Should You Get for It?",
+  "How to Fire Your Marketing Agency: What to Take Back Before You Leave",
   "AI Search vs Google Search: 5 Differences That Affect Your Bookings",
   "How Does ChatGPT Decide Which Local Business to Recommend?",
+  "How to Get More Botox Clients: 7 Ways That Don't Need Ads",
   "Why Facebook Ads Stop Working for Med Spas, and What to Do Instead",
+  "How Do Med Spas Get More Google Reviews That AI Search Will Use?",
+  "What Ranking Factors Does ChatGPT Use for Local Businesses?",
+  "Are Google Ads Worth It for Med Spas? Costs and Alternatives",
+  "How Do I Get Clients to Find My Business on ChatGPT?",
 ];
 
 // Matthew's DON'T column. Every one of these dies on SHAPE or on LENGTH, never on subject matter.
@@ -206,10 +213,16 @@ check(
   "      four headlines opening the same way are rejected",
   headlineFaults(sameShape, 20, HAYSTACK).some((f) => f.why.includes("rule 5"))
 );
+// ‼️ THE OPENING ALLOWANCE SCALES, BECAUSE THIS FIXTURE IS A CORPUS AND NOT A BATCH. Rule 5
+// forbids a repeated shape inside ONE set of candidates for ONE page, where three lookalikes mean
+// one real option. These twenty-five span fourteen weekly headlines and eleven DIFFERENT pages,
+// so "how do i" legitimately opens several: they are never offered side by side. Same formula
+// precall-headlines.ts uses for its thirty three, and for the same reason.
+const CORPUS_OPENINGS = Math.max(2, Math.ceil(GOOD.length / 11));
 check(
-  `      Matthew's own ${GOOD.length} do not trip rule 5`,
-  headlineFaults(GOOD, GOOD.length, HAYSTACK).length === 0,
-  headlineFaults(GOOD, GOOD.length, HAYSTACK)
+  `      Matthew's own ${GOOD.length} do not trip rule 5 (at ${CORPUS_OPENINGS} per opening, scaled for a corpus)`,
+  headlineFaults(GOOD, GOOD.length, HAYSTACK, CORPUS_OPENINGS).length === 0,
+  headlineFaults(GOOD, GOOD.length, HAYSTACK, CORPUS_OPENINGS)
     .map((f) => `${f.headline}: ${f.why}`)
     .join(" | ")
 );
