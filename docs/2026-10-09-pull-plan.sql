@@ -126,6 +126,29 @@ create table if not exists public.scraper_pull_plans (
 -- frontier the other was moving. A partial unique index is the only way to say "at most one row in
 -- these states" in Postgres, and saying it here means a racing second `pull 2000 medspa` fails loudly
 -- instead of quietly doubling the spend.
+-- ‼️ A PLAN THAT IS HELD UP MUST SAY SO, AND THIS IS THE COLUMN THAT LETS IT SAY IT ONCE.
+-- Chunks are serialised through `activeMapsPull`, so an earlier batch stuck anywhere in the
+-- pipeline stops the whole walk. That is correct (see below), but with no record of WHAT is holding
+-- it the only symptom is a plan that was approved and then does nothing, which looks exactly like a
+-- plan that was never approved. Storing the blocker is what turns a silent wait into one message
+-- naming the batch, and lets `plan status` answer "why has this not moved".
+--
+-- ‼️ AND THE SERIALISATION IS NOT LOOSENED, WHICH WAS THE OTHER OPTION AND IS WRONG. The
+-- obvious reading is that a batch sitting at `verifying` is waiting on MillionVerifier's queue
+-- rather than competing for cron budget, so it should not hold a pull. The reason it must is
+-- CREDITS: MillionVerifier is the real constraint at 10,500 bulk credits, a chunk yields roughly
+-- 130 addresses, and a 34 chunk plan allowed to run ahead of its own verification would upload
+-- about 4,400 of them before anybody saw the first result. The queue is not the scarce thing; the
+-- credits are.
+alter table public.scraper_pull_plans
+  add column if not exists blocked_by text,
+  add column if not exists blocked_since timestamptz;
+
+comment on column public.scraper_pull_plans.blocked_by is
+  'What is currently stopping the walk from claiming its next step, e.g. "batch <id> at verifying". '
+  'Written when the block starts and cleared when a step is claimed, so the plan reports a hold '
+  'once rather than every five minutes or not at all.';
+
 create unique index if not exists scraper_pull_plans_one_live
   on public.scraper_pull_plans (vertical_slug)
   where status in ('awaiting_approval', 'approved', 'running');
@@ -245,4 +268,9 @@ select
     where vertical_slug = 'medspa' and metro_key = 'dfw')
     - (select count(*) from public.raw_leads where source_metro = 'Dallas TX') as dallas_remaining,
   (select count(*) from public.scraper_pull_plans) as plans,
-  (select count(*) from public.scraper_pull_plan_steps) as steps;
+  (select count(*) from public.scraper_pull_plan_steps) as steps,
+  -- Both must be true, or the "held up by" message has nowhere to live and a stalled plan goes
+  -- back to being silent.
+  (select count(*) = 2 from information_schema.columns
+    where table_schema = 'public' and table_name = 'scraper_pull_plans'
+      and column_name in ('blocked_by', 'blocked_since')) as blocked_columns_exist;

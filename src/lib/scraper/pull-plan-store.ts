@@ -35,6 +35,16 @@ export interface PlanRowDb {
   records_pulled: number;
   error: string | null;
   finished_at: string | null;
+  /**
+   * What is stopping the walk right now, or null when nothing is.
+   *
+   * ‼️ A PLAN THAT IS HELD UP AND SAYS NOTHING IS INDISTINGUISHABLE FROM ONE THAT WAS NEVER
+   * APPROVED, which is the failure this column exists to prevent. Chunks are serialised, so any
+   * earlier batch stuck anywhere in the pipeline stops the whole walk, and a 34 chunk plan can
+   * therefore be perfectly healthy and perfectly motionless.
+   */
+  blocked_by: string | null;
+  blocked_since: string | null;
   created_at: string;
 }
 
@@ -62,7 +72,7 @@ export interface PlanStepRowDb {
 const PLAN_COLUMNS =
   "id, vertical_slug, requested_records, status, slack_channel_id, slack_thread_ts, approval_ts, " +
   "approved_at, approved_by, estimated_cost_usd, spent_usd, records_pulled, error, finished_at, " +
-  "created_at";
+  "blocked_by, blocked_since, created_at";
 
 const STEP_COLUMNS =
   "id, plan_id, seq, kind, metro_key, metro_label, where_text, pull_limit, pull_offset, " +

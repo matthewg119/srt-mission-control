@@ -2126,15 +2126,26 @@ async function advanceOnePlan(plan: PlanRowDb): Promise<boolean> {
   // ‼️ THE LANE-WIDE GATE, CHECKED HERE RATHER THAN INSIDE THE STEP. Two pulls in flight means two
   // qualification sweeps, two crawls and two MillionVerifier uploads competing for one cron budget.
   // A plan is a queue in FRONT of that gate, never a way around it.
-  if (await activeMapsPull()) return false;
-  // A measurement is probe-shaped and must not race another probe, for the reason activeCellProbe
-  // states: both would re-derive the same owed circles and pay for them twice.
-  if (await activeCellProbe()) return false;
+  //
+  // ‼️ AND THE GATE IS NOT NARROWED TO "ACTUALLY WORKING" BATCHES, WHICH WAS THE OBVIOUS REFINEMENT
+  // AND IS WRONG. A batch sitting at `verifying` is waiting on MillionVerifier's queue rather than
+  // competing for a cron tick, so letting the walk past it looks free. It is not: MillionVerifier
+  // is the real budget at 10,500 bulk credits, a chunk yields roughly 130 addresses, and a 34 chunk
+  // plan allowed to run ahead of its own verification would upload about 4,400 of them before
+  // anybody saw the first result come back. The queue is not the scarce thing, the credits are.
+  const blocker = (await activeMapsPull()) ?? (await activeCellProbe());
+  if (blocker) {
+    await notePlanBlocked(plan, "batch `" + blocker.id + "` at stage `" + blocker.status + "`");
+    return false;
+  }
 
   const step = await claimNextStep(plan.id);
   if (!step) return false;
 
   if (plan.status === "approved") await updatePlan(plan.id, { status: "running" });
+  // Moving again. Cleared here rather than where the block is detected, so the column always
+  // describes the present rather than the last thing that went wrong.
+  if (plan.blocked_by) await updatePlan(plan.id, { blocked_by: null, blocked_since: null });
 
   try {
     await runPlanStep(plan, step);
@@ -2147,6 +2158,39 @@ async function advanceOnePlan(plan: PlanRowDb): Promise<boolean> {
     );
   }
   return true;
+}
+
+/**
+ * Say, once, that the walk is held up and by what.
+ *
+ * ‼️ ONCE PER BLOCKER, NOT ONCE PER TICK. The cron runs every five minutes and a MillionVerifier
+ * file can sit for a day: measured 2026-10-09, batch 8d166a8b was 27 hours into `verifying` with
+ * nothing returned. Posting on every tick would be 324 messages about one stuck file, and a channel
+ * that cries wolf is a channel whose next real alarm is scrolled past. Posting nothing is what this
+ * exists to fix. So the message fires when the blocker CHANGES, and `plan status` answers the rest.
+ *
+ * ‼️ AND IT IS NOT AN ERROR. The plan is healthy and correctly waiting its turn; `status` stays
+ * `approved` or `running` and `error` is left alone, because writing a failure here would make a
+ * queued plan look like a broken one and hide the real failures when they come.
+ */
+async function notePlanBlocked(plan: PlanRowDb, blocker: string): Promise<void> {
+  if (plan.blocked_by === blocker) return;
+
+  await updatePlan(plan.id, { blocked_by: blocker, blocked_since: new Date().toISOString() });
+
+  const progress = await planProgress(plan.id);
+  await slack.postMessage(
+    plan.slack_channel_id,
+    [
+      ":hourglass_flowing_sand: *The pull plan for `" + plan.vertical_slug + "` is waiting its turn.*",
+      "  " + blocker + " is still in the pipeline, and pulls run one at a time on purpose: " +
+        "MillionVerifier credits are the real budget, so a plan is not allowed to run ahead of its " +
+        "own verification and upload thousands of addresses before the first result comes back.",
+      "  " + progress.pending + " of " + progress.total + " steps are still to run. Nothing is lost " +
+        "and nothing extra is being spent. The walk starts again by itself the moment that batch lands.",
+      "  `status` for that batch, `plan status " + plan.vertical_slug + "` for this plan.",
+    ].join("\n")
+  );
 }
 
 /**
@@ -2543,6 +2587,15 @@ async function postPlanStatus(channel: string, vertical: string): Promise<void> 
         Number(plan.records_pulled ?? 0).toLocaleString() + " pulled, $" +
         Number(plan.spent_usd ?? 0).toFixed(2) + " spent of about $" +
         Number(plan.estimated_cost_usd ?? 0).toFixed(2) + " estimated.",
+      // ‼️ THE FIRST QUESTION A MOTIONLESS PLAN RAISES IS "why", AND IT IS ANSWERED HERE RATHER
+      // THAN LEFT TO SOMEBODY READING SCROLLBACK FOR THE ONE HOLD MESSAGE.
+      plan.blocked_by
+        ? "  :hourglass_flowing_sand: *Held up by " + plan.blocked_by + "*" +
+          (plan.blocked_since
+            ? ", since " + new Date(plan.blocked_since).toLocaleString()
+            : "") +
+          ". Pulls run one at a time; this starts again by itself when that batch lands."
+        : "",
       "```",
       ...steps.slice(0, 25).map(
         (s) =>

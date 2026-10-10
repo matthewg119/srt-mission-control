@@ -497,6 +497,11 @@ export async function executeScraperTool(
           const steps = await planSteps(p.id);
           live = {
             status: p.status,
+            // A motionless plan is the single most confusing state this lane can be in, so the
+            // reason travels with the status rather than being something the model has to infer
+            // from "approved, 0 of 7 done".
+            held_up_by: p.blocked_by,
+            held_up_since: p.blocked_since,
             asked_for: p.requested_records,
             records_pulled: p.records_pulled,
             spent_usd: Number(p.spent_usd ?? 0),
@@ -545,7 +550,12 @@ export async function executeScraperTool(
         reading_the_numbers:
           "MillionVerifier credits are the real budget, not DataForSEO: records cost about $0.37 " +
           "per thousand. Supply counts only MEASURED metros, so it understates rather than " +
-          "overstates what is available.",
+          "overstates what is available. " +
+          (live?.held_up_by
+            ? "The plan is NOT broken: it is waiting because pulls run one at a time, so a plan is " +
+              "never allowed to run ahead of its own verification and upload thousands of addresses " +
+              "before the first result returns. It restarts by itself."
+            : ""),
       });
     }
 
