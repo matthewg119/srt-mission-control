@@ -242,7 +242,13 @@ check(
 // Structural first: a gate id that is also an assembled question key is how the word "Yes" ends
 // up in somebody's Google review, because assemblePlain() iterates keys.
 const bulletKeys = new Set(ALL_REVIEW_QUESTIONS.map((q) => String(q.key)));
-check(GATE_IDS.length >= 3, "the script has its three yes/no gates", `${GATE_IDS.length} found`);
+// ‼️ AT LEAST ONE, AND IT USED TO SAY THREE. The walk had three worry gates (expectations,
+// concerns, fears) until 2026-10-10, when they collapsed into the single "Were you nervous about
+// anything before coming in?". The COUNT was never the rule: the rule is the check below it, that
+// a gate's answer is a branch and can never be a sentence she is shown as her own. A probe that
+// pins an incidental number is a probe somebody edits without reading, so this one pins the thing
+// that matters, which is that the gate mechanism is still exercised at all.
+check(GATE_IDS.length >= 1, "the script still has at least one yes/no gate", `${GATE_IDS.length} found`);
 check(
   GATE_IDS.every((id) => !bulletKeys.has(id)),
   "no gate id is also an assembled question key",

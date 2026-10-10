@@ -261,83 +261,65 @@ export const REVIEW_SCRIPT: ScriptStep[] = [
   },
   {
     kind: "ask",
-    id: "q_liked",
-    key: "liked",
-    prompt: "What did you like about our experience the most?",
-    // Matthew's own example, and it does two jobs: it shows the sentence SHAPE ("I loved...") so
-    // her answer reads on from the lead line, and it shows the level of detail that makes a
-    // review quotable. It is grey text she types over, never a draft she can send.
-    placeholder: "I loved how natural it looks, nobody could tell",
+    id: "q_motivation",
+    key: "motivation",
+    // ‼️ FIRST, AND MATTHEW CALLS IT THE MOST IMPORTANT ONE. It is the only question that
+    // produces the sentence a future customer is actually searching for: the problem, in her
+    // words, before anybody fixed it. It is also what makes the rest of the answers read as a
+    // story rather than a list, because everything after it is the resolution of this.
+    prompt: "What made you start looking for a place like this?",
+    placeholder: "I kept putting off doing anything about my smile lines",
   },
 
-  { kind: "say", id: "ack_liked", text: "Good to hear." },
+  { kind: "say", id: "ack_motivation", text: "Thank you, that is useful." },
   {
-    kind: "ask",
-    id: "q_improve",
-    key: "improve",
-    // Asked of everybody, not only of somebody who scored low. A question about what could be
-    // better that is only put to unhappy customers is a sorting mechanism.
-    prompt: "What did you not like about our experience? It helps us improve.",
-    placeholder: "Honestly nothing, the wait was short",
-    skipLabel: "Nothing I can think of",
-  },
-
-  { kind: "say", id: "ack_improve", text: "That is useful, and it is the part we act on." },
-  {
+    // ‼️ ONE WORRY GATE WHERE THERE WERE THREE. v4 asked about expectations, then concerns, then
+    // fears, which to anybody answering is the same question three times; Matthew, 2026-10-10:
+    // "this thing is very redundant". "Nervous" is the word a person actually uses about a
+    // clinic, and it covers all three.
+    //
+    // ‼️ AND IT IS ASKED OF EVERYBODY, exactly as the question it replaced was. A worry question
+    // put only to somebody who scored low would be a sorting mechanism.
     kind: "gate",
-    id: "gate_expectations",
-    prompt: "Did you have any expectations before you came in?",
+    id: "gate_nerves",
+    prompt: "Were you nervous about anything before coming in?",
     yes: "Yes",
     no: "No",
-    onYes: "q_expectations",
+    onYes: "q_nerves",
     onNo: null,
   },
   {
     kind: "ask",
-    id: "q_expectations",
-    key: "expectations",
-    prompt: "What were they?",
-    placeholder: "I expected it to take a few visits",
-    skipLabel: "Nothing specific",
-  },
-
-  {
-    kind: "gate",
-    id: "gate_concerns",
-    prompt: "Were you concerned about anything before working with {business}?",
-    yes: "Yes",
-    no: "No",
-    onYes: "q_concerns",
-    onNo: null,
-  },
-  {
-    kind: "ask",
-    id: "q_concerns",
-    key: "concerns",
-    prompt: "Tell us about it.",
+    id: "q_nerves",
+    key: "nerves",
+    prompt: "What were you nervous about?",
     placeholder: "I was worried it would look overdone",
-    // ‼️ THE SKIP THAT MATTHEW ASKED FOR BY NAME, and it stores nothing, exactly as the
-    // generic skip did. She has already said Yes to the gate by the time she is here, so the
-    // honest escape is one that lets her change her mind without typing an apology.
-    skipLabel: "I was not concerned about anything",
+    // She has already said Yes by the time she is here, so the honest escape lets her change her
+    // mind without typing an apology. It stores nothing, exactly as the generic skip does.
+    skipLabel: "Nothing really",
   },
 
   {
-    kind: "gate",
-    id: "gate_fears",
-    prompt: "Were you afraid of something happening before coming in?",
-    yes: "Yes",
-    no: "No",
-    onYes: "q_fears",
-    onNo: null,
+    kind: "ask",
+    id: "q_walkout",
+    key: "walkout",
+    // ‼️ THE OUTCOME, AND IT REPLACED "What did you like about our experience the most?".
+    // That one asked her to rate a service; this asks what happened to her, which is the half of
+    // a review anybody reads. It is also the natural answer to the worry above it.
+    prompt: "How did you feel walking out?",
+    placeholder: "Like myself again, honestly",
   },
+
+  { kind: "say", id: "ack_walkout", text: "Good to hear." },
   {
     kind: "ask",
-    id: "q_fears",
-    key: "fears",
-    prompt: "Tell us about it.",
-    placeholder: "I was afraid it would hurt",
-    skipLabel: "I was not afraid of anything",
+    id: "q_friend",
+    key: "friend",
+    // ‼️ LAST, BECAUSE IT IS THE LINE THAT CLOSES A REVIEW. It is also the only one of the four
+    // that is addressed to a reader rather than to us, which is why it lands as a recommendation
+    // without anybody having to write "I recommend them".
+    prompt: "What would you tell a friend who is on the fence about coming in?",
+    placeholder: "Just go, they talk you through everything",
   },
 
   { kind: "say", id: "closing", text: "That is everything. Here are your own words, back." },
