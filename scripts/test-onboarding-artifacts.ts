@@ -455,13 +455,22 @@ ok("and the promise", /Ninety seconds/.test(cardText));
 // "What were they?" or "Tell us about it." the card has started printing follow-ups, which read
 // as nonsense in a numbered list on card stock.
 ok("the card names the service question", /What service did you get done with us/.test(cardText));
-ok("and asks the gate, not its follow-up", /Did you have any expectations/.test(cardText));
-ok("and never prints a bare follow-up", !/Tell us about it|What were they/.test(cardText));
+ok("and asks the gate, not its follow-up", /Were you nervous about anything/.test(cardText));
+ok(
+  "and never prints a bare follow-up",
+  !/Tell us about it|What were they|What were you nervous about/.test(cardText)
+);
 ok("and the reassurance", /Nothing is posted unless you post it/.test(cardText));
 // ‼️ Every one of these is a rule from the build spec, not a style preference.
-ok("no star rating", !/star/i.test(cardText));
+// ‼️ `\bstars?\b` AND NOT `/star/i`. The loose form caught "What made you START looking for a
+// place like this?" the day that question was added (2026-10-10) and reported a star rating on a
+// card that has none. The RULE is unchanged and is the build spec's: no rating CONTROL on card
+// stock, because a star ticked on paper sorts a patient before she reaches the tool and there is
+// nothing to prove it routed nothing. What changed is that the check now names stars rather than
+// any word containing them, and "rating" is added because that is the other way one could arrive.
+ok("no star rating", !/\bstars?\b|\brating\b/i.test(cardText));
 ok("no sentiment pre-screen", !/if you loved/i.test(cardText));
-ok("nothing is offered", !/(gift|discount|free|reward)/i.test(cardText));
+ok("nothing is offered", !/\b(gift|discount|free|reward)\b/i.test(cardText));
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1483,7 +1492,13 @@ eq(
 // row written last month comes back byte for byte what its author saw and approved. Reorder the
 // spread and stored reviews silently re-assemble into an order nobody agreed to.
 {
-  const { ALL_REVIEW_QUESTIONS, REVIEW_QUESTIONS, REVIEW_QUESTIONS_V4, REVIEW_QUESTIONS_V5 } =
+  const {
+    ALL_REVIEW_QUESTIONS,
+    REVIEW_QUESTIONS,
+    REVIEW_QUESTIONS_V4,
+    REVIEW_QUESTIONS_V5,
+    REVIEW_QUESTIONS_V6,
+  } =
     require("../src/lib/hub/review-assemble") as typeof import("../src/lib/hub/review-assemble");
 
   // ‼️ ONE EQUALITY OVER EVERY SET, RATHER THAN A SLICE PER SET, AND THAT IS A TIGHTENING.
@@ -1494,9 +1509,14 @@ eq(
   // concatenation in order. Every future set has to be added here by name, which is one line and
   // is the point.
   ok(
-    "ALL_REVIEW_QUESTIONS is exactly v3 then v4 then v5, in order",
+    "ALL_REVIEW_QUESTIONS is exactly v3 then v4 then v5 then v6, in order",
     JSON.stringify(ALL_REVIEW_QUESTIONS) ===
-      JSON.stringify([...REVIEW_QUESTIONS, ...REVIEW_QUESTIONS_V4, ...REVIEW_QUESTIONS_V5])
+      JSON.stringify([
+        ...REVIEW_QUESTIONS,
+        ...REVIEW_QUESTIONS_V4,
+        ...REVIEW_QUESTIONS_V5,
+        ...REVIEW_QUESTIONS_V6,
+      ])
   );
   ok(
     "and it opens with the v3 set, so a v3 row re-assembles byte for byte",

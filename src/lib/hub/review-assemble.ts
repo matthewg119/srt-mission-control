@@ -64,7 +64,12 @@ export interface ReviewQuestion {
     // ‼️ IT IS NOT PATIENT PII. The name is a member of the clinic's staff, so
     // review_tool_submissions still holds nothing that identifies HER, which is what that
     // table's no-column rule has always been about.
-    | "provider";
+    | "provider"
+    // v6 (2026-10-10). FOUR, AND THE ORDER IS THE ALGORITHM. See REVIEW_QUESTIONS_V6.
+    | "motivation"
+    | "nerves"
+    | "walkout"
+    | "friend";
   /** What she is asked. */
   prompt: string;
   /** The label shown beside her sentence ON SCREEN only. Never copied. */
@@ -185,6 +190,62 @@ export const REVIEW_QUESTIONS_V5: ReviewQuestion[] = [
 ];
 
 /**
+ * v6, 2026-10-10. The four that replaced seven, and the STRUCTURE IS THE QUESTION ORDER.
+ *
+ * ‼️ WHAT WAS WRONG WITH v4/v5, IN MATTHEW'S WORDS: "this thing is very redundant". It asked what
+ * she liked, what she did not like, whether she had expectations, whether she was concerned and
+ * whether she was afraid: three near-identical worry gates and a complaint box, which produced
+ * answers like "The people. Nothing. Sexo, Sex, Sara." A review assembled out of those is a form
+ * somebody filled in, because the QUESTIONS had no shape, so the output could not have one either.
+ *
+ * ‼️ THESE FOUR ARE A NARRATIVE IN THE ORDER THEY ARE ASKED, AND THAT IS THE WHOLE TRICK.
+ * Motivation, worry, outcome, recommendation. Answered honestly and joined in sequence they read
+ * as a review a person wrote, with nothing added:
+ *
+ *   "Got lip filler with Sarah today. I kept putting off doing anything about my smile lines.
+ *    I was worried it would look overdone. I felt like myself again. Just go, they talk you
+ *    through everything."
+ *
+ * ‼️ AND THAT IS WHY THIS FILE STILL CONTAINS NO MODEL, NO REWRITER AND NO POLISH STEP.
+ * FTC 16 CFR Part 465 bans disseminating reviews that misrepresent a consumer's experience, and
+ * the Rytr complaint turned on a generator producing "material details unrelated to user input".
+ * The safe side of that line is adding no substance at all. The temptation to add one is a
+ * symptom of badly shaped questions, so the fix went into the questions. assembleBullet still
+ * does exactly three things to her sentence: collapse whitespace, capitalise a lowercase first
+ * letter, add a full stop if there is none.
+ *
+ * ‼️ ONE MORE REASON NOT TO ADD A POLISH BUTTON HERE: the clinic-facing page says in as many
+ * words that we never write the review and never write a replacement. A tidy-up feature would
+ * make that sentence false, which is a deception problem of its own, separate from the review
+ * rule, and it would spend the strongest thing the product says about itself.
+ */
+export const REVIEW_QUESTIONS_V6: ReviewQuestion[] = [
+  {
+    key: "motivation",
+    prompt: "What made you start looking for a place like this?",
+    label: "Why I started looking",
+  },
+  {
+    // ‼️ THE FOLLOW-UP, NOT THE GATE. "Were you nervous about anything before coming in?" is a
+    // yes/no in review-script.ts with no key at all, so a "Yes" is not assignable to
+    // ReviewAnswers and cannot reach the clipboard. This is what she types after one.
+    key: "nerves",
+    prompt: "What were you nervous about?",
+    label: "What I was nervous about",
+  },
+  {
+    key: "walkout",
+    prompt: "How did you feel walking out?",
+    label: "How I felt walking out",
+  },
+  {
+    key: "friend",
+    prompt: "What would you tell a friend who is on the fence about coming in?",
+    label: "What I would tell a friend",
+  },
+];
+
+/**
  * Assembly order for ALL sets, and the reason nothing migrates.
  *
  * ‼️ THE ORDER OF THIS SPREAD IS LOAD BEARING AND IS PINNED BY A TEST. assembleLabelled and
@@ -205,6 +266,11 @@ export const ALL_REVIEW_QUESTIONS: ReviewQuestion[] = [
   ...REVIEW_QUESTIONS,
   ...REVIEW_QUESTIONS_V4,
   ...REVIEW_QUESTIONS_V5,
+  // ‼️ APPENDED, LIKE v5, AND HERE IT IS NOT A COMPROMISE BUT THE POINT. A v6 walk collects only
+  // v6 keys plus the lead's two, so this spread's tail IS the narrative order: motivation, worry,
+  // outcome, recommendation. Every stored v3, v4 and v5 row still comes out byte for byte what
+  // its author approved, because none of them holds a v6 key.
+  ...REVIEW_QUESTIONS_V6,
 ];
 
 
@@ -214,6 +280,9 @@ export const QUESTION_SET_VERSION_V4 = "v4";
 /** The stamp a v5 row carries. Nothing rewrites a v3 or a v4 row. */
 export const QUESTION_SET_VERSION_V5 = "v5";
 
+/** The stamp a v6 row carries. Nothing rewrites anything older. */
+export const QUESTION_SET_VERSION_V6 = "v6";
+
 /**
  * Which set was walked, read off the request body.
  *
@@ -221,6 +290,7 @@ export const QUESTION_SET_VERSION_V5 = "v5";
  * not-null text column, so it is narrowed here rather than trusted.
  */
 export function readQuestionSetVersion(raw: unknown): string {
+  if (raw === QUESTION_SET_VERSION_V6) return QUESTION_SET_VERSION_V6;
   if (raw === QUESTION_SET_VERSION_V5) return QUESTION_SET_VERSION_V5;
   return raw === QUESTION_SET_VERSION_V4 ? QUESTION_SET_VERSION_V4 : QUESTION_SET_VERSION;
 }

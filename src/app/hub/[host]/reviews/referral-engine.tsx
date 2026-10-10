@@ -147,7 +147,6 @@ export async function ReferralEngine({
           needsSpanish={needsSpanish}
           referral={referralConfig}
           // Her own email box, only where the clinic actually sends her the message.
-          askReferrerEmail={emailConfig.enabled && emailConfig.emailReferrer}
         />
       </div>
     </>
