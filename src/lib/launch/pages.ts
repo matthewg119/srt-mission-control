@@ -460,6 +460,12 @@ export const LAUNCH_PAGE_ACTIONS = [
   "page_title",
   "page_title_pick",
   "page_ads",
+  // ‼️ THE SECOND DOOR ONTO THE SAME TWO CONTRACTS, AND IT RUNS NO MODEL. Matthew, 2026-10-09:
+  // "just tell it to give me a prompt i can run in claude... i copy that paste in claude and come
+  // back with the selected ones". Same shape as research_prompt and research_file one block down,
+  // and chosen by the same person for the same reason: he reads every answer and picks from it.
+  "headlines_brief",
+  "headlines_paste",
   // ─────────────────────────────────────────────────────────────────────────
   // ‼️ THE IDEA COMES BEFORE THE LINE, AND LISTING THEM IN THIS ORDER IS HALF OF WHY. The chat is
   // handed this array as the stages it may run, so the order it reads in is the order it teaches.
@@ -905,13 +911,21 @@ export async function runLaunchPagesAction(input: LaunchPagesInput): Promise<Lau
         return { ok: false, error: res.lines.join(" ").replace(/:warning:\s*/g, "") };
       }
 
+      // ‼️ THE REASONS COME WITH THE COUNT, AND DROPPING THEM COST A DAY. On 2026-10-09 this
+      // printed "Angles: 4 of 11 wrote. 7 failed with no ideas written" and nothing else, so the
+      // seven were unexplained and unfixable. generateAnglesForPlan had already returned a line
+      // per failure naming the page and the error; this arm kept only the NUMBER. A count of
+      // failures with no reason is the same dead end `headlines_write` records one case below,
+      // where returning only a count left a person with a true sentence that answers nothing.
+      const why = res.lines.slice(1).map((l) => l.replace(/^\s*[•\s]*/, "  ").replace(/:warning:\s*/g, ""));
+
       return {
         ok: true,
         message: [
           res.drafted
             ? `Wrote three ideas for ${res.drafted} page${res.drafted === 1 ? "" : "s"}.`
             : "Every page already had its ideas.",
-          ...(res.failed ? [`${res.failed} failed.`] : []),
+          ...(res.failed ? [`${res.failed} failed, and here is why each one did:`, ...why] : []),
           "Show these to him verbatim and ask which idea he wants per page:",
           ...lines,
         ].join("\n"),
@@ -1300,6 +1314,79 @@ export async function runLaunchPagesAction(input: LaunchPagesInput): Promise<Lau
       const res = await pickForStage(clientId, row, Number(input.pick), actor, batch);
       if (!res.ok) return { ok: false, error: res.error };
       return { ok: true, message: res.lines.join("\n") };
+    }
+
+    // ‼️ IT HANDS BACK A PROMPT AND RUNS NOTHING, the rule buildBatchPrompt states for research.
+    case "headlines_brief": {
+      const {
+        buildHeadlineBrief,
+        parseKeywordList,
+        BRIEF_TOTAL_PER_FORMAT,
+        BRIEF_MAX_KEYWORDS,
+      } = await import("@/lib/clients/headline-brief");
+      const { headlineContext } = await import("@/lib/clients/client-headlines");
+
+      // Whatever he pasted, else every keyword the plan already aims at. A keyword does NOT have
+      // to be in the plan: he may be briefing a page that does not exist yet.
+      let keywords = parseKeywordList(input.text ?? "");
+      if (!keywords.length) {
+        const rows = await planRows(clientId);
+        // A plan that cannot be read is not a refusal here: he may have pasted nothing because
+        // there is nothing to paste yet, and the error below names what is actually missing.
+        if (!("error" in rows)) keywords = rows.map((r) => r.targetKeyword ?? "").filter(Boolean);
+      }
+      if (!keywords.length) {
+        return {
+          ok: false,
+          error: "No keywords. Paste them one per line, or approve a plan first and I will use its keywords.",
+        };
+      }
+
+      const trimmed = keywords.slice(0, BRIEF_MAX_KEYWORDS);
+      const ctx = await headlineContext(clientId);
+      if (!ctx.ok) return { ok: false, error: ctx.error };
+
+      // ‼️ ONE PROMPT FOR THE WHOLE PILE, AND THE COUNTS ARE TOTALS. Matthew, 2026-10-09: "i sent
+      // a bunch of keywords i wanted it to pile them keywords and generate one final prompt to run
+      // a batch of 100 variations". So the answer is the same size whatever the keyword count,
+      // and the only reason to split is the cap below.
+      const over = keywords.length - trimmed.length;
+      return {
+        ok: true,
+        message:
+          `One brief, ${trimmed.length} keyword${trimmed.length === 1 ? "" : "s"} piled together: ` +
+          `${BRIEF_TOTAL_PER_FORMAT} AEO H1s and ${BRIEF_TOTAL_PER_FORMAT} SEO title tags, ` +
+          `${BRIEF_TOTAL_PER_FORMAT * 2} lines in total spread across them. ` +
+          "Run it, then paste the WHOLE answer back here." +
+          (over > 0
+            ? ` ${over} more keyword${over === 1 ? " was" : "s were"} left out: ${BRIEF_MAX_KEYWORDS} is the most one brief takes, so run a second for the rest.`
+            : ""),
+        prompt: buildHeadlineBrief({ ctx: ctx.ctx, keywords: trimmed }),
+      };
+    }
+
+    case "headlines_paste": {
+      const { parseHeadlinePaste, fileHeadlinePaste, filedLines } = await import(
+        "@/lib/clients/headline-brief"
+      );
+      const blocks = parseHeadlinePaste(input.text ?? "");
+      if (!blocks.length) {
+        return {
+          ok: false,
+          error:
+            "Nothing in that paste read as a headline answer. It has to carry the markers the " +
+            'brief asked for, starting with "=== KEYWORD: <keyword> ===". Paste the whole answer.',
+        };
+      }
+
+      const { loadOffer } = await import("@/lib/clients/offers");
+      const offer = await loadOffer(clientId).catch(() => null);
+      const res = await fileHeadlinePaste({
+        clientId,
+        blocks,
+        audienceId: offer?.audienceId ?? null,
+      });
+      return { ok: true, message: filedLines(res).join("\n") };
     }
 
     case "page_title": {
