@@ -1178,12 +1178,113 @@ export async function recordCallList(
   }
   const { data, error } = await supabaseAdmin
     .from("raw_leads")
-    .select("id, business_name, phone, website, city, state, postal_code, full_address, place_id, instagram_handle, qualify_reason, review_count, rating, owner_name")
+    .select(CALL_LIST_COLUMNS)
     .eq("run_id", runId)
     .eq("route", "call");
   if (error) return { added: 0, alreadyKnown: 0, noPhone: 0, error: "reading the call list failed: " + error.message };
 
-  const rows = (data ?? []).map((r) => r as Record<string, unknown>);
+  // ‼️ `as unknown as` BECAUSE THE COLUMN LIST IS A CONSTANT RATHER THAN A LITERAL. supabase-js
+  // infers a row type from the select STRING, so moving the list into CALL_LIST_COLUMNS (shared with
+  // the sweep, which is the point) costs the inference. The alternative is two copies of a
+  // fourteen-column list, and two copies of that is how a sweep starts writing a column the run
+  // path stopped writing.
+  const rows = (data ?? []).map((r) => r as unknown as Record<string, unknown>);
+  return writeCallList(rows, source);
+}
+
+/**
+ * Every call-route lead this lane has ever pulled, whatever run it came from, into the CRM.
+ *
+ * ‼️ THE PER-RUN WRITE IS NOT ENOUGH AND THE GAP IS STRUCTURAL. `recordCallList` runs at the end of
+ * a run, which covers everything from here on and nothing from before, and it cannot cover a row
+ * whose ROUTE WAS DECIDED LATER: a lead parked as unjudged when its run finished, re-qualified on a
+ * later tick and routed to `call`, is never looked at again by anything. Measured on 2026-10-09:
+ * 423 leads on the call route, 367 with a usable phone, and 6 of those in no CRM row at all.
+ *
+ * ‼️ IT IS A RECONCILIATION, NOT A BACKFILL, so it is safe and useful to run on a schedule. Every
+ * insert is deduped against `contacts` on both `google_place_id` and `phone_last10` and within the
+ * batch itself, exactly as the per-run path is, so running it twice adds nothing the first run did
+ * not. That is what lets the cron call it rather than somebody remembering to.
+ *
+ * ‼️ PAGED, BECAUSE PostgREST CAPS A RESPONSE AT 1,000 ROWS. 423 rows fits today and will not at
+ * 4,000 records a day, and the failure mode is the one that already truncated the territory map:
+ * the query succeeds, returns 1,000, and the sweep reports a clean reconciliation over a third of
+ * the data.
+ */
+export async function sweepCallListGap(
+  verticalSlug: string | null | undefined,
+  options: { includeUnphoned?: boolean } = {}
+): Promise<{
+  scanned: number;
+  added: number;
+  alreadyKnown: number;
+  noPhone: number;
+  error: string | null;
+}> {
+  const source = crmSourceFor(verticalSlug);
+  if (!source) {
+    return {
+      scanned: 0,
+      added: 0,
+      alreadyKnown: 0,
+      noPhone: 0,
+      error:
+        "there is no CRM source registered for the vertical `" + String(verticalSlug) + "`, so " +
+        "these leads would land under a name nothing filters on. Add `crmSource` in " +
+        "src/lib/scraper/verticals.ts.",
+    };
+  }
+
+  const PAGE_SIZE = 1000;
+  const rows: Array<Record<string, unknown>> = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await supabaseAdmin
+      .from("raw_leads")
+      .select(CALL_LIST_COLUMNS)
+      .eq("vertical_slug", verticalSlug ?? "")
+      .eq("route", "call")
+      // A total order, so paging cannot return the same row twice or skip one. `created_at` alone
+      // is not one: a 300-record chunk lands inside the same second.
+      .order("created_at", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) {
+      return { scanned: rows.length, added: 0, alreadyKnown: 0, noPhone: 0, error: "reading the call list failed: " + error.message };
+    }
+    const page = (data ?? []) as unknown as Array<Record<string, unknown>>;
+    rows.push(...page);
+    if (page.length < PAGE_SIZE) break;
+  }
+
+  const wrote = await writeCallList(rows, source, options.includeUnphoned ?? true);
+  return { scanned: rows.length, ...wrote };
+}
+
+/** The raw_leads columns a contact is built from. One list, so the sweep and the run path agree. */
+const CALL_LIST_COLUMNS =
+  "id, business_name, phone, website, city, state, postal_code, full_address, place_id, " +
+  "instagram_handle, qualify_reason, review_count, rating, owner_name";
+
+/**
+ * Put a batch of call-route leads into the CRM, deduped. The shared half of recordCallList.
+ *
+ * ‼️ EXTRACTED RATHER THAN COPIED, AND THE ROW SHAPE IS WHY. recordCallList's own header says the
+ * shape is not cosmetic: `fetchCandidates` selects on `working_state <> 'closed'`, the leads page
+ * filters on `source` with `eq`, and a row in a different shape is a row that is in the table and
+ * on no list. A second writer would start out identical and drift, and the first symptom would be
+ * leads that exist and cannot be found.
+ *
+ * ‼️ `includeUnphoned` IS A PARAMETER AND ITS DEFAULT IS THE OLD BEHAVIOUR. The run path still
+ * refuses a row with no usable phone, because a call list is for dialling. The SWEEP passes true,
+ * because the question it answers is "is any pulled business missing from the book", and for that
+ * question an un-dialable row is still a missing lead. Both are defensible and they are different
+ * jobs, so it is an argument rather than a changed rule.
+ */
+async function writeCallList(
+  rows: Array<Record<string, unknown>>,
+  source: string,
+  includeUnphoned = false
+): Promise<{ added: number; alreadyKnown: number; noPhone: number; error: string | null }> {
   if (!rows.length) return { added: 0, alreadyKnown: 0, noPhone: 0, error: null };
 
   const last10 = (phone: unknown): string | null => {
@@ -1194,8 +1295,9 @@ export async function recordCallList(
     return /^(\d)\1{9}$/.test(ten) ? null : ten;
   };
 
-  const callable = rows.filter((r) => last10(r.phone) !== null);
-  const noPhone = rows.length - callable.length;
+  const phoned = rows.filter((r) => last10(r.phone) !== null);
+  const noPhone = rows.length - phoned.length;
+  const callable = includeUnphoned ? rows : phoned;
   if (!callable.length) return { added: 0, alreadyKnown: 0, noPhone, error: null };
 
   // ‼️ DEDUPED ON BOTH place_id AND phone_last10, AND NEITHER ALONE IS ENOUGH. A Google place id
@@ -1203,7 +1305,10 @@ export async function recordCallList(
   // contacts the old pipeline left behind carry no place id at all. The last ten digits catch those;
   // the place id catches a business that has since changed its number.
   const placeIds = [...new Set(callable.map((r) => String(r.place_id ?? "")).filter(Boolean))];
-  const phones = [...new Set(callable.map((r) => last10(r.phone)!).filter(Boolean))];
+  // ‼️ `filter(Boolean)` BEFORE THE Set AND NOT AFTER, now that an unphoned row can reach here. A
+  // null in this list becomes `phone_last10=in.(null)` in the query string, which PostgREST reads
+  // as the literal string "null" and matches nothing, so every lookup would silently miss.
+  const phones = [...new Set(callable.map((r) => last10(r.phone)).filter((p): p is string => !!p))];
 
   const knownPlaces = new Set<string>();
   const knownPhones = new Set<string>();
@@ -1233,14 +1338,22 @@ export async function recordCallList(
   let alreadyKnown = 0;
 
   for (const r of callable) {
-    const phoneKey = last10(r.phone)!;
+    const phoneKey = last10(r.phone);
     const placeKey = String(r.place_id ?? "");
-    if (knownPhones.has(phoneKey) || (placeKey && knownPlaces.has(placeKey))) {
+    if ((phoneKey && knownPhones.has(phoneKey)) || (placeKey && knownPlaces.has(placeKey))) {
       alreadyKnown += 1;
       continue;
     }
-    if (seen.has(phoneKey)) continue;
-    seen.add(phoneKey);
+    // ‼️ AN UNPHONED ROW IS DEDUPED ON ITS PLACE ID, AND REFUSED WHEN IT HAS NEITHER. With no phone
+    // and no place id there is no key at all, so a re-run would insert the same business again on
+    // every sweep. A business with neither is also one nobody can act on.
+    const key = phoneKey ?? (placeKey ? "place:" + placeKey : null);
+    if (!key) {
+      alreadyKnown += 1;
+      continue;
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
 
     fresh.push({
       business_name: String(r.business_name ?? ""),
@@ -1248,7 +1361,10 @@ export async function recordCallList(
       // list where every row says "there" is worse than one that admits it does not know.
       first_name: String(r.owner_name ?? "").split(/\s+/)[0] || null,
       // phone_last10 is GENERATED ALWAYS from this column. See the header: sending it is an error.
-      phone: String(r.phone ?? ""),
+      // ‼️ NULL RATHER THAN "", because the generated column is right(regexp_replace(...), 10) and
+      // an empty string produces an empty KEY, which every later row with no phone would then
+      // collide with. Null produces null and collides with nothing.
+      phone: phoneKey ? String(r.phone ?? "") : null,
       website: (r.website as string | null) ?? null,
       // ‼️ biz_*, NOT city/state/zip/address, AND THIS HAS BITTEN THIS CODEBASE BEFORE. There is
       // no `contacts.city`: the CRM workflow buttons shipped a query against one and found nothing.
@@ -1270,7 +1386,9 @@ export async function recordCallList(
       // "Instagram only, no own domain" tells the person dialling what the opener is before they
       // pick up the phone. next_action_at is left NULL on purpose: that puts them in the "No
       // follow-up" bucket, which is true, rather than inventing a due date nobody agreed to.
-      next_action_reason: String(r.qualify_reason ?? "scraped, no email route"),
+      next_action_reason:
+        (phoneKey ? "" : "NO PHONE on the row, look it up. ") +
+        String(r.qualify_reason ?? "scraped, no email route"),
     });
   }
 

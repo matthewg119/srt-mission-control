@@ -19,6 +19,10 @@ import { supabaseAdmin } from "@/lib/db";
 import { canonicalStateName } from "./geo";
 import { METROS } from "@/lib/trt";
 import { verticalDef, type VerticalDef } from "./verticals";
+// ‼️ THE ONE REASON NORMALISER, SHARED RATHER THAN RE-IMPLEMENTED. groupDrops and the
+// drop-review card already fold reasons with this; a second fold here would be a second
+// answer to "are these two reasons the same" and the page would disagree with the card.
+import { normalizeReason } from "./qualify";
 
 /** The six rungs, furthest first. Shared by the map legend, the table and the plan. */
 export const STAGES = ["emailed", "sendable", "qualified", "call", "dropped", "pulled"] as const;
@@ -214,6 +218,219 @@ export async function stateRows(
   return { rows: [...byState.values()].sort((a, b) => b.pulled - a.pulled), unplaced };
 }
 
+// ── the drops ────────────────────────────────────────────────────────────────────────────────────
+
+/** One (metro, judge, route, reason) bucket, straight off the rollup. */
+export interface DropRow {
+  metro: string | null;
+  /** 'rule' for a free rule, else the model that judged it. */
+  judge: string;
+  /** 'call' or 'drop'. A called row is not a binned one. */
+  route: string;
+  /** Null on every drop today, by construction. Read first anyway; see groupDropRows. */
+  judgedVertical: string | null;
+  reason: string;
+  n: number;
+}
+
+/**
+ * Every lead the ICP did not keep, bucketed, paged.
+ *
+ * ‼️ PAGED, FOR THE REASON territoryDots IS PAGED AND IT IS THE SAME MEASURED TRAP. PostgREST caps a
+ * response at 1,000 rows SERVER SIDE and `.range(0, 3999)` does not lift it, it only moves the
+ * window. That silently truncated the territory map: 1,546 rows became 1,000 and 546 businesses went
+ * missing from the quiet edges while the map looked full. This grouping is per (metro, model, route,
+ * reason) over free text, so sixteen worked metros can exceed the cap the same way.
+ */
+export async function dropRows(vertical: string): Promise<{ rows: DropRow[]; capped: boolean }> {
+  const out: DropRow[] = [];
+
+  for (let from = 0; from < DOT_LIMIT; from += POSTGREST_MAX_ROWS) {
+    const to = Math.min(from + POSTGREST_MAX_ROWS, DOT_LIMIT) - 1;
+    const { data, error } = await supabaseAdmin
+      .rpc("territory_drop_rollup", { p_vertical: vertical, p_limit: DOT_LIMIT })
+      .range(from, to);
+    // ‼️ A MISSING FUNCTION READS AS NO DROPS RATHER THAN THROWING, because the drops are a SECTION
+    // of a page whose other sections are the operational ones. A territory page that 500s because
+    // one reporting function has not been migrated yet is a worse outcome than a section that says
+    // it has nothing to show.
+    if (error) return { rows: out, capped: false };
+    const rows = (data ?? []) as Array<Record<string, unknown>>;
+    for (const r of rows) {
+      out.push({
+        metro: (r.source_metro as string | null) ?? null,
+        judge: String(r.qualify_model ?? "unrecorded"),
+        route: String(r.route ?? "unrouted"),
+        judgedVertical: (r.judged_vertical as string | null) ?? null,
+        reason: String(r.qualify_reason ?? ""),
+        n: Number(r.n ?? 0),
+      });
+    }
+    if (rows.length < to - from + 1) return { rows: out, capped: false };
+  }
+
+  return { rows: out, capped: true };
+}
+
+export interface DropBucket {
+  /** What to print. The judged vertical when there is one, else the first spelling of the reason. */
+  label: string;
+  n: number;
+  /** How many distinct spellings of this reason were folded together. 1 means none were. */
+  spellings: number;
+}
+
+export interface MetroDrops {
+  metro: string;
+  /** Decided by a free rule: no website, platform-only domain, chain by shared domain, duplicate. */
+  byRule: number;
+  /** Decided by the model. */
+  byModel: number;
+  /** Of the above, still has somebody to ring. These are DOORS, not leftovers. */
+  called: number;
+  /** Of the above, genuinely binned. */
+  binned: number;
+  ruleBuckets: DropBucket[];
+  modelBuckets: DropBucket[];
+}
+
+/**
+ * Collapse the raw buckets into something readable, per metro.
+ *
+ * ‼️ BUCKETED ON judged_vertical WHERE IT EXISTS AND ON THE REASON OTHERWISE, NEVER THE REVERSE. The
+ * reasons are model prose and the stored rows carry nine spellings of "Instagram only";
+ * `normalizeReason` folds them and even that is fuzzy. A stored vertical is a controlled vocabulary
+ * the registry owns, so where one exists it is the real answer and the prose is a description of it.
+ * Today every dropped row has a null vertical (qualifyChunk writes null on a drop by construction),
+ * so in practice this always falls through to the reason, and the page says so rather than letting
+ * a reader take the buckets for a taxonomy.
+ *
+ * ‼️ AND IT REUSES normalizeReason RATHER THAN RE-FOLDING. That function is already the one
+ * implementation `groupDrops` and the drop-review card share. A second fold here would be a second
+ * answer to "are these two reasons the same", and the two cards would disagree about the same run.
+ */
+export function groupDropRows(rows: readonly DropRow[]): MetroDrops[] {
+  const byMetro = new Map<string, MetroDrops>();
+
+  for (const r of rows) {
+    const metro = r.metro ?? "(no metro)";
+    const m =
+      byMetro.get(metro) ??
+      { metro, byRule: 0, byModel: 0, called: 0, binned: 0, ruleBuckets: [], modelBuckets: [] };
+
+    const isRule = r.judge === "rule";
+    if (isRule) m.byRule += r.n;
+    else m.byModel += r.n;
+    if (r.route === "call") m.called += r.n;
+    else if (r.route === "drop") m.binned += r.n;
+
+    byMetro.set(metro, m);
+  }
+
+  // Second pass for the buckets, so the folding key is computed once per row rather than per metro.
+  const bucketsFor = (metro: string, isRule: boolean): DropBucket[] => {
+    const folded = new Map<string, { label: string; n: number; spellings: Set<string> }>();
+    for (const r of rows) {
+      if ((r.metro ?? "(no metro)") !== metro) continue;
+      if ((r.judge === "rule") !== isRule) continue;
+      const vertical = (r.judgedVertical ?? "").trim();
+      const key = vertical ? "v:" + vertical.toLowerCase() : "r:" + normalizeReason(r.reason);
+      const g = folded.get(key) ?? { label: vertical || r.reason, n: 0, spellings: new Set<string>() };
+      g.n += r.n;
+      g.spellings.add(vertical || r.reason);
+      folded.set(key, g);
+    }
+    return [...folded.values()]
+      .map((g) => ({ label: g.label, n: g.n, spellings: g.spellings.size }))
+      .sort((a, b) => b.n - a.n);
+  };
+
+  for (const m of byMetro.values()) {
+    m.ruleBuckets = bucketsFor(m.metro, true);
+    m.modelBuckets = bucketsFor(m.metro, false);
+  }
+
+  return [...byMetro.values()].sort((a, b) => b.byRule + b.byModel - (a.byRule + a.byModel));
+}
+
+/**
+ * The metro circles somebody has paid to count, by METROS key.
+ *
+ * ‼️ THIS IS THE HALF `territory_metro_rollup` CANNOT ANSWER, AND THE GAP IS STRUCTURAL RATHER THAN
+ * AN OVERSIGHT. That function derives `remaining` from list_pipeline_runs.metro_total_count joined
+ * through raw_leads.run_id, so it needs LEADS: a metro nobody has pulled from has no row, no
+ * denominator and no remainder. 15 of the 16 planned metros were in exactly that state on
+ * 2026-10-09, which is every metro except Dallas. An auto-planner that could not tell "Houston is
+ * empty" from "nobody has looked at Houston" would send a budget to a city holding 40 businesses.
+ *
+ * ‼️ A MISSING TABLE READS AS EMPTY RATHER THAN THROWING, the same way cellsMeasured does. The
+ * honest consequence of docs/2026-10-09-pull-plan.sql not having been run is a planner that offers
+ * to measure Dallas again for a penny, not a page that 500s.
+ */
+export async function metroCircles(vertical: string): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  for (const c of await metroCircleRows(vertical)) {
+    // Raised, never assigned, for the reason every other count in this lane is: the vendor's index
+    // is live and the unique index means there is only one row anyway, so this is belt and braces.
+    out.set(c.metroKey, Math.max(out.get(c.metroKey) ?? 0, c.totalCount));
+  }
+  return out;
+}
+
+export interface MetroCircle {
+  metroKey: string;
+  metroLabel: string;
+  locationName: string;
+  lat: number;
+  lon: number;
+  radiusKm: number;
+  totalCount: number;
+  costUsd: number;
+  measuredAt: string | null;
+}
+
+/**
+ * The measured circles in full, for the page, the tools and a re-measurement.
+ *
+ * ‼️ `measured_at` IS THE FIELD THAT MAKES A COUNT READABLE RATHER THAN JUST TRUE. DataForSEO's
+ * index is live: the same Dallas circle read 1,765 and then 1,990 ten days later, which is 12.7%
+ * growth. A remainder computed against a count from three weeks ago is not wrong, but it is old,
+ * and the only way a reader can tell is if the page says when it was taken.
+ *
+ * ‼️ AND THE COORDINATE IS HERE SO A RE-MEASURE DOES NOT RE-GEOCODE. The centre of Houston does not
+ * move. Once a circle has been measured, its lat/lon ARE the circle, and re-resolving the name
+ * through Nominatim could quietly pick a different point and silently change what "Houston" means
+ * between two counts.
+ */
+export async function metroCircleRows(vertical: string): Promise<MetroCircle[]> {
+  const { data, error } = await supabaseAdmin
+    .from("scraper_metro_circles")
+    .select(
+      "metro_key, metro_label, location_name, latitude, longitude, radius_km, total_count, cost_usd, measured_at"
+    )
+    .eq("vertical_slug", vertical);
+  // ‼️ A MISSING TABLE READS AS EMPTY RATHER THAN THROWING, the same way cellsMeasured does. The
+  // honest consequence of docs/2026-10-09-pull-plan.sql not having been run is a planner that offers
+  // to measure Dallas again for a penny, not a page that 500s.
+  if (error) return [];
+  return (data ?? [])
+    .map((raw) => {
+      const r = raw as Record<string, unknown>;
+      return {
+        metroKey: String(r.metro_key ?? ""),
+        metroLabel: String(r.metro_label ?? ""),
+        locationName: String(r.location_name ?? ""),
+        lat: Number(r.latitude ?? 0),
+        lon: Number(r.longitude ?? 0),
+        radiusKm: Number(r.radius_km ?? 0),
+        totalCount: Number(r.total_count ?? 0),
+        costUsd: Number(r.cost_usd ?? 0),
+        measuredAt: (r.measured_at as string | null) ?? null,
+      };
+    })
+    .filter((c) => c.metroKey);
+}
+
 /** How many circles have been paid to be counted. Zero means the cell crawl has never been run. */
 export async function cellsMeasured(vertical: string): Promise<number> {
   const { count, error } = await supabaseAdmin
@@ -294,6 +511,14 @@ export interface PlanRow {
    */
   daysOfSupply: number | null;
   worked: boolean;
+  /**
+   * The vendor's count for this metro's circle, when one has been bought, else null.
+   *
+   * ‼️ SEPARATE FROM `remaining` SO THE PLANNER CAN SAY WHICH MEASUREMENT IT IS USING. "measured at
+   * 1,990, 1,750 pulled" and "never measured" are the two states a plan card has to distinguish,
+   * and a lone remainder cannot carry that.
+   */
+  circleTotal: number | null;
 }
 
 /**
@@ -330,7 +555,17 @@ export function matchMetro(stored: string | null | undefined): string | null {
  * go next", and that is answered by the rows with `worked: false`, in priority order, with a do-not-
  * pull marker on everything above them.
  */
-export function metroPlan(rows: readonly MetroRow[]): PlanRow[] {
+export function metroPlan(
+  rows: readonly MetroRow[],
+  /**
+   * Metro circles bought with a `measure` step, by METROS key, from `metroCircles`.
+   *
+   * ‼️ OPTIONAL, AND ITS ABSENCE MEANS "no metro has been measured on its own", never "every metro
+   * is empty". The dashboard passes it; a caller that does not simply gets the pre-2026-10-09
+   * behaviour, where a metro's remainder can only come from a run that pulled it.
+   */
+  circles?: ReadonlyMap<string, number>
+): PlanRow[] {
   const byKey = new Map<string, { pulled: number; sendable: number; remaining: number | null; matched: string[] }>();
 
   for (const r of rows) {
@@ -350,17 +585,33 @@ export function metroPlan(rows: readonly MetroRow[]): PlanRow[] {
 
   return METROS.map((m) => {
     const agg = byKey.get(m.key);
-    const remaining = agg?.remaining ?? null;
+    const pulled = agg?.pulled ?? 0;
+    const circleTotal = circles?.get(m.key) ?? null;
+
+    // ‼️ THE GREATER OF THE TWO MEASUREMENTS, AND NEVER THE SUM. Both answer "how many are left
+    // here" and they are derived differently: the run path sums (metro_total - pulled) over every
+    // source_metro string that matched this metro, and the circle path is one count for one circle
+    // less everything pulled under the whole metro. For Dallas today they agree exactly, at 240.
+    // They can drift once two sub-circles of one metro have been pulled separately, and the maximum
+    // is the safe direction: it can leave a metro looking unfinished for one more plan, which costs
+    // a chunk that returns nothing, where the minimum would mark it finished and leave real
+    // businesses unbought forever.
+    const fromCircle = circleTotal === null ? null : Math.max(0, circleTotal - pulled);
+    const fromRuns = agg?.remaining ?? null;
+    const remaining =
+      fromCircle === null ? fromRuns : fromRuns === null ? fromCircle : Math.max(fromCircle, fromRuns);
+
     return {
       key: m.key,
       label: m.label,
       priority: m.priority,
       matched: agg?.matched ?? [],
-      pulled: agg?.pulled ?? 0,
+      pulled,
       sendable: agg?.sendable ?? 0,
       remaining,
       daysOfSupply: remaining === null ? null : Math.round((remaining / burn) * 10) / 10,
-      worked: (agg?.pulled ?? 0) > 0,
+      worked: pulled > 0,
+      circleTotal,
     };
   }).sort((a, b) => a.priority - b.priority);
 }

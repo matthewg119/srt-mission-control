@@ -32,7 +32,7 @@ import { hasMx } from "./mx";
 import { crawlSite } from "@/lib/email-scrape";
 import { checkMany } from "@/lib/outreach/suppression";
 import { DEFAULT_VERTICAL, icpFor, knownVerticals, resolveVertical } from "./icp";
-import { campaignFor } from "./verticals";
+import { campaignFor, crmSourceFor, verticalDef, verticalSlugs } from "./verticals";
 import {
   fromCsv,
   funnelLines,
@@ -69,6 +69,7 @@ import {
   tierTally,
   applyFreeRules,
   recordCallList,
+  sweepCallListGap,
   recordCatchallRecheck,
   recordEnrichment,
   recordSuppression,
@@ -100,6 +101,8 @@ import {
   MAPS_LIMIT_DEFAULT,
   MAPS_OFFSET_MAX,
   MAPS_PAGE_MAX,
+  MAPS_RADIUS_KM_DEFAULT,
+  locationNameOf,
   laneHelp,
   parseNextMetroCommand,
   type NextMetroCommand,
@@ -119,6 +122,42 @@ import {
   stateProgress,
 } from "./coverage";
 import { bumpCellTotal, cellRows, cellsMissingState, insertCells, setCellState, type MeasuredCell } from "./cell-store";
+// The auto-planner. Split the way maps-command.ts and lane.ts are: the arithmetic is pure and
+// provable offline by scripts/_probe-pull-plan.ts, the storage is not, and this file is the Slack
+// side of both.
+import {
+  PLAN_MAX_MEASURES,
+  PLAN_MEASURE_BUDGET,
+  PULL_BUDGET_GRAMMAR,
+  expandBudget,
+  parsePullBudgetCommand,
+  planCardLines,
+  planPull,
+  type PullBudgetCommand,
+} from "./pull-plan";
+import {
+  addPlanSpend,
+  approvePlan,
+  cancelPlan,
+  claimNextStep,
+  createPlan,
+  finishStep,
+  getPlan,
+  insertSteps,
+  livePlan,
+  planByApprovalTs,
+  planProgress,
+  planSteps,
+  recordMetroCircle,
+  updatePlan,
+  walkablePlans,
+  type PlanRowDb,
+  type PlanStepRowDb,
+} from "./pull-plan-store";
+// ‼️ THE PLAN READS THE SAME FUNCTIONS /dashboard/territory DOES, rather than a second query written
+// for the Slack path. A card saying "240 left in Dallas" and a page saying something else is the
+// failure this import prevents by construction.
+import { SENDING, metroCircleRows, metroCircles, metroPlan, metroRows } from "./territory";
 // The default source. Its endpoint is synchronous, so this half needs no webhook at all.
 import { isConfigured as dfsPlacesConfigured, searchListings, type DfsListing } from "@/lib/dataforseo-places";
 // The listings endpoint honours a coordinate and silently ignores a name, so this is not optional.
@@ -432,6 +471,68 @@ export async function handleScraperEvent(event: ScraperEvent): Promise<boolean> 
   if (/^\s*(help|workflows?|commands?|\?)\s*$/i.test(unwrapCodeText(event.text))) {
     await slack.postMessage(event.channel, laneHelp());
     return true;
+  }
+
+  // ‼️ THE PLAN COMMANDS COME BEFORE parseNaturalPull, AND THE ORDER IS LOAD-BEARING RATHER THAN
+  // TIDY. `parseNaturalPull` fires on the word "pull" next to a known vertical and then looks for a
+  // city; `pull 2000 medspa` has no city, so it would be answered with "I can tell you want medspa
+  // leads, but not from where" and the plan command would never be reachable. Naming WHERE is the
+  // one thing this command exists not to make a person do.
+  {
+    const text = unwrapCodeText(event.text);
+
+    const stop = /^\s*(?:stop|cancel)\s+plan(?:\s+([a-z]+))?\s*$/i.exec(text);
+    if (stop) {
+      const asked = (stop[1] ?? "").toLowerCase();
+      const vertical = knownVerticals().includes(asked) ? asked : null;
+      if (!vertical) {
+        await slack.postMessage(
+          event.channel,
+          ":no_entry: which vertical. `stop plan " + knownVerticals().join("` or `stop plan ") + "`."
+        );
+        return true;
+      }
+      await postPlanStopped(event.channel, vertical);
+      return true;
+    }
+
+    const status = /^\s*plan(?:\s+status)?(?:\s+([a-z]+))?\s*$/i.exec(text);
+    if (status) {
+      const asked = (status[1] ?? "").toLowerCase();
+      const vertical = knownVerticals().includes(asked) ? asked : null;
+      if (!vertical) {
+        await slack.postMessage(
+          event.channel,
+          "Which vertical. `plan status " + knownVerticals().join("` or `plan status ") + "`."
+        );
+        return true;
+      }
+      await postPlanStatus(event.channel, vertical);
+      return true;
+    }
+
+    // `call list sync`: reconcile every pulled call-route lead against the CRM, across all runs.
+    // A read and an insert of what is missing. It spends nothing, so it has no card and no gate.
+    const sync = /^(?:call\s*list\s*sync|sync\s*call\s*list)(?:\s+([a-z]+))?\s*$/i.exec(text);
+    if (sync) {
+      const asked = (sync[1] ?? "").toLowerCase();
+      const verticals = knownVerticals().includes(asked) ? [asked] : knownVerticals();
+      await postCallListSync(event.channel, verticals);
+      return true;
+    }
+
+    const budget = parsePullBudgetCommand(event.text, knownVerticals());
+    if (budget) {
+      if (!budget.ok) {
+        await slack.postMessage(
+          event.channel,
+          [":no_entry: " + budget.reason, "", PULL_BUDGET_GRAMMAR].join("\n")
+        );
+        return true;
+      }
+      await beginPullPlan(event, budget.command);
+      return true;
+    }
   }
 
   // A plain-English ask becomes the same estimate card, which is what makes guessing safe: it
@@ -1759,6 +1860,868 @@ async function nameCellStates(vertical: string): Promise<void> {
   }
 }
 
+// ── the pull plan: `pull 2000 medspa` ────────────────────────────────────────────────────────────
+//
+// ‼️ IT PLANS, IT DOES NOT BUY. Everything in this section ends at a card. The check mark queues the
+// plan and the cron walks it one chunk at a time, which is the same posture every other spend in
+// this lane has, applied to a LIST of spends rather than to one.
+//
+// ‼️ AND THE WHOLE REASON IT EXISTS IS THAT THE ARITHMETIC IS THE PART A PERSON DOES BADLY. The four
+// Dallas chunks run on 2026-10-08 had their offsets worked out by hand from a circle size that
+// turned out to be stale, and `limit 3000` against a metro holding 1,990 is how batch 7a472c40 died.
+// Reading the plan, subtracting, splitting into 300s and typing four commands with the right offsets
+// is exactly the work a machine should be doing.
+
+/**
+ * How long a step may sit in `running` before the walk gives up on it.
+ *
+ * ‼️ A STUCK STEP WOULD OTHERWISE BE INVISIBLE RATHER THAN BLOCKING, WHICH IS WORSE. `claimNextStep`
+ * only takes PENDING steps, so a step whose lambda was killed mid-pull does not stop the walk: the
+ * plan sails past it and finishes reporting success over a chunk nobody bought. Thirty minutes is
+ * well past any synchronous DataForSEO call (the longest measured is a five-request deep-offset probe
+ * at just over five minutes) and well short of a human noticing.
+ */
+const PLAN_STEP_STUCK_MS = 30 * 60 * 1000;
+
+/**
+ * Build a plan and post its card. Nothing is bought.
+ *
+ * ‼️ THE PLAN IS COMPUTED FROM THE SAME READS /dashboard/territory USES, not from a second query
+ * written for this path. `metroRows` plus `metroCircles` into `metroPlan` is literally the page's own
+ * line, so a card that says "240 left in Dallas" and a page that says something else is not possible.
+ */
+async function beginPullPlan(event: ScraperEvent, command: PullBudgetCommand): Promise<void> {
+  const def = verticalDef(command.vertical);
+  if (!def) {
+    await slack.postMessage(
+      event.channel,
+      ":no_entry: there is no registry entry for `" + command.vertical + "`, so a plan could not name " +
+        "what to search for. Add it in `src/lib/scraper/verticals.ts`."
+    );
+    return;
+  }
+
+  const existing = await livePlan(command.vertical);
+  if (existing) {
+    const progress = await planProgress(existing.id);
+    await slack.postMessage(
+      event.channel,
+      ":hourglass: *There is already a live plan for `" + command.vertical + "`* at status `" +
+        existing.status + "`: " + progress.done + " of " + progress.total + " steps done, " +
+        progress.pending + " still to run. One plan per vertical, or two walks would each compute " +
+        "their offsets from a frontier the other is moving.\n" +
+        "  `plan status " + command.vertical + "` for the detail, `stop plan " + command.vertical +
+        "` to cancel what has not run."
+    );
+    return;
+  }
+
+  const [rows, circles] = await Promise.all([
+    metroRows(command.vertical),
+    metroCircles(command.vertical),
+  ]);
+  const plan = planPull({
+    vertical: command.vertical,
+    requested: command.count,
+    rows: metroPlan(rows, circles),
+    def,
+  });
+
+  if (plan.outcome.kind === "metros_exhausted") {
+    await postVerticalExhausted(event.channel, command.vertical, def.label, plan.metros.length);
+    return;
+  }
+  if (plan.outcome.kind === "nothing_to_do") {
+    await slack.postMessage(
+      event.channel,
+      ":no_entry: *Nothing could be planned*: " + plan.outcome.reason + ". Nothing was bought."
+    );
+    return;
+  }
+
+  const created = await createPlan({
+    vertical: command.vertical,
+    requested: command.count,
+    channel: event.channel,
+    threadTs: event.threadTs ?? event.messageTs,
+    estimatedCostUsd: plan.totalCostUsd,
+    steps: plan.steps,
+  });
+
+  const posted = await slack.postMessage(
+    event.channel,
+    planCardLines(plan, {
+      verticalLabel: def.label,
+      verifierCreditsLeft: SENDING.verifierCreditsLeft,
+    }).join("\n")
+  );
+  const messageTs = (posted as { ts?: string }).ts;
+  if (typeof messageTs === "string") {
+    await updatePlan(created.id, { approval_ts: messageTs });
+  } else {
+    // ‼️ A CARD THAT DID NOT POST IS A PLAN NOBODY CAN APPROVE, AND IT IS CANCELLED RATHER THAN LEFT.
+    // Left alive it would hold the one-live-plan-per-vertical index against every later attempt,
+    // and the only symptom would be "there is already a live plan" for a plan with no card.
+    await cancelPlan(command.vertical);
+    await slack.postMessage(
+      event.channel,
+      ":x: I could not post the plan card, so the plan was cancelled rather than left with no way to " +
+        "approve it. Try again."
+    );
+  }
+}
+
+/**
+ * Every planned metro is measured and empty. Say what that actually means, which depends on the
+ * cell walk and not on this file.
+ *
+ * ‼️ "NO MORE LEADS IN THIS VERTICAL" IS A BIG CLAIM AND IT IS MADE IN TWO STAGES, because the 16
+ * metros in METROS are not the United States. They are the near-term queue INSIDE the national cell
+ * crawl, which models the country properly as a quadtree. Telling somebody to add a new vertical
+ * while thousands of unmeasured circles sit in the crawl would be false and expensive. So: metros
+ * exhausted says "go national"; metros exhausted AND the cell walk done says "this vertical is out".
+ */
+async function postVerticalExhausted(
+  channel: string,
+  vertical: string,
+  label: string,
+  metroCount: number
+): Promise<void> {
+  const categories = DFS_CATEGORIES[vertical] ?? [];
+  const catsKey = categoriesKey(categories);
+  const [rows, history] = await Promise.all([cellRows(vertical, catsKey), mapsPullHistory()]);
+  const action = nextCellAction({
+    vertical,
+    categoriesKey: catsKey,
+    rows,
+    history,
+    limit: MAPS_LIMIT_DEFAULT,
+    probeBatch: PROBE_BATCH_DEFAULT,
+  });
+
+  const others = verticalSlugs().filter((v) => v !== vertical);
+
+  if (action.kind === "done") {
+    await slack.postMessage(
+      channel,
+      [
+        ":checkered_flag: *There are no more leads to pull for `" + vertical + "`.*",
+        "  All " + metroCount + " planned metros are measured and empty, and every measured circle " +
+          "in the national crawl is paged out (" + action.cells + " cells, " +
+          action.records.toLocaleString() + " businesses).",
+        "",
+        "  *Add a new vertical to do any more pulls.* One object in " +
+          "`src/lib/scraper/verticals.ts`: an ICP, a DataForSEO category list, the search strings and " +
+          "a campaign name. " +
+          (others.length
+            ? "The ones already registered are " + others.map((v) => "`" + v + "`").join(", ") + "."
+            : "There are no other verticals registered."),
+        "  A live vertical's category list may NOT be edited to widen it: `scraper_cells` is keyed on " +
+          "that list, so widening `" + vertical + "` would turn every stored count into the answer to " +
+          "a question nobody asked. A wider list needs a NEW SLUG.",
+      ].join("\n")
+    );
+    return;
+  }
+
+  await slack.postMessage(
+    channel,
+    [
+      ":checkered_flag: *All " + metroCount + " planned metros are finished for `" + vertical + "`* (" +
+        label + ").",
+      "  That is the METRO queue, not the country. The national cell crawl is what is left, and it " +
+        "models US coverage properly as a quadtree rather than as sixteen cities.",
+      action.kind === "probe"
+        ? "  Next: `cells " + vertical + "` measures " + action.cells.length + " more circles for " +
+          "about $" + action.costUsd.toFixed(2) + "."
+        : "  Next: `pull maps " + vertical + " | limit 300` works the next measured circle.",
+      "  `coverage " + vertical + "` shows how much of the map is measured and pulled, by state.",
+    ].join("\n")
+  );
+}
+
+/** The check mark on a plan card. Queues the walk. Still buys nothing: the cron does that, one step at a time. */
+async function releasePullPlan(plan: PlanRowDb): Promise<void> {
+  const took = await approvePlan(plan.id, "slack_reaction");
+  // ‼️ NOT AN ERROR, AND NOT SILENT EITHER. A second check mark in the same tick loses the
+  // conditional update and lands here. Saying nothing is what ate a :two: on 2026-09-04 and left a
+  // picker dead forever, so this reports the state rather than returning quietly.
+  if (!took) {
+    const fresh = await getPlan(plan.id);
+    await slack.postMessage(
+      plan.slack_channel_id,
+      ":white_check_mark: Already queued (status `" + (fresh?.status ?? "gone") + "`). " +
+        "Nothing was bought twice."
+    );
+    return;
+  }
+
+  const progress = await planProgress(plan.id);
+  await slack.postMessage(
+    plan.slack_channel_id,
+    [
+      ":white_check_mark: *Queued.* " + progress.pending + " steps, walked one at a time by the cron " +
+        "every 5 minutes.",
+      "  A pull is serialised on purpose, so each chunk waits for the last one to land rather than " +
+        "fighting it for the same tick.",
+      "  `plan status " + plan.vertical_slug + "` to see where it is. `stop plan " +
+        plan.vertical_slug + "` cancels whatever has not run.",
+    ].join("\n")
+  );
+
+  // Start immediately rather than waiting up to five minutes for the next tick. The walk is
+  // idempotent and claims its own step, so doing it here and in the cron cannot double-run one.
+  await advancePullPlans();
+}
+
+/**
+ * Walk every live plan by one step. Called by cron/scraper-tick, and once from the check mark.
+ *
+ * ‼️ ONE STEP PER CALL PER PLAN, NOT A DRAIN LOOP, AND THAT IS THE SERIALISATION. A loop here would
+ * start the second chunk while the first one was still in the same lambda, which is exactly what
+ * `activeMapsPull` exists to prevent. The cron's five minute interval IS the pacing.
+ */
+export async function advancePullPlans(): Promise<{ plans: number; stepped: number }> {
+  let plans: PlanRowDb[];
+  try {
+    plans = await walkablePlans();
+  } catch (e) {
+    // ‼️ A MISSING TABLE MUST NOT KILL THE TICK. The batch drain beside this in the cron is what
+    // keeps every in-flight pull moving, and failing the whole route because a feature's migration
+    // has not been run yet would stop the lane dead over something nobody is using.
+    console.error("[scraper] advancePullPlans:", (e as Error).message);
+    return { plans: 0, stepped: 0 };
+  }
+
+  let stepped = 0;
+  for (const plan of plans) {
+    try {
+      if (await advanceOnePlan(plan)) stepped += 1;
+    } catch (e) {
+      console.error("[scraper] plan", plan.id, "failed:", (e as Error).message);
+      await updatePlan(plan.id, {
+        status: "error",
+        error: (e as Error).message,
+        finished_at: new Date().toISOString(),
+      });
+      await slack.postMessage(
+        plan.slack_channel_id,
+        ":x: *The pull plan for `" + plan.vertical_slug + "` stopped*: " + (e as Error).message +
+          "\n  Whatever already landed is kept. `pull <n> " + plan.vertical_slug + "` starts a new one."
+      );
+    }
+  }
+  return { plans: plans.length, stepped };
+}
+
+async function advanceOnePlan(plan: PlanRowDb): Promise<boolean> {
+  await reconcileStuckSteps(plan);
+
+  const progress = await planProgress(plan.id);
+  if (progress.pending === 0 && progress.running === 0) {
+    await finishPlan(plan);
+    return false;
+  }
+
+  // ‼️ THE LANE-WIDE GATE, CHECKED HERE RATHER THAN INSIDE THE STEP. Two pulls in flight means two
+  // qualification sweeps, two crawls and two MillionVerifier uploads competing for one cron budget.
+  // A plan is a queue in FRONT of that gate, never a way around it.
+  //
+  // ‼️ AND THE GATE IS NOT NARROWED TO "ACTUALLY WORKING" BATCHES, WHICH WAS THE OBVIOUS REFINEMENT
+  // AND IS WRONG. A batch sitting at `verifying` is waiting on MillionVerifier's queue rather than
+  // competing for a cron tick, so letting the walk past it looks free. It is not: MillionVerifier
+  // is the real budget at 10,500 bulk credits, a chunk yields roughly 130 addresses, and a 34 chunk
+  // plan allowed to run ahead of its own verification would upload about 4,400 of them before
+  // anybody saw the first result come back. The queue is not the scarce thing, the credits are.
+  const blocker = (await activeMapsPull()) ?? (await activeCellProbe());
+  if (blocker) {
+    await notePlanBlocked(plan, "batch `" + blocker.id + "` at stage `" + blocker.status + "`");
+    return false;
+  }
+
+  const step = await claimNextStep(plan.id);
+  if (!step) return false;
+
+  if (plan.status === "approved") await updatePlan(plan.id, { status: "running" });
+  // Moving again. Cleared here rather than where the block is detected, so the column always
+  // describes the present rather than the last thing that went wrong.
+  if (plan.blocked_by) await updatePlan(plan.id, { blocked_by: null, blocked_since: null });
+
+  try {
+    await runPlanStep(plan, step);
+  } catch (e) {
+    await finishStep(step.id, { status: "error", note: (e as Error).message });
+    await slack.postMessage(
+      plan.slack_channel_id,
+      ":warning: Step " + step.seq + " (" + step.kind + ", " + step.metro_label + ") failed: " +
+        (e as Error).message + "\n  The plan carries on with the next step."
+    );
+  }
+  return true;
+}
+
+/**
+ * Say, once, that the walk is held up and by what.
+ *
+ * ‼️ ONCE PER BLOCKER, NOT ONCE PER TICK. The cron runs every five minutes and a MillionVerifier
+ * file can sit for a day: measured 2026-10-09, batch 8d166a8b was 27 hours into `verifying` with
+ * nothing returned. Posting on every tick would be 324 messages about one stuck file, and a channel
+ * that cries wolf is a channel whose next real alarm is scrolled past. Posting nothing is what this
+ * exists to fix. So the message fires when the blocker CHANGES, and `plan status` answers the rest.
+ *
+ * ‼️ AND IT IS NOT AN ERROR. The plan is healthy and correctly waiting its turn; `status` stays
+ * `approved` or `running` and `error` is left alone, because writing a failure here would make a
+ * queued plan look like a broken one and hide the real failures when they come.
+ */
+async function notePlanBlocked(plan: PlanRowDb, blocker: string): Promise<void> {
+  if (plan.blocked_by === blocker) return;
+
+  await updatePlan(plan.id, { blocked_by: blocker, blocked_since: new Date().toISOString() });
+
+  const progress = await planProgress(plan.id);
+  await slack.postMessage(
+    plan.slack_channel_id,
+    [
+      ":hourglass_flowing_sand: *The pull plan for `" + plan.vertical_slug + "` is waiting its turn.*",
+      "  " + blocker + " is still in the pipeline, and pulls run one at a time on purpose: " +
+        "MillionVerifier credits are the real budget, so a plan is not allowed to run ahead of its " +
+        "own verification and upload thousands of addresses before the first result comes back.",
+      "  " + progress.pending + " of " + progress.total + " steps are still to run. Nothing is lost " +
+        "and nothing extra is being spent. The walk starts again by itself the moment that batch lands.",
+      "  `status` for that batch, `plan status " + plan.vertical_slug + "` for this plan.",
+    ].join("\n")
+  );
+}
+
+/**
+ * A step that has been `running` too long did not finish, and the walk has to say so.
+ *
+ * Same doctrine as `sweepPullMaps` refusing to finish a half-run measurement step: whatever landed
+ * is stored and was not paid for twice, so the honest outcome is to name the step as failed rather
+ * than either re-driving it (spending on a tick nobody reacted to) or leaving it to read as success.
+ */
+async function reconcileStuckSteps(plan: PlanRowDb): Promise<void> {
+  const cutoff = new Date(Date.now() - PLAN_STEP_STUCK_MS).toISOString();
+  const { data, error } = await supabaseAdmin
+    .from("scraper_pull_plan_steps")
+    .update({
+      status: "error",
+      note:
+        "this step stopped part way through and was not finished. Anything it already bought is " +
+        "stored. Run the plan command again to pick up what is left.",
+      finished_at: new Date().toISOString(),
+    })
+    .eq("plan_id", plan.id)
+    .eq("status", "running")
+    .lt("started_at", cutoff)
+    .select("id");
+  if (error) return;
+  if (data?.length) {
+    console.error("[scraper] plan", plan.id, "reconciled", data.length, "stuck steps");
+  }
+}
+
+async function runPlanStep(plan: PlanRowDb, step: PlanStepRowDb): Promise<void> {
+  // ‼️ EXHAUSTIVE, WITH A `never`, for the fourth time in this file and the same reason as the other
+  // three: a kind that fell through would silently mark a step done without doing it, and the plan
+  // would report success over records nobody bought.
+  switch (step.kind) {
+    case "measure":
+      return measureMetroCircle(plan, step);
+    case "pull_budget":
+      return expandPlanBudget(plan, step);
+    case "pull":
+      return startPlanPull(plan, step);
+    default: {
+      const _never: never = step.kind;
+      throw new Error("unhandled plan step kind: " + String(_never));
+    }
+  }
+}
+
+/**
+ * Buy one metro circle's size. $0.0124: one task fee plus one record.
+ *
+ * ‼️ THIS IS THE SPEND THE DESIGN ARGUED FOR AND IT IS DELIBERATELY TINY AND LOUD. The alternative
+ * was allocating only to measured metros and reporting the rest of the budget as unspendable, which
+ * is honest but leaves the operator doing the measuring by hand. A penny to turn "nobody knows what
+ * Houston holds" into a number is the right trade, and the card said it would happen before it did.
+ */
+async function measureMetroCircle(plan: PlanRowDb, step: PlanStepRowDb): Promise<void> {
+  if (!dfsPlacesConfigured()) {
+    throw new Error("DataForSEO is not configured, so nothing could be measured");
+  }
+  const categories = DFS_CATEGORIES[plan.vertical_slug] ?? [];
+  if (!categories.length) {
+    throw new Error("no DataForSEO categories are mapped for `" + plan.vertical_slug + "`");
+  }
+
+  // ‼️ GEOCODE BEFORE SPENDING AND REFUSE RATHER THAN GUESS, the same rule pullFromDataForSeo
+  // states: the listings endpoint IGNORES a location name and answers globally, so a query with no
+  // coordinate does not fail, it counts med spas in Doncaster and Shenzhen.
+  //
+  // ‼️ UNLESS THIS CIRCLE HAS BEEN MEASURED BEFORE, IN WHICH CASE ITS OWN CENTRE IS REUSED. The
+  // centre of Houston does not move, and re-resolving the name could quietly return a different
+  // point: Nominatim's answer for a city is its own choice of centroid and it is free to change it.
+  // Two counts of "Houston" taken against two different circles would look like index drift and be
+  // a different question entirely.
+  const known = (await metroCircleRows(plan.vertical_slug)).find((c) => c.metroKey === step.metro_key);
+  const locationName = known?.locationName || locationNameOf(step.where_text);
+  const place = known ? { lat: known.lat, lon: known.lon } : await geocodeMetro(locationName);
+  if (!place) {
+    throw new Error(
+      "I could not find `" + step.where_text + "` on the map, so I will not guess a coordinate and " +
+        "measure the wrong city"
+    );
+  }
+
+  const radiusKm = known?.radiusKm || MAPS_RADIUS_KM_DEFAULT;
+  const found = await searchListings({
+    categories,
+    locationCoordinate: place.lat + "," + place.lon + "," + radiusKm,
+    // limit 1: total_count comes back on every response, so the count costs one record.
+    limit: 1,
+  });
+  if (!found.ok) {
+    // A failed task is not billed (measured 2026-09-28: five HTTP 500s cost $0.0000), so the circle
+    // is simply still unmeasured and the next plan offers to measure it again.
+    throw new Error(
+      "DataForSEO could not measure " + step.metro_label + ": " + (found.error ?? "no reason given")
+    );
+  }
+
+  await recordMetroCircle({
+    verticalSlug: plan.vertical_slug,
+    metroKey: step.metro_key,
+    metroLabel: step.metro_label,
+    locationName,
+    lat: place.lat,
+    lon: place.lon,
+    radiusKm,
+    categoriesKey: categoriesKey(categories),
+    totalCount: found.totalCount,
+    costUsd: found.costUsd,
+  });
+
+  await finishStep(step.id, {
+    status: "done",
+    costUsd: found.costUsd,
+    note: found.totalCount + " in the circle",
+  });
+  await addPlanSpend(plan.id, found.costUsd, 0);
+
+  await slack.postMessage(
+    plan.slack_channel_id,
+    ":straight_ruler: *" + step.metro_label + "* holds *" + found.totalCount.toLocaleString() +
+      "* businesses in a " + radiusKm + "km circle for `" + plan.vertical_slug + "`, measured for $" +
+      found.costUsd.toFixed(4) + ". Nobody had ever counted it."
+  );
+}
+
+/**
+ * Turn a reservation into real chunks, now that the circle has a number.
+ *
+ * ‼️ FREE, AND IT IS THE STEP THAT MAKES THE WHOLE PLAN HONEST. At plan time this metro's size was
+ * unknown, so the card said "up to N records once we know what is there" instead of inventing a
+ * chunk count. This is where the real one appears.
+ */
+async function expandPlanBudget(plan: PlanRowDb, step: PlanStepRowDb): Promise<void> {
+  const def = verticalDef(plan.vertical_slug);
+  const budget = step.budget_records ?? 0;
+  if (!def || budget <= 0) {
+    await finishStep(step.id, { status: "skipped", note: "no budget was reserved" });
+    return;
+  }
+
+  const [rows, circles] = await Promise.all([
+    metroRows(plan.vertical_slug),
+    metroCircles(plan.vertical_slug),
+  ]);
+  const row = metroPlan(rows, circles).find((p) => p.key === step.metro_key);
+  const total = row?.circleTotal ?? null;
+
+  if (total === null) {
+    await finishStep(step.id, {
+      status: "skipped",
+      note: "the circle for this metro still has no measurement, so no chunks could be worked out",
+    });
+    await slack.postMessage(
+      plan.slack_channel_id,
+      ":warning: *" + step.metro_label + " was never measured*, so the " + budget.toLocaleString() +
+        " records held for it could not be placed. Nothing was bought. The measurement step before " +
+        "this one must have failed."
+    );
+    return;
+  }
+
+  const chunks = expandBudget({
+    vertical: plan.vertical_slug,
+    query: def.searchQueries[0],
+    where: step.where_text,
+    metroKey: step.metro_key,
+    metroLabel: step.metro_label,
+    totalCount: total,
+    alreadyPulled: row?.pulled ?? 0,
+    budget,
+    startSeq: Number(step.seq),
+  });
+
+  const records = chunks.reduce((a, c) => a + (c.limit ?? 0), 0);
+  await insertSteps(plan.id, chunks);
+
+  // ‼️ THE LEFTOVER MOVES ON, AND WITHOUT THIS THE PLAN WOULD QUIETLY UNDER-DELIVER. A reservation
+  // takes the WHOLE remaining budget, because nobody knew how big this metro was. When the answer
+  // comes back smaller than the reservation (Houston holding 400 against 1,760 held), the other
+  // 1,360 records are authorised, unspent, and would simply evaporate: the operator asked for 2,000
+  // and would get 640 with nothing saying why.
+  //
+  // ‼️ RE-PLANNED RATHER THAN RE-RESERVED, so the same rules apply to the leftover as applied to the
+  // original ask: measured metros get chunks, an unmeasured one gets measured first, and a finished
+  // one is skipped. The metro just expanded is passed in as FULLY ALLOCATED, or the planner would
+  // hand it the leftover it has already been given.
+  const leftover = budget - records;
+  const leftoverSteps: typeof chunks = [];
+  if (leftover > 0) {
+    const spentMeasures = (await planSteps(plan.id)).filter((s) => s.kind === "measure").length;
+    const allowance = Math.max(0, PLAN_MEASURE_BUDGET - spentMeasures);
+    const next = planPull({
+      vertical: plan.vertical_slug,
+      requested: leftover,
+      def,
+      maxMeasures: Math.min(PLAN_MAX_MEASURES, allowance),
+      rows: metroPlan(rows, circles).map((p) =>
+        p.key === step.metro_key
+          ? { ...p, remaining: 0, pulled: (row?.pulled ?? 0) + records }
+          : p
+      ),
+    });
+    // Sorted after this reservation's own chunks, so the walk keeps its order.
+    leftoverSteps.push(
+      ...next.steps.map((st, i) => ({ ...st, seq: Number(step.seq) + (chunks.length + i + 1) / 1000 }))
+    );
+    if (leftoverSteps.length) await insertSteps(plan.id, leftoverSteps);
+  }
+
+  await finishStep(step.id, {
+    status: "done",
+    note:
+      chunks.length + " chunks, " + records + " records" +
+      (leftover > 0 ? "; " + leftover + " left over, " + leftoverSteps.length + " steps added" : ""),
+  });
+
+  await slack.postMessage(
+    plan.slack_channel_id,
+    [
+      chunks.length === 0
+        ? ":information_source: *" + step.metro_label + " has nothing left to pull* (" +
+          total.toLocaleString() + " in the circle, " + (row?.pulled ?? 0).toLocaleString() +
+          " already pulled)."
+        : ":heavy_plus_sign: *" + step.metro_label + "*: " + chunks.length +
+          (chunks.length === 1 ? " chunk" : " chunks") + ", " + records.toLocaleString() +
+          " records, about $" + chunks.reduce((a, c) => a + c.costUsd, 0).toFixed(2) + ".",
+      leftover > 0 && leftoverSteps.length > 0
+        ? "  " + leftover.toLocaleString() + " of the reserved records did not fit here, so they " +
+          "moved on to " + [...new Set(leftoverSteps.map((s) => s.metroLabel))].join(", ") + "."
+        : leftover > 0
+          ? "  :warning: " + leftover.toLocaleString() + " of the reserved records could not be " +
+            "placed anywhere else and will not be spent. Either the remaining metros are finished " +
+            "or the plan has used its " + PLAN_MEASURE_BUDGET + " measurements."
+          : "",
+    ].filter(Boolean).join("\n")
+  );
+}
+
+/**
+ * Run one chunk. THIS is the function in the plan path that spends money on records.
+ *
+ * ‼️ IT GOES THROUGH THE SAME DOOR A TYPED COMMAND DOES, including the same parser. The command text
+ * stored on the step is parsed by `parseMapsCommand` and written to `batch_label` verbatim, because
+ * that label is what `mapsPullHistory` re-reads to compute paging depth. A plan that wrote a label
+ * its own parser could not read back would give every chunk a depth of zero and re-buy the top of
+ * the list forever.
+ *
+ * ‼️ AND THERE IS NO SECOND CHECK MARK, WHICH IS THE WHOLE POINT OF THE PLAN CARD. The approval that
+ * authorised this was the one on the plan, and the spend is attributed to it BY NAME rather than
+ * claiming a Slack reaction that never happened on this chunk.
+ */
+async function startPlanPull(plan: PlanRowDb, step: PlanStepRowDb): Promise<void> {
+  const text = step.command_text ?? "";
+  const parsed = parseMapsCommand(text);
+  if (!parsed.ok) {
+    throw new Error("I built a chunk command I cannot read back (`" + text + "`): " + parsed.reason);
+  }
+  const command = parsed.command;
+
+  const icp = icpFor(command.vertical);
+  if (!icp) throw new Error("there is no buyer profile for `" + command.vertical + "` any more");
+
+  const batch = await createBatch({
+    channel: plan.slack_channel_id,
+    threadTs: plan.slack_thread_ts,
+    fileId: null,
+    fileName: null,
+    status: "awaiting_pull_approval",
+    batchLabel: text,
+  });
+  await updateBatch(batch.id, { workflow: "mapspull" });
+
+  const started = await startRun({
+    label: command.searchQuery,
+    source: command.source,
+    queries: [command.searchQuery],
+    icp,
+    vertical: command.vertical,
+    slackChannelId: batch.slack_channel_id,
+    slackThreadTs: batch.slack_thread_ts,
+  });
+  if (!started.ok) {
+    await fail(batch, started.error);
+    throw new Error(started.error);
+  }
+  await bindRunToBatch(started.runId, batch.id);
+  await updateBatch(batch.id, { list_run_id: started.runId });
+
+  const progress = await planProgress(plan.id);
+  await say(
+    batch,
+    ":arrow_forward: *Plan step " + (progress.done + 1) + " of " + progress.total + "*: " +
+      step.metro_label + ", " + (step.pull_limit ?? 0) + " records from result " +
+      ((step.pull_offset ?? 0) + 1) + ".\n  `" + text + "`"
+  );
+
+  // ‼️ THE STEP IS MARKED DONE BEFORE THE PULL RUNS, NOT AFTER, AND THE ORDER IS DELIBERATE. The
+  // same reasoning pullFromDataForSeo gives for raising its attempt counter before the fetch: a
+  // lambda killed mid-pull must not leave a step the walk will claim again and buy twice. Marked
+  // first, a death leaves a step recorded as run and a batch the ordinary cron will finish; marked
+  // after, it leaves a step that looks pending with records already bought against it.
+  await finishStep(step.id, { status: "done", batchId: batch.id, recordsPulled: step.pull_limit ?? 0 });
+
+  const fresh = (await getBatch(batch.id)) ?? batch;
+  // Released directly, with no card, because the plan card already carried the approval.
+  await releaseMapsPull(fresh, "pull_plan:" + plan.id);
+
+  const after = await getRun(started.runId);
+  await addPlanSpend(plan.id, Number(after?.cost_usd ?? 0), Number(after?.raw_count ?? 0));
+}
+
+/** The plan ran out of steps. Say what it did, and where those metros stand now. */
+async function finishPlan(plan: PlanRowDb): Promise<void> {
+  const steps = await planSteps(plan.id);
+  const fresh = (await getPlan(plan.id)) ?? plan;
+  const errored = steps.filter((s) => s.status === "error");
+  const skipped = steps.filter((s) => s.status === "skipped");
+
+  await updatePlan(plan.id, { status: "done", finished_at: new Date().toISOString() });
+
+  const [rows, circles] = await Promise.all([
+    metroRows(plan.vertical_slug),
+    metroCircles(plan.vertical_slug),
+  ]);
+  const after = metroPlan(rows, circles);
+  const touched = new Set(steps.map((s) => s.metro_key));
+
+  await slack.postMessage(
+    plan.slack_channel_id,
+    [
+      ":checkered_flag: *The pull plan for `" + plan.vertical_slug + "` is done.*",
+      "  Asked for " + plan.requested_records.toLocaleString() + " records, pulled " +
+        Number(fresh.records_pulled ?? 0).toLocaleString() + ", spent $" +
+        Number(fresh.spent_usd ?? 0).toFixed(2) + " against an estimate of $" +
+        Number(fresh.estimated_cost_usd ?? 0).toFixed(2) + ".",
+      errored.length ? "  :warning: " + errored.length + " steps failed and are named on the plan." : "",
+      skipped.length ? "  " + skipped.length + " steps were skipped." : "",
+      "",
+      "*Where those metros stand now*",
+      "```",
+      ...after
+        .filter((p) => touched.has(p.key))
+        .map(
+          (p) =>
+            p.label.padEnd(22) +
+            p.pulled.toLocaleString().padStart(7) + " pulled" +
+            (p.remaining === null ? "   not measured" : "   " + p.remaining.toLocaleString() + " left")
+        ),
+      "```",
+      "`pull <n> " + plan.vertical_slug + "` plans the next one.",
+    ].filter(Boolean).join("\n")
+  );
+}
+
+/** `plan status medspa`: where the walk has got to. Reads, spends nothing. */
+async function postPlanStatus(channel: string, vertical: string): Promise<void> {
+  const plan = await livePlan(vertical);
+  if (!plan) {
+    await slack.postMessage(
+      channel,
+      "There is no live plan for `" + vertical + "`. `pull <n> " + vertical + "` starts one."
+    );
+    return;
+  }
+  const steps = await planSteps(plan.id);
+  const done = steps.filter((s) => s.status === "done").length;
+
+  const mark = (s: PlanStepRowDb): string =>
+    s.status === "done" ? "done " :
+    s.status === "running" ? "RUN  " :
+    s.status === "error" ? "FAIL " :
+    s.status === "skipped" ? "skip " : "     ";
+
+  const what = (s: PlanStepRowDb): string =>
+    s.kind === "pull"
+      ? String(s.pull_limit ?? 0) + " from result " + String((s.pull_offset ?? 0) + 1)
+      : s.kind === "pull_budget"
+        ? "up to " + String(s.budget_records ?? 0) + " once measured"
+        : "count the circle";
+
+  await slack.postMessage(
+    channel,
+    [
+      "*Pull plan for `" + vertical + "`*, status `" + plan.status + "`" +
+        (plan.finished_at ? ", finished " + new Date(plan.finished_at).toLocaleString() : "") +
+        (plan.approved_at
+          ? ", approved " + new Date(plan.approved_at).toLocaleString() +
+            (plan.approved_by ? " by `" + plan.approved_by + "`" : "")
+          : ""),
+      "  " + done + " of " + steps.length + " steps done. Asked for " +
+        plan.requested_records.toLocaleString() + " records, " +
+        Number(plan.records_pulled ?? 0).toLocaleString() + " pulled, $" +
+        Number(plan.spent_usd ?? 0).toFixed(2) + " spent of about $" +
+        Number(plan.estimated_cost_usd ?? 0).toFixed(2) + " estimated.",
+      // ‼️ THE FIRST QUESTION A MOTIONLESS PLAN RAISES IS "why", AND IT IS ANSWERED HERE RATHER
+      // THAN LEFT TO SOMEBODY READING SCROLLBACK FOR THE ONE HOLD MESSAGE.
+      plan.blocked_by
+        ? "  :hourglass_flowing_sand: *Held up by " + plan.blocked_by + "*" +
+          (plan.blocked_since
+            ? ", since " + new Date(plan.blocked_since).toLocaleString()
+            : "") +
+          ". Pulls run one at a time; this starts again by itself when that batch lands."
+        : "",
+      "```",
+      ...steps.slice(0, 25).map(
+        (s) =>
+          mark(s) + s.kind.padEnd(12) + s.metro_label.padEnd(20) + what(s) +
+          (s.note && s.status !== "done" ? "   " + s.note : "")
+      ),
+      steps.length > 25 ? "  ... and " + (steps.length - 25) + " more" : "",
+      "```",
+      "`stop plan " + vertical + "` cancels whatever has not run.",
+    ].filter(Boolean).join("\n")
+  );
+}
+
+// ── the call list, reconciled ────────────────────────────────────────────────────────────────────
+//
+// ‼️ THE QUESTION IS "IS ANY PULLED BUSINESS MISSING FROM THE BOOK", AND IT IS A DIFFERENT QUESTION
+// FROM THE ONE recordCallList ANSWERS. That function runs at the end of a run and covers everything
+// from that moment on. What it cannot cover is a row whose ROUTE WAS DECIDED AFTER its run
+// finished: a lead parked as unjudged, re-qualified on a later tick and routed to `call`, is never
+// looked at again by anything. Measured 2026-10-09: 423 leads on the call route, 367 with a usable
+// phone, 6 of those in no CRM row at all.
+
+/**
+ * How many leads a reconciliation may add before it says so in the channel.
+ *
+ * ‼️ SILENT WHEN IT FINDS NOTHING, AND THAT IS THE WHOLE REASON IT CAN RUN ON A CRON. A sweep that
+ * posts "0 added" every five minutes is a sweep somebody turns off, and then the one tick that
+ * would have found six missing leads is the tick nobody reads.
+ */
+const SYNC_REPORT_THRESHOLD = 1;
+
+/**
+ * Reconcile every vertical's call list against the CRM and report what changed.
+ *
+ * `quiet` is what the cron passes: it posts only when something was actually added, so an idle
+ * lane says nothing. A typed command always answers, because somebody asked.
+ */
+async function postCallListSync(
+  channel: string,
+  verticals: readonly string[],
+  quiet = false
+): Promise<number> {
+  const lines: string[] = [];
+  let addedTotal = 0;
+  let missingPhones = 0;
+
+  for (const vertical of verticals) {
+    const res = await sweepCallListGap(vertical);
+    if (res.error) {
+      if (!quiet) lines.push("  *" + vertical + "*: :x: " + res.error);
+      continue;
+    }
+    addedTotal += res.added;
+    missingPhones += res.noPhone;
+    const source = crmSourceFor(vertical);
+    lines.push(
+      "  *" + vertical + "*: " + res.scanned.toLocaleString() + " on the call route, " +
+        res.added.toLocaleString() + " added" +
+        (res.alreadyKnown ? ", " + res.alreadyKnown.toLocaleString() + " already there" : "") +
+        (res.noPhone ? ", " + res.noPhone.toLocaleString() + " with no phone number" : "") +
+        (source ? "  _(`" + source + "`)_" : "")
+    );
+  }
+
+  if (quiet && addedTotal < SYNC_REPORT_THRESHOLD) return addedTotal;
+
+  await slack.postMessage(
+    channel,
+    [
+      addedTotal > 0
+        ? ":inbox_tray: *" + addedTotal.toLocaleString() + " leads were missing from the CRM and " +
+          "have been added.*"
+        : ":white_check_mark: *The call list and the CRM agree.* Nothing was missing.",
+      ...lines,
+      "",
+      // ‼️ THE NO-PHONE ROWS ARE NAMED RATHER THAN QUIETLY INCLUDED OR QUIETLY DROPPED. They ARE
+      // written now, because "no lead sitting around" was the ask, and their reason line says so in
+      // capitals so the person dialling knows before they pick up the phone rather than after.
+      missingPhones > 0
+        ? "_" + missingPhones.toLocaleString() + " of these have no phone number on the row. They " +
+          "are still written, and their reason starts \"NO PHONE on the row, look it up\" so the " +
+          "board says why there is nothing to dial._"
+        : "",
+      "_Deduped on both the Google place id and the last ten digits of the phone, so running this " +
+        "again adds nothing._",
+    ].filter(Boolean).join("\n")
+  );
+  return addedTotal;
+}
+
+/**
+ * The cron's version: reconcile when the lane is quiet, say nothing unless something was missing.
+ *
+ * ‼️ ONLY WHEN NOTHING IS IN FLIGHT, AND THE REASON IS CORRECTNESS RATHER THAN LOAD. A sweep run
+ * mid-pipeline would read rows the qualification sweep has not finished routing and insert a lead
+ * whose route is about to change, which is the one way this can write a row it should not have.
+ * Waiting for the lane to be idle costs nothing: idle is most ticks.
+ */
+export async function reconcileCallLists(): Promise<number> {
+  const channel = scraperChannel();
+  if (!channel) return 0;
+  try {
+    return await postCallListSync(channel, knownVerticals(), true);
+  } catch (e) {
+    console.error("[scraper] reconcileCallLists:", (e as Error).message);
+    return 0;
+  }
+}
+
+/** `stop plan medspa`. A running step finishes; nothing after it starts. */
+async function postPlanStopped(channel: string, vertical: string): Promise<void> {
+  const { plan, stepsLeft } = await cancelPlan(vertical);
+  if (!plan) {
+    await slack.postMessage(channel, "There is no live plan for `" + vertical + "` to stop.");
+    return;
+  }
+  await slack.postMessage(
+    channel,
+    ":octagonal_sign: *Stopped the pull plan for `" + vertical + "`.* " + stepsLeft +
+      " steps were cancelled before they ran. Anything already pulled is kept and is in the pipeline.\n" +
+      "  A step that was already running finishes, because its records are bought.\n" +
+      "  $" + Number(plan.spent_usd ?? 0).toFixed(2) + " spent, " +
+      Number(plan.records_pulled ?? 0).toLocaleString() + " records pulled."
+  );
+}
+
 /**
  * How much of the country is measured and paged, by state.
  *
@@ -1864,7 +2827,14 @@ async function postPullEstimate(batch: BatchRow, command?: MapsCommand): Promise
         // four fees, and a spend card that under-quotes is worse than one that does not quote at all.
         (parsed.source === "dataforseo"
           ? "  (about $" +
-            (Math.ceil(parsed.limit / MAPS_PAGE_MAX) * 0.012 + parsed.limit * 0.00036).toFixed(3) +
+            // ‼️ THE PRICE COMES FROM SENDING, NOT FROM A LITERAL HERE, AND THE TWO HAD ALREADY
+            // DRIFTED. This line read `0.00036` while SENDING.dfsPerThousand says 0.37 per thousand,
+            // which is 0.00037, and the comment directly above it says "$0.37 per thousand" too. A
+            // tenth of a cent per thousand records is nothing; two copies of one price quietly
+            // disagreeing on the card that authorises the spend is not, and the plan card prices the
+            // same chunks from the same constant.
+            (Math.ceil(parsed.limit / MAPS_PAGE_MAX) * SENDING.dfsPerTask +
+              (parsed.limit * SENDING.dfsPerThousand) / 1000).toFixed(3) +
             " for this pull" +
             (parsed.limit > MAPS_PAGE_MAX ? ", in " + Math.ceil(parsed.limit / MAPS_PAGE_MAX) + " pages" : "") +
             ")"
@@ -1897,7 +2867,19 @@ async function postPullEstimate(batch: BatchRow, command?: MapsCommand): Promise
  * replay lands on the same row. pull_request_id is stored so a pull that never comes back can be
  * named in its failure message rather than guessed at.
  */
-async function releaseMapsPull(batch: BatchRow): Promise<void> {
+async function releaseMapsPull(
+  batch: BatchRow,
+  /**
+   * What goes in the spend ledger as `spend_approved_by`.
+   *
+   * ‼️ A PARAMETER RATHER THAN A LITERAL, BECAUSE THE PLAN PATH RELEASES WITHOUT A REACTION ON THIS
+   * CARD. The approval was real and a human gave it; it was given on the plan card, which authorised
+   * this chunk and twenty others. Hardcoding "slack_reaction" here would put a human release in the
+   * ledger for a chunk no human looked at, which is exactly the kind of quietly-wrong attribution
+   * that made a DataForSEO pull record itself as an Outscraper one.
+   */
+  approvedBy = "slack_reaction"
+): Promise<void> {
   const runId = batch.list_run_id;
   if (!runId) return fail(batch, "this pull has no run to attach results to");
   const run = await getRun(runId);
@@ -1916,7 +2898,7 @@ async function releaseMapsPull(batch: BatchRow): Promise<void> {
   // to a webhook the other never registered.
   switch (command.source) {
     case "dataforseo":
-      return pullFromDataForSeo(batch, runId, command);
+      return pullFromDataForSeo(batch, runId, command, approvedBy);
     case "outscraper":
       break;
     default: {
@@ -1953,7 +2935,7 @@ async function releaseMapsPull(batch: BatchRow): Promise<void> {
   }
 
   const now = new Date().toISOString();
-  await updateRun(runId, { spend_approved_at: now, spend_approved_by: "slack_reaction" });
+  await updateRun(runId, { spend_approved_at: now, spend_approved_by: approvedBy });
 
   const res = await submitMapsSearch([command.searchQuery], { limit: command.limit, webhook });
   if (!res.ok || !res.requestId) {
@@ -2056,7 +3038,13 @@ async function parkOrRefusePull(
   );
 }
 
-async function pullFromDataForSeo(batch: BatchRow, runId: string, command: MapsCommand): Promise<void> {
+async function pullFromDataForSeo(
+  batch: BatchRow,
+  runId: string,
+  command: MapsCommand,
+  /** See releaseMapsPull: the plan path releases a chunk with no reaction on that chunk's card. */
+  approvedBy = "slack_reaction"
+): Promise<void> {
   if (!dfsPlacesConfigured()) {
     await updateRun(runId, { error: "DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD are not set" });
     await say(
@@ -2108,7 +3096,7 @@ async function pullFromDataForSeo(batch: BatchRow, runId: string, command: MapsC
   const approval: Record<string, unknown> = { pull_attempts: attempt, error: null };
   if (!before?.spend_approved_at) {
     approval.spend_approved_at = now;
-    approval.spend_approved_by = "slack_reaction";
+    approval.spend_approved_by = approvedBy;
   }
   if (!before?.started_at) approval.started_at = now;
   await updateRun(runId, approval);
@@ -3968,6 +4956,31 @@ export async function handleScraperReaction(input: {
   const keycap = KEYCAPS[input.reaction];
   const isCheck = input.reaction === "white_check_mark";
   if (!keycap && !isCheck) return false;
+
+  // ‼️ THE PLAN CARD IS RESOLVED BEFORE THE BATCH GATES, AND IT IS NOT ONE OF THEM. A plan is not a
+  // batch: it outlives the batches it spawns and its approval ts lives on its own table, so
+  // `batchByGateTs` cannot see it. Checked first because it is one indexed lookup against six.
+  if (isCheck) {
+    let plan: PlanRowDb | null = null;
+    try {
+      plan = await planByApprovalTs(input.channel, input.slackTs);
+    } catch (e) {
+      // A missing table means the migration has not been run. Fall through to the batch gates
+      // rather than swallowing every reaction in the channel.
+      console.error("[scraper] planByApprovalTs:", (e as Error).message);
+    }
+    if (plan) {
+      // Guarded on the STATUS, the same way the pull gate is: a second check mark on a plan card
+      // whose walk has already started must not re-queue it.
+      if (plan.status !== "awaiting_approval") return true;
+      waitUntil(
+        releasePullPlan(plan).catch((e) =>
+          slack.postMessage(plan!.slack_channel_id, ":x: the plan could not be queued: " + (e as Error).message)
+        )
+      );
+      return true;
+    }
+  }
 
   const found = await batchByGateTs(input.channel, input.slackTs);
   if (!found) return false;

@@ -144,6 +144,16 @@ jobs:
       - name: National coverage cells (the geometry, and that nowhere is uncovered)
         run: bun --no-env-file run scripts/_probe-cells.ts
 
+      # ‼️ THE ONE THAT DECIDES HOW MUCH MONEY A SINGLE CHECK MARK SPENDS. `pull 2000 medspa`
+      # authorises a LIST of purchases, so an arithmetic mistake here is not a wrong number on a
+      # card, it is records bought in the wrong city. The load-bearing assertion is the negative
+      # one: a metro whose circle has never been measured must get NO chunks, because 15 of the 16
+      # planned metros were in that state on 2026-10-09 and guessing that Houston holds what Dallas
+      # holds is how a plan buys 300 records in a city that has 40. The probe builds that exact
+      # wrong planner and asserts the real one disagrees with it. Offline, no key, no spend.
+      - name: Pull planner (a budget never lands on an unmeasured circle)
+        run: bun --no-env-file run scripts/_probe-pull-plan.ts
+
       # ‼️ THE ONE THAT DECIDES WHOSE NAME GOES IN A GREETING. A wrong owner is not a missing lead:
       # it is permuted into six addresses, verified, and mailed to a real stranger addressed as
       # somebody else. The load-bearing rail is the eight-character containment floor, without which
