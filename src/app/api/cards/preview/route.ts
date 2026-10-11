@@ -33,7 +33,7 @@ import {
   copyFor,
 } from "@/config/card-preview";
 import { designByKey } from "@/config/card-designs";
-import { leadFromCardToken } from "@/lib/cards/preview-link";
+import { cardPdfUrl, leadFromCardToken } from "@/lib/cards/preview-link";
 import { sendPreviewEmail } from "@/lib/cards/preview-email";
 import { renderCardForLead } from "@/lib/cards/render-card";
 
@@ -129,8 +129,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     detailLines: [
       // First, because it is the line that decides whether anybody owes them anything.
       card
-        ? "Card: generated and attached to their confirmation email, and downloadable on the page."
-        : "⚠️ THE CARD DID NOT RENDER, so the email went without it and they are owed one by hand.",
+        ? `Card: rendered, and the link is in their confirmation email. ${cardPdfUrl(fromLead ? rawToken : null)}`
+        : "⚠️ THE CARD DID NOT RENDER, so the email went without a link and they are owed one by hand.",
       customDesign
         ? `${PREVIEW_CUSTOM.flag} They did not like either card and were told a few options are coming within 2 hours.`
         : "",
@@ -140,13 +140,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       // correctly; what it cannot know is the clinic's real deal, because the preview is written
       // before they answer. The sample figure goes out, and the call is where it gets replaced.
       copy.carriesOffer
-        ? `Card wording: "${copy.promise}" over "${copy.scanLine}". The figure is OUR sample, ` +
-          "so the printed run needs their own number in place of it."
+        ? `Card wording: "${copy.promise}" over "${copy.scanLine}". ‼️ THE FIGURE IS OUR SAMPLE. ` +
+          "They have been told the card still needs customising and NOT to print a batch yet; " +
+          "swapping their real offer in is what the 10 minute call is for."
         : "Standard card wording, the same as the printed one.",
       topProduct ? `Best seller: ${topProduct}` : "Best seller: not answered",
       referralOffer
-        ? `Offer for a referred friend: ${referralOffer}`
-        : "Offer for a referred friend: not answered",
+        ? `Offer for a referred patient: ${referralOffer}`
+        : "Offer for a referred patient: not answered",
       // Said plainly, because it is what the next fifteen minutes are for and it is easy to
       // forget that these two answers are already a service offer in all but the row.
       "Those two are the setup call's homework: they become the service label and the friend's " +
@@ -176,19 +177,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // Awaited because this route is the only thing that knows the send failed, and a failure is
   // worth a line in the lead's own thread: the clinic was told on screen that an email is coming,
   // so silence from us is a promise broken in a place nobody is watching. It cannot throw.
-  const mail = await sendPreviewEmail(
-    email,
-    {
-      firstName,
-      businessName: business || null,
-      copy,
-      topProduct,
-      referralOffer,
-      wantsCustom: customDesign,
-      hasCard: Boolean(card),
-    },
-    card
-  );
+  const mail = await sendPreviewEmail(email, {
+    firstName,
+    businessName: business || null,
+    copy,
+    topProduct,
+    referralOffer,
+    wantsCustom: customDesign,
+    // ‼️ THE LINK ONLY WHEN THE CARD ACTUALLY RENDERS. The route regenerates on request, so this
+    // URL is useless if rendering is broken, and an email pointing at a 500 is worse than one
+    // saying the card is coming.
+    cardUrl: card ? cardPdfUrl(fromLead ? rawToken : null) : null,
+  });
   // ‼️ THE CHANNEL COMES FROM THE ENV AND NOT FROM result. IngestLeadResult carries a contact id
   // and a thread ts and nothing else; reaching for a channel on it typechecked as `any` in an
   // earlier draft only because the object was indexed loosely. This is the same fallback

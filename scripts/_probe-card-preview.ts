@@ -28,7 +28,6 @@ import {
   PREVIEW_CUSTOM,
   PREVIEW_DAY,
   PREVIEW_DAYPART,
-  PREVIEW_DOWNLOAD,
   PREVIEW_IDS,
   PREVIEW_INSIDE,
   PREVIEW_OFFER_SAMPLE,
@@ -376,10 +375,21 @@ check(
   "and the Slack card only shouts when a card is genuinely owed",
   "a warning that fires on every lead is wallpaper"
 );
+// ‼️ THE DOWNLOAD BUTTON IS GONE AND THE CARD IS EMAILED AS A LINK (2026-10-11). The card
+// the generator makes carries OUR sample figure, so a download handed a clinic a finished
+// looking card advertising a discount they never agreed to. What replaced it has to SAY that.
 check(
-  /download/i.test(PREVIEW_DOWNLOAD.cta) && /download/i.test(PREVIEW_INSIDE.cta),
-  "both calls to action name the download",
-  `${PREVIEW_INSIDE.cta} / ${PREVIEW_DOWNLOAD.cta}`
+  !/cp-download/.test(clientSrc) && !clientSrc.includes("download"),
+  "the page offers no download button"
+);
+check(
+  /still needs customising/i.test(PREVIEW_CLOSE.ready) && /email you the link/i.test(PREVIEW_CLOSE.ready),
+  "and the closing bubble says the card is unfinished and the link is coming",
+  PREVIEW_CLOSE.ready
+);
+check(
+  /cardUrl/.test(routeSrc) && !/attachments/.test(routeSrc),
+  "the email carries a link rather than an attachment"
 );
 // ‼️ THE PRINTED CODE IS THE CLINIC'S OWN WHENEVER THERE IS A LEAD. A thousand cards carrying
 // our shared demo would be a thousand patients landing on "Clinic 123".

@@ -179,6 +179,19 @@ export const PREVIEW_SCAN = {
    * is not a different conversation, and a bubble acknowledging the skip would be the funnel
    * talking about itself.
    */
+  /**
+   * The same door as PREVIEW_INSIDE.custom, one screen earlier.
+   *
+   * ‼️ ON SCREEN ONE TOO, BECAUSE A CLINIC THAT DISLIKES THE CARD KNOWS IT ON SIGHT. It was only
+   * offered after the walkthrough, which meant somebody who took one look at the card had to sit
+   * through a demo of the thing behind it before they could say so. Matthew, 2026-10-11.
+   *
+   * ‼️ AND IT SAYS "(free)", WHICH IS THE ONLY PRICE WORD ANYWHERE IN THIS FUNNEL AND IS NOT A
+   * PRICE. The page quotes no figure and names no plan; "free" here answers the question a clinic
+   * actually has when it reads "custom design", which is whether asking for one costs them
+   * anything. The probe's no-price rule looks for a currency figure, which this is not.
+   */
+  customFree: guard("preview scan custom", "Request custom design (free)"),
   skipToChat: guard("preview scan skip", "Skip the preview"),
 } as const;
 
@@ -213,7 +226,7 @@ export const PREVIEW_INSIDE = {
    * lost lead, it is a lead with an opinion, and the old link sent them to another tab instead of
    * into the conversation.
    */
-  custom: guard("preview inside custom", "Not quite right? Custom design"),
+  custom: guard("preview inside custom", "Don't like it? Request custom design"),
   foot: guard("preview inside foot", "Free. About two minutes."),
 } as const;
 
@@ -314,13 +327,17 @@ export const PREVIEW_SCRIPT: readonly PreviewStep[] = [
     kind: "ask",
     id: "p_offer",
     key: "referralOffer",
-    // ‼️ IT ASKS WHAT THE FRIEND GETS, NOT WHAT THE PATIENT GETS, and the two are different
-    // things on purpose. The referral deal goes to the person being referred, before they have
-    // written a word, conditional on nothing. That is what keeps this a referral programme rather
-    // than a paid review, and the whole lane is built on the distinction.
+    // ‼️ IT ASKS WHAT THE REFERRED PERSON GETS, NOT WHAT THE REFERRER GETS, and the two are
+    // different things on purpose. The referral deal goes to the person being referred, before
+    // they have written a word, conditional on nothing. That is what keeps this a referral
+    // programme rather than a paid review, and the whole lane is built on the distinction.
+    // ‼️ "PATIENT", NOT "FRIEND", AND THE AUDIENCE IS WHY. This question is put to the CLINIC
+    // OWNER, who thinks in patients; "friend" is the word the PATIENT uses about the person she
+    // is referring, and it stays that way on her side of the product (q_friend, and the invite
+    // step). Same deal, named from each side by the word that side uses. Matthew, 2026-10-11.
     prompt: guard(
       "preview q offer",
-      "And what do you want a referred friend to get on their first visit?"
+      "And what do you want a referred patient to get on their first visit?"
     ),
     placeholder: guard("preview q offer hint", "20% off, a free consult, not decided yet..."),
     validate: "free",
@@ -343,18 +360,34 @@ export const PREVIEW_SCRIPT: readonly PreviewStep[] = [
  * instant email would be the one lie this page could tell that somebody sits and waits for.
  */
 export const PREVIEW_CLOSE = {
-  /**
-   * ‼️ IT NO LONGER PROMISES ANYTHING, BECAUSE THE CARD ARRIVES A BEAT LATER. This said "we will
-   * send the email with your free PDF card shortly" for as long as nothing generated one. It does
-   * now: PREVIEW_DOWNLOAD.ready follows this bubble with a button that produces the real card, and
-   * the confirmation email carries the same bytes. Leaving "shortly" in would be the funnel
-   * promising later what it is about to hand over.
-   */
   sent: guard("preview close sent", "Perfect, that is everything we needed."),
-  /** The pivot into the booking, as its own bubble so it reads as a second thought. */
+  /**
+   * ‼️ IT NO LONGER SAYS "download it now", AND REMOVING THAT FIXED AN HONESTY PROBLEM RATHER
+   * THAN LOSING A FEATURE. The card the generator produces carries PREVIEW_OFFER_SAMPLE, which is
+   * OUR figure, not theirs: they answer what a referred patient actually gets two questions
+   * earlier, and nothing substitutes it yet. So a download button handed a clinic a finished
+   * looking card advertising a discount they never agreed to. Matthew, 2026-10-11: say it still
+   * needs customising and email the link instead.
+   *
+   * ‼️ A LINK AND NOT AN ATTACHMENT, which is the other half of his instruction and is the
+   * better shape anyway: the route regenerates on every request, so the same URL serves the
+   * customised card the moment it exists, where an attachment freezes today's version in their
+   * inbox forever.
+   */
+  ready: guard(
+    "preview close ready",
+    "Your card is ready. It still needs customising for your clinic, so we will email you the link as soon as that is done."
+  ),
+  /**
+   * The pivot into the booking, as its own bubble so it reads as a second thought.
+   *
+   * ‼️ TEN MINUTES AND "GATHER THE FINAL DETAILS", WHICH IS WHAT THE CALL ACTUALLY IS NOW. It
+   * asked for fifteen and described setting up emails and texts; the bubble above has just told
+   * them the card needs customising, so the call has an obvious purpose and the ask can name it.
+   */
   ask: guard(
     "preview close ask",
-    "One more thing. When do you have 15 minutes to share your offer with us, and set up the internal streams for the new patients (emails, text messages, etc)?"
+    "What works better for us to sit down together for 10 minutes and gather the final details?"
   ),
 } as const;
 
@@ -419,29 +452,6 @@ export const PREVIEW_SLOTS = {
   ),
   booking: guard("preview slots booking", "Good. Confirm it here and you are done."),
   booked: guard("preview slots booked", "You are booked. We will see you then."),
-} as const;
-
-/**
- * The download, once the questions are answered.
- *
- * ‼️ THE CARD IS REAL AND IT ARRIVES ON THE SPOT. Until now this funnel's whole promise was a
- * PDF "shortly", made by a person, and a clinic had nothing in their hand at the end of it.
- * /api/cards/pdf/<token> renders their name onto the same card the delivery board prints, with a
- * code that opens their own page, so the thing they were shown is the thing they get.
- */
-export const PREVIEW_DOWNLOAD = {
-  /** The button, under the closing line. */
-  cta: guard("preview download cta", "Download my card"),
-  /** Said once, as its own bubble, before the booking ask. */
-  ready: guard(
-    "preview download ready",
-    "Your card is ready. Download it now, and we will email you a copy too."
-  ),
-  /** Under the button, in the smallest type: what they are actually getting. */
-  foot: guard(
-    "preview download foot",
-    "Print double sided on card stock. The code opens your own page."
-  ),
 } as const;
 
 /** The step ids, for the probe. A walk whose ids drift is a walk whose analytics drift. */

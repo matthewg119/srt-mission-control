@@ -5,14 +5,15 @@
 // has been given a reason to assume the thing is not real. The #hot-leads card has shouted
 // "OWES THEM THE PDF" since the lane shipped, but that is a note to Matthew, not an answer to them.
 //
-// ‼️ IT CARRIES THE CARD SINCE 2026-10-09, AND THE COPY MOVED WITH IT. It used to promise a PDF
-// "shortly", made by a person, because renderReviewCard could only produce the neutral wording and
-// the preview shows the offer one. That renderer takes a copy set now, so the real card, with
-// their name and a code that opens their own page, is attached to this message. The sentence that
-// said a person was making it is gone: it would be the one line in here that is no longer true.
+// ‼️ A LINK, NOT AN ATTACHMENT, SINCE 2026-10-11. The card was attached for two days. Matthew:
+// "we should just email the link". It is also the better shape: /api/cards/pdf/<token>
+// regenerates on every request, so one URL serves the CUSTOMISED card the moment it exists, where
+// an attachment freezes today's sample-figure version in their inbox and is the one they print.
 //
-// ‼️ THE ATTACHMENT IS OPTIONAL AND ITS ABSENCE IS NOT FATAL. A render failure must not cost the
-// clinic the whole email, so the caller passes what it has and the copy below branches once.
+// ‼️ AND THE COPY SAYS THE CARD IS NOT FINISHED, BECAUSE IT IS NOT. What the generator produces
+// carries PREVIEW_OFFER_SAMPLE, which is OUR figure: the clinic told us their real one two
+// questions earlier and nothing substitutes it yet. Calling this a finished card would be
+// advertising a discount they never agreed to, on their own card stock.
 //
 // ‼️ SRT IS THE SENDER AND THERE IS NO PER-CLIENT FROM. Same position referral-emails.ts takes:
 // /users/{mailbox}/sendMail only works for mailboxes in our own tenant, so a "from the clinic"
@@ -44,12 +45,16 @@ export interface PreviewEmailFacts {
   copy: CardCopySet;
   /** Their best seller, as typed. */
   topProduct: string;
-  /** What they said a referred friend gets. May be "Not decided yet". */
+  /** What they said a referred patient gets. May be "Not decided yet". */
   referralOffer: string;
   /** They pressed the grey button, so a few design options are owed within two hours. */
   wantsCustom: boolean;
-  /** True when the printable card is attached. False degrades the copy, never the send. */
-  hasCard: boolean;
+  /**
+   * Where their card lives, absolute, or null when there is no lead to address one to.
+   *
+   * Null degrades the copy to "it is coming", never the send.
+   */
+  cardUrl: string | null;
 }
 
 /**
@@ -71,7 +76,7 @@ export function previewEmailHtml(facts: PreviewEmailFacts): string {
   const rows: string[] = [
     ["What the card says", `${facts.copy.promise} / ${facts.copy.scanLine}`],
     ["Your best seller", facts.topProduct || "not answered"],
-    ["A referred friend gets", facts.referralOffer || "not answered"],
+    ["A referred patient gets", facts.referralOffer || "not answered"],
   ].map(
     ([k, v]) =>
       `<tr>` +
@@ -84,11 +89,13 @@ export function previewEmailHtml(facts: PreviewEmailFacts): string {
     `<div style="font:16px/1.6 ${FONT};color:#14181f">` +
     p(`Hi ${name},`) +
     p(
-      facts.hasCard
-        ? "Thanks for taking a look. Your QR referral card is attached, print ready. Print it " +
-          "double sided on card stock and start handing it out."
-        : "Thanks for taking a look. Your QR referral card is being put together and it will be " +
-          "in your inbox as a print ready PDF shortly."
+      facts.cardUrl
+        ? "Thanks for taking a look. Here is your QR referral card so far: " +
+          `<a href="${escapeHtml(facts.cardUrl)}" style="color:#0f7a65">open your card</a>. ` +
+          "It still needs customising for your clinic, so hold off printing a batch until we have " +
+          "talked. The link always gives you the latest version."
+        : "Thanks for taking a look. Your QR referral card is being put together and we will " +
+          "email you the link as soon as it is ready."
     ) +
     p("Here is what we have against your clinic:") +
     `<table style="border-collapse:collapse;margin:0 0 16px;font:15px/1.5 ${FONT}">${rows.join("")}</table>` +
@@ -102,13 +109,14 @@ export function previewEmailHtml(facts: PreviewEmailFacts): string {
       "Hand the card to every patient. They scan it at home, on their own phone, and answer a few " +
         "questions in their own words. Nothing is posted anywhere unless they post it."
     ) +
-    // ‼️ SAID PLAINLY, BECAUSE A PRINTED CODE CANNOT BE CHANGED. The code on this card opens a
-    // page on OUR host carrying their name. Once their own domain is pointed at us it moves to
-    // reviews.{theirdomain} and that batch needs reprinting. A clinic that printed a thousand
-    // without being told would have a right to be annoyed.
+    // ‼️ SAID PLAINLY, BECAUSE A PRINTED CODE AND A PRINTED FIGURE CANNOT BE CHANGED. The offer
+    // on the card is OUR sample, and the code opens a page on OUR address. Both move on the call:
+    // the figure becomes theirs and the code becomes reviews.{theirdomain}. A clinic that printed
+    // a thousand without being told either of those would have a right to be annoyed.
     p(
-      "The code on this card opens your page on our address. On the setup call we point it at " +
-        "your own domain, and that is the version to print in bulk."
+      "Two things change on that call. The offer printed on the card is our example rather than " +
+        "yours, and the code points at your page on our address rather than your own domain. " +
+        "That is the version to print in bulk."
     ) +
     // ‼️ THE CALL IS DESCRIBED, NOT CLAIMED. Whether they actually booked is Calendly's to know,
     // and this email is sent the moment the questions are answered, which is before the calendar
@@ -131,8 +139,7 @@ export function previewEmailHtml(facts: PreviewEmailFacts): string {
  */
 export async function sendPreviewEmail(
   to: string,
-  facts: PreviewEmailFacts,
-  card?: { filename: string; bytes: Buffer } | null
+  facts: PreviewEmailFacts
 ): Promise<{ sent: boolean; error?: string }> {
   if (!to) return { sent: false, error: "no address" };
   try {
@@ -142,15 +149,6 @@ export async function sendPreviewEmail(
       body: previewEmailHtml(facts),
       isHtml: true,
       fromMailbox: connectedMailbox(),
-      attachments: card
-        ? [
-            {
-              name: card.filename,
-              contentType: "application/pdf",
-              contentBytes: card.bytes.toString("base64"),
-            },
-          ]
-        : undefined,
     });
     return { sent: true };
   } catch (e) {

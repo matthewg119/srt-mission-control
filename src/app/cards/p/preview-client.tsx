@@ -27,7 +27,6 @@ import {
   PREVIEW_CLOSE,
   PREVIEW_CUSTOM,
   PREVIEW_DAY,
-  PREVIEW_DOWNLOAD,
   PREVIEW_DAYPART,
   PREVIEW_INSIDE,
   PREVIEW_SCAN,
@@ -89,8 +88,6 @@ export interface PreviewClientProps {
   initialDesign: string;
   /** The link's own token, handed back on submit so the answers find the right thread. */
   token: string | null;
-  /** Where the printable card comes from. Relative, so it stays on the visitor's host. */
-  pdfPath: string;
 }
 
 export function PreviewClient(props: PreviewClientProps) {
@@ -119,9 +116,6 @@ export function PreviewClient(props: PreviewClientProps) {
   const [slots, setSlots] = useState<Slot[] | null>(null);
   const [bookingUrl, setBookingUrl] = useState<string | null>(null);
   const [booked, setBooked] = useState(false);
-  // ‼️ ONCE TRUE IT STAYS TRUE, so the download survives every beat that follows it. A button
-  // that vanishes when the next question lands is a card they meant to save and did not.
-  const [ready, setReady] = useState(false);
 
   // Refs, not state: the Calendly listener reads them from a closure set up once, so it has to
   // see the latest value rather than the one that existed when it subscribed. The same shape
@@ -328,8 +322,7 @@ export function PreviewClient(props: PreviewClientProps) {
           setTyping(false);
           // ‼️ THE CARD BEFORE THE CALENDAR. They came for the card; asking for fifteen minutes
           // while the thing they asked for is still notional is the funnel taking before it gives.
-          push("them", PREVIEW_DOWNLOAD.ready);
-          setReady(true);
+          push("them", PREVIEW_CLOSE.ready);
           setTyping(true);
           later(() => {
             setTyping(false);
@@ -498,9 +491,25 @@ export function PreviewClient(props: PreviewClientProps) {
             previews 2 squares". There is one card now, so a picker under it was a question with
             one answer, and it turned a demonstration into a form. */}
         <p className="cp-note">{PREVIEW_SCAN.qrNote}</p>
-        <button type="button" className="cp-mini cp-skip" onClick={() => setScreen("chat")}>
-          {PREVIEW_SCAN.skipToChat}
-        </button>
+        {/* ‼️ TWO DOORS, AND THE ORDER IS THE POINT. The custom-design one is above the skip
+            because disliking the card is the more common reason to leave this screen early, and
+            because the two mean different things: this one sets wantsCustom and promises options
+            in two hours, the skip below claims nothing at all. */}
+        <div className="cp-minis">
+          <button
+            type="button"
+            className="cp-mini"
+            onClick={() => {
+              setWantsCustom(true);
+              setScreen("chat");
+            }}
+          >
+            {PREVIEW_SCAN.customFree}
+          </button>
+          <button type="button" className="cp-mini cp-skip" onClick={() => setScreen("chat")}>
+            {PREVIEW_SCAN.skipToChat}
+          </button>
+        </div>
 
         <button type="button" className="cd-primary cp-cta" onClick={() => setScreen("inside")}>
           {PREVIEW_SCAN.cta}
@@ -618,22 +627,6 @@ export function PreviewClient(props: PreviewClientProps) {
           >
             Try that again
           </button>
-        </div>
-      )}
-
-      {/*
-        ‼️ AN ANCHOR WITH `download`, NOT A fetch AND A BLOB. The route sets
-        `content-disposition: attachment`, so the browser saves the file and the page never has to
-        hold the bytes, show a spinner or revoke an object URL. It also means a long press on a
-        phone offers Share, which is how a clinic owner actually gets this to whoever prints for
-        them.
-      */}
-      {ready && (
-        <div className="cd-composer cp-download">
-          <a className="cd-primary" href={props.pdfPath} download>
-            {PREVIEW_DOWNLOAD.cta}
-          </a>
-          <p className="cd-open-foot">{PREVIEW_DOWNLOAD.foot}</p>
         </div>
       )}
 
