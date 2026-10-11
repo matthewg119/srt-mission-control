@@ -254,3 +254,14 @@
    that is still asking questions. */
 .cp-download { margin: 0.25rem 0 1.25rem; }
 .cp-download .cd-primary { text-decoration: none; }
+
+/* The two small doors under the domain line, stacked and left aligned. The custom-design one
+   leads; the skip sits under it and smaller, because it is an escape rather than an offer. */
+.cp-minis {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.45rem;
+  margin-top: 0.6rem;
+}
+.cp-minis .cp-skip { margin-top: 0; }

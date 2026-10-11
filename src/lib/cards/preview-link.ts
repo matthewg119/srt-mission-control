@@ -65,6 +65,19 @@ export function cardPdfPath(token?: string | null): string {
 }
 
 /**
+ * The same card, absolute, for an email.
+ *
+ * ‼️ A LINK IS WHAT GOES IN THE EMAIL, NOT AN ATTACHMENT, AND THAT IS NOT ONLY HIS
+ * INSTRUCTION. The route regenerates on every request, so this URL serves the CUSTOMISED card
+ * the moment one exists; an attachment freezes the sample-figure version in their inbox forever
+ * and is the thing they would print. It also survives mailbox size limits and spam filters that
+ * dislike PDFs.
+ */
+export function cardPdfUrl(token?: string | null): string {
+  return `${appUrl()}${cardPdfPath(token)}`;
+}
+
+/**
  * What screen two embeds, and what "Open it full screen" opens. `bare` drops the demo ribbon.
  *
  * ‼️ RELATIVE, AND THE QR TARGET ABOVE IS NOT. The difference is who is doing the opening. A

@@ -24,7 +24,7 @@ import QRCode from "qrcode";
 
 import { OFFERED_DESIGNS, designByKey } from "@/config/card-designs";
 import { PREVIEW_FALLBACK_NAME } from "@/config/card-preview";
-import { cardPdfPath, cardQrTarget, insideUrl, leadFromCardToken } from "@/lib/cards/preview-link";
+import { cardQrTarget, insideUrl, leadFromCardToken } from "@/lib/cards/preview-link";
 import { Lockup } from "../../lockup";
 import { PreviewClient } from "../preview-client";
 import "../../cards.css";
@@ -139,7 +139,6 @@ export default async function CardPreviewPage({
         insideSrc={insideUrl(true)}
         initialDesign={design.key}
         token={token}
-        pdfPath={cardPdfPath(lead ? token : null)}
       />
     </main>
   );
