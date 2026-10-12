@@ -1953,6 +1953,7 @@ async function beginPullPlan(event: ScraperEvent, command: PullBudgetCommand): P
     planCardLines(plan, {
       verticalLabel: def.label,
       verifierCreditsLeft: SENDING.verifierCreditsLeft,
+      verifierCreditsReadOn: SENDING.verifierCreditsReadOn,
     }).join("\n")
   );
   const messageTs = (posted as { ts?: string }).ts;
@@ -2158,6 +2159,50 @@ async function advanceOnePlan(plan: PlanRowDb): Promise<boolean> {
     );
   }
   return true;
+}
+
+/**
+ * How long a MillionVerifier file may sit before the lane says something.
+ *
+ * ‼️ FOUR HOURS IS "UNUSUAL", NOT "DEAD", AND THE DIFFERENCE IS THE WHOLE DESIGN. Measured
+ * 2026-10-08: file 32277475 took 29 hours and then completed perfectly, and our cron drained it 83
+ * seconds later. So this number must never gate anything; it only decides when a human is worth
+ * telling. Set it too low and the channel cries wolf, set it too high and a plan sits all day with
+ * nobody knowing why.
+ */
+const MV_STALL_MS = 4 * 60 * 60 * 1000;
+
+/**
+ * A verification that is taking longer than any before it. Said once, and nothing is abandoned.
+ *
+ * ‼️ THIS IS AN ALARM AND NOT A TIMEOUT, WHICH IS WHY IT CHANGES NO STATE BUT ITS OWN. A timeout
+ * cannot finish a verification. All it can do is throw away addresses that have already been paid
+ * for in MillionVerifier credits, and the uploaded file is the receipt for them. So the poll keeps
+ * polling forever, exactly as it did, and the only thing that changes is that somebody is told.
+ * Giving up is a person's decision and this is how they get the chance to make it.
+ */
+async function noteVerificationStall(batch: BatchRow): Promise<void> {
+  if (!batch.mv_uploaded_at || batch.mv_stall_alerted_at) return;
+  const waitedMs = Date.now() - new Date(batch.mv_uploaded_at).getTime();
+  if (!Number.isFinite(waitedMs) || waitedMs < MV_STALL_MS) return;
+
+  // Stamped BEFORE the post, not after. A Slack failure must not leave this unstamped, or the next
+  // tick tries again and the "once" becomes every five minutes for as long as the file is slow.
+  await updateBatch(batch.id, { mv_stall_alerted_at: new Date().toISOString() });
+
+  const hours = Math.round(waitedMs / 3_600_000);
+  await say(
+    batch,
+    [
+      ":hourglass_flowing_sand: *MillionVerifier has had this file for " + hours + " hours* and is " +
+        "still reporting `" + (batch.mv_status ?? "unknown") + "`.",
+      "  File `" + (batch.mv_file_id ?? "?") + "`. Nothing is lost and nothing is being re-spent: " +
+        "the credits are already paid and that file is the receipt, so this keeps polling and will " +
+        "finish by itself the moment they answer. The longest one so far took 29 hours.",
+      "  Worth a look at app.millionverifier.com if it goes much past a day. While it sits here it " +
+        "also holds up any pull plan, because pulls run one at a time.",
+    ].join("\n")
+  );
 }
 
 /**
@@ -3836,13 +3881,22 @@ async function pollListPrepVerification(batch: BatchRow): Promise<void> {
       toUpload.map((r) => r.email),
       (batch.file_name ?? "sendable") + ".txt"
     );
-    await updateBatch(batch.id, { mv_file_id: info.file_id, mv_status: info.status });
+    await updateBatch(batch.id, {
+      mv_file_id: info.file_id,
+      mv_status: info.status,
+      // The clock the stall alarm measures against. Written with the file id, in the same update,
+      // so a batch can never carry one without the other.
+      mv_uploaded_at: new Date().toISOString(),
+    });
     return;
   }
 
   const info = await fileInfo(batch.mv_file_id);
   await updateBatch(batch.id, { mv_status: info.status, mv_counts: info as unknown as Record<string, unknown> });
-  if (info.status !== "finished") return;
+  if (info.status !== "finished") {
+    await noteVerificationStall(batch);
+    return;
+  }
 
   const text = await downloadResult(batch.mv_file_id, "all");
   const verdicts = parseResultLines(text);

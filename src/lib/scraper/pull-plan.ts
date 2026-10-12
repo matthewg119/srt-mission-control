@@ -17,6 +17,11 @@
 // fifteen cities never looked at.
 
 import { METROS } from "@/lib/trt";
+// ‼️ THE REGISTRY'S OWN ALIAS TABLE, SHARED RATHER THAN RE-LISTED. It already knows "med spa",
+// "medical spa", "aesthetics" and "dentists", and it is what the CSV drop caption resolves
+// through. A second list here would start out agreeing and then stop, and the symptom would be a
+// spelling that works on a dropped file and not in a typed command.
+import { resolveVertical } from "./icp";
 import type { PlanRow } from "./territory";
 import type { VerticalDef } from "./verticals";
 
@@ -468,42 +473,67 @@ export function parsePullBudgetCommand(
   text: string,
   knownVerticals: readonly string[]
 ): PullBudgetParse | null {
-  const t = unwrap(text).trim();
+  const t = normalizeCommandText(text);
   if (!t) return null;
   // "pull maps ..." belongs to the other parser, whatever follows it.
   if (/^pull\s+maps\b/i.test(t)) return null;
 
-  // `pull 2000 medspa`, `pull 2000 medspa leads`, `pull medspa 2000`. A count and a vertical, in
-  // either order, with an optional noun on the end that is ignored.
+  // ‼️ THE REST IS CAPTURED AS `.+` AND RESOLVED, NOT MATCHED AS ONE BARE WORD, AND THAT WAS A LIVE
+  // BUG. The first version required a single `[a-z]+` token after the number, so `pull 2000 medspa`
+  // worked and `pull 2000 med spa` silently did not: it fell through to `parseNaturalPull`, which
+  // answered "I can tell you want medspa leads, but not from where" and printed the Maps grammar.
+  // That refusal is the exact question this command exists to stop anybody answering, so the near
+  // miss was worse than no command at all. Measured 2026-10-12 in #srt-scraper.
   const m =
-    /^pull\s+(\d[\d,]*)\s+([a-z][a-z\s]*?)(?:\s+(?:leads|records|rows|businesses))?$/i.exec(t) ??
-    /^pull\s+([a-z][a-z\s]*?)\s+(\d[\d,]*)(?:\s+(?:leads|records|rows|businesses))?$/i.exec(t);
+    /^pull\s+(\d[\d,]*)\s+(.+)$/i.exec(t) ??
+    /^pull\s+(.+?)\s+(\d[\d,]*)$/i.exec(t);
   if (!m) return null;
 
-  const digits = /^\d/.test(m[1]) ? m[1] : m[2];
-  const word = (/^\d/.test(m[1]) ? m[2] : m[1]).trim();
+  const numberFirst = /^\d/.test(m[1]);
+  const digits = numberFirst ? m[1] : m[2];
+  const rest = (numberFirst ? m[2] : m[1]).trim();
+  if (!rest) return null;
 
-  // ‼️ THE VERTICAL IS CHECKED BEFORE THE COUNT, AND A MULTI-WORD ONE FALLS THROUGH RATHER THAN
-  // BEING REFUSED. This channel is a CHAT surface as well as a command surface, and returning a
-  // refusal is as much a claim on the message as returning a command: both stop it reaching the
-  // assistant. "pull 20 of those into a list" is conversation and must reach the model, which now
-  // has a plan_pull tool and can answer it properly. "pull 2000 plumber" is unambiguously this
-  // command typed with an unknown vertical, and gets the list of known ones.
+  // Nouns a person adds without meaning anything by them. Stripped before the vertical is read so
+  // "pull 2000 med spa leads" and "pull 2000 med spa" are the same command.
+  const words = rest.replace(/\b(leads?|records?|rows?|businesses|business|more|of them)\b/gi, " ").trim();
+
+  // ‼️ RESOLVED THROUGH THE REGISTRY'S OWN ALIAS TABLE RATHER THAN BY EXACT SLUG. `resolveVertical`
+  // already knows that "med spa", "med-spa", "medical spa", "aesthetics" and "dentists" are things
+  // people type, and it is the same resolver the CSV drop caption uses. Matching the slug exactly
+  // meant the one spelling the registry is keyed on was the only one that worked, which is a
+  // machine's idea of a command surface.
   //
-  // The discriminator is whitespace: one bare word after the number is a vertical somebody meant,
-  // several words are a sentence. Same instinct as `isOptionToken`, which separates two command
-  // forms that have the same number of parts.
-  if (/\s/.test(word)) return null;
+  // ‼️ AND LOOSE MATCHING IS SAFE HERE FOR ONE REASON ONLY: the result is a CARD. Nothing is bought
+  // until somebody reads what it inferred and reacts, so a wrong guess costs a glance. That is the
+  // same reason `parseNaturalPull` is allowed to guess at all, and it would NOT be acceptable on a
+  // path that spends.
+  const resolved = resolveVertical(words || rest);
 
-  const vertical = word.toLowerCase();
+  if (!resolved.matched) {
+    // ‼️ A SENTENCE FALLS THROUGH, A BARE WORD IS REFUSED BY NAME. Returning a refusal is as much a
+    // claim on a message as returning a command: both stop it reaching the assistant, and this
+    // channel is a chat surface too. "pull 20 of those into a list" is conversation and must reach
+    // the model, which has a plan_pull tool and can answer it properly. "pull 2000 mitzvah" is
+    // unambiguously this command typed or dictated wrong, and deserves the list of known verticals.
+    if (/\s/.test(words || rest)) return null;
+    return {
+      ok: false,
+      reason:
+        "`" + (words || rest) + "` is not a vertical I have a buyer profile for. Known: " +
+        knownVerticals.map((v) => "`" + v + "`").join(", ") +
+        ". Add one in `src/lib/scraper/verticals.ts` first, because a pull that cannot be judged is " +
+        "money spent for nothing.",
+    };
+  }
+
+  const vertical = resolved.slug;
   if (!knownVerticals.includes(vertical)) {
     return {
       ok: false,
       reason:
-        "`" + word + "` is not a vertical I have a buyer profile for. Known: " +
-        knownVerticals.map((v) => "`" + v + "`").join(", ") +
-        ". Add one in `src/lib/scraper/verticals.ts` first, because a pull that cannot be judged is " +
-        "money spent for nothing.",
+        "`" + vertical + "` resolved from `" + rest + "` but is not registered. Known: " +
+        knownVerticals.map((v) => "`" + v + "`").join(", ") + ".",
     };
   }
 
@@ -523,6 +553,30 @@ export function parsePullBudgetCommand(
   }
 
   return { ok: true, command: { count, vertical } };
+}
+
+/**
+ * Everything between what a person types and what a regex can read.
+ *
+ * ‼️ EVERY ONE OF THESE WAS MEASURED AGAINST THE REAL PARSER, NOT IMAGINED. On 2026-10-12 three
+ * shapes fell through to `parseNaturalPull` and were answered with the wrong refusal:
+ * a zero-width character inside the word (invisible, and arrives by paste), Slack decoration
+ * (`*pull 2000 medspa*`), and "med spa" with the space a person naturally types.
+ *
+ * ‼️ THE ZERO-WIDTH STRIP IS NOT PARANOIA. U+200B is not matched by `\s`, survives `.trim()`, and
+ * is invisible in Slack, so the operator sees a command that looks exactly right, gets an answer
+ * about something else, and has no way at all to tell why.
+ */
+export function normalizeCommandText(text: string): string {
+  return unwrap(text)
+    // Zero-width space, non-joiner, joiner and the byte order mark.
+    .replace(/[​-‍﻿]/g, "")
+    // Slack decoration around the whole message. Anchored, so a `*` inside is left alone.
+    .replace(/^[*_~]+/, "")
+    .replace(/[*_~]+$/, "")
+    // Every kind of Unicode space, including the non-breaking one, collapsed to one plain space.
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**
@@ -563,6 +617,14 @@ export function planCardLines(plan: PullPlan, args: {
   verticalLabel: string;
   /** Rendered after the cost, so the person ticking sees the real constraint. */
   verifierCreditsLeft: number;
+  /**
+   * When that credit figure was last read off the MillionVerifier dashboard.
+   *
+   * ‼️ PRINTED, NEVER OMITTED, BECAUSE THE NUMBER IS A STAMP AND NOT A LIVE READING. It said 10,500
+   * for weeks while the real balance fell to 9,668. A figure with a date on it is a fact; the same
+   * figure without one is a claim about today that nobody checks.
+   */
+  verifierCreditsReadOn: string;
 }): string[] {
   const pulls = plan.steps.filter((s) => s.kind === "pull");
   const lines: string[] = [];
@@ -635,7 +697,7 @@ export function planCardLines(plan: PullPlan, args: {
   lines.push("");
   lines.push(
     "_MillionVerifier is the budget, not DataForSEO: " + args.verifierCreditsLeft.toLocaleString() +
-      " credits left. The records here are about " +
+      " credits as at " + args.verifierCreditsReadOn + ". The records here are about " +
       Math.round((plan.allocated + plan.reserved) * 0.09) + " to " +
       Math.round((plan.allocated + plan.reserved) * 0.13) + " shippable addresses at the measured rate._"
   );

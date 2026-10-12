@@ -467,8 +467,23 @@ export const SENDING = {
    */
   rawToSendableLow: 0.09,
   rawToSendableHigh: 0.13,
-  /** 10,500 bulk credits, bought once. The real budget constraint, and it is not DataForSEO. */
-  verifierCreditsLeft: 10500,
+  /**
+   * Bulk credits left at MillionVerifier. The real budget constraint, and it is not DataForSEO.
+   *
+   * ‼️ A READING WITH A DATE ON IT, NOT A LIVE NUMBER, AND EVERY CARD THAT PRINTS IT SAYS THE DATE.
+   * It was 10,500 when this constant was written and 9,668 on 2026-10-11, measured off the
+   * MillionVerifier dashboard. A hardcoded figure that drifts is not the problem; a hardcoded figure
+   * that LOOKS live is, because the plan card uses it to tell somebody how much supply they can
+   * afford and nobody questions a number a machine printed.
+   *
+   * ‼️ AND IT IS STILL NOT READ FROM THE API, DELIBERATELY FOR NOW. The card renders on
+   * /dashboard/territory and in Slack, and putting a vendor call in that path means the page fails
+   * when MillionVerifier is slow, which is the exact condition under which somebody most wants to
+   * read it. Reading it on the cron and caching it is the right fix and is not done yet.
+   */
+  verifierCreditsLeft: 9668,
+  /** When `verifierCreditsLeft` was last read off the dashboard. Printed next to it, always. */
+  verifierCreditsReadOn: "2026-10-11",
   /** $0.37 per 1,000 records plus $0.012 per task, one task per 1,000. */
   dfsPerThousand: 0.37,
   dfsPerTask: 0.012,

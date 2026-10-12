@@ -26,6 +26,8 @@ import {
 import { parseMapsCommand } from "@/lib/scraper/maps-command";
 import type { PlanRow } from "@/lib/scraper/territory";
 import { verticalDef, verticalSlugs } from "@/lib/scraper/verticals";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 let passed = 0;
 const failures: string[] = [];
@@ -87,9 +89,58 @@ check(
 
 // ‼️ THE TWO GRAMMARS MAY NOT BOTH CLAIM A MESSAGE. If this returned anything but null, a typed
 // `pull maps ...` would be answered by the planner and the explicit pull would be unreachable.
+//
+// ‼️ AND THE SECOND CASE BELOW IS NOT PARANOIA, IT CAUGHT A REAL BUG BEFORE IT SHIPPED. The guard
+// is `/^pull\s+maps\b/`, and a patch script turned that `\b` into a literal backspace byte, which
+// is invisible in an editor and can never match. With the guard dead, `pull maps medspa | Dallas TX
+// | med spa | limit 300 | offset 1750` fell into the "number last" branch, resolved a vertical out
+// of the middle of it and would have hijacked every explicit pull in the channel as a 1,750 record
+// PLAN. A command ending in a number is exactly the shape the real grammar produces.
 check(
   "`pull maps ...` is left alone for the other parser",
   parsePullBudgetCommand("pull maps medspa | Dallas TX | med spa | limit 300", known) === null
+);
+check(
+  "...including the full form that ENDS in a number",
+  parsePullBudgetCommand("pull maps medspa | Dallas TX | med spa | limit 300 | offset 1750", known) === null,
+  parsePullBudgetCommand("pull maps medspa | Dallas TX | med spa | limit 300 | offset 1750", known)
+);
+check(
+  "...and the cell form, which also ends in a number",
+  parsePullBudgetCommand("pull maps medspa | 32.7767,-96.7970,24 | med spa | limit 500", known) === null
+);
+
+// ‼️ EVERY ONE OF THESE WAS MEASURED FAILING IN #srt-scraper ON 2026-10-12, not imagined. The parser
+// was anchored on a single bare word, so a space, a stray decoration character or an invisible
+// zero-width byte sent the message to `parseNaturalPull`, which answered "I can tell you want
+// medspa leads, but not from where" and printed the Maps grammar. Being told to name a city by the
+// one system that exists to work the city out is worse than having no command at all.
+for (const [name, text] of [
+  ["the space a person actually types", "pull 2000 med spa"],
+  ["a plural", "pull 2000 medspas"],
+  ["med spas, plural and spaced", "pull 2000 med spas"],
+  ["a trailing noun", "pull 2000 med spa leads"],
+  ["Slack bold around the whole line", "*pull 2000 medspa*"],
+  ["an invisible zero width space", "pull 2000 med​spa"],
+  ["a non breaking space", "pull 2000 medspa"],
+  ["an inline code span", "`pull 2000 medspa`"],
+  ["a fenced block", "```\npull 2000 medspa\n```"],
+  ["capitalised", "Pull 2000 Medspa"],
+  ["the registry's own alias", "pull 2000 medical spa"],
+] as const) {
+  const r = parsePullBudgetCommand(text, known);
+  check(
+    "it reads " + name,
+    r?.ok === true && r.command.vertical === "medspa" && r.command.count === 2000,
+    r
+  );
+}
+check(
+  "and dentists resolves to dentist",
+  (() => {
+    const r = parsePullBudgetCommand("pull 300 dentists", known);
+    return r?.ok === true && r.command.vertical === "dentist";
+  })()
 );
 check(
   "`pull maps medspa` (the queue form) is left alone too",
@@ -427,7 +478,11 @@ check("an unknown key falls back to the label", whereFor("nowhere", "Nowhere") =
       row({ key: "houston", label: "Houston", priority: 2 }),
     ],
   });
-  const card = planCardLines(plan, { verticalLabel: "Med spa and aesthetics", verifierCreditsLeft: 10500 }).join("\n");
+  const card = planCardLines(plan, {
+    verticalLabel: "Med spa and aesthetics",
+    verifierCreditsLeft: 10500,
+    verifierCreditsReadOn: "2026-10-11",
+  }).join("\n");
 
   check("the card names the metros", /Dallas-Fort Worth/.test(card) && /Houston/.test(card));
   check("the card names the cost", /Cost:/.test(card) && /\$/.test(card));
@@ -436,6 +491,10 @@ check("an unknown key falls back to the label", whereFor("nowhere", "Nowhere") =
   check("the card says nothing is bought until a reaction", /Nothing is bought until you react/.test(card));
   check("the card says a circle is being measured first", /never had its circle counted/.test(card));
   check("the card names the MillionVerifier budget", /MillionVerifier/.test(card));
+  // ‼️ THE DATE IS NOT DECORATION. The credit figure is a hand-read stamp, not a live balance, and
+  // it said 10,500 for weeks while the real number fell to 9,668. A card that prints it without a
+  // date is making a claim about today that nobody will check.
+  check("...with the date that figure was read", /credits as at 2026-10-11/.test(card), card);
   // ‼️ NO EM DASHES IN ANYTHING THE SYSTEM GENERATES. Standing rule, and a card is copy.
   check("the card has no em dash", !card.includes("—"), card.match(/.{0,30}—.{0,30}/)?.[0]);
 }
@@ -462,6 +521,48 @@ check("an unknown key falls back to the label", whereFor("nowhere", "Nowhere") =
     "...and the real planner buys none of them",
     real.steps.filter((s) => s.kind === "pull").length === 0
   );
+}
+
+// ── no control bytes in the files that decide spending ──────────────────────────────────────────
+//
+// ‼️ THIS EXISTS BECAUSE IT HAPPENED, TWICE, IN ONE SITTING. A patch script wrote `\b` into three
+// regexes as a literal BACKSPACE (0x08) rather than as a word boundary. The file compiles, the
+// editor shows nothing, `tsc` is clean, and the regex can never match. One of the three was the
+// guard that keeps `pull maps ...` away from the planner, and with it dead the planner would have
+// claimed every explicit pull in the channel as a multi-thousand record plan.
+//
+// ‼️ IT SCANS THE FILES THIS LANE'S SPENDING GOES THROUGH, NOT THE WHOLE TREE. Four unrelated files
+// already carry one each on main; fixing those belongs to whoever owns them, and widening this
+// check to fail on their behalf would make it something people turn off. Tab, newline and carriage
+// return are the only control characters a source file has any business containing.
+{
+  const owned = [
+    "src/lib/scraper/pull-plan.ts",
+    "src/lib/scraper/pull-plan-store.ts",
+    "src/lib/scraper/maps-command.ts",
+    "src/lib/scraper/lane.ts",
+    "src/lib/scraper/territory.ts",
+    "src/lib/scraper-tools.ts",
+  ];
+  for (const rel of owned) {
+    const body = readFileSync(join(process.cwd(), rel), "utf8");
+    // Char codes rather than a regex literal, and that is not a style choice. The first version of
+    // this check WAS a regex with \u0000 style escapes in it, and the patch that wrote the file
+    // turned every one of them into the literal control byte it names. The check against control
+    // bytes shipped full of control bytes and would not even parse. Nothing here can be mangled
+    // that way, because there is no escape sequence to mangle.
+    const hits: Array<{ at: number; code: number; near: string }> = [];
+    for (let i = 0; i < body.length; i += 1) {
+      const code = body.charCodeAt(i);
+      const printable = code >= 32 || code === 9 || code === 10 || code === 13;
+      if (!printable) hits.push({ at: i, code, near: body.slice(Math.max(0, i - 40), i + 20) });
+    }
+    check(
+      rel + " carries no control bytes",
+      hits.length === 0,
+      hits
+    );
+  }
 }
 
 // ── report ──────────────────────────────────────────────────────────────────────────────────────
