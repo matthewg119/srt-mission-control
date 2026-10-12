@@ -24,7 +24,66 @@ type LeadSearchParams = {
   /** Where the lead came from: the `source` column, e.g. "Med Spa Scrape - No Website". */
   source?: string;
   page?: string;
+  /** A key of SORTS. Anything else falls back to the default rather than reaching the database. */
+  sort?: string;
+  /** "asc" or "desc". Anything else uses the column's own default. */
+  dir?: string;
 };
+
+/**
+ * The orderings this page offers.
+ *
+ * ‼️ A WHITELIST, AND THE COLUMN NAME NEVER COMES FROM THE URL. `?sort=` is interpolated into a
+ * PostgREST `order` clause, and that clause takes a column name, a direction and a nulls hint
+ * separated by dots. A raw value from the query string there is the same class of hole the `q`
+ * filter already sanitises for, except that an ORDER BY can also be made to error in ways that leak
+ * column names. A key into this table cannot.
+ *
+ * ‼️ AND EVERY ONE OF THEM IS A TOTAL ORDER, because `id` is appended as the tiebreaker below.
+ * Roughly 7,400 of 8,800 contacts share a NULL last_activity_at and most share a created_at second,
+ * so without a tiebreaker Postgres may return two identical requests in different orders and "the
+ * list I was just looking at" stops meaning anything, especially across a page boundary.
+ */
+const SORTS: Record<
+  string,
+  {
+    column: string;
+    label: string;
+    defaultDir: "asc" | "desc";
+    nullsFirst: boolean;
+    /** Only decides how the direction is WORDED. "oldest first" is nonsense for a business name. */
+    kind: "date" | "text";
+  }
+> = {
+  name: { column: "business_name", label: "Lead", defaultDir: "asc", nullsFirst: false, kind: "text" },
+  stage: { column: "application_stage", label: "Status", defaultDir: "asc", nullsFirst: false, kind: "text" },
+  source: { column: "source", label: "Source", defaultDir: "asc", nullsFirst: false, kind: "text" },
+  created: { column: "created_at", label: "Created", defaultDir: "desc", nullsFirst: false, kind: "date" },
+  updated: { column: "updated_at", label: "Updated", defaultDir: "desc", nullsFirst: false, kind: "date" },
+  touched: { column: "last_activity_at", label: "Last touch", defaultDir: "desc", nullsFirst: false, kind: "date" },
+  // ‼️ nullsFirst ON PURPOSE HERE AND NOWHERE ELSE. "Next follow-up, soonest first" with nulls last
+  // buries the leads with NO follow-up scheduled at the back of 88 pages, and those are the ones the
+  // worklist calls the most important bucket. Ascending here means "deal with these first".
+  followup: { column: "next_action_at", label: "Next follow-up", defaultDir: "asc", nullsFirst: true, kind: "date" },
+};
+
+const DEFAULT_SORT = "touched";
+
+function dirLabel(kind: "date" | "text", dir: "asc" | "desc"): string {
+  if (kind === "text") return dir === "asc" ? "A to Z" : "Z to A";
+  return dir === "asc" ? "oldest first" : "newest first";
+}
+
+/** Date AND time, because "when was this uploaded" is a question a date alone cannot answer. */
+function stamp(value: string | null): { date: string; time: string } | null {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return {
+    date: d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }),
+    time: d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }),
+  };
+}
 
 // Every link on this page has to carry the filters the others set, or the page
 // number silently resets a search and the chips silently drop it. One helper so
@@ -67,6 +126,17 @@ interface LeadRow {
   next_action_at: string | null;
   next_action_reason: string | null;
   open_task_count: number | null;
+  /** When this lead first landed in the book. Never changes. */
+  created_at: string | null;
+  /**
+   * When the row last changed, in any way.
+   *
+   * ‼️ TRUE ONLY SINCE 2026-10-09, AND THE PAGE DOES NOT PRETEND OTHERWISE. There was no trigger on
+   * `contacts` until docs/2026-10-09-lead-timestamps.sql, so this column was whatever the last
+   * writer that bothered to set it wrote, and most writers did not. Rows older than that carry
+   * whatever they happened to carry.
+   */
+  updated_at: string | null;
 }
 
 // Same button styling the Search button already uses, dimmed at the ends of the
@@ -97,19 +167,27 @@ export default async function LeadsPage({
   // and look like the leads had been deleted rather than shelved.
   const showingTerminal = !!sp.status && isTerminalStage(sp.status);
 
+  // ‼️ RESOLVED THROUGH THE WHITELIST, SO AN UNKNOWN `?sort=` IS THE DEFAULT RATHER THAN AN ERROR
+  // OR A COLUMN NAME. See SORTS: the value never reaches the database.
+  const sortKey = sp.sort && SORTS[sp.sort] ? sp.sort : DEFAULT_SORT;
+  const sort = SORTS[sortKey];
+  const dir: "asc" | "desc" = sp.dir === "asc" || sp.dir === "desc" ? sp.dir : sort.defaultDir;
+
   let query = supabaseAdmin
     .from("contacts")
     .select(
-      "id, first_name, last_name, business_name, email, phone, application_stage, working_state, source, last_activity_at, next_action_at, next_action_reason, open_task_count",
+      "id, first_name, last_name, business_name, email, phone, application_stage, working_state, source, last_activity_at, next_action_at, next_action_reason, open_task_count, created_at, updated_at",
       // The page can't say "of 8,312" without asking. An exact count is a full
       // count scan, but the table is ~8k rows and /api/contacts already pays it.
       { count: "exact" }
     )
-    .order("last_activity_at", { ascending: false, nullsFirst: false })
-    // Secondary key so the order is TOTAL. Roughly 7,400 of 8,300 contacts have never
-    // been touched and so share a NULL last_activity_at; without a tiebreaker Postgres
-    // returns those in arbitrary order that can differ between two identical requests,
-    // which makes "the list I was just looking at" a meaningless phrase.
+    .order(sort.column, { ascending: dir === "asc", nullsFirst: sort.nullsFirst })
+    // Secondary key so the order is TOTAL. Roughly 7,400 of 8,800 contacts have never
+    // been touched and so share a NULL last_activity_at; a 300-record scraper chunk
+    // shares a created_at second. Without a tiebreaker Postgres returns those in
+    // arbitrary order that can differ between two identical requests, which makes "the
+    // list I was just looking at" a meaningless phrase and can show one lead twice
+    // across a page boundary while hiding another.
     .order("id", { ascending: true })
     .range(offset, offset + PAGE_SIZE - 1);
 
@@ -191,6 +269,12 @@ export default async function LeadsPage({
             {total === 0
               ? "No leads match"
               : `Showing ${offset + 1}-${offset + rows.length} of ${total.toLocaleString()}`}
+            {total > 0 && (
+              <span className="text-[rgba(255,255,255,0.25)]">
+                {" "}
+                · by {sort.label.toLowerCase()}, {dirLabel(sort.kind, dir)}
+              </span>
+            )}
           </p>
         </div>
         {/* A new search starts at page 1, so `page` is deliberately not carried. */}
@@ -204,6 +288,10 @@ export default async function LeadsPage({
           {sp.status && <input type="hidden" name="status" value={sp.status} />}
           {sp.unscheduled === "1" && <input type="hidden" name="unscheduled" value="1" />}
           {sp.source && <input type="hidden" name="source" value={sp.source} />}
+          {/* The ordering survives a search. Without these a search silently reverts the column
+              you just sorted by, which reads as the sort having failed. */}
+          {sortKey !== DEFAULT_SORT && <input type="hidden" name="sort" value={sortKey} />}
+          {dir !== sort.defaultDir && <input type="hidden" name="dir" value={dir} />}
           <button className="rounded-lg border border-[rgba(255,255,255,0.12)] px-3 py-1.5 text-xs text-white">
             Search
           </button>
@@ -292,14 +380,35 @@ export default async function LeadsPage({
       )}
 
       <div className="overflow-x-auto rounded-xl border border-[rgba(255,255,255,0.07)]">
-        <table className="w-full min-w-[860px] text-left text-xs">
+        <table className="w-full min-w-[1080px] text-left text-xs">
+          {/* ‼️ EVERY HEADER IS A LINK AND THE ACTIVE ONE TOGGLES DIRECTION. Sorting lives on the
+              URL for the same reason the filters do: the whole page stays a server component and
+              every view is a shareable link. Clicking a new column takes that column's OWN default
+              direction (newest first for a date, A to Z for a name), because "sort by created" read
+              ascending would open on the oldest lead in the book. */}
           <thead className="bg-[rgba(255,255,255,0.03)] text-[10px] uppercase tracking-widest text-[rgba(255,255,255,0.35)]">
             <tr>
-              <th className="px-3 py-2.5">Lead</th>
-              <th className="px-3 py-2.5">Status</th>
-              <th className="px-3 py-2.5">Source</th>
-              <th className="px-3 py-2.5">Last touch</th>
-              <th className="px-3 py-2.5">Next follow-up</th>
+              {(["name", "stage", "source", "created", "updated", "touched", "followup"] as const).map(
+                (key) => {
+                  const active = key === sortKey;
+                  const nextDir = active ? (dir === "asc" ? "desc" : "asc") : SORTS[key].defaultDir;
+                  return (
+                    <th key={key} className="px-3 py-2.5 font-normal">
+                      <Link
+                        href={hrefWith(sp, { sort: key, dir: nextDir })}
+                        className={
+                          active
+                            ? "text-white"
+                            : "text-[rgba(255,255,255,0.35)] hover:text-[rgba(255,255,255,0.6)]"
+                        }
+                      >
+                        {SORTS[key].label}
+                        {active && <span className="ml-1">{dir === "asc" ? "↑" : "↓"}</span>}
+                      </Link>
+                    </th>
+                  );
+                }
+              )}
             </tr>
           </thead>
           <tbody>
@@ -338,6 +447,24 @@ export default async function LeadsPage({
                 <td className="px-3 py-2.5 text-[rgba(255,255,255,0.45)]">
                   {r.source ?? "—"}
                 </td>
+                {/* ‼️ DATE AND TIME, AND THE TIME IS NOT DECORATION. "When was this batch
+                    uploaded" is the question these columns exist for, and a 300-record scraper
+                    chunk lands inside one minute: a date alone cannot tell two of them apart. */}
+                {[r.created_at, r.updated_at].map((value, i) => {
+                  const s = stamp(value);
+                  return (
+                    <td key={i} className="whitespace-nowrap px-3 py-2.5">
+                      {s ? (
+                        <>
+                          <span className="text-[rgba(255,255,255,0.6)]">{s.date}</span>{" "}
+                          <span className="text-[rgba(255,255,255,0.3)]">{s.time}</span>
+                        </>
+                      ) : (
+                        <span className="text-[rgba(255,255,255,0.25)]">—</span>
+                      )}
+                    </td>
+                  );
+                })}
                 <td className="px-3 py-2.5 text-[rgba(255,255,255,0.45)]">
                   {r.last_activity_at ? formatRelativeTime(r.last_activity_at) : "never"}
                 </td>

@@ -106,6 +106,17 @@ export interface BatchRow {
   mv_counts: Record<string, unknown> | null;
   mv_awaiting_approval: boolean;
   mv_approval_ts: string | null;
+  /** When the addresses were handed to MillionVerifier. The clock the stall alarm measures against. */
+  mv_uploaded_at: string | null;
+  /**
+   * When the lane said out loud that this verification was taking unusually long.
+   *
+   * ‼️ SET ONCE, AND IT IS NOT A TIMEOUT. `pollVerification` keeps polling forever on purpose: the
+   * credits are spent and the uploaded file is the receipt, so abandoning it throws away work that
+   * is already paid for. What was missing was anybody being TOLD. Measured 2026-10-08: file
+   * 32277475 sat 29 hours at `in_progress`, held up a pull plan, and nothing anywhere mentioned it.
+   */
+  mv_stall_alerted_at: string | null;
   workflow_pick_ts: string | null;
   scoring_approval_ts: string | null;
   cutoff_confirm_ts: string | null;
@@ -180,7 +191,8 @@ const BATCH_COLUMNS =
   "id, slack_channel_id, slack_thread_ts, slack_file_id, file_name, status, workflow, " +
   "batch_label, parent_batch_id, apollo_export_file_id, score_query_template, score_cutoff, " +
   "score_cost_usd, email_column, headers, total_rows, clean_count, junk_count, mv_file_id, " +
-  "mv_status, mv_counts, mv_awaiting_approval, mv_approval_ts, workflow_pick_ts, " +
+  "mv_status, mv_counts, mv_awaiting_approval, mv_approval_ts, mv_uploaded_at, " +
+  "mv_stall_alerted_at, workflow_pick_ts, " +
   "scoring_approval_ts, cutoff_confirm_ts, csv_posted_at, dedupe_dupe_indexes, " +
   "dedupe_dupe_count, dedupe_new_count, dedupe_ran_at, list_run_id, error, created_at, updated_at";
 

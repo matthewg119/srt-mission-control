@@ -7,6 +7,10 @@ import { cancelPendingSuggestion } from "./imessage-suggestion";
 import { dispatchOutbound } from "./imessage-transport";
 import { scheduleFollowup } from "./imessage-followups";
 import { CRM_TOOLS, CRM_TOOL_NAMES, executeCrmTool } from "./crm-tools";
+// The lead engine's own data, so the assistant in #srt-scraper can answer about the lane it is
+// sitting in. Merged here for the same reason the CRM tools are: that channel's handler passes
+// no tool overrides, so a tool is reachable there the moment it is in this list.
+import { SCRAPER_TOOLS, SCRAPER_TOOL_NAMES, executeScraperTool } from "./scraper-tools";
 import { CLIENT_TOOLS, CLIENT_TOOL_NAMES, executeClientTool } from "./client-tools";
 
 // Structured result returned from executeTool — content goes to Claude, structuredData goes to the UI
@@ -190,7 +194,11 @@ const BASE_TOOLS = [
 // The CLIENT tools (2026-09-12) are the delivery side: the businesses SRT does the work FOR, as
 // opposed to the leads it sells to. Until they existed the assistant could not see a single one of
 // them from any surface, which is the whole of what this merge fixes.
-export const AI_TOOLS = [...BASE_TOOLS, ...CRM_TOOLS, ...CLIENT_TOOLS];
+// The SCRAPER tools (2026-10-09) are the supply side: where the leads come from, what the ICP
+// rejects, and what another pull would cost. Until they existed the assistant could not see
+// this lane at all and said so: asked "workflows" in #srt-scraper it answered "I don't have a
+// pull maps or lead scrape workflow", which was honest and completely wrong.
+export const AI_TOOLS = [...BASE_TOOLS, ...CRM_TOOLS, ...CLIENT_TOOLS, ...SCRAPER_TOOLS];
 
 // Tool execution functions
 export async function executeTool(
@@ -199,6 +207,7 @@ export async function executeTool(
 ): Promise<ToolExecutionResult> {
   if (CRM_TOOL_NAMES.has(toolName)) return executeCrmTool(toolName, input);
   if (CLIENT_TOOL_NAMES.has(toolName)) return executeClientTool(toolName, input);
+  if (SCRAPER_TOOL_NAMES.has(toolName)) return executeScraperTool(toolName, input);
   try {
     let content: string;
     switch (toolName) {
