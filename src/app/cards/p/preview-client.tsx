@@ -237,15 +237,53 @@ export function PreviewClient(props: PreviewClientProps) {
     return () => window.removeEventListener("message", onMessage);
   }, []);
 
+  /**
+   * The early lead, fired once, the moment the name and the email are in.
+   *
+   * ‼️ FIRE AND FORGET, AND IT MUST BE. Her next question is already on screen; a clinic should
+   * never wait on a notification. A failure costs the early card and nothing else, because the
+   * full POST at the end is a separate call that upserts the same contact either way.
+   */
+  const earlyOnce = useRef(false);
+  const sendEarly = useCallback(
+    (a: Answers) => {
+      if (earlyOnce.current) return;
+      if (!a.email || !a.firstName || !a.lastName) return;
+      earlyOnce.current = true;
+      void fetch("/api/cards/preview", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          email: a.email,
+          firstName: a.firstName,
+          lastName: a.lastName,
+          partial: true,
+          token: props.token,
+        }),
+      }).catch(() => {});
+    },
+    [props.token]
+  );
+
   /** Store an answer, show it in the transcript, and move on. */
-  const accept = useCallback((key: PreviewKey, value: string) => {
-    setFieldError(null);
-    push("her", value);
-    setAnswers((prev) => ({ ...prev, [key]: value }));
-    setComposed("");
-    setAwaiting("none");
-    setIndex((i) => i + 1);
-  }, [push]);
+  const accept = useCallback(
+    (key: PreviewKey, value: string) => {
+      setFieldError(null);
+      push("her", value);
+      setAnswers((prev) => {
+        const next = { ...prev, [key]: value };
+        // ‼️ READ OFF `next`, NOT OFF `answers`. The state has not re-rendered yet at this point,
+        // so checking the outer value would miss the very answer that completed the set and the
+        // early lead would fire one question late, or never.
+        sendEarly(next);
+        return next;
+      });
+      setComposed("");
+      setAwaiting("none");
+      setIndex((i) => i + 1);
+    },
+    [push, sendEarly]
+  );
 
   /** Their typed answer, validated before it is kept. */
   function commit(raw: string) {

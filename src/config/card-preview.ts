@@ -154,7 +154,11 @@ export const PREVIEW_SCAN = {
    * preview resolves to the same walkthrough the button opens, so a clinic owner holding their
    * phone over their laptop gets the real thing. See cardQrTarget().
    */
-  tap: guard("preview scan tap", "Click or scan here"),
+  // 203cFe0f IT SAID "Click or scan here" UNTIL 2026-10-12. Both halves were true, and that was the
+  // problem: it described two mechanisms instead of naming one thing to do. The screen two label
+  // already said "Tap to try it yourself" and this is the same action on the same product, so
+  // saying it the same way is one instruction rather than two.
+  tap: guard("preview scan tap", "Tap to try it yourself"),
   /**
    * ‼️ SAID ON THE SCREEN, BECAUSE THE QR ON A REAL CARD POINTS SOMEWHERE ELSE. The preview's
    * code opens our walkthrough; a printed card's code opens the clinic's own reviews page on their

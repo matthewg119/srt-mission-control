@@ -1320,14 +1320,12 @@ export function VirtualAgentClient({
                           </div>
                         )}
 
-                        {/* The way back to the boxes, because they are no longer on this screen. */}
-                        <button
-                          type="button"
-                          className="va-skip"
-                          onClick={() => setInvitePhase("enter")}
-                        >
-                          Change their details
-                        </button>
+                        {/* ‼️ "Change their details" WAS HERE AND WENT ON 2026-10-12, his call.
+                            It was the way back to the two boxes. What it mostly did on a phone at
+                            a counter was offer a second decision at the moment she had already
+                            made one. Her details are still hers to fix: nothing has been sent
+                            until she taps a channel, and the message preview above shows exactly
+                            what will go. */}
                       </>
                     )}
 
@@ -1376,9 +1374,24 @@ export function VirtualAgentClient({
                       The label changes in round two because by then she has already sent one, and
                       "Skip this one" would read as undoing it rather than stopping here.
                     */}
-                    {!inviteSent && (
+                    {/*
+                      ‼️ ROUND ONE CANNOT BE SKIPPED SINCE 2026-10-12, AND ROUND TWO STILL CAN.
+                      Matthew: "get rid of it so they are not able to just skip this option, and
+                      they actually have to go all the way through it."
+
+                      ‼️ THE OPT OUT DID NOT DISAPPEAR, IT MOVED UP ONE STEP. "Would you recommend
+                      this service to a friend?" is immediately before this and a No counts past
+                      the invite entirely. That gate is now the ONLY way out of the referral, which
+                      is the whole reason it is safe to remove the second one: somebody who does
+                      not want to refer anybody answers the question that asks them.
+
+                      ‼️ ROUND TWO KEEPS "That is enough" AND MUST. She opted into a second friend
+                      by tapping "Yes, add one more"; removing her way out would leave her inside a
+                      loop she chose, with the rest of the walk behind it.
+                    */}
+                    {!inviteSent && inviteRound > 1 && (
                       <button type="button" className="va-skip" onClick={skipInvite}>
-                        {inviteRound === 1 ? "Skip this one" : "That is enough"}
+                        That is enough
                       </button>
                     )}
                   </div>
