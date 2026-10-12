@@ -469,6 +469,7 @@ export async function executeScraperTool(
           ? planCardLines(plan, {
               verticalLabel: def?.label ?? v.slug,
               verifierCreditsLeft: SENDING.verifierCreditsLeft,
+              verifierCreditsReadOn: SENDING.verifierCreditsReadOn,
             }).join("\n")
           : null,
         how_to_answer:

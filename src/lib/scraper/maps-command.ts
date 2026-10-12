@@ -453,11 +453,30 @@ export function parseNaturalPull(text: string): MapsParse | null {
 
   const where = metroFrom(t);
   if (!where) {
+    // ‼️ THIS REFUSAL USED TO BE THE END OF THE ROAD AND IT IS NOW THE WRONG ANSWER, which is
+    // worth stating because the fix for it lives in another file. "Name a city" is exactly the work
+    // `pull <n> <vertical>` exists to stop a person doing: the planner reads the territory map and
+    // works the city out. Measured 2026-10-12: `pull 2000 med spa` missed the budget parser on the
+    // space, landed here, and was told to name a metro by the one system that already knows which
+    // metro is next.
+    //
+    // ‼️ SO THIS IS A BACKSTOP, NOT A ROUTE. parsePullBudgetCommand runs BEFORE this and is
+    // where the shape should be caught; normalizeCommandText and the registry's alias table are what
+    // make that reliable. Anything still reaching here is a shape neither parser recognised, and the
+    // honest thing is to name the command that would have worked rather than the grammar that
+    // demands a city.
+    const counted = /\b(\d[\d,]*)\b/.exec(t);
     return {
       ok: false,
       reason:
-        "I can tell you want `" + vertical + "` leads, but not from where. Name a city and state, " +
-        "for example `get me med spa leads in Dallas TX`.",
+        "I can tell you want `" + vertical + "` leads, but not from where." +
+        (counted
+          ? " If you want me to work out where, say `pull " + counted[1].replace(/,/g, "") + " " +
+            vertical + "` and I will read the territory plan, measure the next circle if nobody has " +
+            "counted it, and show you the cost before anything is bought."
+          : " Either name a city and state, for example `get me med spa leads in Dallas TX`, or say " +
+            "`pull 2000 " + vertical + "` and I will work out where.") +
+        " To name the place yourself, use the grammar below.",
     };
   }
 
