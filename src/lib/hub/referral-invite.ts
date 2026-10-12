@@ -100,11 +100,16 @@ export interface InviteChannelOption {
 }
 
 export const INVITE_CHANNELS: readonly InviteChannelOption[] = [
-  {
-    key: "sms",
-    label: guard("invite sms", "Text us both"),
-    threeWay: true,
-  },
+  // ‼️ `sms` ("Text us both") WAS HERE AND MATTHEW REMOVED IT ON 2026-10-12: "I'm not sure how
+  // that works". He is right that it was the confusing one. It opened a GROUP text with the
+  // clinic as a second recipient, which is the only genuinely three-way channel there has ever
+  // been, and on iOS that silently becomes a different thing depending on the handset. What is
+  // left is the two anybody can predict: open WhatsApp, or copy the words.
+  //
+  // ‼️ NOTHING ELSE CLAIMS TO BE THREE WAY. `threeWay` is still on the type and is false on both
+  // survivors, and _probe-referral-invite.ts fails the build on any label claiming "both" over a
+  // channel whose threeWay is false. That check is now vacuous rather than wrong; it stays,
+  // because the next person to add a channel is who it is for.
   {
     key: "whatsapp",
     // Named for what it is: her to the friend, no clinic on the thread.
@@ -155,6 +160,23 @@ export interface InviteTemplate {
  * undisclosed material connection, and that is the line this lane does not cross.
  */
 export const INVITE_TEMPLATES: readonly InviteTemplate[] = [
+  {
+    // ‼️ FIRST, AND IT IS THE ONE WITH A CLOCK IN IT. Matthew asked for a limited time promotion
+    // option above the other three on 2026-10-12. The urgency is REAL and not invented: claimUrl
+    // mints a link that genuinely expires, and {days} is that number rather than a figure in this
+    // file, so the message cannot promise a deadline the link does not have.
+    //
+    // ‼️ THE DEADLINE IS THE LINK'S, NOT THE OFFER'S. "They are only doing this for a few days"
+    // would be the patient making a claim about the clinic's pricing on the clinic's behalf. What
+    // she can truthfully say is when HER link stops working.
+    key: "promo",
+    label: guard("invite promo label", "Limited time"),
+    body: guard(
+      "invite promo",
+      "{friend}, I just had {service} at {business} and they are giving you {offer}. " +
+        "My link only works for {days} days so grab it now: {link}"
+    ),
+  },
   {
     key: "warm",
     label: guard("invite warm label", "Warm"),

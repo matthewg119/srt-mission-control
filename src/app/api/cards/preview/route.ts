@@ -84,6 +84,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // because the thing it triggers is a person opening a design tool.
   const customDesign = body.customDesign === true;
 
+  // ‼️ THE LEAD LANDS ON THE NAME AND THE EMAIL, NOT AT THE END OF THE WALK. Matthew, 2026-10-12:
+  // "get the hot lead as soon as they send name and email. Because right now it does the trigger
+  // only after they completed all the way through." He is right, and the cost of the old shape was
+  // every clinic that answered three questions and stopped: they existed nowhere.
+  //
+  // ‼️ THE SAME ROUTE, CALLED TWICE, RATHER THAN A SECOND ROUTE. ingestLead upserts on the email,
+  // so the second call finds the same contact and postOrThreadLeadUpdate threads the detail under
+  // the card the first call opened. One door, one headline shape, and nothing to keep in step.
+  //
+  // ‼️ THE PARTIAL CALL RENDERS NO CARD AND SENDS NO EMAIL. Both are promises about a finished
+  // conversation, and this one is three questions in.
+  const partial = body.partial === true;
+
   // ‼️ THE TOKEN IS IDENTITY AND NOT AUTHORITY. It cannot create, grant or change anything; all
   // it does is tell us which conversation this page was opened from, so the answers can land in
   // the thread Matthew is already reading. An absent or forged one costs the lead nothing: the
@@ -97,13 +110,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // ‼️ RENDERED ONCE, HERE, AND USED THREE TIMES: the Slack card says whether it exists, the
   // email attaches it, and the page offers the same bytes behind its download button. Rendering
   // it per consumer is how one of them quietly ends up with a different card.
-  const card = await renderCardForLead({
-    clinicName: business || null,
-    token: fromLead ? rawToken : null,
-  });
+  const card = partial
+    ? null
+    : await renderCardForLead({
+        clinicName: business || null,
+        token: fromLead ? rawToken : null,
+      });
 
-  const headline =
-    `CARD PREVIEW: ${leadName}` +
+  const headline = partial
+    ? `CARD PREVIEW, still answering: ${leadName}` +
+      (business ? ` · ${business}` : "") +
+      " · they have given their name and email, nothing else yet"
+    : `CARD PREVIEW: ${leadName}` +
     (business ? ` · ${business}` : "") +
     (topProduct ? ` · best seller: ${topProduct}` : "") +
     ` · wants the "${design.label}" card` +
@@ -126,7 +144,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     sourcePage: pageFromRequest(req, "/cards/p"),
     noteTitle: "AI Referral Engine card preview",
     headline,
-    detailLines: [
+    detailLines: partial
+      ? [
+          "They are mid-walk on /cards/p. The rest of this card fills in when they finish.",
+          "If nothing follows, they stopped after the email and are worth a chase.",
+        ]
+      : [
       // First, because it is the line that decides whether anybody owes them anything.
       card
         ? `Card: rendered, and the link is in their confirmation email. ${cardPdfUrl(fromLead ? rawToken : null)}`
@@ -153,7 +176,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       "Those two are the setup call's homework: they become the service label and the friend's " +
         "offer on client_service_offers.",
       "They have seen the card and walked the patient side of it.",
-    ],
+        ],
   });
 
   if (!result.contactId) {
@@ -177,6 +200,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   // Awaited because this route is the only thing that knows the send failed, and a failure is
   // worth a line in the lead's own thread: the clinic was told on screen that an email is coming,
   // so silence from us is a promise broken in a place nobody is watching. It cannot throw.
+  // ‼️ NOTHING ELSE HAPPENS ON THE PARTIAL CALL. No card, no email, no booking link: the walk is
+  // three questions in and every one of those is about a conversation that has finished.
+  if (partial) {
+    return NextResponse.json({ ok: true, partial: true, contactId: result.contactId });
+  }
+
   const mail = await sendPreviewEmail(email, {
     firstName,
     businessName: business || null,

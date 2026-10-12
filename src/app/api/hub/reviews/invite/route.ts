@@ -28,6 +28,7 @@
 
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/db";
+import { slack } from "@/lib/slack-bot";
 import { resolveHost } from "@/lib/hub/resolve";
 import {
   INVITE_CHANNELS,
@@ -204,6 +205,46 @@ export async function POST(req: Request): Promise<NextResponse> {
     // from a request body is a URL somebody else chose to put in an email we send.
     claimUrl: claimUrl(hubHost, code, appUrl()),
   });
+
+  // ── And #hot-leads hears about it ──────────────────────────────────────────
+  //
+  // ‼️ A REFERRAL IS A LEAD AND UNTIL NOW IT REACHED NOBODY WHO WATCHES A CHANNEL. The row went
+  // into referral_invites, the clinic email is OFF by default for every client, and that was the
+  // whole audience. Matthew, 2026-10-12: "when we get the name and the phone number, we want to
+  // trigger the hot lead so we actually get the referral". So the person being referred now shows
+  // up where every other inbound lead does.
+  //
+  // ‼️ IT IS NOT ingestLead() AND MUST NOT BE, WHICH IS THE ONE DECISION IN THIS BLOCK.
+  // That door upserts a `contacts` row, and the friend is a THIRD PARTY who has not contacted
+  // anybody: she gave no consent, asked for nothing, and her number reached us second hand from a
+  // patient at a counter. Writing her into the CRM would start a speed-to-lead RingOut against a
+  // stranger. What posts here is a notice that a referral happened, with the claim link, so a
+  // human can work it; the friend's details stay in referral_invites where the invite probe's
+  // per-column allowlist already fences them.
+  //
+  // ‼️ BEST EFFORT, AFTER THE ROW, AND IT CANNOT FAIL THIS REQUEST. Her screen is finished.
+  const channelId = process.env.SLACK_HOT_LEADS_CHANNEL || "";
+  if (channelId) {
+    const friend = text(body.friendName, MAX_FIELD) || "somebody";
+    try {
+      await slack.postMessage(
+        channelId,
+        [
+          `:handshake: *Referral from a patient at ${resolved.client.displayName}*`,
+          `They referred *${friend}*${serviceLabel ? ` after ${serviceLabel}` : ""}.`,
+          offerText ? `The friend was promised: ${offerText}` : "",
+          mode === "text"
+            ? "She opened the message on her own phone, so they have the link already."
+            : ":warning: INTERNAL mode: nobody messaged them. The clinic has to make contact.",
+          `Claim link: ${claimUrl(hubHost, code, appUrl())}`,
+        ]
+          .filter(Boolean)
+          .join("\n")
+      );
+    } catch (e) {
+      console.error("[hub/reviews/invite] slack notice failed:", (e as Error).message);
+    }
+  }
 
   return NextResponse.json({ id: (data?.id as string | undefined) ?? null });
 }

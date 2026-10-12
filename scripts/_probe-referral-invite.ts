@@ -114,7 +114,16 @@ check(
   const sms = INVITE_CHANNELS.find((c) => c.key === "sms");
   const whatsapp = INVITE_CHANNELS.find((c) => c.key === "whatsapp");
   const copy = INVITE_CHANNELS.find((c) => c.key === "copy");
-  check(sms?.threeWay === true, "the text channel is marked three-way");
+  // ‼️ THE THREE-WAY CHANNEL IS GONE, SO THE RULE INVERTS RATHER THAN DISAPPEARING. `sms` ("Text
+  // us both") was removed on 2026-10-12 and it was the only channel that could ever open a group.
+  // What this section is actually for is the check below it: no label may claim "both" over a
+  // channel that cannot deliver it. With sms gone that means NOTHING may claim it, which is a
+  // stronger statement than the one it replaced, not a weaker one.
+  check(
+    sms === undefined,
+    "the group text channel is gone, so nothing can open a group any more",
+    "removed 2026-10-12; a wa.me link takes exactly one recipient"
+  );
   check(whatsapp?.threeWay === false, "the WhatsApp channel is NOT marked three-way");
   check(copy?.threeWay === false, "copying the message is NOT marked three-way");
 
