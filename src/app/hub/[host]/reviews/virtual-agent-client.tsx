@@ -1823,9 +1823,16 @@ export function VirtualAgentClient({
                         )}
                       </>
                     ) : (
+                      /*
+                        ‼️ SHORTER THAN THE REVIEW BOX, AND ONLY BECAUSE THEY ARE STACKED NOW.
+                        Side by side they were equals; one above the other, two ten-row boxes put
+                        the attestation and the Copy button a long way down a 26rem frame. This one
+                        is reference material and scrolls internally, so six rows costs her nothing
+                        and keeps the thing she has to press on the screen.
+                      */
                       <textarea
                         className="rev-out"
-                        rows={10}
+                        rows={6}
                         value={hersText}
                         readOnly
                         aria-label="What you typed, for comparison"

@@ -1186,18 +1186,28 @@ body:has(.hub-root) {
    scoped under .rev2-read precisely so that deleting them could not touch v1. Nothing in this
    component references them any more. */
 
+/* ‼️ ONE COLUMN, AT EVERY WIDTH, AND THE SECOND COLUMN HERE WAS A REAL BUG (2026-10-13).
+   This read `repeat(2, minmax(0, 1fr))` for one commit and produced panels about 90px wide on a
+   desktop, with the review wrapping one word per line. Two causes, and both are worth keeping
+   written down:
+
+   1. ‼️ IT WAS A GRID INSIDE A GRID. .rev2-versions below is ALSO a two-column grid, so the pair
+      was being split twice: .rev2-read gave each half of the frame, then .rev2-versions split the
+      first half again. Four columns where two were intended.
+   2. ‼️ AND THE MEDIA QUERY THAT WAS MEANT TO SAVE IT MEASURES THE WRONG THING. A `max-width`
+      query reads the VIEWPORT, and this content lives inside .rev-frame, which is pinned to
+      --rev-frame-w (26rem) on a 1900px monitor by deliberate design: "ONE FRAME, PHONE WIDTH ON
+      DESKTOP TOO", from Matthew's own mockup. So on a desktop the query says "plenty of room"
+      while the real container is 416px. Any width rule in this block that keys off the viewport
+      is answering a question nobody asked.
+
+   This element now only stacks the pair and the promise, which is all it ever needed to do. */
 .rev2-read {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1.25rem;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
   align-items: start;
   margin-top: 0.5rem;
-}
-@media (max-width: 52rem) {
-  /* ‼️ THE REVIEW IS FIRST IN THE SOURCE, SO STACKING NEEDS NO ORDER RULE. On a phone she reads
-     the box she is going to post, then the original underneath it for comparison. That is the
-     same priority as the desktop layout rather than a different one. */
-  .rev2-read { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
 }
 
 /* ‼️ "Try another wording", AND IT REPHRASES OUR CONNECTIVES ONLY. Styled as a quiet secondary
@@ -1223,12 +1233,11 @@ body:has(.hub-root) {
   color: var(--hub-muted);
 }
 
-/* ‼️ THE PROMISE, AND IT SPANS BOTH COLUMNS BECAUSE IT IS ABOUT BOTH OF THEM. It sits under the
-   pair and above the attestation, which is the order she reads in: here is your review, here is
-   what we did to it, now confirm it is yours. It used to live in the rail's foot; the rail is
-   gone and this sentence is not optional. See the component for the three wordings it has had. */
+/* ‼️ THE PROMISE. It sits under the pair and above the attestation, which is the order she reads
+   in: here is your review, here is what we did to it, now confirm it is yours. It used to live in
+   the rail's foot; the rail is gone and this sentence is not optional. See the component for the
+   three wordings it has had. */
 .rev2-promise {
-  grid-column: 1 / -1;
   margin: 0.25rem 0 0;
   padding-top: 0.75rem;
   border-top: 1px solid var(--hub-rule);
@@ -1682,16 +1691,24 @@ body:has(.hub-tpl-editorial) { background: #fffdf9; }
    laptop. Stacked, HER panel is on top, because VERSIONS puts it first and the reading order on a
    phone is the array order. */
 
+/* ‼️ STACKED, NOT SIDE BY SIDE, AND THE FRAME IS WHY. The pair lived in a two-column grid with a
+   `max-width: 52rem` escape hatch, which is the shape you write when the container is the page.
+   It is not: .rev-frame pins this to 26rem on every screen, by design, so "side by side" meant two
+   ~12rem columns at best and, with the nested grid above, ~6rem in practice. 416px does not hold
+   two editable reviews, and no viewport query can change that.
+
+   ‼️ WHAT THE SIDE-BY-SIDE WAS FOR IS NOT LOST, WHICH IS THE ONLY REASON THIS IS THE RIGHT FIX.
+   The rule it serves is that she can SEE what we added by comparing the two. Stacked, both are
+   still rendered, still complete, still unedited on the original, one scroll apart instead of one
+   glance. A collapsed or hidden original would fail that rule; a stacked one does not.
+
+   The review is first in the source, so it is first on the screen with no order rule: she reads
+   the box she is about to post, then what she typed. */
 .rev2-versions {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
   align-items: start;
-}
-@media (max-width: 52rem) {
-  .rev2-versions {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 
 /* min-width: 0 so a long unbroken word cannot push a column wider than its share of the grid. */
