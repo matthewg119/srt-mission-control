@@ -41,7 +41,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  CARRY_VARIANTS,
+  CARRY_COMBINATIONS,
+  CARRY_STRIDE,
   QUESTION_SET_VERSION_V6,
   assembleJoined,
   assemblePlain,
@@ -242,7 +243,26 @@ export function VirtualAgentClient({
    * name; `rating` must never appear in this, in the panel below, or in assembleJoined, and
    * _probe-review-v7.ts asserts all three.
    */
-  const [variant, setVariant] = useState(0);
+  /**
+   * ‼️ RANDOM PER WALK, NOT 0, AND THIS IS THE HALF THAT ACTUALLY BREAKS THE PATTERN. A table of
+   * 54 shapes is worth nothing if every patient starts on the same one, and before this they did:
+   * everybody who never pressed Regenerate got the identical skeleton, so a clinic's profile would
+   * have filled with reviews whose full stops and commas landed in the same places. See
+   * CARRY_COMBINATIONS in review-assemble.ts for his words on it.
+   *
+   * ‼️ A LAZY useState INITIALISER, NOT Math.random() IN THE RENDER BODY, and not a ref either.
+   * This component is server rendered before it hydrates; a random value computed during render
+   * would be computed twice and disagree, which is the hydration mismatch the invite code's own
+   * docstring was written about. It is safe here for the additional reason that the seed is only
+   * ever READ inside the review step, which renders when `revealed` is true and is therefore never
+   * part of the server's output.
+   *
+   * ‼️ AND THE RANDOMNESS IS IN THE COMPONENT, NEVER IN review-assemble.ts. That module stays pure
+   * and deterministic: the same answers and the same variant always produce the same string, which
+   * is what lets the probe sweep all 54 shapes over fixtures. A module that rolled its own dice
+   * could not be tested at all.
+   */
+  const [variant, setVariant] = useState(() => Math.floor(Math.random() * CARRY_COMBINATIONS));
 
   /**
    * How many times she pressed Regenerate. Counted, never routed.
@@ -415,6 +435,15 @@ export function VirtualAgentClient({
   const nothingTyped = isEmpty(answers);
 
   /**
+   * Where "Copy and go" takes her.
+   *
+   * ‼️ destinationsFor() ALREADY PUTS THE CLINIC'S CHOSEN PLATFORM FIRST, so this is their
+   * decision and not ours: `review_destination_primary`, then the rest in declaration order. Null
+   * when the clinic has configured no link at all, which the launch lane is supposed to prevent.
+   */
+  const primaryDestination = destinations[0] ?? null;
+
+  /**
    * Another wording for our connecting words. Hers never move.
    *
    * ‼️ IT RE-RUNS A PURE FUNCTION OVER A TABLE OF LITERALS. No network, no model, no request. All
@@ -427,7 +456,7 @@ export function VirtualAgentClient({
    * is byte identical at every index. Fixture 4 asserts exactly that, at every index.
    */
   const regenerate = () => {
-    setVariant((at) => (at + 1) % CARRY_VARIANTS);
+    setVariant((at) => (at + CARRY_STRIDE) % CARRY_COMBINATIONS);
     // ‼️ A SEPARATE COUNTER, BECAUSE `variant` WRAPS AND WOULD BE A WRONG NUMBER. With three
     // wordings, four presses leaves `variant` at 1. Storing that as "how many wordings she tried"
     // would under-report every patient who went round more than once, and a metric that is wrong
@@ -1053,12 +1082,30 @@ export function VirtualAgentClient({
     void store({ completed: true });
   }
 
+  /**
+   * Copy her review, record where she is going, and take her there.
+   *
+   * ‼️ THE OPEN HAPPENS IN THE SAME USER GESTURE AS THE COPY, AND IT HAS TO. A popup blocker
+   * allows window.open only while a click is still being handled, so awaiting the store() round
+   * trip first would get the tab blocked for some patients and not others. The store is fired and
+   * not awaited for the same reason it is everywhere else in this file: recording is for SRT's
+   * benefit and must never stand between her and posting her own words.
+   *
+   * ‼️ AND IT IS STILL THE SAME PATH FOR EVERY RATING. One button, one destination, no branch on
+   * the stars anywhere in it. The destination is whichever platform the clinic named as primary,
+   * which is a fact about the clinic and not about her.
+   */
   async function copy() {
     try {
       await navigator.clipboard.writeText(text);
       setCopied(true);
     } catch {
       setCopied(false);
+    }
+    if (primaryDestination) {
+      void store({ postedDestination: primaryDestination.key });
+      // noopener for the usual reason: the page we are opening gets no handle on this one.
+      window.open(primaryDestination.url, "_blank", "noopener,noreferrer");
     }
   }
 
@@ -1904,32 +1951,41 @@ export function VirtualAgentClient({
             <span>I am a real customer of this business and I approve these words as my own.</span>
           </label>
 
+          {/*
+            ‼️ ONE BUTTON. THE ROW OF DESTINATION LINKS IS GONE, 2026-10-13, HIS CALL: "remove the
+            post on google button lets leave it only as copy and go".
+
+            It used to be Copy, then a row of links she had to tap second. Two taps for one
+            intention, and the second one is the one people forget: she copies, the step looks
+            finished, and the review never reaches a profile. Copy and go does both.
+
+            ‼️ THE DESTINATION ROW IS STILL NAMED .rev-dests AND STILL SITS ABOVE THE PRIVATE BOX,
+            WHICH IS NOT COSMETIC. scripts/_probe-review-gating.ts section 5 compares where
+            "rev-dests" and "rev-private" appear IN THIS FILE and fails if the private box comes
+            first. The rule it enforces is the one this whole tool is built around: the public
+            route is offered to everybody, above the private one, and never instead of it. A single
+            button is still the public route, so the element stays and keeps the name.
+
+            ‼️ AND SHE IS TOLD WHERE IT GOES BEFORE SHE PRESSES IT. A button that silently opens a
+            new tab is a dark pattern, and this one opens somebody else's website.
+          */}
           <button type="button" className="rev-primary" onClick={copy} disabled={!attested}>
-            {copied ? "Copied" : "Copy and go leave review"}
+            {copied
+              ? "Copied"
+              : primaryDestination
+                ? `Copy and go to ${primaryDestination.label}`
+                : "Copy my review"}
           </button>
 
-          {destinations.length > 0 ? (
-            <>
-              <p className="rev-hint">Then paste it wherever you would like to post it.</p>
-              <div className="rev-dests">
-                {destinations.map((destination) => (
-                  <a
-                    key={destination.key}
-                    href={destination.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={() => void store({ postedDestination: destination.key })}
-                  >
-                    {destination.label}
-                  </a>
-                ))}
-              </div>
-            </>
-          ) : (
-            <p className="rev-hint">
-              Copy your words, then paste them into your review on Google.
-            </p>
-          )}
+          <p className="rev-dests rev-hint">
+            {primaryDestination
+              ? `Opens ${primaryDestination.label} in a new tab. Paste your review there.`
+              : // ‼️ ABSENT BEATS WRONG, SAME AS THE REFERRAL STEP. With no link configured there
+                // is nowhere to send her, so the button copies and says so rather than inventing a
+                // destination. A clinic in this state should not be live: the reviews_live step in
+                // src/lib/launch/verify.ts refuses until at least one link exists.
+                "Copy your words, then paste them wherever you leave reviews."}
+          </p>
 
           {/*
             ‼️ AFTER THE DESTINATION LINKS, NEVER INSTEAD OF THEM, AND OFFERED TO EVERYONE.

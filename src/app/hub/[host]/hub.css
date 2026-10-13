@@ -355,14 +355,20 @@ body:has(.hub-root) {
 
 
 
-.rev-dests { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.75rem; }
-.rev-dests a {
-  border: 1px solid var(--hub-accent);
-  border-radius: var(--hub-radius);
-  padding: 0.6rem 1.1rem;
-  text-decoration: none;
-  font-weight: 600;
-}
+/* ‼️ ONE LINE OF TEXT SINCE 2026-10-13, NOT A ROW OF LINK BUTTONS. His call: "remove the post on
+   google button lets leave it only as copy and go". The destinations became one primary button
+   that copies and opens the clinic's chosen platform, so what is left here says where that button
+   goes, above the private box.
+
+   ‼️ THE CLASS NAME IS LOAD BEARING AND MUST NOT BE RENAMED AWAY. _probe-review-gating.ts section
+   5 compares where "rev-dests" and "rev-private" appear in the component's SOURCE and fails if the
+   private box comes first; section 13 fails any rule that sets display:none on either. Both are
+   enforcing the same rule: the public route is offered to everybody, above the private one. The
+   element changed shape; the rule did not.
+
+   `.rev-dests a` went with the links. If a second destination is ever offered again, it comes
+   back with its own argument for why two taps beat one. */
+.rev-dests { margin-top: 0.6rem; }
 
 /* ── The chat (2026-09-08) ─────────────────────────────────────────────────────
    The four questions arrive one at a time as messages instead of sitting on the page as four

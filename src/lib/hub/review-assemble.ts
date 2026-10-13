@@ -695,16 +695,53 @@ export const CARRIES: Readonly<Record<"motivation" | "nerves" | "walkout" | "fri
 };
 
 /**
- * How many wordings Regenerate can cycle through.
+ * The keys in the order their digits are read out of a variant number. V6 narrative order.
  *
- * The longest row, so every press lands on a real variant for at least one key; shorter rows wrap
- * by modulo. Derived rather than typed, because a fourth variant added to one row should change
- * the button's behaviour without anybody remembering to update a number (onboarding2's scar: it
- * typed "Six" over an array of seven).
+ * ‼️ CHANGING THIS ORDER RE-MAPS EVERY VARIANT NUMBER, which is harmless today (nothing stores a
+ * variant) and would not be if one were ever persisted.
  */
-export const CARRY_VARIANTS: number = Math.max(
-  ...Object.values(CARRIES).map((wordings) => wordings.length)
+const CARRY_ORDER = ["motivation", "nerves", "walkout", "friend"] as const;
+
+/**
+ * How many distinct shapes a review can take: 3 x 2 x 3 x 3 = 54.
+ *
+ * ‼️ EVERY KEY PICKS ITS WORDING INDEPENDENTLY, AND THAT IS THE WHOLE POINT OF THIS NUMBER.
+ * Matthew, 2026-10-13, looking at the preview: "all of the reviews will have the same format, the
+ * dots are in the same spot and the commas, so we need to create some randommness in that
+ * formatting to not create a pattern".
+ *
+ * He is right, and it is not only a cosmetic problem. Every review this tool produced opened with
+ * the same lead line and then ran four sentences in the same order with the same punctuation
+ * rhythm, because a single wording index moved all four carries together and everybody started at
+ * index 0. A clinic's profile would have filled with reviews sharing a visible skeleton, which is
+ * what a reader and a spam filter both call a template.
+ *
+ * A single index gave 3 shapes. Reading the number as a MIXED-RADIX digit string, one digit per
+ * key, gives 54: "I walked out feeling good." and "Walking out, I felt good." put the full stop
+ * and the comma in different places, and they now vary independently of the sentence before them.
+ *
+ * ‼️ THE ORDER OF THE SENTENCES CANNOT BE PART OF THE VARIATION, AND THAT IS A HARD CONSTRAINT
+ * RATHER THAN A CHOICE. scripts/_probe-review-v7.ts requires her own assembly's word sequence to
+ * survive in the output AS A SUBSEQUENCE, so shuffling her answers would fail the invariant that
+ * proves nothing was moved. What varies is how each answer is dressed, never where it sits.
+ *
+ * Derived from the table, so adding a wording to any row widens the space without anybody
+ * remembering to update a number (onboarding2's scar: it typed "Six" over an array of seven).
+ */
+export const CARRY_COMBINATIONS: number = CARRY_ORDER.reduce(
+  (total, key) => total * CARRIES[key].length,
+  1
 );
+
+/**
+ * How far Regenerate jumps.
+ *
+ * ‼️ NOT 1, AND IT HAS TO BE COPRIME WITH CARRY_COMBINATIONS. Adding 1 changes only the first
+ * digit most of the time, so the review would look almost identical to the one before it and the
+ * button would read as broken. 7 is coprime with 54, so repeated presses still reach all 54 shapes
+ * before repeating, and each press moves more than one key.
+ */
+export const CARRY_STRIDE = 7;
 
 /** The four keys v7 joins. Derived, so it cannot drift from the question set. */
 export const V6_KEYS: ReadonlyArray<ReviewQuestion["key"]> = REVIEW_QUESTIONS_V6.map((q) => q.key);
@@ -856,15 +893,28 @@ function canCarry(answer: string): boolean {
 }
 
 /**
- * The wording this key uses at this variant index.
+ * The wording this key uses at this variant number.
  *
- * Modulo its OWN length, so a key with two wordings and a key with three both resolve for every
- * index Regenerate can produce, and no press of the button can ever land on undefined.
+ * ‼️ THE VARIANT IS A MIXED-RADIX NUMBER, NOT AN INDEX, AND THAT IS WHAT BREAKS THE PATTERN. Each
+ * key reads its OWN digit: divide out the radices of the keys before it, then take the remainder
+ * modulo this key's own row length. So variant 17 might be motivation wording 2, nerves 0,
+ * walkout 2, friend 0, and variant 18 a different combination again. See CARRY_COMBINATIONS.
+ *
+ * Before this, one index moved all four carries in lockstep and there were three possible reviews.
+ *
+ * Negative and out-of-range numbers are folded back in, so no caller can land on undefined however
+ * it arrives at a number.
  */
-function carryFor(key: keyof typeof CARRIES, variant: number): string {
+function carryFor(key: (typeof CARRY_ORDER)[number], variant: number): string {
   const wordings = CARRIES[key];
-  const at = ((variant % wordings.length) + wordings.length) % wordings.length;
-  return wordings[at];
+  let divisor = 1;
+  for (const earlier of CARRY_ORDER) {
+    if (earlier === key) break;
+    divisor *= CARRIES[earlier].length;
+  }
+  const whole = Math.trunc(variant);
+  const folded = ((whole % CARRY_COMBINATIONS) + CARRY_COMBINATIONS) % CARRY_COMBINATIONS;
+  return wordings[Math.floor(folded / divisor) % wordings.length];
 }
 
 /**

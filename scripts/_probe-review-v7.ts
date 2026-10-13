@@ -47,7 +47,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   CARRIES,
-  CARRY_VARIANTS,
+  CARRY_COMBINATIONS,
   JOIN_MOTIVATION_NERVES,
   LEAD_SERVICE_ONLY,
   LEAD_WITH_PROVIDER,
@@ -261,11 +261,32 @@ for (const question of REVIEW_QUESTIONS_V6) {
   );
 }
 
+// ‼️ THE PRODUCT, NOT THE LONGEST ROW, AND THE DIFFERENCE IS THE WHOLE ANTI-PATTERN FIX. This read
+// `Math.max(...)` while one index moved all four carries together, which gave 3 possible reviews.
+// Each key reads its own digit now, so the space is 3 x 2 x 3 x 3.
 check(
-  CARRY_VARIANTS === Math.max(...Object.values(CARRIES).map((w) => w.length)),
-  "CARRY_VARIANTS is derived from the table rather than typed",
-  `${CARRY_VARIANTS} wordings is the longest row, so Regenerate cannot overrun it`
+  CARRY_COMBINATIONS ===
+    Object.values(CARRIES).reduce((total, wordings) => total * wordings.length, 1),
+  "CARRY_COMBINATIONS is the product of every row, derived rather than typed",
+  `${CARRY_COMBINATIONS} shapes from ${Object.values(CARRIES).map((w) => w.length).join(" x ")}`
 );
+// ‼️ AND EVERY KEY MUST BE ABLE TO VARY, or a row of length 1 would pin one sentence across every
+// review and the pattern would survive in that line.
+for (const [key, wordings] of Object.entries(CARRIES)) {
+  check(
+    wordings.length >= 2,
+    `the "${key}" sentence can be worded more than one way`,
+    `${wordings.length} wordings; a single one would make that line identical in every review`
+  );
+}
+// Distinct wordings, so a "variant" cannot be a duplicate wearing a different number.
+for (const [key, wordings] of Object.entries(CARRIES)) {
+  check(
+    new Set(wordings).size === wordings.length,
+    `and the "${key}" wordings are all different from each other`,
+    wordings.join(" | ")
+  );
+}
 
 // ‼️ ONE CONJUNCTION, AND IT IS THE ONE THAT ASSERTS NOTHING. The brief allowed and, but, so,
 // because and which is why. The last four assert contrast or causation between two answers, which
@@ -485,7 +506,7 @@ check(
 {
   const hersWords = words(assemblePlain(F2, { lead: true }));
   const seen = new Set<string>();
-  for (let variant = 0; variant < CARRY_VARIANTS; variant += 1) {
+  for (let variant = 0; variant < CARRY_COMBINATIONS; variant += 1) {
     const out = assertInvariants(`fixture 2 at variant ${variant}`, F2, variant);
     seen.add(out);
     const mine = words(out).filter((word) => hersWords.includes(word));
@@ -496,9 +517,9 @@ check(
     );
   }
   check(
-    seen.size === CARRY_VARIANTS,
-    `Regenerate produces ${CARRY_VARIANTS} genuinely different reviews`,
-    `${seen.size} distinct outputs from ${CARRY_VARIANTS} variants. A button that redraws the ` +
+    seen.size === CARRY_COMBINATIONS,
+    `Regenerate produces ${CARRY_COMBINATIONS} genuinely different reviews`,
+    `${seen.size} distinct outputs from ${CARRY_COMBINATIONS} variants. A button that redraws the ` +
       "same text is a button that lies about what it does."
   );
 }
@@ -568,7 +589,7 @@ check(
 // not be a way to roll the dice until a complaint reads better. The conjunction refusal in
 // canCarry() is what holds it: "a bit sore AND the wait was long" contains "and", so no wording of
 // any carry can ever reach it, which makes the complaint byte-identical at every index.
-for (let variant = 0; variant < CARRY_VARIANTS; variant += 1) {
+for (let variant = 0; variant < CARRY_COMBINATIONS; variant += 1) {
   const at = assembleJoined(F4, variant);
   check(
     at === f4,
@@ -637,10 +658,10 @@ let sweepFailures = 0;
 for (const [shapeName, shape] of Object.entries(SHAPES)) {
   for (let mask = 0; mask < 16; mask += 1) {
     for (const withLead of [true, false]) {
-      // ‼️ EVERY WORDING, NOT JUST THE FIRST. v8 multiplied this sweep by CARRY_VARIANTS, because
+      // ‼️ EVERY WORDING, NOT JUST THE FIRST. v8 multiplied this sweep by CARRY_COMBINATIONS, because
       // a variant nobody swept is a variant nobody checked, and Regenerate puts all of them in
       // front of a patient. 96 cases became 96 times the wording count.
-      for (let variant = 0; variant < CARRY_VARIANTS; variant += 1) {
+      for (let variant = 0; variant < CARRY_COMBINATIONS; variant += 1) {
         const answers: ReviewAnswers = {};
         if (withLead) {
           answers.service = "grumbish";
@@ -679,7 +700,7 @@ check(
   sweepFailures === 0,
   `the sweep: ${swept} answer combinations invent nothing and drop nothing`,
   sweepFailures === 0
-    ? `every rule fired against nonsense tokens at all ${CARRY_VARIANTS} wordings and inserted ` +
+    ? `every rule fired against nonsense tokens at all ${CARRY_COMBINATIONS} wordings and inserted ` +
       "only our own literals"
     : `${sweepFailures} of ${swept} combinations breached, listed above`
 );
@@ -839,9 +860,29 @@ check(
 // Regenerate varies our wording and must not be able to touch hers, nor to run on a schedule, nor
 // to reach the network.
 check(
-  clientSrc.includes("setVariant((at) => (at + 1) % CARRY_VARIANTS)"),
-  "Regenerate advances a wording index and does nothing else",
-  "modulo the table's own length, so it cycles and cannot overrun it"
+  clientSrc.includes("setVariant((at) => (at + CARRY_STRIDE) % CARRY_COMBINATIONS)"),
+  "Regenerate advances the wording number and does nothing else",
+  "by a stride coprime with the space, so each press moves more than one sentence and all 54 " +
+    "shapes are still reachable"
+);
+
+// ‼️ THE STARTING SHAPE IS RANDOM PER WALK, AND THIS IS THE ASSERTION THAT KEEPS THE PATTERN FIX
+// ALIVE. 54 shapes are worth nothing if every patient starts on shape 0: the clinic's profile
+// fills with reviews whose full stops and commas land in the same places, which is what a reader
+// and a spam filter both call a template. A future tidy-up that "simplifies" this back to
+// useState(0) would restore the exact defect he reported, silently, and every other check in this
+// file would still pass.
+check(
+  clientSrc.includes("useState(() => Math.floor(Math.random() * CARRY_COMBINATIONS))"),
+  "every walk starts on a random one of the shapes",
+  "NOT useState(0): that is the pattern he reported, and nothing else here would catch it"
+);
+// A lazy initialiser, not a value computed in the render body, or the server and the client roll
+// different numbers. Same scar as the invite code's.
+check(
+  !/Math\.random\(\)/.test(clientSrc.replace("useState(() => Math.floor(Math.random() * CARRY_COMBINATIONS))", "")),
+  "and that is the only randomness in the client",
+  "a second Math.random() in a render body is a hydration mismatch waiting to happen"
 );
 check(
   !/setVariant[\s\S]{0,200}(rating|fetch\(|setAnswers)/.test(clientSrc),

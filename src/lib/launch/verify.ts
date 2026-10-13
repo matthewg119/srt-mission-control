@@ -32,6 +32,8 @@ import { supabaseAdmin } from "@/lib/db";
 import { LAUNCH_STEPS, launchStepNumber, type LaunchStepKey } from "@/config/launch-steps";
 import { readDay0 } from "@/lib/clients/day-zero";
 import { faultsInStoredIntake } from "@/lib/validate/intake-fields";
+// The same registry the walk reads, so "a link is configured" means the same thing in both places.
+import { REVIEW_PLATFORMS } from "@/lib/hub/review-destinations";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The verdict
@@ -724,14 +726,45 @@ export const LAUNCH_VERIFIERS: Record<LaunchStepKey, LaunchVerifier> = {
       );
     }
 
+    // ‼️ AT LEAST ONE PLACE TO POST, OR THE WALK HAS NOWHERE TO SEND HER (2026-10-13). His call:
+    // "lets leave it only as copy and go so for it to go live we need to give it at least one link
+    // for it to be able to go somewhere after its done."
+    //
+    // The row of destination links became one "Copy and go" button that opens the clinic's primary
+    // platform. With no link configured that button can only copy, which is a worse walk than the
+    // one we sold and is invisible from Mission Control. It is observable from here, so it is
+    // checked here rather than left to somebody noticing.
+    const { data: client, error: clientError } = await supabaseAdmin
+      .from("clients")
+      .select("review_workflow")
+      .eq("id", ctx.clientId)
+      .maybeSingle();
+
+    if (clientError) return dbUnreachable("clients");
+    const workflow = (client?.review_workflow ?? {}) as Record<string, unknown>;
+    const links = REVIEW_PLATFORMS.filter((p) => {
+      const raw = workflow[p.field];
+      return typeof raw === "string" && raw.trim().length > 0;
+    });
+    if (links.length === 0) {
+      return notYet(
+        "a review destination",
+        "the walk has nowhere to send her after she copies her review",
+        "Add at least one review link (Google, Yelp, Facebook and the rest live on the review " +
+          "workflow panel). The patient's last step opens that page for her, so without one the " +
+          "button can only copy."
+      );
+    }
+
     const artifacts = await filedArtifacts(ctx.clientId, ctx.stepKey);
     if (artifacts === null) return dbUnreachable("client_docs");
     if (artifacts.length === 0) {
       return artifactRefusal(
         ctx.stepKey,
-        `${host.host as string} is attached, but nothing is filed to say the cards were handed over`,
-        "File a photo of the printed cards with the client. The hostname is something we can " +
-          "observe; the handover is not."
+        `${host.host as string} is attached and ${links.length} review link(s) are set, but ` +
+          "nothing is filed to say the cards were handed over",
+        "File a photo of the printed cards with the client. The hostname and the links are things " +
+          "we can observe; the handover is not."
       );
     }
     // ‼️ MIXED EVIDENCE RESOLVES TO THE WEAKER TIER. Half of this was observed and half was
