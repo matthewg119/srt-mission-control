@@ -288,38 +288,45 @@ export function VirtualAgentClient({
    * means this page may have been unloaded and restored; asking is how she finds out whether the
    * thing she copied survived, before she is looking at an empty box wondering what she did wrong.
    */
-  const [invitePhase, setInvitePhase] = useState<
-    "instruct" | "confirm" | "enter" | "send"
-  >("instruct");
   /**
-   * Which friend she is on, 1 or 2.
+   * ‼️ "handoff" IS NEW IN v8 AND IT IS WHERE SHE ACTUALLY SENDS THE MESSAGE. Before it, "Copy the
+   * message" copied and the step ended, which left her holding a clipboard on a screen that had
+   * moved on. He asked for her to be held in frame: copy, then "open your texting app and paste...
+   * come back when you are finished", then a Done button she presses herself.
    *
-   * ‼️ TWO IS THE CEILING AND IT IS NOT AN OVERSIGHT. The second ask is paid for by a
-   * specific deal, the two-for-one, and there is no third deal to pay for a third ask. A loop that
-   * kept offering would be this tool pressing somebody who has already said yes twice, at a
-   * counter, which is the one thing the whole handover was shaped to avoid.
+   * ‼️ AND "Done" IS NOT A DELIVERY CONFIRMATION. We are not the sender and cannot be: see the
+   * module header in referral-invite.ts. It advances the walk and it is recorded as "she got as
+   * far as her own keyboard", which is exactly what referral_invites.sent_at's comment already
+   * says it means. Nothing here may claim her friend received anything.
    */
-  const [inviteRound, setInviteRound] = useState<1 | 2>(1);
+  const [invitePhase, setInvitePhase] = useState<
+    "instruct" | "confirm" | "enter" | "send" | "handoff"
+  >("instruct");
   const [inviteError, setInviteError] = useState<string | null>(null);
   /**
-   * Minted once per visit, so the message she previews carries the code that gets stored.
+   * The invite code for this visit. One friend, one code.
+   *
+   * ‼️ THE SECOND FRIEND WAS DROPPED ENTIRELY ON 2026-10-13, HIS CALL, AND THE REASON IT IS A
+   * CLEAN DELETION RATHER THAN A LOSS IS WORTH WRITING DOWN. Round two existed to spend a
+   * two-for-one deal, and its only exit was a "That is enough" button. He asked for that button to
+   * go. Removing the button without removing the round would have trapped her in a loop she had
+   * opted into, with the rest of the walk behind it; removing the round removes the need for the
+   * exit. One friend per visit.
+   *
+   * What v7's comment here argued still holds and is now enforced by there being no mechanism:
+   * "A loop that kept offering would be this tool pressing somebody who has already said yes
+   * twice, at a counter, which is the one thing the whole handover was shaped to avoid."
+   *
+   * ‼️ clients.review_workflow.referral_offer.default_pair_offer IS LEFT ALONE IN THE CONFIG AND
+   * IN referral-config.ts. It is simply no longer read here. Ripping a key out of a bag a clinic
+   * may already have filled in is a separate decision from not asking a second time.
    *
    * A lazy useState initialiser rather than a ref assigned during render: this component is
    * server rendered before it hydrates, and a ref written in the render body would be computed
    * on both sides from Math.random and disagree. useState's initialiser runs once per mount on
    * the client, which is the only place the code is ever read.
    */
-  const [codes] = useState(() => [inviteCode(), inviteCode()]);
-  /**
-   * The code for the friend she is on.
-   *
-   * ‼️ ONE PER FRIEND, MINTED TOGETHER AND UP FRONT. Both rows are real invites with real
-   * expiries, so the second friend cannot be handed the first friend's link: whoever claimed it
-   * first would close it for the other, and the clinic would see one referral where there were
-   * two. Minted in the same lazy initialiser for the reason above: a code computed during render
-   * disagrees between the server pass and hydration.
-   */
-  const code = codes[inviteRound - 1];
+  const [code] = useState(() => inviteCode());
 
   // ── The walk ───────────────────────────────────────────────────────────────
   const [stage, setStage] = useState<Stage>("intro");
@@ -422,15 +429,17 @@ export function VirtualAgentClient({
 
   const offerText = resolvedOffer.friend;
   const referrerOffer = resolvedOffer.referrer;
-  /** The two-for-one, offered once, for a second friend. Null means she is never asked. */
-  const pairOffer = referral?.defaultPairOffer ?? null;
-  /**
-   * ‼️ ASKED ONLY AFTER A FIRST INVITE ACTUALLY WENT, AND ONLY WHERE THERE IS A DEAL. Not
-   * after a skip: she declined to send one, and following that with a better deal for sending two
-   * is haggling. The reward she is shown here is the pair offer and never the first one, because
-   * they are earned by different things.
-   */
-  const canOfferSecond = inviteRound === 1 && Boolean(pairOffer);
+  // ‼️ THE TWO-FOR-ONE AND THE SECOND-FRIEND ASK WERE DELETED HERE, 2026-10-13. What stood here
+  // was `pairOffer` (read from review_workflow.referral_offer.default_pair_offer) and
+  // `canOfferSecond`, with this argument attached to it: "ASKED ONLY AFTER A FIRST INVITE ACTUALLY
+  // WENT, AND ONLY WHERE THERE IS A DEAL. Not after a skip: she declined to send one, and
+  // following that with a better deal for sending two is haggling."
+  //
+  // That reasoning was sound and the ask is gone anyway, because he asked for the "That is enough"
+  // exit to go and the round cannot survive without it. See the `code` docstring above.
+  //
+  // The config key and the column are untouched. referral-config.ts still reads
+  // default_pair_offer into the config object; nothing on this screen consumes it.
 
   /**
    * Whether the referral half of the walk happens at all.
@@ -677,10 +686,18 @@ export function VirtualAgentClient({
     }
     if (result.kind === "clipboard") {
       void navigator.clipboard.writeText(result.text).catch(() => {});
-    } else {
-      window.open(result.href, "_self");
+      setInviteSent(true);
+      void storeInvite("text", channel);
+      // ‼️ THE COPY PATH NOW HOLDS HER IN FRAME, AND THE WHATSAPP PATH CANNOT. His ask: after
+      // "Copy the message", "open your texting app and paste the copied message into your friend's
+      // chat. Come back when you are finished" and a Done button. That only works for the channel
+      // that LEAVES HER HERE. The branch below calls window.open(_, "_self"), which navigates this
+      // page away, so a hand-off screen behind it would be a screen nobody is ever on.
+      setInvitePhase("handoff");
+      return;
     }
 
+    window.open(result.href, "_self");
     setInviteSent(true);
     void storeInvite("text", channel);
   }
@@ -711,23 +728,9 @@ export function VirtualAgentClient({
     setInvitePhase("send");
   }
 
-  /**
-   * The two-for-one: a second friend, on a deal that is about both of them coming in together.
-   *
-   * ‼️ IT RESETS THE FRIEND AND NOTHING ELSE. templateKey stays, because she has already
-   * chosen how she wants to sound, and her own email stays, because it is hers and she gave it
-   * once. inviteRound moves the code to the second one, so the second friend gets a link of their
-   * own rather than one that the first friend can close by claiming it.
-   */
-  function addSecondFriend() {
-    push("her", "Yes, I will add one more.");
-    setFriendName("");
-    setFriendContact("");
-    setInviteError(null);
-    setInviteSent(false);
-    setInviteRound(2);
-    setInvitePhase("instruct");
-  }
+  // ‼️ addSecondFriend() WAS DELETED HERE, 2026-10-13, WITH THE ROUND IT STARTED. See the `code`
+  // docstring: his call was to drop the "That is enough" button, and that button was round two's
+  // only exit.
 
   /**
    * The `internal` shape: record the referral and send nothing.
@@ -786,11 +789,15 @@ export function VirtualAgentClient({
     }
   }
 
-  /** Move past the invite without sending one. A command, not an answer. */
-  function skipInvite() {
-    setAwaiting("none");
-    setIndex((i) => i + 1);
-  }
+  // ‼️ skipInvite() WAS DELETED HERE, 2026-10-13, BECAUSE NOTHING CALLED IT ANY MORE. It moved
+  // past the invite without sending one, and its last caller was round two's "That is enough"
+  // button. Round one has not been skippable since 2026-10-12, so with round two gone there is no
+  // surface that skips this step at all.
+  //
+  // Left as a comment rather than as an uncalled function on purpose: an unreferenced handler on a
+  // regulated surface reads as a way out that exists and is merely unwired, which is the thing
+  // somebody re-wires in six months without finding the argument. The way out is the recommend
+  // gate one step earlier. If this is ever needed again, it is four lines.
 
   /** She sent it, so carry on to the review questions. */
   function finishInvite() {
@@ -862,13 +869,18 @@ export function VirtualAgentClient({
           // Snapshotted beside the friend's, so a later edit to the clinic's deals cannot change
           // what either of them was promised.
           //
-          // ‼️ THE SECOND FRIEND'S ROW CARRIES THE PAIR OFFER, NOT THE FIRST REWARD. They are
-          // earned by different things: the first is earned when that friend books, the two-for-one
-          // when she and the second friend come in together. Storing the first reward on both rows
-          // would have the clinic honouring the wrong one at the desk.
-          referrerOfferText: inviteRound === 1 ? referrerOffer : pairOffer,
+          // ‼️ ONE REWARD NOW, BECAUSE THERE IS ONE FRIEND. This read
+          // `inviteRound === 1 ? referrerOffer : pairOffer` while a second round existed, because
+          // the two were earned by different things: the first when that friend books, the
+          // two-for-one when she and a second friend came in together. With the round gone there
+          // is only the first, which is the one the copy on screen promises her.
+          referrerOfferText: referrerOffer,
           templateKey,
-          round: inviteRound,
+          // ‼️ CONSTANT 1 SINCE 2026-10-13, AND IT IS SENT ANYWAY. The route writes it into
+          // offer_snapshot and the column shape stays as it was, so no migration and no reader
+          // changes. A row that says round 1 is true; dropping the field would make every stored
+          // invite indistinguishable from the two-round ones already in the table.
+          round: 1,
           code,
           friendName: friendName.trim() || null,
           friendContact: friendContact.trim() || null,
@@ -1249,12 +1261,7 @@ export function VirtualAgentClient({
                       <>
                         <p className="va-invite-note">
                           Did you copy their number?
-                          {inviteRound === 1 && referrerOffer
-                            ? ` You get ${referrerOffer} once they book.`
-                            : ""}
-                          {inviteRound === 2 && pairOffer
-                            ? ` You both get ${pairOffer} when you come in together.`
-                            : ""}
+                          {referrerOffer ? ` You get ${referrerOffer} once they book.` : ""}
                         </p>
                         <div className="va-chips is-pair">
                           <button
@@ -1363,7 +1370,15 @@ export function VirtualAgentClient({
                       <>
                         {inviteMode === "text" ? (
                           <>
-                            <div className="va-chips" role="group" aria-label="Message wording">
+                            {/*
+                              ‼️ THE HEADING IS THE FIX, AND THE CHIPS WERE NEVER THE PROBLEM.
+                              He walked the preview and could not tell what four unlabelled chips
+                              were offering. A row of bare words above a message preview could
+                              plausibly be the recipient, the service, or a filter. One line of
+                              copy saying what the row IS costs nothing and was the whole defect.
+                            */}
+                            <p className="va-invite-note">Select message style</p>
+                            <div className="va-chips" role="group" aria-label="Message style">
                               {INVITE_TEMPLATES.map((t) => (
                                 <button
                                   key={t.key}
@@ -1424,70 +1439,66 @@ export function VirtualAgentClient({
                     )}
 
                     {/*
-                      ── Beat five: it went. The two-for-one, or the way on ──
+                      ── Beat five: she has the message. Now she sends it. ──
 
-                      ‼️ THE SECOND ASK IS PAID FOR, AND IT IS ASKED ONCE. Matthew, 2026-10-07: a
-                      second friend earns a two-for-one so she comes in WITH them, which puts two
-                      people through the door on one visit. It appears only where the clinic has
-                      agreed one (see defaultPairOffer) and only after a first invite actually went,
-                      never after a skip.
+                      ‼️ THIS SCREEN IS WHERE THE REFERRAL ACTUALLY HAPPENS AND IT DID NOT EXIST
+                      BEFORE v8. "Copy the message" copied and the step ended, which left her
+                      holding a clipboard on a screen that had already moved on; whether she ever
+                      pasted it was a thing nobody on either side could know. His ask, in his
+                      words: stay in the same frame, "open your texting app and paste the copied
+                      message into your friend's chat. Come back when you are finished", and a Done
+                      button.
 
-                      ‼️ AND IT IS NOT TIED TO WHAT SHE WRITES. The deal is earned by the two of them
-                      turning up. Tying any reward to a review is what the FTC endorsement rules
-                      reach and what _probe-review-gating.ts fails the build over.
+                      ‼️ "Done" IS NOT A DELIVERY CONFIRMATION AND MUST NEVER BE WORDED AS ONE. We
+                      are not the sender and cannot observe anything: see the module header in
+                      referral-invite.ts. She is telling us she is finished, which is what
+                      referral_invites.sent_at already means ("she got as far as her own
+                      keyboard"). "Sent" or "Delivered" here would be a claim we cannot make.
+
+                      ‼️ AND IT IS NOT A SECOND ASK. The two-for-one and the whole second-friend
+                      round were deleted on 2026-10-13: see the `code` docstring. What stood here
+                      offered "Add a second friend and you both get {pairOffer}". One friend per
+                      visit now, and the only button is the way on.
                     */}
-                    {inviteSent &&
-                      (canOfferSecond ? (
-                        <>
-                          <p className="va-invite-note">
-                            Add a second friend and you both get {pairOffer} when you come in
-                            together.
-                          </p>
-                          <div className="va-chips is-pair">
-                            <button
-                              type="button"
-                              className="va-chip"
-                              onClick={addSecondFriend}
-                            >
-                              Yes, add one more
-                            </button>
-                            <button type="button" className="va-chip" onClick={finishInvite}>
-                              No thanks
-                            </button>
-                          </div>
-                        </>
-                      ) : (
+                    {invitePhase === "handoff" && (
+                      <>
+                        <p className="va-invite-note">
+                          Open your texting app and paste the copied message into your friend&apos;s
+                          chat. Come back when you are finished.
+                        </p>
                         <button type="button" className="va-send is-wide" onClick={finishInvite}>
-                          Done, next question
+                          Done
                         </button>
-                      ))}
+                      </>
+                    )}
 
-                    {/*
-                      Gone once something has been sent: there is nothing left to skip.
-
-                      The label changes in round two because by then she has already sent one, and
-                      "Skip this one" would read as undoing it rather than stopping here.
-                    */}
-                    {/*
-                      ‼️ ROUND ONE CANNOT BE SKIPPED SINCE 2026-10-12, AND ROUND TWO STILL CAN.
-                      Matthew: "get rid of it so they are not able to just skip this option, and
-                      they actually have to go all the way through it."
-
-                      ‼️ THE OPT OUT DID NOT DISAPPEAR, IT MOVED UP ONE STEP. "Would you recommend
-                      this service to a friend?" is immediately before this and a No counts past
-                      the invite entirely. That gate is now the ONLY way out of the referral, which
-                      is the whole reason it is safe to remove the second one: somebody who does
-                      not want to refer anybody answers the question that asks them.
-
-                      ‼️ ROUND TWO KEEPS "That is enough" AND MUST. She opted into a second friend
-                      by tapping "Yes, add one more"; removing her way out would leave her inside a
-                      loop she chose, with the rest of the walk behind it.
-                    */}
-                    {!inviteSent && inviteRound > 1 && (
-                      <button type="button" className="va-skip" onClick={skipInvite}>
-                        That is enough
+                    {/* The WhatsApp path navigates away and returns here, so it still needs a
+                        plain way on. Suppressed during the hand-off, which has its own. */}
+                    {inviteSent && invitePhase !== "handoff" && (
+                      <button type="button" className="va-send is-wide" onClick={finishInvite}>
+                        Done, next question
                       </button>
                     )}
+
+                    {/*
+                      ‼️ "That is enough" WAS HERE AND WENT ON 2026-10-13 WITH THE ROUND IT EXITED.
+                      His call. It rendered only in round two, and v7's comment said in capitals
+                      that round two "KEEPS 'That is enough' AND MUST. She opted into a second
+                      friend by tapping 'Yes, add one more'; removing her way out would leave her
+                      inside a loop she chose, with the rest of the walk behind it."
+
+                      That was correct, and it is exactly why dropping the second friend entirely
+                      was the right way to honour the ask. Deleting the button alone would have
+                      built the trap the comment described. Deleting the round removes the need for
+                      an exit from it.
+
+                      ‼️ THE OPT OUT STILL EXISTS AND IT IS ONE STEP EARLIER. "Would you recommend
+                      this service to a friend?" sits immediately before the invite and a No counts
+                      past the whole referral. That gate is the only way out, which is what makes
+                      it safe for this step to have none: somebody who does not want to refer
+                      anybody answers the question that asks them, rather than being asked to send
+                      something and then given a way to back out of it.
+                    */}
                   </div>
                 ) : awaiting === "text" ? (
                   <div className="va-composer">

@@ -248,7 +248,17 @@ check(dialable("555.555.0111") === "5555550111", "and a local number keeps no pu
       `and says nothing about what SHE gets`
     );
   }
-  check(INVITE_TEMPLATES.length >= 3, "there are at least three wordings to choose from");
+  // ‼️ LOOSENED FROM >= 3 TO >= 2 ON 2026-10-13, AND HERE IS THE REASON, BESIDE THE CHECK.
+  //
+  // A silently loosened probe is worse than no probe, so: he cut the four wordings to two (`warm`
+  // and `short`), because four unlabelled chips with no heading was the thing he could not read on
+  // the preview. The number three was never the rule. What this assertion is FOR is that there is
+  // a CHOICE at all, rather than one wording she is handed: a single template would make this a
+  // message we wrote and she sent, and two is the smallest number that is still a choice.
+  //
+  // ‼️ IF THIS EVER NEEDS TO BE >= 1, STOP. That is not a loosening of the same check, it is the
+  // deletion of it, and it changes what the invite step is.
+  check(INVITE_TEMPLATES.length >= 2, "there are at least two wordings to choose from");
   check(
     templateByKey("not-a-real-key").key === INVITE_TEMPLATES[0].key,
     "an unrecognised wording falls back to the first rather than throwing"
