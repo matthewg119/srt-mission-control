@@ -57,6 +57,14 @@ import {
   type ReviewAnswers,
 } from "../src/lib/hub/review-assemble";
 
+import {
+  MIN_WALKS_FOR_RATE,
+  pct,
+  referralFunnel,
+  walkFunnel,
+  type WalkFunnelRow,
+} from "../src/lib/hub/review-funnel";
+
 /** Every wording the module can insert, flattened once. The fence's subject. */
 const ALL_CARRIES: readonly string[] = Object.values(CARRIES).flat();
 
@@ -962,6 +970,108 @@ check(
     "added three more carries and this is the check that proves none of them leaked onto a stored " +
     "row somebody already approved."
 );
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+// 8. THE FUNNEL ARITHMETIC. A WRONG CONVERSION NUMBER IS WORSE THAN AN ABSENT ONE.
+//
+// ‼️ THIS SECTION EXISTS BECAUSE THESE FIGURES GO IN FRONT OF A PAYING CLIENT. An undercount that
+// looks plausible is the failure mode docs/2026-08-21-hub-analytics.sql warns about twice, and the
+// fold is where it would happen: a running total written the wrong way round reads perfectly and
+// is nonsense. Every assertion below is a property, not a snapshot, so reordering the walk does
+// not break them.
+// ════════════════════════════════════════════════════════════════════════════════════════════════
+
+console.log("");
+
+{
+  // Two walks stopped at the stars, one at the review's last question, one finished.
+  const rows: WalkFunnelRow[] = [
+    { last_step: "q_stars", n: 2, completed: 0, edited: 0, regenerated: 0 },
+    { last_step: "q_friend", n: 1, completed: 0, edited: 0, regenerated: 0 },
+    { last_step: "closing", n: 1, completed: 1, edited: 1, regenerated: 1 },
+  ];
+  const folded = walkFunnel(rows);
+
+  check(
+    folded.started === 4 && folded.completed === 1,
+    "the funnel counts every walk that produced an answer, and completions separately",
+    `${folded.started} started, ${folded.completed} completed`
+  );
+
+  // ‼️ MONOTONIC, AND THIS IS THE ONE THAT CATCHES THE RUNNING TOTAL BEING BUILT BACKWARDS. Later
+  // steps can never have been reached by MORE people than earlier ones. A fold that summed
+  // forwards instead of backwards would produce a rising series and look like a funnel upside
+  // down, which somebody would read as the walk gaining people as it went.
+  let monotonic = true;
+  for (let at = 1; at < folded.steps.length; at += 1) {
+    if (folded.steps[at].reached > folded.steps[at - 1].reached) monotonic = false;
+  }
+  check(
+    monotonic,
+    "and every step was reached by no more people than the step before it",
+    folded.steps.map((s) => `${s.id}:${s.reached}`).join(" ")
+  );
+
+  check(
+    folded.steps[0]?.reached === folded.started - folded.unknown,
+    "the first step accounts for every walk with a recognised step",
+    `${folded.steps[0]?.reached} of ${folded.started}, ${folded.unknown} unknown`
+  );
+
+  // ‼️ AN UNRECOGNISED STEP IS COUNTED AND NAMED, NEVER DROPPED. A row stamped with a step this
+  // build no longer has is still a real patient. Discarding it would shrink the denominator and
+  // inflate every rate above it, which is the direction that flatters us.
+  const withStale = walkFunnel([
+    ...rows,
+    { last_step: "q_a_step_we_deleted", n: 5, completed: 0, edited: 0, regenerated: 0 },
+  ]);
+  check(
+    withStale.started === 9 && withStale.unknown === 5,
+    "a step this build no longer has is counted in the total and reported as unknown",
+    `${withStale.started} started, ${withStale.unknown} unknown`
+  );
+
+  // ‼️ NO PERCENTAGE UNDER THE FLOOR, AND THE FLOOR IS WHAT PROTECTS A CLIENT CALL. Four walks
+  // cannot produce a conversion rate. funnel-report.ts pins the same rule for the same reason.
+  check(
+    folded.steps.every((s) => s.rate === "-"),
+    `under ${MIN_WALKS_FOR_RATE} walks no rate is printed at all`,
+    "two of three is not 67%, it is two of three"
+  );
+  const busy = walkFunnel([
+    { last_step: "closing", n: MIN_WALKS_FOR_RATE, completed: MIN_WALKS_FOR_RATE, edited: 0, regenerated: 0 },
+  ]);
+  check(
+    busy.steps[0]?.rate === "100.0%",
+    `and at ${MIN_WALKS_FOR_RATE} walks it is`,
+    `first step reads ${busy.steps[0]?.rate}`
+  );
+  check(pct(1, 3) === "33.3%" && pct(0, 0) === "-", "pct rounds to one place and refuses to divide by zero");
+
+  // The referral half, from its own table.
+  const ref = referralFunnel([
+    { channel: "copy", invites: 10, sent: 8, claimed: 2 },
+    { channel: "whatsapp", invites: 3, sent: 3, claimed: 0 },
+  ]);
+  check(
+    ref.invites === 13 && ref.sent === 11 && ref.claimed === 2,
+    "the referral funnel totals invites, keyboards reached and claims",
+    `${ref.invites} / ${ref.sent} / ${ref.claimed}`
+  );
+  check(
+    ref.channels[0]?.channel === "copy",
+    "ordered by how much each channel is actually used",
+    "so the channel worth keeping is the first row"
+  );
+  // ‼️ THE CLAIM RATE DIVIDES BY SENT AND NOT BY INVITES. An invite she never sent cannot be
+  // claimed, so dividing by the minted count would blame the friend for a message that never left
+  // the counter.
+  check(
+    ref.channels.every((c) => c.claimRate === "-"),
+    "and no claim rate is printed under the floor either",
+    "same rule as the walk"
+  );
+}
 
 console.log("");
 if (failures > 0) {

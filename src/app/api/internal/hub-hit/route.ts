@@ -23,6 +23,9 @@ import { resolveHost } from "@/lib/hub/resolve";
 import { listPublished } from "@/lib/hub/pages";
 import { listSitePages } from "@/lib/hub/site-pages";
 import { recordHit, slugFromPath } from "@/lib/hub/analytics";
+// The same regex the middleware allowlist uses, so this file cannot admit a claim path the
+// middleware would refuse, nor refuse one it serves.
+import { HUB_CLAIM } from "@/lib/hub/hub-paths";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -62,8 +65,25 @@ function authorized(req: NextRequest): boolean {
  */
 async function isRealPath(clientId: string, kind: string, path: string): Promise<boolean> {
   if (path === "/") return true;
-  // The AI Referral Engine is one tool on one URL. It has no slugs at all.
-  if (kind === "reviews") return false;
+  // ‼️ THE REVIEWS HOST HAS EXACTLY TWO REAL PATHS, AND UNTIL 2026-10-13 THE CLAIM PAGE WAS
+  // SILENTLY THROWN AWAY. This read "The AI Referral Engine is one tool on one URL. It has no
+  // slugs at all." and returned false, which was true when it was written and stopped being true
+  // when /r/{CODE} shipped: every friend who opened a claim link was discarded here as an unreal
+  // path, so the one page in this lane with an outside audience had a view count of zero.
+  //
+  // ‼️ ALLOWED BY SHAPE, NOT BY LOOKUP, AND THAT IS WHAT KEEPS THE AMPLIFIER CLOSED. HUB_CLAIM is
+  // the same regex the middleware allowlist uses to decide the path is servable at all, so this
+  // admits exactly the paths that can render and nothing else. Resolving the CODE against
+  // referral_invites would be a database read per hit on the hot path, and it would also make
+  // this file a reader of a table whose columns are fenced per file by
+  // scripts/_probe-referral-invite.ts.
+  //
+  // ‼️ THE CODE LANDS IN hub_hits.path AND THAT IS A DELIBERATE ACCEPTANCE. A claim code is a
+  // capability: it is single use, expires in 14 days, and `.is("claimed_at", null)` closes it on
+  // first claim. hub_hits is internal and behind auth. The alternative, normalising every claim to
+  // one path, would lose the ability to tell one invite's traffic from another's, and `slug` below
+  // already collapses to "r" for grouping.
+  if (kind === "reviews") return HUB_CLAIM.test(path);
   if (HUB_FILES.has(path)) return true;
 
   // ‼️ A `site` HOST HAS TWO PATH NAMESPACES AND THE CLOSED SET IS THE UNION OF BOTH.

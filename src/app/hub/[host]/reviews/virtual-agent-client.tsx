@@ -245,6 +245,15 @@ export function VirtualAgentClient({
   const [variant, setVariant] = useState(0);
 
   /**
+   * How many times she pressed Regenerate. Counted, never routed.
+   *
+   * Separate from `variant` because that one cycles: with three wordings, four presses leaves it
+   * at 1. This is the press count, which is the thing worth knowing. A high number across many
+   * patients means our connectives read badly, which is a fact about us.
+   */
+  const [regenerateCount, setRegenerateCount] = useState(0);
+
+  /**
    * Her edits to the retouched box. `null` means she has not touched it.
    *
    * ‼️ null IS LOAD BEARING AND NOT MERELY AN EMPTY VALUE. It is what Regenerate checks: once she
@@ -419,6 +428,11 @@ export function VirtualAgentClient({
    */
   const regenerate = () => {
     setVariant((at) => (at + 1) % CARRY_VARIANTS);
+    // ‼️ A SEPARATE COUNTER, BECAUSE `variant` WRAPS AND WOULD BE A WRONG NUMBER. With three
+    // wordings, four presses leaves `variant` at 1. Storing that as "how many wordings she tried"
+    // would under-report every patient who went round more than once, and a metric that is wrong
+    // in one direction only is worse than no metric.
+    setRegenerateCount((n) => n + 1);
     setCopied(false);
   };
 
@@ -631,6 +645,12 @@ export function VirtualAgentClient({
       // is deliberately left alone, because it holds words she typed into the review box and
       // answering a later question is not a reason to throw them away.
       setCopied(false);
+      // ‼️ THE PROGRESS WRITE, AND THIS IS THE ONLY REASON AN ABANDONED WALK EXISTS AT ALL.
+      // Before 2026-10-13 the row appeared only at reveal(), so somebody who answered two
+      // questions and put the phone down was in no table and "where do we lose people" could not
+      // be answered. The answer she just gave is passed explicitly: setAnswers has not flushed
+      // yet when this runs, so reading `answers` here would store the state one question behind.
+      void store({ alsoAnswer: { key: current.key, value: body } });
     }
     setComposed("");
     setAwaiting("none");
@@ -688,6 +708,11 @@ export function VirtualAgentClient({
     if (!starsAnswered) return;
     setAwaiting("none");
     setIndex((i) => i + 1);
+    // ‼️ IT STILL DOES NOT READ WHAT SHE TAPPED. store() sends `rating` because the column exists
+    // and has since 2026-09-04; this function neither reads it nor branches on it, and the five
+    // pinned `rating` expressions in this file are unchanged. What it records is that she got
+    // PAST the stars, which is a step and not a score.
+    void store();
   }
 
   /**
@@ -897,20 +922,63 @@ export function VirtualAgentClient({
     setIndex((i) => i + 1);
   }
 
-  async function store(postedDestination?: string) {
+  /**
+   * Write what we have so far.
+   *
+   * ‼️ CALLED AS SHE GOES SINCE 2026-10-13, NOT ONCE AT THE END, AND THAT IS WHAT MAKES A FUNNEL
+   * POSSIBLE. Before this the row appeared only when she reached her finished review, so a walk
+   * abandoned at the stars existed nowhere and "where do we lose people" was unanswerable. The
+   * first call inserts, every later one patches.
+   *
+   * ‼️ AND IT IS WHY ANYTHING COUNTING ROWS IN THAT TABLE IS NOW COUNTING ATTEMPTS. `completed_at`
+   * is the column that means "she got a review out of it". weekly-report.ts moved to it in the
+   * same release; a future reader that counts rows instead will quietly report abandoned walks to
+   * a client as reviews collected.
+   *
+   * ‼️ NO session id, NO ip, NO user agent, EVER. docs/2026-08-18-client-hub.sql: "THE ABSENCE OF
+   * THE COLUMN IS THE ENFORCEMENT... Adding one of these columns later is a spec violation, not a
+   * feature." The funnel is built from how far THIS ROW got, which is weaker than joining page
+   * views to submissions and is the measurement we are allowed to take.
+   */
+  async function store(opts?: {
+    postedDestination?: string;
+    completed?: boolean;
+    /**
+     * The answer she gave in the same tick as this call.
+     *
+     * ‼️ REQUIRED WHEN CALLING FROM commit(), AND LEAVING IT OUT IS A SILENT OFF-BY-ONE. React
+     * has not flushed setAnswers by the time the handler calls this, so `answers` is still the
+     * state from before her latest answer. The first call would insert a row missing the only
+     * answer she had given, which is also the call that decides whether a row exists at all: the
+     * route refuses an insert with nothing in it.
+     */
+    alsoAnswer?: { key: keyof ReviewAnswers; value: string };
+  }) {
+    const sending: ReviewAnswers = opts?.alsoAnswer
+      ? { ...answers, [opts.alsoAnswer.key]: opts.alsoAnswer.value }
+      : answers;
     try {
       const res = await fetch("/api/hub/reviews/submit", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           clientId,
-          answers,
+          answers: sending,
           submissionId,
-          postedDestination,
+          postedDestination: opts?.postedDestination,
           rating,
           privateNote: privateNote.trim() || undefined,
           attested,
           questionSetVersion: QUESTION_SET_VERSION_V6,
+          // ── The funnel, counted and never routed ──
+          lastStep: REVIEW_SCRIPT[index]?.id ?? null,
+          completed: opts?.completed === true,
+          // ‼️ "SHE CHANGED IT", NOT "WHAT SHE CHANGED IT TO". editedJoined holds her text and it
+          // is already stored, in `answers`, as the answers she typed. A second copy of her prose
+          // under a different column would be the same words stored twice with no reader for the
+          // duplicate.
+          copiedEdited: editedJoined !== null,
+          regenerateCount,
         }),
       });
       const json = (await res.json()) as { id?: string };
@@ -977,7 +1045,12 @@ export function VirtualAgentClient({
   function reveal() {
     setRevealed(true);
     // Stored whether or not she goes on to post. The language is the asset either way.
-    void store();
+    //
+    // ‼️ THIS IS WHERE completed_at IS SET, AND "COMPLETED" MEANS SHE GOT A REVIEW OUT OF THE
+    // WALK. It does not mean she posted one: no code path can observe a review appearing on
+    // Google, which is what posted_destination's own comment says. Reaching her finished review
+    // is the furthest thing this tool can honestly claim to have achieved.
+    void store({ completed: true });
   }
 
   async function copy() {
@@ -1838,7 +1911,7 @@ export function VirtualAgentClient({
                     href={destination.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    onClick={() => void store(destination.key)}
+                    onClick={() => void store({ postedDestination: destination.key })}
                   >
                     {destination.label}
                   </a>
