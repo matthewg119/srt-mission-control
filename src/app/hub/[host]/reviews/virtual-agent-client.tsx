@@ -190,10 +190,36 @@ type Stage = "intro" | "connecting" | "chat";
  */
 type Awaiting = "none" | "text" | "gate" | "stars" | "refer" | "invite";
 
+/**
+ * A control set she has already answered, kept in the transcript.
+ *
+ * ‼️ IT IS A RECORD OF A CHOICE, NOT A CONTROL. Matthew, 2026-10-13: "you remove the whole texting
+ * buttons after we finish it, make them part as the conversation but gray out the options that
+ * they didnt pick leaving the button dead but visible in the history". Before this the live
+ * controls simply vanished when the step completed, so the transcript lost the fact that she had
+ * been asked anything at all, and a chat that shows her answers but not the questions reads as
+ * half a conversation.
+ *
+ * ‼️ AND NOTHING HERE IS AN ANSWER IN THE SENSE THAT MATTERS. These strings are chip LABELS, ours,
+ * and the rule they sit under has not moved: a chip's text may never become review text. This is
+ * display. `_probe-review-gating.ts` separately asserts that no "Yes" is assignable to
+ * ReviewAnswers, and nothing below changes what reaches the clipboard.
+ */
+interface AnsweredChips {
+  /** What she was asked, in her own transcript's voice. */
+  label: string;
+  /** Every option she was shown, in the order she saw them. */
+  options: readonly string[];
+  /** The one she picked. Rendered solid; the rest are greyed and dead. */
+  chosen: string;
+}
+
 interface Bubble {
   id: number;
   from: "them" | "her";
   text: string;
+  /** Present instead of `text` when this entry records a control set she answered. */
+  chips?: AnsweredChips;
 }
 
 export function VirtualAgentClient({
@@ -476,6 +502,26 @@ export function VirtualAgentClient({
   }, []);
 
   /**
+   * Keep an answered control set in the transcript, greyed and dead.
+   *
+   * ‼️ ITS OWN FUNCTION, DELIBERATELY, AND THE REASON IS A PROBE AND NOT TASTE.
+   * `scripts/_probe-review-gating.ts` cuts `answerGate()` and `answerRefer()` out of this file by
+   * name and fails the build if `rev-private`, `privateNote`, `setRevealed`, `destinations`,
+   * `rating`, `store(` or `setAnswers` appears inside either of them. Those two handlers must stay
+   * small enough to read in one go, because what they are NOT allowed to do is the whole point of
+   * them. Transcript bookkeeping lives here instead of being inlined there.
+   *
+   * ‼️ AND IT CARRIES NO VALUE THE WALK CAN READ BACK. It writes to `bubbles`, which nothing
+   * stores, nothing assembles and nothing posts: store() sends `answers`. A greyed chip is a thing
+   * she can see and nothing else can use.
+   */
+  const pushChips = useCallback((label: string, options: readonly string[], chosen: string) => {
+    bubbleId.current += 1;
+    const id = bubbleId.current;
+    setBubbles((prev) => [...prev, { id, from: "her", text: chosen, chips: { label, options, chosen } }]);
+  }, []);
+
+  /**
    * Play the step at `index`, then either advance or wait for her.
    *
    * ‼️ THE PAUSE IS NOT A LOADING STATE. Nothing is fetched and nothing is generated; the whole
@@ -608,7 +654,7 @@ export function VirtualAgentClient({
   function answerGate(saidYes: boolean) {
     const current = REVIEW_SCRIPT[index];
     if (!current || current.kind !== "gate") return;
-    push("her", saidYes ? current.yes : current.no);
+    pushChips(current.prompt, [current.yes, current.no], saidYes ? current.yes : current.no);
     setAwaiting("none");
     setIndex(stepAfter(index, saidYes));
   }
@@ -620,6 +666,23 @@ export function VirtualAgentClient({
    * already in state by the time this runs (the row's own onClick put it there, unchanged from
    * the five pinned expressions); this function does not read it, and must not. A branch here on
    * what she tapped would be review gating with the branch moved one function along.
+   *
+   * ‼️ AND THE STARS ARE DELIBERATELY LEFT OUT OF THE GREYED-TRANSCRIPT WORK, 2026-10-13. This is
+   * an exclusion with a reason, not a row somebody forgot.
+   *
+   * The gates, the message-style chips and the send buttons all keep an answered copy of
+   * themselves in the transcript now (see pushChips). The star row cannot join them without
+   * reading `rating` to know which star to render solid, and `_probe-review-gating.ts` section 1
+   * subtracts five exact `rating` expressions from this file and fails on any residue, section 1b
+   * requires all five present byte for byte, and one of the five is the literal
+   * `onClick={() => setRating(n)}`. So a greyed star row means either a sixth read of `rating` or
+   * an edit to a pinned expression, and both fail the build.
+   *
+   * That probe is the FTC rail on this surface: it is what proves no path behaves differently for
+   * a 1 than for a 5. His ask named the texting buttons. Trading the rail for a cosmetic row would
+   * be the wrong way round, so the stars simply advance as they always did. If he wants them in
+   * the history, the honest route is a sixth allowed expression added to that probe WITH the
+   * argument written beside it, in its own commit.
    */
   function leaveStars() {
     if (!starsAnswered) return;
@@ -642,7 +705,7 @@ export function VirtualAgentClient({
   function answerRefer(saidYes: boolean) {
     const current = REVIEW_SCRIPT[index];
     if (!current || current.kind !== "refer") return;
-    push("her", saidYes ? current.yes : current.no);
+    pushChips(current.prompt, [current.yes, current.no], saidYes ? current.yes : current.no);
     setAwaiting("none");
     setIndex(stepAfter(index, saidYes));
   }
@@ -684,6 +747,21 @@ export function VirtualAgentClient({
       setInviteError(result.reason);
       return;
     }
+    // ‼️ THE TWO ANSWERED CHIP ROWS GO INTO THE TRANSCRIPT HERE, AND THIS IS THE LAST MOMENT BOTH
+    // ARE STILL TRUE. The style row and the channel row both disappear with the `send` phase, and
+    // his ask was that they stay in the history with the unpicked options greyed. Recorded in the
+    // order she answered them: she chose the wording first, then how to send it.
+    pushChips(
+      "Select message style",
+      INVITE_TEMPLATES.map((t) => t.label),
+      templateByKey(templateKey).label
+    );
+    pushChips(
+      "How to send it",
+      INVITE_CHANNELS.map((c) => c.label),
+      INVITE_CHANNELS.find((c) => c.key === channel)?.label ?? channel
+    );
+
     if (result.kind === "clipboard") {
       void navigator.clipboard.writeText(result.text).catch(() => {});
       setInviteSent(true);
@@ -1122,14 +1200,53 @@ export function VirtualAgentClient({
             ) : (
               <>
                 <div className="va-msgs">
-                  {bubbles.map((bubble) => (
-                    <div
-                      key={bubble.id}
-                      className={bubble.from === "her" ? "va-msg is-her" : "va-msg is-them"}
-                    >
-                      {bubble.text}
-                    </div>
-                  ))}
+                  {bubbles.map((bubble) =>
+                    bubble.chips ? (
+                      /*
+                        ‼️ THE ANSWERED CONTROL SET, DEAD AND VISIBLE. His ask: "gray out the
+                        options that they didnt pick leaving the button dead but visible in the
+                        history". Rendered as real <button> elements so the row looks like the one
+                        she tapped rather than like a sentence about it, and every one of them is
+                        `disabled`, so there is nothing to tap and nothing to tab to.
+
+                        ‼️ `disabled` IS CORRECT HERE AND IS FORBIDDEN IN THE REVIEW PANEL, which
+                        is not a contradiction. There, a disabled control would be a live choice
+                        withheld from her. Here the choice is already made and the only honest
+                        state for the row is inert.
+
+                        ‼️ aria-disabled AS WELL AS disabled, and the label says so. A screen
+                        reader walking back through the transcript should hear "Warm, selected" and
+                        "Short, dimmed", not two buttons it might try to press.
+                      */
+                      <div key={bubble.id} className="va-answered">
+                        <p className="va-answered-q">{bubble.chips.label}</p>
+                        <div className="va-chips is-pair va-answered-row">
+                          {bubble.chips.options.map((option) => {
+                            const picked = option === bubble.chips?.chosen;
+                            return (
+                              <button
+                                key={option}
+                                type="button"
+                                disabled
+                                aria-disabled="true"
+                                className={picked ? "va-chip is-on" : "va-chip is-dim"}
+                              >
+                                {option}
+                                <span className="va-sr">{picked ? " selected" : " not selected"}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : (
+                      <div
+                        key={bubble.id}
+                        className={bubble.from === "her" ? "va-msg is-her" : "va-msg is-them"}
+                      >
+                        {bubble.text}
+                      </div>
+                    )
+                  )}
 
                   {typing && (
                     // Three dots, never a sentence about what is happening. Nothing is happening.

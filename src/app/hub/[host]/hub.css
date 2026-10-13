@@ -843,6 +843,70 @@ body:has(.hub-root) {
   background: var(--va-accent);
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   THE ANSWERED CONTROL SET, LEFT IN THE TRANSCRIPT (2026-10-13)
+   ───────────────────────────────────────────────────────────────────────────
+   Matthew: "make them part as the conversation but gray out the options that they didnt pick
+   leaving the button dead but visible in the history". Before this the live control row simply
+   vanished when the step completed, so the transcript showed her answers with none of the
+   questions, which reads as half a conversation.
+
+   ‼️ IT IS A RECORD AND IT MUST NOT INVITE A TAP. Every button in the row carries `disabled` and
+   `aria-disabled`, the cursor is default, and there is no hover state: the one thing worse than
+   losing the row is keeping a row that looks live and does nothing.
+
+   ‼️ TOKENS ONLY, AND ONLY THE va ONES. scripts/_probe-virtual-agent-grammar.ts fails the build if
+   any .va-* rule reads a client token other than --hub-accent / --hub-on-accent, because the
+   panel's grammar is the lane's and only the accent is the clinic's. --va-mut and --va-line are
+   what "dimmed" is made of here. */
+.va-answered {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.25rem 0;
+}
+.va-answered-q {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--va-mut);
+}
+/* Not a tap target any more, so it does not need a tap target's height. */
+.va-answered-row .va-chip {
+  padding: 0.45rem 0.9rem;
+  font-size: 0.875rem;
+  cursor: default;
+}
+.va-answered-row .va-chip:hover {
+  background: transparent;
+}
+.va-answered-row .va-chip.is-on:hover {
+  background: var(--va-accent);
+}
+
+/* ‼️ DIMMED, NOT HIDDEN, AND NOT ILLEGIBLE EITHER. The unpicked option has to stay readable: the
+   whole value of keeping the row is that she can see what she was offered. Border and text at the
+   muted token rather than an opacity on the accent, so the dimming is the same on a white clinic
+   page and on one whose ground is near black. */
+.va-chip.is-dim {
+  color: var(--va-mut);
+  border-color: var(--va-line);
+  background: transparent;
+  font-weight: 500;
+}
+
+/* Visually hidden, still read out. The row says "Warm, selected" and "Short, not selected" to a
+   screen reader walking back through the transcript, where sighted readers have the colour. */
+.va-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* ‼️ SHE READS THE MESSAGE BEFORE IT OPENS, SO IT IS SET AS A MESSAGE AND NOT AS FINE PRINT.
    It goes out of her phone, from her number, to somebody she knows. Styling it small or grey
    would be the tool hoping she does not check it. */
