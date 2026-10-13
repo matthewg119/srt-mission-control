@@ -41,8 +41,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  CARRY_COMBINATIONS,
   CARRY_STRIDE,
+  REVIEW_SHAPES,
   QUESTION_SET_VERSION_V6,
   assembleJoined,
   assemblePlain,
@@ -221,6 +221,16 @@ interface Bubble {
   text: string;
   /** Present instead of `text` when this entry records a control set she answered. */
   chips?: AnsweredChips;
+  /**
+   * Present instead of `text` when this entry records a block she was SHOWN and acted on.
+   *
+   * ‼️ THE MESSAGE SHE COPIED IS THE ONE THAT MATTERS AND IT USED TO VANISH. Matthew, 2026-10-13:
+   * "after we click copy the message it gets rid of the original message i need all of it to stay
+   * and just gray out and continue the conversation no dissappearing." The preview lived inside
+   * the `send` phase, so advancing to the hand-off took it off the screen, and the one thing she
+   * might want to re-read while pasting into another app was the thing we had just removed.
+   */
+  quote?: { label: string; body: string };
 }
 
 export function VirtualAgentClient({
@@ -262,7 +272,7 @@ export function VirtualAgentClient({
    * is what lets the probe sweep all 54 shapes over fixtures. A module that rolled its own dice
    * could not be tested at all.
    */
-  const [variant, setVariant] = useState(() => Math.floor(Math.random() * CARRY_COMBINATIONS));
+  const [variant, setVariant] = useState(() => Math.floor(Math.random() * REVIEW_SHAPES));
 
   /**
    * How many times she pressed Regenerate. Counted, never routed.
@@ -456,7 +466,7 @@ export function VirtualAgentClient({
    * is byte identical at every index. Fixture 4 asserts exactly that, at every index.
    */
   const regenerate = () => {
-    setVariant((at) => (at + CARRY_STRIDE) % CARRY_COMBINATIONS);
+    setVariant((at) => (at + CARRY_STRIDE) % REVIEW_SHAPES);
     // ‼️ A SEPARATE COUNTER, BECAUSE `variant` WRAPS AND WOULD BE A WRONG NUMBER. With three
     // wordings, four presses leaves `variant` at 1. Storing that as "how many wordings she tried"
     // would under-report every patient who went round more than once, and a metric that is wrong
@@ -562,6 +572,20 @@ export function VirtualAgentClient({
     bubbleId.current += 1;
     const id = bubbleId.current;
     setBubbles((prev) => [...prev, { id, from: "her", text: chosen, chips: { label, options, chosen } }]);
+  }, []);
+
+  /**
+   * Keep a block she was shown in the transcript, greyed and dead.
+   *
+   * Same rule as pushChips and the same reason it is its own function: `bubbles` is display, and
+   * nothing stores, assembles or posts it. What it holds here is the message SHE is about to send
+   * from her own phone, which is the one thing she may want to re-read while pasting it somewhere
+   * else, and which used to be removed from the screen at exactly that moment.
+   */
+  const pushQuote = useCallback((label: string, body: string) => {
+    bubbleId.current += 1;
+    const id = bubbleId.current;
+    setBubbles((prev) => [...prev, { id, from: "her", text: body, quote: { label, body } }]);
   }, []);
 
   /**
@@ -810,6 +834,9 @@ export function VirtualAgentClient({
       INVITE_TEMPLATES.map((t) => t.label),
       templateByKey(templateKey).label
     );
+    // ‼️ IN THE ORDER SHE MET THEM: the wording she chose, the message that wording produced, then
+    // how she sent it. The message is the block that used to disappear at this exact moment.
+    if (inviteMode === "text") pushQuote("The message you copied", inviteMessage);
     pushChips(
       "How to send it",
       INVITE_CHANNELS.map((c) => c.label),
@@ -1321,7 +1348,18 @@ export function VirtualAgentClient({
               <>
                 <div className="va-msgs">
                   {bubbles.map((bubble) =>
-                    bubble.chips ? (
+                    bubble.quote ? (
+                      /*
+                        A block she was shown and acted on. Dimmed to the muted token, selectable,
+                        never a control: there is nothing to press and nothing to undo. It is here
+                        so the message she is pasting into another app is still on screen while she
+                        pastes it.
+                      */
+                      <div key={bubble.id} className="va-answered">
+                        <p className="va-answered-q">{bubble.quote.label}</p>
+                        <p className="va-answered-quote">{bubble.quote.body}</p>
+                      </div>
+                    ) : bubble.chips ? (
                       /*
                         ‼️ THE ANSWERED CONTROL SET, DEAD AND VISIBLE. His ask: "gray out the
                         options that they didnt pick leaving the button dead but visible in the

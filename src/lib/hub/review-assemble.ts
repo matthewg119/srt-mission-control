@@ -743,6 +743,51 @@ export const CARRY_COMBINATIONS: number = CARRY_ORDER.reduce(
  */
 export const CARRY_STRIDE = 7;
 
+/**
+ * The orders her four answers may appear in.
+ *
+ * ‼️ CURATED, NOT ALL 24 PERMUTATIONS, AND THAT IS THE POINT RATHER THAN A SHORTCUT. Matthew asked
+ * to "randomize the order in which we say the started looking nervous about and how it felt and
+ * then fence, mix it up". All 24 would include orders that read like a shuffled deck ("If you are
+ * on the fence, just go. I was nervous about bruising. I started looking because of wrinkles."),
+ * and a review that reads wrong is the same problem as a review that reads templated. These six
+ * are orders a person actually writes in.
+ *
+ * ‼️ REORDERING WHOLE ANSWERS IS NOT THE SAME THING AS MOVING HER WORDS, AND THE DIFFERENCE IS THE
+ * WHOLE LICENCE FOR THIS. Each answer stays intact and entire; nothing is lifted out of one
+ * sentence and dropped into another. The thing v7's subsequence check was built to catch was the
+ * brief's own suggestion of moving her "honestly" from the walkout answer into the nerves clause,
+ * which changes what the hedge modifies. That is still impossible: scripts/_probe-review-v7.ts now
+ * requires every answer to appear as a CONTIGUOUS run of words, which is stricter within an answer
+ * than the subsequence rule it replaced, and separately requires that nothing is dropped.
+ *
+ * ‼️ THE RECOMMENDATION CLOSES FIVE OF THE SIX. It is the sentence a reader acts on, and burying
+ * it mid-review is the one reordering that costs the clinic something real.
+ */
+export const SENTENCE_ORDERS: ReadonlyArray<ReadonlyArray<(typeof CARRY_ORDER)[number]>> = [
+  // The order the questions are asked in: why I came, what worried me, how it went, what I'd say.
+  ["motivation", "nerves", "walkout", "friend"],
+  // Opens on the worry, which is the shape of a reassurance review.
+  ["nerves", "motivation", "walkout", "friend"],
+  // Opens on the outcome. A great many real reviews start with how it turned out.
+  ["walkout", "motivation", "nerves", "friend"],
+  // Why, then how it went, with the worry as an aside before the advice.
+  ["motivation", "walkout", "nerves", "friend"],
+  // Outcome first, then the backstory behind it.
+  ["walkout", "nerves", "motivation", "friend"],
+  // The one that opens on the recommendation, which is also a shape people write in.
+  ["friend", "walkout", "motivation", "nerves"],
+];
+
+/**
+ * Every distinct review this module can produce from one set of answers: 54 wordings x 6 orders.
+ *
+ * ‼️ 324, AND HE ASKED FOR 52. The number is not the point; the absence of a repeating skeleton is.
+ * Two reviews on the same clinic's profile now differ in which sentence opens, whether the first
+ * two are merged into one, and where the commas fall inside each.
+ */
+export const REVIEW_SHAPES: number = CARRY_COMBINATIONS * SENTENCE_ORDERS.length;
+
 /** The four keys v7 joins. Derived, so it cannot drift from the question set. */
 export const V6_KEYS: ReadonlyArray<ReviewQuestion["key"]> = REVIEW_QUESTIONS_V6.map((q) => q.key);
 
@@ -777,6 +822,28 @@ const CLAUSE_OPENERS: ReadonlySet<string> = new Set([
  */
 const CONJUNCTIONS: ReadonlySet<string> = new Set([
   "and", "but", "so", "because", "which", "though", "although", "plus", "also", "then", "however",
+]);
+
+/**
+ * The two carries whose wording ends in a preposition and therefore takes a noun phrase.
+ *
+ * "I started looking because of ___" and "I was nervous about ___". A determiner is the natural
+ * next word in both. The other two take a complement ("I walked out feeling ___") or a clause
+ * ("If you are on the fence, ___"), where a determiner reads as a fragment.
+ */
+const NOUN_FRAME_KEYS: ReadonlySet<string> = new Set(["motivation", "nerves"]);
+
+/**
+ * Determiners, which open a noun phrase rather than a clause.
+ *
+ * ‼️ EVERY ONE OF THESE IS ALSO IN CLAUSE_OPENERS, AND THAT IS NOT A CONTRADICTION. There they are
+ * refused because they open a clause in the walkout and friend frames; here they are allowed back
+ * in the two frames that want a noun. No PRONOUN appears below, so the double-subject failure
+ * CLAUSE_OPENERS exists to prevent is untouched in all four frames.
+ */
+const DETERMINERS: ReadonlySet<string> = new Set([
+  "the", "this", "that", "these", "those",
+  "my", "our", "his", "her", "their", "your",
 ]);
 
 /** A word reduced to letters for a closed-list lookup, so a trailing comma cannot miss. */
@@ -883,13 +950,29 @@ const CARRY_MAX_WORDS = 6;
  * declined carry is v6 byte for byte, so the conservative direction is the safe one. Per-key
  * opener lists would buy a few nicer sentences and cost the one-function guarantee above.
  */
-function canCarry(answer: string): boolean {
+function canCarry(answer: string, key: (typeof CARRY_ORDER)[number]): boolean {
   const words = wordsOf(answer);
   if (words.length < CARRY_MIN_WORDS || words.length > CARRY_MAX_WORDS) return false;
   if (!isSingleSentence(answer)) return false;
-  if (CLAUSE_OPENERS.has(token(words[0]))) return false;
   if (words.some((word) => CONJUNCTIONS.has(token(word)))) return false;
-  return true;
+
+  const first = token(words[0]);
+  if (!CLAUSE_OPENERS.has(first)) return true;
+  // ‼️ A DETERMINER IS NOT A CLAUSE OPENER IN A NOUN FRAME, AND TREATING IT AS ONE LEFT BARE
+  // FRAGMENTS ON THE SCREEN. Matthew answered "the food" to the nerves question and got back the
+  // sentence `The food.` sitting on its own, which is the same defect as the `Great.` this release
+  // was built to fix.
+  //
+  // The reason is that CLAUSE_OPENERS was tuned for ONE carry. "I walked out feeling the food" is
+  // nonsense, so "the" belongs on that list; but the four carries do not all end in the same part
+  // of speech. The motivation and nerves wordings end in a preposition and take a NOUN PHRASE
+  // ("because of the food", "nervous about the food"), where a determiner is exactly what should
+  // follow. The walkout and friend wordings take a complement or a clause, where it should not.
+  //
+  // So the list is per frame rather than global. What it still refuses everywhere is the thing it
+  // was always for: a pronoun subject, which would make a double subject ("I walked out feeling I
+  // felt fine", "I was nervous about we were late").
+  return NOUN_FRAME_KEYS.has(key) && DETERMINERS.has(first);
 }
 
 /**
@@ -1008,6 +1091,11 @@ function splitFriendClause(friend: string, answers: ReviewAnswers): string | nul
 export function assembleJoined(answers: ReviewAnswers, variant = 0): string {
   const sentences: string[] = [];
 
+  // One fold for the whole number, so the order digit and the wording digits are read off the
+  // same value. Negatives and out-of-range numbers come back inside the space.
+  const whole = Math.trunc(variant);
+  const folded = ((whole % REVIEW_SHAPES) + REVIEW_SHAPES) % REVIEW_SHAPES;
+
   /**
    * One key's sentence: her answer with its own question's words carried onto it when the shape
    * allows, and the bullet v6 produced when it does not.
@@ -1015,11 +1103,11 @@ export function assembleJoined(answers: ReviewAnswers, variant = 0): string {
    * ‼️ THE FALLBACK IS THE POINT. Every precondition that fails lands on assembleBullet, which
    * is v6 byte for byte, so the worst case of this whole feature is today's output.
    */
-  const carried = (key: keyof typeof CARRIES): string | null => {
+  const carried = (key: (typeof CARRY_ORDER)[number]): string | null => {
     const fragment = assembleFragment(answers[key]);
     if (!fragment) return null;
-    return canCarry(fragment)
-      ? assembleBullet(carryFor(key, variant) + midSentence(fragment, answers))
+    return canCarry(fragment, key)
+      ? assembleBullet(carryFor(key, folded) + midSentence(fragment, answers))
       : assembleBullet(answers[key]);
   };
 
@@ -1035,40 +1123,55 @@ export function assembleJoined(answers: ReviewAnswers, variant = 0): string {
     if (text) sentences.push(text);
   }
 
-  // 1. motivation + nerves, merged with the one conjunction that asserts nothing.
+  // ── Her four answers, in one of the orders a person writes in ──
   //
-  // ‼️ THE MERGE IS TRIED FIRST AND THE CARRIES ARE THE ELSE BRANCH, WHICH IS WHY TWO FULL
-  // SENTENCES ARE NEVER ALSO PREFIXED. The merge needs both answers at four words or more; a
-  // carry needs one to six. The two rules can both be eligible only in the four-to-six band, and
-  // there the merge is the better output because it uses one connective for two answers instead
-  // of one prefix for each.
+  // ‼️ THE ORDER IS PART OF THE VARIANT NUMBER, which is what stops every review on a clinic's
+  // profile sharing a skeleton. See SENTENCE_ORDERS for why six curated orders and not all 24.
+  const order = SENTENCE_ORDERS[Math.floor(folded / CARRY_COMBINATIONS) % SENTENCE_ORDERS.length];
+
+  // ‼️ THE MERGE NEEDS THE PAIR ADJACENT AND IN THAT ORDER, AND NOW IT IS NOT ALWAYS. ", and "
+  // asserts addition between two answers the question order already put side by side. Across a
+  // gap, or reversed, it would be asserting a relationship she did not make and the reader cannot
+  // check. So the merge fires only in the orders that keep motivation immediately before nerves,
+  // and in the others both answers simply get their own sentence. That is not a loss: it is one
+  // more axis on which two reviews differ.
+  const motivationAt = order.indexOf("motivation");
+  const pairIsAdjacent = motivationAt >= 0 && order[motivationAt + 1] === "nerves";
+
   const motivation = assembleFragment(answers.motivation);
   const nerves = assembleFragment(answers.nerves);
-  if (motivation && nerves && canMergeMotivationAndNerves(motivation, nerves)) {
-    const merged = assembleBullet(
-      motivation + JOIN_MOTIVATION_NERVES + midSentence(nerves, answers)
-    );
-    if (merged) sentences.push(merged);
-  } else {
-    const first = carried("motivation");
-    if (first) sentences.push(first);
-    const second = carried("nerves");
-    if (second) sentences.push(second);
-  }
+  const merging =
+    pairIsAdjacent &&
+    Boolean(motivation) &&
+    Boolean(nerves) &&
+    canMergeMotivationAndNerves(motivation as string, nerves as string);
 
-  // 2. walkout, with the question's own verb carried onto a fragment. This is the one the whole
-  // of v8 exists for: "Great." becomes "I walked out feeling great."
-  const walkout = carried("walkout");
-  if (walkout) sentences.push(walkout);
+  for (const key of order) {
+    // The merged pair is emitted once, at the motivation's position, and the nerves slot is then
+    // already spent.
+    if (merging && key === "nerves") continue;
 
-  // 3. friend: split where she already put the break, and otherwise carried like the rest.
-  //
-  // The split is tried first because it adds NO word at all, so where both are eligible the
-  // cheaper transformation wins.
-  const friend = assembleFragment(answers.friend);
-  if (friend) {
-    const split = splitFriendClause(friend, answers) ?? carried("friend");
-    if (split) sentences.push(split);
+    if (merging && key === "motivation") {
+      const merged = assembleBullet(
+        (motivation as string) + JOIN_MOTIVATION_NERVES + midSentence(nerves as string, answers)
+      );
+      if (merged) sentences.push(merged);
+      continue;
+    }
+
+    if (key === "friend") {
+      // The split is tried first because it adds NO word at all, so where both are eligible the
+      // cheaper transformation wins.
+      const friend = assembleFragment(answers.friend);
+      if (friend) {
+        const split = splitFriendClause(friend, answers) ?? carried("friend");
+        if (split) sentences.push(split);
+      }
+      continue;
+    }
+
+    const sentence = carried(key);
+    if (sentence) sentences.push(sentence);
   }
 
   return sentences.join(" ");

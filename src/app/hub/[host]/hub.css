@@ -875,6 +875,19 @@ body:has(.hub-root) {
   font-size: 0.8125rem;
   color: var(--va-mut);
 }
+/* The message she copied, kept on screen while she pastes it somewhere else. Dimmed and
+   selectable, never a control. --va-mut and --va-line only: see the token rule above. */
+.va-answered-quote {
+  margin: 0;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--va-line);
+  border-radius: 12px;
+  color: var(--va-mut);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
 /* Not a tap target any more, so it does not need a tap target's height. */
 .va-answered-row .va-chip {
   padding: 0.45rem 0.9rem;

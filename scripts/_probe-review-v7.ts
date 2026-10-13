@@ -18,20 +18,25 @@
 //   NOTHING INVENTED. Every word of the output is a word of hers, or a word in
 //     JOIN_MOTIVATION_NERVES / CARRIES / the lead templates. Vocabulary is built from the MODULE,
 //     so adding a literal to review-assemble.ts is the only way to widen what we can say.
-//   NOTHING DROPPED OR MOVED. Her own assembly's word sequence must appear in the joined output
-//     AS A SUBSEQUENCE: same words, same order, insertions allowed. A joiner that quietly dropped
-//     "and the wait was long" would satisfy the first invariant perfectly.
+//   EACH ANSWER CONTIGUOUS. Every answer appears in the output as one unbroken run of her words.
+//     Nothing of ours may land inside a sentence of hers.
+//   NOTHING DROPPED. Her every word appears at least as many times as she typed it. A joiner that
+//     quietly discarded "and the wait was long" would satisfy both of the above perfectly.
 //   NOTHING FROM OUTSIDE THE QUESTION. v8's own fence, section 1b. Every content word of every
 //     carry variant must appear in THAT KEY'S OWN QUESTION PROMPT. The vocabulary check above is
 //     derived FROM the literals, so it cannot see a widened literal; this one can, and it is the
 //     reason four carries with three wordings each is a tighter feature than one fixed verb was.
 //
-// The second one is doing more work than it looks. The v7 brief sketched a target output that
-// moved her "honestly" out of the walkout answer and into the nerves clause. Every word in that
-// string is hers, so the vocabulary check passes it; the subsequence check fails it, because
-// "honestly" arrives before "worried" instead of after "again". Relocating a hedge across two
-// answers changes which statement it modifies, which is a sentiment shift made out of her own
-// words, and it is the failure mode a word-list check cannot see.
+// ‼️ THE FIRST TWO REPLACED A SINGLE SUBSEQUENCE CHECK ON 2026-10-13, WHEN SENTENCE ORDER BECAME
+// PART OF THE VARIANT. The old rule was "her own assembly's word sequence appears in the output AS
+// A SUBSEQUENCE", which a reordered review fails by construction. What that rule was built to
+// catch is the v7 brief's own suggestion of moving her "honestly" out of the walkout answer and
+// into the nerves clause: every word is hers, so a word-list check passes it, and relocating a
+// hedge changes which statement it modifies. Contiguity still fails that, and fails it harder,
+// because it also refuses our words INSIDE her sentence, which a subsequence allowed.
+//
+// What is no longer asserted is the order of whole answers. Reordering intact statements is the
+// feature (see SENTENCE_ORDERS); rewriting one is still impossible.
 //
 // ‼️ AND IT IS NOT FOUR HAND-CHECKED STRINGS. Section 3 runs the joiner over every subset of the
 // four keys, in three answer shapes, with and without the lead line: 96 combinations, with
@@ -52,6 +57,9 @@ import {
   LEAD_SERVICE_ONLY,
   LEAD_WITH_PROVIDER,
   REVIEW_QUESTIONS_V6,
+  REVIEW_SHAPES,
+  SENTENCE_ORDERS,
+  assembleFragment,
   assembleJoined,
   assemblePlain,
   type ReviewAnswers,
@@ -132,6 +140,46 @@ function vocabularyOf(answers: ReviewAnswers): Set<string> {
   return vocabulary;
 }
 
+/**
+ * Whether `run` appears in `outer` as consecutive elements.
+ *
+ * ‼️ CONTIGUOUS, NOT A SUBSEQUENCE, AND THAT IS WHAT KEEPS ONE ANSWER ONE STATEMENT. A subsequence
+ * check would pass "I was worried it [absolutely] would look overdone"; this does not, because our
+ * word lands in the middle of her run.
+ */
+function hasRun(outer: string[], run: string[]): boolean {
+  if (run.length === 0) return true;
+  for (let at = 0; at + run.length <= outer.length; at += 1) {
+    let all = true;
+    for (let i = 0; i < run.length; i += 1) {
+      if (outer[at + i] !== run[i]) {
+        all = false;
+        break;
+      }
+    }
+    if (all) return true;
+  }
+  return false;
+}
+
+/**
+ * Words of hers that the output does not carry as many times as she typed them.
+ *
+ * Multiset containment rather than set containment: she may legitimately use "the" four times, and
+ * an output carrying it twice has dropped two of her words.
+ */
+function droppedWords(hers: string[], joined: string[]): string[] {
+  const have = new Map<string, number>();
+  for (const word of joined) have.set(word, (have.get(word) ?? 0) + 1);
+  const short: string[] = [];
+  const need = new Map<string, number>();
+  for (const word of hers) need.set(word, (need.get(word) ?? 0) + 1);
+  for (const [word, count] of need) {
+    if ((have.get(word) ?? 0) < count) short.push(word);
+  }
+  return short;
+}
+
 /** Whether `inner` appears in `outer` in order, gaps allowed. */
 function isSubsequence(inner: string[], outer: string[]): boolean {
   let at = 0;
@@ -179,14 +227,48 @@ function assertInvariants(label: string, answers: ReviewAnswers, variant = 0): s
       : "every word is hers or is in JOIN_MOTIVATION_NERVES / CARRIES / the lead template"
   );
 
-  const hersWords = words(hers);
-  const placed = isSubsequence(hersWords, words(joined));
+  // ‼️ THIS CHECK CHANGED SHAPE ON 2026-10-13 WHEN SENTENCE ORDER BECAME PART OF THE VARIANT, AND
+  // THE REPLACEMENT IS STRICTER WHERE IT MATTERS. It used to be:
+  //
+  //     isSubsequence(words(hers), words(joined))   // her words, in her order, gaps allowed
+  //
+  // which proved nothing was dropped and nothing moved, and which a reordered review fails by
+  // construction. What that rule was really built to catch is named in this file's header: the v7
+  // brief suggested moving her "honestly" out of the walkout answer and into the nerves clause,
+  // which changes what the hedge modifies. Two rules replace it and both must hold:
+  //
+  //   CONTIGUOUS. Every answer appears as an unbroken run of her words. That is STRONGER than
+  //     the subsequence rule within an answer: a subsequence permits our words to be interleaved
+  //     through her sentence, and this does not. Moving "honestly" across answers still fails.
+  //   NOTHING DROPPED. Her every word appears at least as many times as she typed it. A joiner
+  //     that quietly discarded "and the wait was long" fails here, which is the half that the
+  //     contiguity rule alone would miss.
+  //
+  // What is deliberately no longer asserted is the ORDER OF WHOLE ANSWERS, because reordering
+  // intact answers is the feature. An answer is a statement she made; which statement she makes
+  // first is presentation, and she reads and approves the result either way.
+  for (const [key, value] of Object.entries(answers)) {
+    const fragment = assembleFragment(value);
+    if (!fragment) continue;
+    const block = words(fragment);
+    if (block.length === 0) continue;
+    const contiguous = hasRun(words(joined), block);
+    check(
+      contiguous,
+      `${label}: her "${key}" answer survives as one unbroken run`,
+      contiguous
+        ? `${block.length} word(s), untouched and uninterleaved`
+        : `"${fragment}" was broken up or altered; joined: ${joined}`
+    );
+  }
+
+  const missing = droppedWords(words(hers), words(joined));
   check(
-    placed,
-    `${label}: nothing dropped and nothing moved`,
-    placed
-      ? `all ${hersWords.length} of her words, in her order`
-      : `could not place "${firstUnplaced(hersWords, words(joined))}" in order; joined: ${joined}`
+    missing.length === 0,
+    `${label}: nothing dropped`,
+    missing.length === 0
+      ? `all ${words(hers).length} of her words are still there`
+      : `missing from the output: ${missing.join(", ")}; joined: ${joined}`
   );
 
   return joined;
@@ -506,20 +588,20 @@ check(
 {
   const hersWords = words(assemblePlain(F2, { lead: true }));
   const seen = new Set<string>();
-  for (let variant = 0; variant < CARRY_COMBINATIONS; variant += 1) {
+  for (let variant = 0; variant < REVIEW_SHAPES; variant += 1) {
     const out = assertInvariants(`fixture 2 at variant ${variant}`, F2, variant);
     seen.add(out);
     const mine = words(out).filter((word) => hersWords.includes(word));
     check(
-      mine.join(" ") === hersWords.filter((w) => mine.includes(w)).join(" "),
-      `variant ${variant}: her words are in her order and none of them changed`,
+      mine.length > 0,
+      `variant ${variant}: her words are still in it`,
       out
     );
   }
   check(
-    seen.size === CARRY_COMBINATIONS,
-    `Regenerate produces ${CARRY_COMBINATIONS} genuinely different reviews`,
-    `${seen.size} distinct outputs from ${CARRY_COMBINATIONS} variants. A button that redraws the ` +
+    seen.size === REVIEW_SHAPES,
+    `the variant space produces ${REVIEW_SHAPES} genuinely different reviews`,
+    `${seen.size} distinct outputs from ${REVIEW_SHAPES} shapes. A button that redraws the ` +
       "same text is a button that lies about what it does."
   );
 }
@@ -589,25 +671,48 @@ check(
 // not be a way to roll the dice until a complaint reads better. The conjunction refusal in
 // canCarry() is what holds it: "a bit sore AND the wait was long" contains "and", so no wording of
 // any carry can ever reach it, which makes the complaint byte-identical at every index.
-for (let variant = 0; variant < CARRY_COMBINATIONS; variant += 1) {
+// ‼️ THE COMPLAINT SURVIVES AT ALL 324 SHAPES, AND THIS LOOP CHANGED SHAPE WHEN ORDER DID. It used
+// to assert the whole review was byte-identical at every variant, which is the strongest form of
+// "Regenerate cannot soften it" and is impossible once the sentence order varies. What it asserts
+// now is the part that was ever load-bearing, and it asserts it 324 times:
+//
+//   the complaint is PRESENT, word for word;
+//   it is a SENTENCE OF ITS OWN, so nothing absorbed it into a neighbour as a clause;
+//   and no walkout carry appears anywhere, at any wording.
+//
+// ‼️ THE SENTENCE COUNT IS NOT ONE OF THEM, AND MY FIRST ATTEMPT AT THIS LOOP ASSERTED IT AND
+// FAILED 162 OF 324 SHAPES. Exactly half, which is the giveaway: the merge needs motivation
+// immediately before nerves, three of the six orders put them that way, and the other three
+// produce five sentences instead of four. That is the merge legitimately declining, not the
+// complaint being touched. A count check here would have been a probe failing for a reason
+// unrelated to what it is named after, which is how a real breach gets filed as flaky.
+//
+// Rolling the dice until a complaint reads better is still impossible. What a patient can now get
+// is the same complaint in a review whose sentences run in a different order.
+let softened = 0;
+for (let variant = 0; variant < REVIEW_SHAPES; variant += 1) {
   const at = assembleJoined(F4, variant);
-  check(
-    at === f4,
-    `fixture 4: identical at variant ${variant}`,
-    at === f4
-      ? "pressing Regenerate cannot soften it"
-      : `THE COMPLAINT MOVED. variant ${variant} gave: ${at}`
-  );
+  const intact = at.includes("A bit sore and the wait was long.");
+  const uncarried = !CARRIES.walkout.some((wording) => at.includes(wording));
+  const standsAlone = sentencesOf(at).includes("A bit sore and the wait was long.");
+  if (!intact || !uncarried || !standsAlone) {
+    softened += 1;
+    if (softened <= 3) console.log(`      variant ${variant} gave: ${at}`);
+  }
 }
-// In the same position: third sentence of four, exactly where v6 put it.
-const hers4 = sentencesOf(assemblePlain(F4, { lead: true }));
+check(
+  softened === 0,
+  `fixture 4: the complaint survives word for word at all ${REVIEW_SHAPES} shapes`,
+  softened === 0
+    ? "no wording and no ordering can carry a verb onto it or absorb it into a neighbour"
+    : `${softened} shape(s) altered it, first three above`
+);
+// And it is still its own sentence rather than a clause inside somebody else's.
 const joined4 = sentencesOf(f4);
 check(
-  joined4.indexOf("A bit sore and the wait was long.") === 2 &&
-    hers4.indexOf("A bit sore and the wait was long.") === 3,
-  "fixture 4: and it sits in the same place in the narrative, after the nerves and before the advice",
-  `hers: sentence ${hers4.indexOf("A bit sore and the wait was long.") + 1} of ${hers4.length}; ` +
-    `joined: sentence ${joined4.indexOf("A bit sore and the wait was long.") + 1} of ${joined4.length}`
+  joined4.includes("A bit sore and the wait was long."),
+  "fixture 4: and it stands as a sentence of its own",
+  `sentence ${joined4.indexOf("A bit sore and the wait was long.") + 1} of ${joined4.length}`
 );
 // Lukewarm stays lukewarm. Her "but" is hers; ours is never added.
 check(
@@ -661,7 +766,7 @@ for (const [shapeName, shape] of Object.entries(SHAPES)) {
       // ‼️ EVERY WORDING, NOT JUST THE FIRST. v8 multiplied this sweep by CARRY_COMBINATIONS, because
       // a variant nobody swept is a variant nobody checked, and Regenerate puts all of them in
       // front of a patient. 96 cases became 96 times the wording count.
-      for (let variant = 0; variant < CARRY_COMBINATIONS; variant += 1) {
+      for (let variant = 0; variant < REVIEW_SHAPES; variant += 1) {
         const answers: ReviewAnswers = {};
         if (withLead) {
           answers.service = "grumbish";
@@ -678,7 +783,19 @@ for (const [shapeName, shape] of Object.entries(SHAPES)) {
         const hersWords = words(assemblePlain(answers, { lead: true }));
 
         swept += 1;
-        if (invented.length > 0 || !isSubsequence(hersWords, words(joined))) {
+        // ‼️ THE SAME TWO RULES assertInvariants USES, NOT THE OLD SUBSEQUENCE. Her answers must
+        // each survive as an unbroken run and nothing may be dropped; the order of whole answers
+        // is the variant's to choose. A sweep still asserting order would fail 5 of the 6
+        // orderings and tell nobody anything.
+        const outWords = words(joined);
+        const broken = (["motivation", "nerves", "walkout", "friend"] as const).filter((key) => {
+          const fragment = assembleFragment(answers[key]);
+          if (!fragment) return false;
+          return !hasRun(outWords, words(fragment));
+        });
+        const lost = droppedWords(hersWords, outWords);
+
+        if (invented.length > 0 || broken.length > 0 || lost.length > 0) {
           sweepFailures += 1;
           // ‼️ THE REASON, NOT JUST THE COUNT. A probe that reports "7 cases failed" and stops
           // sends somebody back to re-derive which seven and why, which is how a real breach gets
@@ -686,8 +803,8 @@ for (const [shapeName, shape] of Object.entries(SHAPES)) {
           if (sweepFailures <= 10) {
             console.log(`      case ${shapeName}/mask ${mask}/lead ${withLead}/variant ${variant}`);
             if (invented.length > 0) console.log(`        invented: ${invented.join(", ")}`);
-            const missing = firstUnplaced(hersWords, words(joined));
-            if (missing) console.log(`        could not place in order: "${missing}"`);
+            if (broken.length > 0) console.log(`        answer broken up: ${broken.join(", ")}`);
+            if (lost.length > 0) console.log(`        dropped: ${lost.join(", ")}`);
             console.log(`        output: ${joined}`);
           }
         }
@@ -700,7 +817,7 @@ check(
   sweepFailures === 0,
   `the sweep: ${swept} answer combinations invent nothing and drop nothing`,
   sweepFailures === 0
-    ? `every rule fired against nonsense tokens at all ${CARRY_COMBINATIONS} wordings and inserted ` +
+    ? `every rule fired against nonsense tokens at all ${REVIEW_SHAPES} shapes and inserted ` +
       "only our own literals"
     : `${sweepFailures} of ${swept} combinations breached, listed above`
 );
@@ -860,7 +977,7 @@ check(
 // Regenerate varies our wording and must not be able to touch hers, nor to run on a schedule, nor
 // to reach the network.
 check(
-  clientSrc.includes("setVariant((at) => (at + CARRY_STRIDE) % CARRY_COMBINATIONS)"),
+  clientSrc.includes("setVariant((at) => (at + CARRY_STRIDE) % REVIEW_SHAPES)"),
   "Regenerate advances the wording number and does nothing else",
   "by a stride coprime with the space, so each press moves more than one sentence and all 54 " +
     "shapes are still reachable"
@@ -873,14 +990,14 @@ check(
 // useState(0) would restore the exact defect he reported, silently, and every other check in this
 // file would still pass.
 check(
-  clientSrc.includes("useState(() => Math.floor(Math.random() * CARRY_COMBINATIONS))"),
+  clientSrc.includes("useState(() => Math.floor(Math.random() * REVIEW_SHAPES))"),
   "every walk starts on a random one of the shapes",
   "NOT useState(0): that is the pattern he reported, and nothing else here would catch it"
 );
 // A lazy initialiser, not a value computed in the render body, or the server and the client roll
 // different numbers. Same scar as the invite code's.
 check(
-  !/Math\.random\(\)/.test(clientSrc.replace("useState(() => Math.floor(Math.random() * CARRY_COMBINATIONS))", "")),
+  !/Math\.random\(\)/.test(clientSrc.replace("useState(() => Math.floor(Math.random() * REVIEW_SHAPES))", "")),
   "and that is the only randomness in the client",
   "a second Math.random() in a render body is a hydration mismatch waiting to happen"
 );
@@ -1122,6 +1239,7 @@ if (failures > 0) {
 console.log(
   "All checks passed. Every word in the joined version is hers or is in a literal whose every " +
     "content word comes from the question she answered, " +
-    "her order survives it, the complaint survives it at every wording, and the original is " +
+    "every answer of hers survives whole and undropped, the complaint survives it at every one " +
+    "of the shapes, and the original is " +
     "still on the screen beside it."
 );
