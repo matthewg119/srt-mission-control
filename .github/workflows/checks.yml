@@ -67,6 +67,18 @@ jobs:
       - name: Review gating probe (the rating must not route, and neither may a Yes)
         run: bun --no-env-file run scripts/_probe-review-gating.ts
 
+      # ‼️ v7 (2026-10-13) LET US PUT WORDS BETWEEN HER ANSWERS FOR THE FIRST TIME, which is the
+      # thing every rail on this surface was written to prevent us doing casually. The joiner can
+      # insert ", and " and "I walked out feeling " and nothing else, and this probe is the only
+      # place that fact is enforced rather than described: it checks that every word of the joined
+      # review is hers or is in one of those two literals, that her word ORDER survives the join
+      # (a relocated hedge is a sentiment shift made out of her own words, which a word list cannot
+      # see), that a complaint comes out undiluted and in the same position, that her version is
+      # still the radio that is selected when the screen opens, and that the on-screen promise
+      # matches what the code now does. Needs no secrets and no database.
+      - name: Review v7 joiner probe (connective tissue only, and hers is still the default)
+        run: bun --no-env-file run scripts/_probe-review-v7.ts
+
       - name: Virtual Agent grammar probe (one agent, two surfaces)
         run: bun --no-env-file run scripts/_probe-virtual-agent-grammar.ts
 
