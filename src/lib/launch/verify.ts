@@ -713,7 +713,14 @@ export const LAUNCH_VERIFIERS: Record<LaunchStepKey, LaunchVerifier> = {
       return notYet(
         "the reviews host row",
         "the review surface is not attached yet",
-        "Attach the reviews hostname for this client so the referral engine has somewhere to live."
+        // ‼️ THE CONSEQUENCE IS NAMED SINCE 2026-10-13, BECAUSE IT IS NOW A REAL ONE. Until this
+        // host is attached, referralConfigFor() suppresses the referral steps entirely: the walk
+        // still collects a review, and nobody is asked to refer a friend. That is deliberate
+        // (absent beats wrong) and it is the kind of silent state somebody has to be told about,
+        // or the step reads as paperwork rather than as a thing blocking the feature.
+        "Attach the reviews hostname for this client so the referral engine has somewhere to " +
+          "live. Until it is attached the walk asks for a review but never for a referral, " +
+          "because the claim link would otherwise point at our domain instead of theirs."
       );
     }
 
@@ -729,8 +736,16 @@ export const LAUNCH_VERIFIERS: Record<LaunchStepKey, LaunchVerifier> = {
     }
     // ‼️ MIXED EVIDENCE RESOLVES TO THE WEAKER TIER. Half of this was observed and half was
     // filed, and a verdict may never claim the stronger of the two.
+    //
+    // ‼️ THE CLAIM LINK IS ON THE EVIDENCE LINE SO SOMEBODY CAN EYEBALL IT ONCE, 2026-10-13. This
+    // is the shape a patient's friend actually receives, and until now the only way to see it was
+    // to walk the whole flow on a live clinic. The code is shown as CODE rather than a real one:
+    // a genuine code belongs to one invite, expires in 14 days, and reading one out of
+    // referral_invites here would also mean this file touching a table that
+    // scripts/_probe-referral-invite.ts fences per column. The host is the half that goes wrong.
     return filedOk(
       `${host.host as string} is attached`,
+      `patients will send https://${host.host as string}/r/CODE`,
       `${artifacts.length} artifact(s) filed against this step, most recent: ${artifacts[0].filename}`
     );
   },

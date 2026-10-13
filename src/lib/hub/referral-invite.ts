@@ -279,8 +279,20 @@ export const CLAIM_PATH_PREFIX = "/r/";
  * forwarded advert and is the single easiest thing for the friend to distrust. The host is the
  * one their QR cards already resolve to.
  *
- * Falls back to the app's own origin when the clinic has no reviews host attached, because a
- * referral that produces an unopenable link is worse than an off-brand one.
+ * ‼️ THE FALLBACK IS NO LONGER REACHABLE FOR A REAL CLINIC, AND THAT IS THE 2026-10-13 FIX.
+ *
+ * It used to read: "Falls back to the app's own origin when the clinic has no reviews host
+ * attached, because a referral that produces an unopenable link is worse than an off-brand one."
+ * True as far as it went, and it quietly produced the worse outcome: a patient vouching for her
+ * clinic texting her friend a mission.srtagency.com link, with nothing warning anybody.
+ *
+ * referralConfigFor() now returns null when there is no ATTACHED reviews host, so the referral is
+ * not offered at all rather than offered with the wrong URL. Absent beats wrong.
+ *
+ * ‼️ THE PARAMETER STAYS, AND IT IS NOT DEAD. Three callers pass it, and two of them are reached
+ * by surfaces that legitimately have no host: /demo/agent and /c/{token} hand the component a
+ * literal referral config and never consult the database. The fallback is what keeps the demo's
+ * preview link openable. What changed is that a LIVE clinic can no longer get here.
  */
 export function claimUrl(host: string | null, code: string, fallbackOrigin: string): string {
   const base = host ? `https://${host}` : fallbackOrigin.replace(/\/+$/, "");
