@@ -1104,97 +1104,68 @@ body:has(.hub-root) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   HER WORDS, AND THE RAIL BESIDE THEM (v2)
+   HER WORDS, AND THE REVIEW BESIDE THEM (v2)
    ───────────────────────────────────────────────────────────────────────────
-   ‼️ SCOPED UNDER .rev2-read SO v1 IS UNTOUCHED. The mark classes below are the same ones the
-   v1 notes screen uses, and v1 is the thing v2 is being compared against. Restyling them
-   globally would change both sides of the comparison.
+   ‼️ THE READABILITY RAIL'S RULES WERE DELETED FROM HERE, 2026-10-13. Matthew: "Get rid of the
+   grammaryl tab". What stood here was a 15rem second column, sentence shading in amber and red,
+   four word-mark colours, a struck-through hedge, and the key that explained them. All of it
+   painted and none of it offered a replacement, which was its defence and still is; it went
+   because he did not want it.
 
-   ‼️ IT POINTS. IT DOES NOT REWRITE. Every rule here paints; none of them offers a replacement,
-   and there is no button in the component that does. "This sentence runs long" is a fact about
-   her sentence. "Try this instead" is us writing her review, which is what FTC 16 CFR Part 465
-   reaches and what this whole tool is built not to do.
+   ‼️ AND ITS REMOVAL IS WHY THE TWO PANELS ARE NOW SYMMETRIC, which is the thing he asked for.
+   The mirror div had to wrap identically to a transparent textarea on top of it, character for
+   character, so the panel carrying it could never be styled like the one that did not. With no
+   mirror, both panels are the same object: a plain textarea, same typography, same box.
 
-   ‼️ COLOUR AND text-decoration ONLY, NEVER A BOX. The mirror has to wrap identically to the
-   textarea on top of it, character for character. A border, an outline, padding or a changed
-   weight on an inline span moves the text under it and drags every later highlight off its word.
-   The colours are mid-tone on purpose: they have to read on a white clinic page AND on a client
-   whose ground is near black, and neither a pale wash nor a dark one does both. */
+   ‼️ .rev-editor, .rev-mirror AND THE .rev-hard / .rev-flag RULES AROUND LINE 307 ARE STILL
+   THERE ON PURPOSE. They are the v1 notes screen's, not this one's; v2's rules were always
+   scoped under .rev2-read precisely so that deleting them could not touch v1. Nothing in this
+   component references them any more. */
 
 .rev2-read {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 15rem;
-  gap: 1.5rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.25rem;
   align-items: start;
   margin-top: 0.5rem;
 }
 @media (max-width: 52rem) {
-  /* The rail goes under the words rather than shrinking beside them. At 15rem it is already as
-     narrow as a two-word label and a number can be. */
+  /* ‼️ THE REVIEW IS FIRST IN THE SOURCE, SO STACKING NEEDS NO ORDER RULE. On a phone she reads
+     the box she is going to post, then the original underneath it for comparison. That is the
+     same priority as the desktop layout rather than a different one. */
   .rev2-read { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
 }
 
-.rev2-read .rev-editor { margin-top: 0; }
-
-/* Sentence shading. Amber runs long, red is packed tight, the same two facts the rail counts. */
-.rev2-read .rev-mirror .rev-hard-long {
-  background: rgba(245, 166, 35, 0.3);
-  box-shadow: none;
-}
-.rev2-read .rev-mirror .rev-hard-dense {
-  background: rgba(239, 68, 68, 0.26);
-  box-shadow: none;
-}
-
-/* Word marks, one colour each so the rail row and the mark are obviously the same thing. */
-.rev2-read .rev-mirror .rev-flag-adverb { text-decoration-color: #3b82f6; }
-.rev2-read .rev-mirror .rev-flag-passive { text-decoration-color: #10b981; }
-.rev2-read .rev-mirror .rev-flag-complex { text-decoration-color: #8b5cf6; }
-
-/* ‼️ A HEDGE IS STRUCK THROUGH, WHICH IS THE ONE MARK THAT LOOKS LIKE AN INSTRUCTION AND IS NOT.
-   Matthew asked for the redundant phrases to be crossed out. A line through "I would say that"
-   says THIS ADDS NOTHING; it does not say what to put there, nothing removes it for her, and the
-   words stay in the box until she deletes them herself. That is the line between pointing and
-   authoring, and it is the whole reason there is no button beside it. */
-.rev2-read .rev-mirror .rev-flag-qualifier {
-  text-decoration-line: line-through;
-  text-decoration-style: solid;
-  text-decoration-color: #ec4899;
-}
-
-.rev2-rail {
+/* ‼️ "Try another wording", AND IT REPHRASES OUR CONNECTIVES ONLY. Styled as a quiet secondary
+   control and never as the primary action: the primary action on this screen is Copy, and a
+   regenerate button that competes with it would read as "keep pressing until it sounds better",
+   which is the opposite of what it does. It cannot reach a word she typed and it cannot soften a
+   complaint; see the promise text and fixture 4. */
+.rev2-regen {
+  margin-top: 0.5rem;
+  padding: 0.4rem 0.75rem;
   border: 1px solid var(--hub-rule);
-  border-radius: var(--hub-radius);
-  padding: 0.9rem 1rem;
-  font-size: 0.875rem;
+  border-radius: calc(var(--hub-radius) / 2);
+  background: transparent;
+  color: var(--hub-muted);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
 }
-.rev2-rail-head {
-  margin: 0 0 0.6rem;
-  font-weight: 700;
-  color: var(--hub-fg);
+.rev2-regen:hover { color: var(--hub-fg); border-color: var(--hub-fg); }
+.rev2-regen-off {
+  margin: 0.5rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--hub-muted);
 }
-.rev2-rail-clear { margin: 0; color: var(--hub-muted); }
-.rev2-rail-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.45rem; }
-.rev2-rail-rows li {
-  display: grid;
-  grid-template-columns: 0.75rem 1fr auto;
-  align-items: center;
-  gap: 0.55rem;
-}
-.rev2-rail-label { color: var(--hub-fg); }
-.rev2-rail-n { font-weight: 700; font-variant-numeric: tabular-nums; }
 
-/* The key, painted the same way the mark it counts is painted. */
-.rev2-key { display: block; width: 0.75rem; height: 0.75rem; border-radius: 3px; }
-.rev2-key-long { background: rgba(245, 166, 35, 0.85); }
-.rev2-key-dense { background: rgba(239, 68, 68, 0.8); }
-.rev2-key-adverb { background: #3b82f6; }
-.rev2-key-passive { background: #10b981; }
-.rev2-key-complex { background: #8b5cf6; }
-.rev2-key-qualifier { background: #ec4899; }
-
-.rev2-rail-foot {
-  margin: 0.9rem 0 0;
+/* ‼️ THE PROMISE, AND IT SPANS BOTH COLUMNS BECAUSE IT IS ABOUT BOTH OF THEM. It sits under the
+   pair and above the attestation, which is the order she reads in: here is your review, here is
+   what we did to it, now confirm it is yours. It used to live in the rail's foot; the rail is
+   gone and this sentence is not optional. See the component for the three wordings it has had. */
+.rev2-promise {
+  grid-column: 1 / -1;
+  margin: 0.25rem 0 0;
   padding-top: 0.75rem;
   border-top: 1px solid var(--hub-rule);
   font-size: 0.8125rem;
@@ -1664,18 +1635,16 @@ body:has(.hub-tpl-editorial) { background: #fffdf9; }
   min-width: 0;
 }
 
+/* ‼️ A HEADING, NOT A LABEL, SINCE v8. It was a <label> wrapping a radio while she picked which
+   panel to copy. There is nothing to pick any more: the review is the one that gets copied and
+   the original is there to be read, so a cursor:pointer and a tap target on it would promise an
+   interaction that does not exist. */
 .rev2-version-head {
   display: flex;
   align-items: baseline;
   gap: 0.45rem;
   flex-wrap: wrap;
   margin-bottom: 0.45rem;
-  cursor: pointer;
-}
-.rev2-version-head input {
-  margin: 0;
-  /* The tap target at a counter is the whole label, which is why the head is the <label>. */
-  flex: none;
 }
 .rev2-version-name {
   font-weight: 700;
@@ -1686,21 +1655,27 @@ body:has(.hub-tpl-editorial) { background: #fffdf9; }
   font-size: 0.8rem;
 }
 
-/* The ring says "this is the one that gets copied". It is on hers when the screen opens. */
-.rev2-version-on .rev-editor,
+/* The ring says "this is the one that gets copied". In v8 it is always on the review, because the
+   review is always the one that gets copied. */
 .rev2-version-on .rev-out {
   border-radius: var(--hub-radius);
-}
-.rev2-version-on .rev-editor {
   outline: 2px solid var(--hub-accent);
   outline-offset: 3px;
 }
 
-/* The unselected panel is editable and legible, just visibly not the live one. Not disabled, not
-   hidden, not collapsed: she can type in it and selecting it keeps what she typed. */
-.rev2-version-off {
-  opacity: 0.78;
+/* ‼️ THE ORIGINAL IS READ-ONLY AND LEGIBLE, NOT DISABLED, NOT HIDDEN, NOT COLLAPSED. It is dimmed
+   enough to read as reference rather than as the live box, and no further: its whole job is to let
+   her see what we added by comparing the two, and a panel she has to squint at cannot do that job.
+   Full opacity on focus, because somebody reading it closely has focused it.
+
+   ‼️ AND IT IS THE SAME AT EVERY RATING. Nothing here is conditional on the stars, and
+   scripts/_probe-review-v7.ts fails the build if `rating` appears anywhere in the panel block or
+   if either panel carries `disabled` or `hidden`. */
+.rev2-version-off .rev-out {
+  opacity: 0.82;
+  border-radius: var(--hub-radius);
+  cursor: default;
 }
-.rev2-version-off:focus {
+.rev2-version-off .rev-out:focus {
   opacity: 1;
 }

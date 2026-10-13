@@ -736,9 +736,14 @@ check(
   "every value 1 through 5 reaches the same joined text"
 );
 
-// The panel pair, sliced from its own container to the rail that follows it.
+// The panel pair, sliced from its own container to the promise that follows it.
+//
+// ‼️ THE END MARKER CHANGED IN v8 BECAUSE THE RAIL IT USED TO POINT AT WAS DELETED. It was
+// `className="rev2-rail"`. If a future commit renames .rev2-promise, this slice silently collapses
+// to "" and the three checks below pass over nothing, which is why the length guard is here and
+// why it is checked FIRST. A fence around an empty string permits everything.
 const panelStart = clientSrc.indexOf('className="rev2-versions"');
-const panelEnd = clientSrc.indexOf('className="rev2-rail"', panelStart);
+const panelEnd = clientSrc.indexOf('className="rev2-promise"', panelStart);
 const panelBlock = panelStart >= 0 && panelEnd > panelStart
   ? clientSrc.slice(panelStart, panelEnd)
   : "";
@@ -749,43 +754,96 @@ check(
 );
 check(
   !panelBlock.includes("rating"),
-  "the joined version is offered without consulting the rating",
-  "not gated, not collapsed, not withheld from a low rating"
+  "both panels are rendered without consulting the rating",
+  "not gated, not collapsed, not reordered, not withheld from a low rating"
 );
 check(
   !/\bdisabled\b|(?<!aria-)\bhidden\b/.test(panelBlock),
   "and neither panel is disabled or hidden",
-  'both are editable at every rating. `aria-hidden` is excluded on purpose: the mirror div ' +
-    "carries it because it is decorative and must not be read out twice, which is the opposite " +
-    "of hiding a panel"
+  "`aria-hidden` is excluded on purpose: a decorative node may carry it, which is the opposite " +
+    "of hiding a panel from her"
+);
+// ‼️ READ-ONLY IS NOT THE SAME AS DISABLED AND THE DISTINCTION IS THE POINT. v8 made the original
+// panel read-only, which the check above deliberately does not catch: a read-only textarea is
+// selectable, scrollable, screen-reader navigable and fully legible, and the original's entire job
+// is to be READ beside the review. A disabled one is none of those things. Exactly one of the two
+// panels carries it, so the review box cannot become read-only by a copy-paste slip.
+check(
+  (panelBlock.match(/readOnly/g) ?? []).length === 1,
+  "exactly one of the two panels is read-only, and it is not the one she copies",
+  "the original is for reading; the review is for editing"
 );
 
 // ════════════════════════════════════════════════════════════════════════════════════════════════
-// 5. HER VERSION IS THE DEFAULT, AND IT IS FIRST.
+// 5. THE REVIEW IS WHAT SHE COPIES, AND THE ORIGINAL IS ALWAYS BESIDE IT.
 //
-// Which version is selected when the screen opens is the whole difference between offering her a
-// tidier draft and replacing her review with ours. One line of source decides it.
+// ‼️ THIS SECTION REVERSED IN v8 AND THE REVERSAL WAS DELIBERATE. v7 asserted the opposite, under
+// the heading "HER VERSION IS THE DEFAULT, AND IT IS FIRST", in these words:
+//
+//     clientSrc.includes('useState<"hers" | "joined">("hers")'),
+//     "the selected version on first render is HERS"
+//     hersAt >= 0 && joinedAt > hersAt,
+//     "her words are the first panel on the screen and in the reading order on a phone"
+//
+// Matthew, 2026-10-13: "I want them to see original, and retouched version so they can copy the
+// retouched only."
+//
+// ‼️ WHAT THIS SECTION CHECKS INSTEAD IS THE MITIGATION, AND IT IS A HARDER THING TO SATISFY THAN
+// THE DEFAULT WAS. v7's fear was a tool that replaces her words and hopes she does not notice. The
+// answer to that fear is no longer "hers is pre-selected"; it is that the original is rendered,
+// complete, unedited and adjacent on every render, so the difference is visible rather than
+// described. A build that dropped the original panel to save space would pass v7's check (nothing
+// would be "selected" wrongly) and fails every check below.
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 
 console.log("");
 
 check(
-  clientSrc.includes('useState<"hers" | "joined">("hers")'),
-  "the selected version on first render is HERS",
-  'useState<"hers" | "joined">("hers")'
-);
-check(
-  clientSrc.includes('const text = version === "joined" ? joinedText : hersText;'),
-  "and the selected version is the one that gets copied, by construction",
-  "one variable feeds the rail, the mirror, the clipboard and the attestation"
+  clientSrc.includes("const text = editedJoined ?? joined;"),
+  "the review she edits is the string the clipboard reads, by construction",
+  "one variable feeds the box, the clipboard and the attestation, so what she approved is what " +
+    "she posts"
 );
 
-const hersAt = clientSrc.indexOf('key: "hers"');
+// ‼️ THE ORIGINAL IS NOT OPTIONAL. Both panels must be in VERSIONS, and the review must be first:
+// first in the source is first on the screen and first on a phone, where the second panel is
+// below the fold.
 const joinedAt = clientSrc.indexOf('key: "joined"');
+const hersAt = clientSrc.indexOf('key: "hers"');
 check(
-  hersAt >= 0 && joinedAt > hersAt,
-  "her words are the first panel on the screen and in the reading order on a phone",
-  "reversing VERSIONS would put our draft in the reading position"
+  joinedAt >= 0 && hersAt > joinedAt,
+  "the review is the first panel and the original is the second",
+  "she reads the thing she is about to post, then what she typed, in that order"
+);
+check(
+  hersAt >= 0,
+  "and the original panel still exists at all",
+  "‼️ THE SHIPPING CONDITION FOR THE WHOLE FEATURE. Dropping it would make this a box that " +
+    "rewrites her words with nothing to compare them against, which is the form of this tool " +
+    "that FTC 16 CFR Part 465 reaches."
+);
+check(
+  clientSrc.includes("const hersText = assembled;"),
+  "the original renders straight from her answers with no edit buffer over it",
+  "nothing can put a word in that panel that assemblePlain did not put there"
+);
+
+// Regenerate varies our wording and must not be able to touch hers, nor to run on a schedule, nor
+// to reach the network.
+check(
+  clientSrc.includes("setVariant((at) => (at + 1) % CARRY_VARIANTS)"),
+  "Regenerate advances a wording index and does nothing else",
+  "modulo the table's own length, so it cycles and cannot overrun it"
+);
+check(
+  !/setVariant[\s\S]{0,200}(rating|fetch\(|setAnswers)/.test(clientSrc),
+  "and nothing near it reads the rating, posts anything, or rewrites her answers",
+  "a pure function over a table of literals, re-run"
+);
+check(
+  clientSrc.includes("{editedJoined === null ? ("),
+  "and it is withdrawn once she has edited the box",
+  "regenerating over her edit would silently discard what she wrote"
 );
 
 // Nothing persists the choice, so it is her words again on the next visit and for the next patient
@@ -837,6 +895,41 @@ check(
   "both halves describe exactly what sections 1 to 3 assert"
 );
 
+// ‼️ v8 ADDED TWO CLAUSES AND EACH OF THEM IS LOAD BEARING.
+//
+// "with words from our own questions" is the honest description of CARRIES. There are MORE of our
+// words in her review than v7 put there, and the promise has to say where they came from rather
+// than imply there are none.
+//
+// "only rephrases our joining words, never yours" exists because the button exists. A control
+// labelled "Try another wording" invites exactly one wrong assumption, which is that it is
+// rewriting what she said.
+check(
+  clientFlat.includes("with words from our own questions"),
+  "and it says WHERE our words come from, now that there are four carries",
+  "section 1b is what makes that sentence true; without the clause the promise understates us"
+);
+check(
+  clientFlat.includes("only rephrases our joining words, never yours"),
+  "and the Regenerate button is described on the screen that carries it",
+  "a button she can press without being told what it varies is a button she will misread"
+);
+
+// ‼️ AND THE ATTESTATION SAYS APPROVAL RATHER THAN AUTHORSHIP. With our question's words in the
+// box, "these are my own words" asked her to certify something not quite true on the one control
+// whose only job is to be a truthful record. "A real customer of this business" is untouched.
+check(
+  clientFlat.includes("I am a real customer of this business"),
+  "she still attests that she is a real customer",
+  "the half that matters most, and the half that was always hers to assert"
+);
+check(
+  clientFlat.includes("I approve these words as my own") &&
+    !clientFlat.includes("these are my own words"),
+  "and she attests that she APPROVES the words rather than that she authored every one",
+  "accurate once a carry can put four of the question's words in the box"
+);
+
 // ════════════════════════════════════════════════════════════════════════════════════════════════
 // 7. AN OLDER STORED ROW IS NOT SILENTLY EMPTIED.
 //
@@ -878,5 +971,6 @@ if (failures > 0) {
 console.log(
   "All checks passed. Every word in the joined version is hers or is in a literal whose every " +
     "content word comes from the question she answered, " +
-    "her order survives it, the complaint survives it, and her version is still the default."
+    "her order survives it, the complaint survives it at every wording, and the original is " +
+    "still on the screen beside it."
 );

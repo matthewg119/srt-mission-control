@@ -41,6 +41,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  CARRY_VARIANTS,
   QUESTION_SET_VERSION_V6,
   assembleJoined,
   assemblePlain,
@@ -72,7 +73,6 @@ import {
   type InviteChannel,
   type InviteMode,
 } from "@/lib/hub/referral-invite";
-import { analyse, mergeMarks } from "@/lib/hub/readability";
 
 export interface ReviewDestination {
   key: string;
@@ -147,22 +147,33 @@ interface Props {
 const BUBBLE_GAP_MS = { min: 400, max: 900 } as const;
 
 /**
- * The two versions of her review, in the order they appear on screen.
+ * The two panels, in the order they appear on screen.
  *
- * ‼️ HERS IS FIRST AND THAT IS NOT A LAYOUT PREFERENCE. First and selected is the version she
- * typed; the joined one sits beside it as the option. Reversing this array would put our joined
- * draft in the reading position and make hers the alternative, which is the same product as a
- * tidy-up button with extra steps. scripts/_probe-review-v7.ts pins the order and the default.
+ * ‼️ THE RETOUCHED ONE IS FIRST IN v8 AND HERS WAS FIRST IN v7. THE REVERSAL WAS DELIBERATE.
+ * v7's comment here read: "HERS IS FIRST AND THAT IS NOT A LAYOUT PREFERENCE. First and selected
+ * is the version she typed; the joined one sits beside it as the option. Reversing this array
+ * would put our joined draft in the reading position and make hers the alternative, which is the
+ * same product as a tidy-up button with extra steps."
  *
- * ‼️ THE LABELS CLAIM EXACTLY WHAT THE CODE DOES AND NOT A WORD MORE. "Joined up" and "Same
- * words, joined into sentences" are true of assembleJoined: the only strings it can insert are
- * JOIN_MOTIVATION_NERVES and CARRY_WALKOUT. "Tidied", "improved", "better" or "polished" would be
- * us advertising a rewrite we do not perform and must never perform, and the honest label is also
- * the one that tells her what she is choosing between.
+ * Matthew, 2026-10-13: "I want them to see original, and retouched version so they can copy the
+ * retouched only. and modify if they want in that same box where the retouched is".
+ *
+ * ‼️ WHAT SURVIVES OF THE OLD RULE IS THE MITIGATION AND IT IS LOAD BEARING. v7's fear was a tool
+ * that replaces her words and hopes she does not mind. Three things stop that being what this is,
+ * and all three are on this screen rather than in a comment: the original is beside it, always,
+ * unedited and visible, so the difference is shown rather than remembered; the retouched box is
+ * fully editable, so her exact words are one deletion away; and she ticks an attestation before
+ * the clipboard will take anything. What she cannot do any more is COPY the unjoined one, which
+ * is the single thing he asked to change.
+ *
+ * ‼️ THE LABELS CLAIM EXACTLY WHAT THE CODE DOES AND NOT A WORD MORE. "Joined into sentences" is
+ * true of assembleJoined: every word it inserts is in CARRIES, and every content word of those is
+ * in the question she answered. "Tidied", "improved", "better" or "polished" would be us
+ * advertising a rewrite we do not perform and must never perform.
  */
 const VERSIONS = [
-  { key: "hers", name: "Your words", note: "Exactly what you typed" },
-  { key: "joined", name: "Joined up", note: "Same words, joined into sentences" },
+  { key: "joined", name: "Your review", note: "Your answers, joined into sentences" },
+  { key: "hers", name: "What you typed", note: "Your answers exactly as you wrote them" },
 ] as const;
 
 type Stage = "intro" | "connecting" | "chat";
@@ -194,31 +205,30 @@ export function VirtualAgentClient({
   referral = null,
 }: Props) {
   const [answers, setAnswers] = useState<ReviewAnswers>({});
-  const [edited, setEdited] = useState<string | null>(null);
 
   /**
-   * ‼️ "hers" IS THE INITIAL VALUE AND THAT IS THE WHOLE v7 SAFETY PROPERTY ON THIS SCREEN.
+   * Which wording the carries use. Regenerate advances it.
    *
-   * v7 offers a joined-up version of her four answers beside the version she typed. Which one is
-   * SELECTED WHEN THE SCREEN OPENS is the difference between offering her a tidier draft and
-   * replacing her review with ours and hoping she does not mind. She has to choose the joined one.
-   * It is never chosen for her, there is no "remember my choice", and nothing about the clinic or
-   * her rating can flip this default. scripts/_probe-review-v7.ts reads this line.
-   *
-   * ‼️ AND IT IS OFFERED AT EVERY RATING, WHICH IS NOT A COURTESY. Showing the better-reading
-   * option to five stars and withholding it from two is review shaping: the output she is nudged
-   * toward would depend on how happy she is. `rating` must never appear in this choice, in the
-   * panel that renders it, or in assembleJoined, and the probe asserts all three.
+   * ‼️ IT IS A WORDING INDEX AND IT IS NOT THE RATING, AND THE DISTANCE BETWEEN THOSE TWO IS THE
+   * WHOLE OF WHY THIS IS ALLOWED TO EXIST. It starts at 0 for everybody, it moves only when she
+   * presses the button, and nothing about the clinic, the stars or the answers can move it.
+   * Offering a better-reading review to five stars and not to two is review shaping with a nicer
+   * name; `rating` must never appear in this, in the panel below, or in assembleJoined, and
+   * _probe-review-v7.ts asserts all three.
    */
-  const [version, setVersion] = useState<"hers" | "joined">("hers");
+  const [variant, setVariant] = useState(0);
 
   /**
-   * Her edits to the joined version, kept SEPARATE from `edited` on purpose.
+   * Her edits to the retouched box. `null` means she has not touched it.
    *
-   * Both panels are editable and both keep what she typed in them, so switching between them is
-   * not destructive and she can start from whichever reads closer and fix it. One shared buffer
-   * would mean selecting the joined version silently discarded her own edits, which is the same
-   * harm as defaulting to it.
+   * ‼️ null IS LOAD BEARING AND NOT MERELY AN EMPTY VALUE. It is what Regenerate checks: once she
+   * has edited the box, pressing it again would silently throw away what she wrote, so the button
+   * is replaced by a line telling her the wording is hers now. See the panel below.
+   *
+   * ‼️ AND THERE IS NO SECOND BUFFER ANY MORE. v7 kept `edited` beside this one because both
+   * panels were editable and switching between them had to be non-destructive. The original panel
+   * is read-only in v8, so it has nothing to keep and a buffer for it would be a buffer nothing
+   * can ever fill.
    */
   const [editedJoined, setEditedJoined] = useState<string | null>(null);
   const [revealed, setRevealed] = useState(false);
@@ -342,25 +352,42 @@ export function VirtualAgentClient({
   const assembled = useMemo(() => assemblePlain(answers, { lead: true }), [answers]);
 
   /**
-   * ‼️ THE v7 OPTION, COMPUTED ALONGSIDE HERS AND NEVER INSTEAD OF IT. Both exist on every render
-   * and `version` decides which one is copied. assembleJoined takes answers and nothing else: no
-   * rating, no client, no business name, no destination. See the v7 banner in review-assemble.ts.
+   * ‼️ COMPUTED ALONGSIDE HERS AND NEVER INSTEAD OF IT. Both exist on every render, both are on
+   * the screen, and the difference between them is a thing she can see rather than a thing she is
+   * told about. assembleJoined takes answers and a wording index and nothing else: no rating, no
+   * client, no business name, no destination. See the banner in review-assemble.ts.
    */
-  const joined = useMemo(() => assembleJoined(answers), [answers]);
+  const joined = useMemo(() => assembleJoined(answers, variant), [answers, variant]);
 
-  const hersText = edited ?? assembled;
-  const joinedText = editedJoined ?? joined;
+  /** The original, read-only. No edit buffer, because nothing can edit it. */
+  const hersText = assembled;
 
   /**
-   * What the rail reads, the mirror highlights, the copy button copies and the attestation covers.
+   * What the copy button copies and the attestation covers.
    *
-   * ‼️ ONE VARIABLE FOR ALL FOUR, SO THE SELECTED VERSION IS THE COPIED VERSION BY CONSTRUCTION.
-   * The alternative shape, where the pair of panels is separate from the box that gets copied,
-   * is how a tool ends up copying the version she did not pick.
+   * ‼️ ONE VARIABLE FOR BOTH, SO WHAT SHE APPROVED IS WHAT REACHES HER CLIPBOARD BY CONSTRUCTION.
+   * The alternative shape, where the box on screen is separate from the string the button reads,
+   * is how a tool ends up copying something she never saw.
    */
-  const text = version === "joined" ? joinedText : hersText;
+  const text = editedJoined ?? joined;
   const nothingTyped = isEmpty(answers);
-  const reading = useMemo(() => analyse(text), [text]);
+
+  /**
+   * Another wording for our connecting words. Hers never move.
+   *
+   * ‼️ IT RE-RUNS A PURE FUNCTION OVER A TABLE OF LITERALS. No network, no model, no request. All
+   * it changes is which entry of CARRIES each key uses, and every entry is fenced by
+   * _probe-review-v7.ts section 1b to the words of the question that key asked. Pressing it
+   * cannot reach a word she did not type and the question did not contain.
+   *
+   * ‼️ AND IT CANNOT SOFTEN A COMPLAINT, WHICH IS THE ONE THING A "TRY AGAIN" BUTTON MUST NOT DO.
+   * An answer holding a conjunction is never carried at all, so "a bit sore and the wait was long"
+   * is byte identical at every index. Fixture 4 asserts exactly that, at every index.
+   */
+  const regenerate = () => {
+    setVariant((at) => (at + 1) % CARRY_VARIANTS);
+    setCopied(false);
+  };
 
   /**
    * The deal for the service she named.
@@ -542,8 +569,12 @@ export function VirtualAgentClient({
     if (body) {
       push("her", body);
       setAnswers((prev) => ({ ...prev, [current.key]: body }));
-      // Her edits are hers. Re-assembling over them would discard what she typed in the box.
-      setEdited(null);
+      // ‼️ HER EDITS TO THE REVIEW BOX ARE NOT RESET HERE, AND THAT IS THE SAME RULE v7 HAD.
+      // v7 cleared `edited` at this point, because answering another question re-assembled HER
+      // version and an edit buffer over it would have gone stale. There is no such buffer now:
+      // the original panel is read-only and recomputes from `answers` on its own. `editedJoined`
+      // is deliberately left alone, because it holds words she typed into the review box and
+      // answering a later question is not a reason to throw them away.
       setCopied(false);
     }
     setComposed("");
@@ -868,31 +899,27 @@ export function VirtualAgentClient({
     }
   }
 
-  const highlighted = useMemo(() => mergeMarks(text, reading), [text, reading]);
-
-  /**
-   * The rail beside her words. Counts and consequences, never replacements.
-   *
-   * ‼️ EVERY ROW IS A COUNT OF SOMETHING IN HER SENTENCE. "2 sentences run long" is an
-   * observation. "Try this instead" is us writing her review, and there is no button that does
-   * it. Read the header of src/lib/hub/readability.ts before adding a row.
-   */
-  const rail = useMemo(() => {
-    const kinds = new Map<string, number>();
-    for (const flag of reading.flags) kinds.set(flag.kind, (kinds.get(flag.kind) ?? 0) + 1);
-    const long = reading.hard.filter((h) => h.reason === "long").length;
-    const dense = reading.hard.length - long;
-    return [
-      { key: "long", mark: "long", label: "Sentences that run long", n: long },
-      { key: "dense", mark: "dense", label: "Sentences packed tight", n: dense },
-      { key: "adverb", mark: "adverb", label: "Adverbs", n: kinds.get("adverb") ?? 0 },
-      { key: "passive", mark: "passive", label: "Passive phrases", n: kinds.get("passive") ?? 0 },
-      { key: "qualifier", mark: "qualifier", label: "Hedges", n: kinds.get("qualifier") ?? 0 },
-      { key: "complex", mark: "complex", label: "Long words", n: kinds.get("complex") ?? 0 },
-    ];
-  }, [reading]);
-
-  const clean = rail.every((row) => row.n === 0);
+  // ‼️ THE READABILITY RAIL WAS DELETED HERE, 2026-10-13. Matthew: "Get rid of the grammaryl tab".
+  //
+  // What stood here was `highlighted` (a mirror div under a transparent textarea, so a highlight
+  // could land under the sentence it was about), a `rail` memo counting long sentences, adverbs,
+  // passives, hedges and long words, and a `clean` flag. It pointed at her writing and never
+  // rewrote it, which was its whole defence, and that defence still holds. It went because he did
+  // not want it, not because it was wrong.
+  //
+  // ‼️ AND ITS REMOVAL IS WHAT MAKES THE TWO PANELS SYMMETRIC, which is the thing he actually
+  // asked for. With no mirror to line up, both panels are plain textareas with the same
+  // typography, so the side-by-side finally looks like a comparison instead of one real box and
+  // one shadow of it.
+  //
+  // ‼️ src/lib/hub/readability.ts IS DELIBERATELY STILL THERE. It now has no caller in the app,
+  // but scripts/test-onboarding-artifacts.ts (the FIRST script in CI) imports it and asserts it
+  // imports nothing and exports no rewriter. Deleting the module belongs in its own commit, if at
+  // all: one commit doing two things is how this deletion gets blamed for that probe going red.
+  //
+  // ‼️ THE PROMISE COPY THAT LIVED IN THE RAIL'S FOOT MOVED, IT DID NOT GO. See .rev2-promise
+  // below. Shipping a joiner with no on-screen statement of what it does is a deception problem
+  // of its own, separate from the review rule and not cured by any of it.
 
   const step = REVIEW_SCRIPT[index];
   const canSend = composed.trim().length > 0;
@@ -1029,14 +1056,17 @@ export function VirtualAgentClient({
       {chatting && (
         /*
           The panel opens OVER the page and closes when the walk ends, so the masthead, her stars
-          and the client's mark stay where they were, and her notes land on a normal page with room
-          for the reading rail beside them.
+          and the client's mark stay where they were, and her review lands on a normal page with
+          room for the original beside it.
 
           ‼️ A FULL-SCREEN VARIANT WAS BUILT, WALKED AND REJECTED (2026-09-24). It deleted the
           masthead and the client's mark, which are the only things making reviews.{domain} look
-          like the same business as learn.{domain}, and it put the notes step, the rail, the
-          attestation, the destination links and the private note inside one fixed scrolling
-          column. If somebody proposes it again, that is what it costs.
+          like the same business as learn.{domain}, and it put the review step, the attestation,
+          the destination links and the private note inside one fixed scrolling column. If
+          somebody proposes it again, that is what it costs.
+
+          (The rail this comment used to name was deleted on 2026-10-13. The two-column room it
+          describes is now the review and the original, which needs it for the same reason.)
         */
         <div className="va-shell">
           <div className="va-scrim" aria-hidden="true" />
@@ -1522,99 +1552,82 @@ export function VirtualAgentClient({
           */}
           <h2>Your review</h2>
           <p className="rev-hint">
-            Edit anything below before you copy it. These are your words, and only your words get
-            copied.
+            Edit it however you like before you copy it. Every word in it is a word you typed or a
+            word from the question you were answering.
           </p>
 
           <div className="rev2-read">
             {/*
-              ‼️ TWO VERSIONS, SIDE BY SIDE, HERS SELECTED. NOT ONE BOX WITH A TIDY-UP BUTTON.
-              A button that rewrites the box in place takes her words away and puts ours in their
-              place; she then has to remember what she wrote to judge the swap. Side by side she
-              reads both and picks, which is the difference between an option and a replacement,
-              and it is the form of this feature that FTC 16 CFR Part 465 does not reach.
+              ‼️ TWO PANELS, SIDE BY SIDE, AND ONLY ONE OF THEM IS COPYABLE. NOT ONE BOX WITH A
+              TIDY-UP BUTTON. A single box that rewrites itself in place takes her words away and
+              puts ours where they were; she then has to remember what she wrote in order to judge
+              the swap. Side by side she can see both, which is the difference between a tool that
+              shows its work and one that hides it.
 
-              ‼️ BOTH PANELS ARE EDITABLE AND BOTH ARE SHOWN AT EVERY RATING. The joined panel is
-              not gated, not collapsed behind a disclosure and not withheld from a low rating.
+              ‼️ THE ORIGINAL IS READ-ONLY, AND THAT IS THE ONE THING v8 CHANGED HERE. Matthew:
+              "so they can copy the retouched only". It is still rendered, still complete, still
+              beside the box she posts, so what we added is always visible by comparison. What she
+              cannot do is post the unjoined version, and that was his decision.
 
-              ‼️ THE SELECTED PANEL CARRIES THE MIRROR, THE OTHER IS A PLAIN TEXTAREA. The
-              readability rail counts and shades the text that is going to be COPIED, so the marks
-              and the numbers always describe the same characters. Two mirrors would mean shading
-              a version she is not posting, and the rail's own rule is that it points at what she
-              is about to put on a public profile.
+              ‼️ BOTH PANELS ARE SHOWN AT EVERY RATING AND NEITHER IS GATED. Not collapsed behind
+              a disclosure, not withheld from a low rating, not reordered by it. `rating` must not
+              appear anywhere between this comment and .rev2-promise below, and
+              scripts/_probe-review-v7.ts slices exactly that range and fails if it does.
+
+              ‼️ BOTH ARE PLAIN TEXTAREAS SINCE THE RAIL WENT, which is what makes them symmetric.
+              There is no mirror div to keep aligned any more, so there is no reason for one panel
+              to be built differently from the other.
             */}
-            <div className="rev2-versions" role="radiogroup" aria-label="Which version to copy">
+            <div className="rev2-versions">
               {VERSIONS.map((panel) => {
-                const chosen = version === panel.key;
+                const isJoined = panel.key === "joined";
                 return (
                   <div
                     key={panel.key}
-                    className={`rev2-version${chosen ? " rev2-version-on" : ""}`}
+                    className={`rev2-version${isJoined ? " rev2-version-on" : " rev2-version-off"}`}
                   >
-                    <label className="rev2-version-head">
-                      <input
-                        type="radio"
-                        name="rev2-version"
-                        checked={chosen}
-                        onChange={() => {
-                          setVersion(panel.key);
-                          setCopied(false);
-                        }}
-                      />
+                    <div className="rev2-version-head">
                       <span className="rev2-version-name">{panel.name}</span>
                       <span className="rev2-version-note">{panel.note}</span>
-                    </label>
+                    </div>
 
-                    {chosen ? (
-                      /*
-                        The textarea is transparent and sits on a mirror div holding the same
-                        characters, so a highlight lands under the sentence it is about. The two
-                        MUST keep identical text and identical typography or the words separate.
-                        Only background and text-decoration may be added to a mark.
-                      */
-                      <div className="rev-editor">
-                        <div className="rev-mirror" aria-hidden="true">
-                          {highlighted.map((part, i) => {
-                            const flagClass = part.flag ? ` rev-flag rev-flag-${part.flag}` : "";
-                            if (part.hard) {
-                              return (
-                                <mark
-                                  key={i}
-                                  className={`rev-hard rev-hard-${part.hard}${flagClass}`}
-                                >
-                                  {part.text}
-                                </mark>
-                              );
-                            }
-                            return (
-                              <span key={i} className={flagClass.trim() || undefined}>
-                                {part.text}
-                              </span>
-                            );
-                          })}
-                          {"\n"}
-                        </div>
+                    {isJoined ? (
+                      <>
                         <textarea
                           className="rev-out"
                           rows={10}
                           value={text}
+                          aria-label="Your review, which you can edit"
                           onChange={(e) => {
-                            if (panel.key === "joined") setEditedJoined(e.target.value);
-                            else setEdited(e.target.value);
+                            setEditedJoined(e.target.value);
                             setCopied(false);
                           }}
                         />
-                      </div>
+                        {/*
+                          ‼️ THE BUTTON GOES AWAY ONCE SHE HAS EDITED THE BOX, AND IT IS NOT
+                          DISABLED. Two reasons, and the second one is a probe. Regenerating over
+                          her edit would silently discard what she wrote, which is the one harm
+                          this screen exists to prevent; and a `disabled` attribute anywhere in
+                          this block fails the panel slice, which is how the gating rule is kept
+                          enforceable. A swap is honest and a greyed button is a puzzle.
+                        */}
+                        {editedJoined === null ? (
+                          <button type="button" className="rev2-regen" onClick={regenerate}>
+                            Try another wording
+                          </button>
+                        ) : (
+                          <p className="rev2-regen-off">
+                            This is your wording now, so we have stopped suggesting others.
+                          </p>
+                        )}
+                      </>
                     ) : (
                       <textarea
-                        className="rev-out rev2-version-off"
+                        className="rev-out"
                         rows={10}
-                        value={panel.key === "joined" ? joinedText : hersText}
-                        onChange={(e) => {
-                          if (panel.key === "joined") setEditedJoined(e.target.value);
-                          else setEdited(e.target.value);
-                          setCopied(false);
-                        }}
+                        value={hersText}
+                        readOnly
+                        aria-label="What you typed, for comparison"
                       />
                     )}
                   </div>
@@ -1623,59 +1636,37 @@ export function VirtualAgentClient({
             </div>
 
             {/*
-              ‼️ THE RAIL POINTS. IT DOES NOT REWRITE, AND THERE IS NO BUTTON THAT DOES.
-              "This sentence runs long" is a fact about her sentence. "Try this instead" is us
-              writing her review, which is the thing this tool exists not to do. That holds for
-              every row below exactly as it holds for the marks they count.
+              ‼️ THE PROMISE. IT MOVED HERE FROM THE RAIL'S FOOT AND MOVING IT WAS A SHIPPING
+              CONDITION, NOT A TIDY-UP.
+
+              Deleting the rail deleted the home of the only on-screen sentence saying what this
+              tool does to her words. Shipping a joiner with no such sentence is a deception
+              problem of its own: separate from FTC 16 CFR Part 465, not cured by any of the
+              fences, and not something a comment in a source file can answer for.
+
+              Its wording has now changed twice, each time because the feature changed under it:
+
+                v6: "We point at what is shaded. We never write a replacement. Your call, and
+                     your words either way." False the moment a joined panel existed.
+                v7: "We point at what is shaded. We tidy the grammar and join your answers up.
+                     We never add words you did not say." Its first sentence died with the rail.
+                v8: below. "with words from our own questions" is the new clause and it is the
+                     honest description of CARRIES: there are more of our words in her review
+                     than in v7, and every one of them comes from a question she read.
+
+              ‼️ THE THIRD SENTENCE EXISTS BECAUSE THE BUTTON EXISTS. A control labelled "Try
+              another wording" invites exactly one wrong assumption, which is that it is rewriting
+              what she said. Saying what it actually varies is cheaper than letting her guess.
+
+              ‼️ DO NOT RESTORE EITHER OLD WORDING. scripts/_probe-review-v7.ts fails on the v6
+              sentence by exact match, and this class name is the end marker for the panel slice
+              above, so renaming it silently empties that check instead of failing it.
             */}
-            <aside className="rev2-rail" aria-label="Readability">
-              <p className="rev2-rail-head">
-                {reading.words} word{reading.words === 1 ? "" : "s"}
-                {reading.words > 0 ? ` · grade ${Math.round(reading.grade)}` : ""}
-              </p>
-
-              {clean ? (
-                <p className="rev2-rail-clear">
-                  {reading.words > 0
-                    ? "Nothing here is hard to read. It is ready."
-                    : "Your words will be checked here as you write."}
-                </p>
-              ) : (
-                <ul className="rev2-rail-rows">
-                  {rail
-                    .filter((row) => row.n > 0)
-                    .map((row) => (
-                      <li key={row.key}>
-                        <span className={`rev2-key rev2-key-${row.mark}`} aria-hidden="true" />
-                        <span className="rev2-rail-label">{row.label}</span>
-                        <span className="rev2-rail-n">{row.n}</span>
-                      </li>
-                    ))}
-                </ul>
-              )}
-
-              {/*
-                ‼️ THIS SENTENCE CHANGED IN THE SAME COMMIT AS THE JOINER, AND THAT WAS A CONDITION
-                OF SHIPPING IT RATHER THAN A TIDY-UP. It used to read "We point at what is shaded.
-                We never write a replacement. Your call, and your words either way." The joined
-                panel beside this rail IS a replacement on offer, so that sentence became a false
-                claim about our own product the moment the panel existed: a deception problem of
-                its own, separate from the review rule and not cured by any of it.
-
-                What it says now is the smaller thing that is true. "We tidy the grammar and join
-                your answers up" describes exactly the two literals in review-assemble.ts, and "we
-                never add words you did not say" is the one the probe can hold: every word in the
-                joined version is hers, or it is in one of those literals.
-
-                ‼️ DO NOT RESTORE THE OLD WORDING WHILE THE JOINED PANEL EXISTS.
-                scripts/_probe-review-v7.ts fails on the old sentence by exact match, which is the
-                only reason that instruction is worth writing down.
-              */}
-              <p className="rev2-rail-foot">
-                We point at what is shaded. We tidy the grammar and join your answers up. We never
-                add words you did not say.
-              </p>
-            </aside>
+            <p className="rev2-promise">
+              We tidy the grammar and join your answers up with words from our own questions. We
+              never add words you did not say about your visit. Try another wording only rephrases
+              our joining words, never yours.
+            </p>
           </div>
 
           {/*
@@ -1692,7 +1683,17 @@ export function VirtualAgentClient({
                 setCopied(false);
               }}
             />
-            <span>I am a real customer of this business and these are my own words.</span>
+            {/*
+              ‼️ "I APPROVE THESE WORDS AS MY OWN" REPLACED "THESE ARE MY OWN WORDS", AND THE
+              CHANGE IS FOR ACCURACY RATHER THAN STYLE. With four carries in play the box holds a
+              few words of our questions as well as hers, so the old sentence asked her to certify
+              something that is not quite true, on the one control whose entire job is to be a
+              truthful record of her approval. His own compliance note calls this step "the
+              customer approves it"; approval is exactly what this now says. "A real customer of
+              this business" is untouched, because that half is the half that matters most and it
+              was always hers to assert.
+            */}
+            <span>I am a real customer of this business and I approve these words as my own.</span>
           </label>
 
           <button type="button" className="rev-primary" onClick={copy} disabled={!attested}>
