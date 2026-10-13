@@ -1630,3 +1630,77 @@ body:has(.hub-tpl-editorial) { background: #fffdf9; }
   font-size: 0.85rem;
   color: var(--hub-muted, rgba(0, 0, 0, 0.55));
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   v7: TWO VERSIONS SIDE BY SIDE, AND HERS IS THE ONE THAT LOOKS CHOSEN
+   ───────────────────────────────────────────────────────────────────────────
+   ‼️ NEITHER PANEL IS STYLED TO BE PREFERRED. The selected one gets a ring and full opacity
+   because it is the one being copied, and "selected" starts on HER words every time. What must
+   never appear here is a treatment that recommends the joined panel: an accent fill, a badge, a
+   "recommended" chip, a larger box or a brighter ground on that side is a nudge toward our draft
+   and away from hers, which is the thing the radio default exists to prevent. Same box, same
+   type, same width; the only difference between the two is which radio is on.
+
+   ‼️ THEY STACK RATHER THAN SHRINK, AT THE SAME BREAKPOINT THE RAIL USES. Two 10-row textareas
+   side by side inside the 1fr column of .rev2-read are already narrow on a laptop and unreadable
+   on a phone, and this surface is read at a clinic counter on a phone far more often than on a
+   laptop. Stacked, HER panel is on top, because VERSIONS puts it first and the reading order on a
+   phone is the array order. */
+
+.rev2-versions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+@media (max-width: 52rem) {
+  .rev2-versions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* min-width: 0 so a long unbroken word cannot push a column wider than its share of the grid. */
+.rev2-version {
+  min-width: 0;
+}
+
+.rev2-version-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.45rem;
+  cursor: pointer;
+}
+.rev2-version-head input {
+  margin: 0;
+  /* The tap target at a counter is the whole label, which is why the head is the <label>. */
+  flex: none;
+}
+.rev2-version-name {
+  font-weight: 700;
+  font-family: var(--hub-label-family);
+}
+.rev2-version-note {
+  color: var(--hub-muted);
+  font-size: 0.8rem;
+}
+
+/* The ring says "this is the one that gets copied". It is on hers when the screen opens. */
+.rev2-version-on .rev-editor,
+.rev2-version-on .rev-out {
+  border-radius: var(--hub-radius);
+}
+.rev2-version-on .rev-editor {
+  outline: 2px solid var(--hub-accent);
+  outline-offset: 3px;
+}
+
+/* The unselected panel is editable and legible, just visibly not the live one. Not disabled, not
+   hidden, not collapsed: she can type in it and selecting it keeps what she typed. */
+.rev2-version-off {
+  opacity: 0.78;
+}
+.rev2-version-off:focus {
+  opacity: 1;
+}

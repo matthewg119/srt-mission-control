@@ -8,6 +8,15 @@
 // user did not write is the thing being regulated. A tool that REFORMATS what she typed is
 // not. Every rule below follows from staying well behind that line.
 //
+// ‼️ v7 (2026-10-13) ADDED A JOINER AND THAT LINE ABOVE STILL HOLDS, BUT IT IS NO LONGER THE
+// WHOLE STORY AND MUST NOT BE READ AS ONE. There is still no model, no network and no rewriter in
+// this path. There are now two strings of ours that can land BETWEEN her answers, ", and " and
+// "I walked out feeling ", on top of the lead line's "Got ... with ... today.". They are
+// enumerable, they are exported, and scripts/_probe-review-v7.ts fails on any word in the output
+// that is not in one of them or in her own text. See the v7 banner at the foot of this file for
+// why a joiner is not the generator the rule reaches, and for the rules-against-a-model argument
+// re-run rather than inherited.
+//
 // Pure and isomorphic on purpose, the same doctrine as src/lib/clients/normalize.ts: the
 // client component previews the assembly as she types and the server stores from this same
 // function, so what she reads and what is kept cannot drift.
@@ -206,6 +215,13 @@ export const REVIEW_QUESTIONS_V5: ReviewQuestion[] = [
  *    I was worried it would look overdone. I felt like myself again. Just go, they talk you
  *    through everything."
  *
+ * ‼️ v7 (2026-10-13) PARTLY SUPERSEDED THE TWO PARAGRAPHS BELOW. Read them, then read the v7
+ * banner at the foot of this file, which says what changed and what did not. In short: still no
+ * model and still no rewriter, but a JOINER now exists, the four sentences below can be offered
+ * joined up as an OPTION beside hers, and the shipped copy quoted at the end of this docstring was
+ * rewritten in the same commit because the joiner made it false. The reasoning in both paragraphs
+ * is why the joiner is two conjunction-shaped literals and not a tidy-up button.
+ *
  * ‼️ AND THAT IS WHY THIS FILE STILL CONTAINS NO MODEL, NO REWRITER AND NO POLISH STEP.
  * FTC 16 CFR Part 465 bans disseminating reviews that misrepresent a consumer's experience, and
  * the Rytr complaint turned on a generator producing "material details unrelated to user input".
@@ -218,6 +234,13 @@ export const REVIEW_QUESTIONS_V5: ReviewQuestion[] = [
  * words that we never write the review and never write a replacement. A tidy-up feature would
  * make that sentence false, which is a deception problem of its own, separate from the review
  * rule, and it would spend the strongest thing the product says about itself.
+ *
+ * ‼️ v7 TOOK THAT COST RATHER THAN DENYING IT. "We never write a replacement. Your call, and your
+ * words either way." is gone from the rail, because a joined version offered beside hers IS a
+ * replacement on offer and keeping the sentence would have been the deception this paragraph
+ * warns about. What replaced it claims less and is true: "We tidy the grammar and join your
+ * answers up. We never add words you did not say." The half of the promise that was worth having
+ * survived, and the probe fails if the old sentence returns.
  */
 export const REVIEW_QUESTIONS_V6: ReviewQuestion[] = [
   {
@@ -391,6 +414,13 @@ export function assembleLead(answers: ReviewAnswers): string | null {
  * reordering, no joining of clauses, no transitions, no adjectives, no business name
  * inserted, no service name inserted. Her words, tidied, or nothing.
  *
+ * ‼️ EVERY WORD OF THAT IS STILL TRUE OF THIS FUNCTION, AND v7 DID NOT TOUCH IT. The joining
+ * added in v7 lives entirely in assembleJoined, which COMPOSES this function rather than changing
+ * it: it hands this one a string it has already built and relies on exactly the three
+ * transformations above. Anything that joins, carries or splits belongs down there, where the
+ * probe can see it. This function staying the one place her sentence is only tidied is what makes
+ * "her version" and "the joined version" two different things on the screen rather than one.
+ *
  * Returns null for an empty answer. An unanswered question simply produces fewer bullets;
  * none of the four is required.
  */
@@ -472,4 +502,329 @@ export function assemblePlain(answers: ReviewAnswers, opts?: { lead?: boolean })
 /** Nothing typed in any of the four. */
 export function isEmpty(answers: ReviewAnswers): boolean {
   return ALL_REVIEW_QUESTIONS.every((q) => !assembleBullet(answers[q.key]));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// v7 (2026-10-13): CONNECTIVE TISSUE, AND THE ARGUMENT DIRECTLY ABOVE THAT IT AMENDS
+//
+// ‼️ READ THE v6 DOCSTRING FIRST. It says this file contains no model, no rewriter and no polish
+// step, and it is right about two of those three. v7 adds a JOINER. The difference is not a
+// shading of the same idea, it is the whole reason this is allowed to exist:
+//
+//   A REWRITER takes her sentence and emits a better one. It decides what she meant.
+//   A JOINER takes two sentences she typed and names the relationship THE ORDER ALREADY IMPLIES.
+//
+// v6 made the questions a narrative and the output still read as four disconnected sentences,
+// because nothing carried across the full stops:
+//
+//   "Got lip filler with Sarah today. I kept putting off doing anything about my smile lines.
+//    I was worried it would look overdone. Like myself again, honestly. Just go, they talk you
+//    through everything."
+//
+// and with the joins below it reads as one person talking, with no word added that is not in a
+// literal in this file:
+//
+//   "Got lip filler with Sarah today. I kept putting off doing anything about my smile lines,
+//    and I was worried it would look overdone. I walked out feeling like myself again, honestly.
+//    Just go. They talk you through everything."
+//
+// ‼️ "THERE IS NO MODEL IN THIS PATH" AT THE TOP OF THIS FILE SURVIVED v7, AND IT WAS RE-ARGUED
+// RATHER THAN INHERITED. Rules against a model was the open question on the v7 brief. A model
+// writes better prose over the long tail of answer shapes and the rule table below handles eight.
+// It lost on three things, in increasing order of how much they matter:
+//
+//   1. The header's isomorphic doctrine. The client previews the assembly AS SHE TYPES from this
+//      same function, so what she reads and what the server stores cannot drift. A network call
+//      cannot run in that path, so a model puts the drift back.
+//   2. The guarantee changes kind. "No adjective she did not write" is a property of a rule table
+//      and a hope about a model. A probe over four fixtures in CI is not a runtime validator over
+//      every live submission, and when a validator trips, the fallback is her raw text anyway.
+//   3. "Nothing varies by star rating" is provable while no rating argument exists, and becomes an
+//      argument about a prompt the moment one does. scripts/_probe-review-gating.ts asserts that
+//      byte for byte today. It would be asserting a weaker thing tomorrow.
+//
+// What a model would buy is prose quality. What it would cost is the one property this surface is
+// built to be ABLE TO PROVE. If a model is ever wanted here, it belongs behind a second explicit
+// choice with a runtime validator in front of it, not inside this function.
+//
+// ‼️ THE CONSERVATIVE DEFAULT IS THE DESIGN, NOT A FALLBACK. Every rule below has to EARN her
+// sentence. When any precondition misses, the sentence is emitted by assembleBullet exactly as v6
+// emitted it, so the worst case of the whole feature is today's output. All the fuzziness in the
+// closed word lists is therefore biased in one direction on purpose: a list that is too long makes
+// a rule DECLINE, and declining is free.
+//
+// ‼️ THE SHIPPED COPY CHANGED IN THE SAME COMMIT, AND THAT IS A CONDITION OF THE FEATURE, NOT
+// POLISH. The rail in virtual-agent-client.tsx promised "We never write a replacement. Your call,
+// and your words either way." A joined version offered beside hers makes the first half of that
+// false, which is a deception problem of its own, separate from the review rule and not cured by
+// any of it. It now reads "We tidy the grammar and join your answers up. We never add words you
+// did not say." Shipping the joiner without that edit would be a false claim about our own
+// product. scripts/_probe-review-v7.ts fails if the old sentence comes back.
+//
+// ‼️ WHAT MAKES CONNECTIVE WORDS THE SAFE ZONE, WHICH IS THE SAME ARGUMENT THE LEAD LINE WON ON.
+// FTC 16 CFR Part 465 bans disseminating a review that misrepresents a consumer's experience, and
+// the Rytr complaint turned on a generator producing "material details unrelated to user input".
+// ", and" asserts no detail. It names a relationship between two answers she gave in the order she
+// gave them. An adjective, a result, a duration, a price or a staff name she did not type is a
+// detail, and none of them can reach the output: the only words this section can insert are in the
+// two literals below, and the probe reads them out of this module to build its vocabulary.
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+/**
+ * ‼️ THE ONLY TWO STRINGS v7 CAN PUT IN HER REVIEW, AND BOTH ARE EXPORTED SO A PROBE CAN FENCE
+ * THEM. scripts/_probe-review-v7.ts builds its allowed vocabulary out of these plus the lead
+ * templates plus her own answers, and fails on any other word in the output. That makes adding a
+ * word to this file the only way to widen what we can say, which is a line in a diff somebody
+ * reviews rather than a behaviour somebody discovers.
+ *
+ * ‼️ "and" IS THE ONLY CONJUNCTION, AND THE BRIEF ALLOWED FIVE. "but" asserts contrast, "so",
+ * "because" and "which is why" assert causation: each of them is a claim about the relationship
+ * between two answers that SHE did not make, and picking between them needs a reader who
+ * understands her meaning, which is the rewriter this is not. "and" asserts addition, which is
+ * the one relationship the question order already establishes. Narrowing five to one is the
+ * single most load-bearing decision in this section.
+ */
+export const JOIN_MOTIVATION_NERVES = ", and ";
+
+/**
+ * The verb carried from "How did you feel walking out?" so a fragment becomes a sentence.
+ *
+ * This is the one transformation the brief named by example: her "like myself again" plus the
+ * question's own verb is "I walked out feeling like myself again". The words are the question's,
+ * not ours, and the question is fixed, sentiment-neutral and identical for every business.
+ */
+export const CARRY_WALKOUT = "I walked out feeling ";
+
+/** The four keys v7 joins. Derived, so it cannot drift from the question set. */
+export const V6_KEYS: ReadonlyArray<ReviewQuestion["key"]> = REVIEW_QUESTIONS_V6.map((q) => q.key);
+
+/**
+ * Words meaning "she has already started a clause here".
+ *
+ * A verb carried onto one of these produces a double subject ("I walked out feeling I felt fine"),
+ * and a merge onto one reads as a run-on. Over-inclusion only makes a rule decline, so "the" and
+ * "that" are in here even though they open plenty of fragments too.
+ *
+ * Apostrophes are stripped before the lookup, so "it" plus "s" and "I" plus "m" both arrive bare.
+ */
+const CLAUSE_OPENERS: ReadonlySet<string> = new Set([
+  "i", "im", "ive", "id", "ill",
+  "we", "weve", "were", "well", "our", "us",
+  "it", "its", "they", "theyre", "theyve", "he", "hes", "she", "shes", "you", "youre", "youve",
+  "my", "mine", "his", "her", "hers", "their", "your",
+  "everything", "everyone", "everybody", "something", "someone", "nobody", "nothing", "none",
+  "there", "that", "this", "these", "those", "the", "when", "after", "before", "since", "if",
+]);
+
+/**
+ * Conjunctions, used for two different refusals.
+ *
+ * ‼️ THE SECOND REFUSAL IS WHAT KEEPS A COMPLAINT INTACT, AND IT IS THE REASON FIXTURE 4 PASSES.
+ * "a bit sore and the wait was long" carries its own second clause. Carrying a verb onto it gives
+ * "I walked out feeling a bit sore and the wait was long", which routes a FACT about the clinic
+ * ("the wait was long") through "feeling" and recasts it as a mood. Every word of hers would still
+ * be there and the sentiment would have moved, which is the prohibition that is easiest to break
+ * without noticing. So an answer holding a conjunction is never carried; it is emitted as she
+ * typed it, in the position v6 put it.
+ */
+const CONJUNCTIONS: ReadonlySet<string> = new Set([
+  "and", "but", "so", "because", "which", "though", "although", "plus", "also", "then", "however",
+]);
+
+/** A word reduced to letters for a closed-list lookup, so a trailing comma cannot miss. */
+function token(word: string): string {
+  return word.toLowerCase().replace(/[^a-z]/g, "");
+}
+
+/** Her answer's words, after assembleFragment has already collapsed the whitespace. */
+function wordsOf(text: string): string[] {
+  return text.split(" ").filter(Boolean);
+}
+
+/**
+ * True when the whole answer is ONE sentence.
+ *
+ * Anything with sentence-final punctuation inside it is left alone: two sentences merged with
+ * ", and " is a run-on, and "Dr. Smith" would be read as two. Both refusals are the safe direction.
+ */
+function isSingleSentence(text: string): boolean {
+  return !/[.!?…]/.test(text.replace(/[.!?…]+$/, ""));
+}
+
+/**
+ * Her fragment, prepared to sit after a conjunction or a carried verb.
+ *
+ * Lowercasing a sentence-initial capital mid-sentence is grammar, which the brief allows. The
+ * three exceptions are the ones where the capital is hers and means something: the pronoun I, an
+ * acronym she typed in capitals (IPL, PRP, CO2), and the provider's name, which is the one proper
+ * noun this flow knows by name because she typed it into a different question.
+ *
+ * Beyond those three a lowercased proper noun is possible and is a visible wart in a box she is
+ * reading and editing, exactly like the one in assembleFragment's docstring. The alternative is
+ * this function deciding which of her words are names, which is a guess about her meaning for a
+ * cosmetic win.
+ */
+function midSentence(fragment: string, answers: ReviewAnswers): string {
+  const first = wordsOf(fragment)[0] ?? "";
+  const bare = first.replace(/[^A-Za-z']/g, "");
+  if (bare === "I" || bare.startsWith("I" + "'")) return fragment;
+  if (bare.length > 1 && bare === bare.toUpperCase()) return fragment;
+
+  const provider = (answers.provider ?? "").trim().toLowerCase();
+  const providerFirst = provider.split(" ")[0] ?? "";
+  if (providerFirst.length > 1 && bare.toLowerCase() === providerFirst) return fragment;
+
+  const head = fragment[0];
+  return head === head.toUpperCase() && head !== head.toLowerCase()
+    ? head.toLowerCase() + fragment.slice(1)
+    : fragment;
+}
+
+/** Below this, a merge would be building a sentence around two words rather than joining two. */
+const MERGE_MIN_WORDS = 4;
+
+/**
+ * Whether motivation and nerves may become one sentence.
+ *
+ * ‼️ THE PAIR IS NAMED, NOT ADJACENT, AND THAT IS WHAT STOPS IT BRIDGING A GAP. This asks about
+ * motivation and nerves specifically, never "the first two answers present". With nerves skipped,
+ * motivation stands alone and nothing joins across the hole, because a conjunction spanning a
+ * question she declined to answer asserts a relationship between her answer and nothing.
+ *
+ * ‼️ AND THE WORD FLOOR IS WHY ONE-WORD ANSWERS ARE LEFT ALONE. motivation "wrinkles" and nerves
+ * "bruising" joined would be "Wrinkles, and bruising", a sentence we built around two words she
+ * typed. Under the floor, both come out as the bullets v6 produced.
+ */
+function canMergeMotivationAndNerves(motivation: string, nerves: string): boolean {
+  if (!isSingleSentence(motivation) || !isSingleSentence(nerves)) return false;
+  if (wordsOf(motivation).length < MERGE_MIN_WORDS) return false;
+
+  const nerveWords = wordsOf(nerves);
+  if (nerveWords.length < MERGE_MIN_WORDS) return false;
+  // A nerves answer that already opens with a conjunction would double it after ", and ".
+  if (CONJUNCTIONS.has(token(nerveWords[0]))) return false;
+  return true;
+}
+
+/** A carried verb is for a short complement phrase. Longer than this and she wrote a sentence. */
+const CARRY_MIN_WORDS = 2;
+const CARRY_MAX_WORDS = 6;
+
+/**
+ * Whether "How did you feel walking out?" may lend its verb to her answer.
+ *
+ * One word ("good") is left alone: "I walked out feeling good" is a sentence built around one word
+ * she typed. Seven or more, or anything holding a conjunction or opening its own clause, is
+ * already a sentence and gets nothing added. What is left is the shape the carry was designed for:
+ * "like myself again, honestly".
+ */
+function canCarryWalkout(walkout: string): boolean {
+  const words = wordsOf(walkout);
+  if (words.length < CARRY_MIN_WORDS || words.length > CARRY_MAX_WORDS) return false;
+  if (!isSingleSentence(walkout)) return false;
+  if (CLAUSE_OPENERS.has(token(words[0]))) return false;
+  if (words.some((word) => CONJUNCTIONS.has(token(word)))) return false;
+  return true;
+}
+
+const SPLIT_MIN_HEAD_WORDS = 2;
+const SPLIT_MIN_TAIL_WORDS = 3;
+
+/**
+ * "Just go, they talk you through everything" becomes "Just go. They talk you through everything."
+ *
+ * A full stop and a capital, and nothing else: the only transformation in this file that adds no
+ * word at all. It is kept to the friend answer rather than applied generally because that is where
+ * the advise-then-explain shape occurs, and one named rule is easier to audit than a general
+ * sentence-splitter running over every answer.
+ *
+ * Requires exactly one comma and a tail that opens its own clause, so a list ("the staff, the
+ * rooms, everything") and a trailing aside ("just go, honestly") are both left alone.
+ */
+function splitFriendClause(friend: string, answers: ReviewAnswers): string | null {
+  if (!isSingleSentence(friend)) return null;
+
+  const parts = friend.replace(/[.]+$/, "").split(",");
+  if (parts.length !== 2) return null;
+
+  const head = parts[0].trim();
+  const tail = parts[1].trim();
+  if (wordsOf(head).length < SPLIT_MIN_HEAD_WORDS) return null;
+
+  const tailWords = wordsOf(tail);
+  if (tailWords.length < SPLIT_MIN_TAIL_WORDS) return null;
+  if (!CLAUSE_OPENERS.has(token(tailWords[0]))) return null;
+
+  const first = assembleBullet(head);
+  const second = assembleBullet(tail);
+  return first && second ? first + " " + second : null;
+}
+
+/**
+ * HER ANSWERS, JOINED. The v7 option, offered beside the version this file has always produced.
+ *
+ * ‼️ IT IS AN OPTION AND assemblePlain IS STILL THE DEFAULT, IN THIS FILE AND ON THE SCREEN. The
+ * component holds both, hers is selected, and the joined one is a radio she has to choose. That
+ * ordering is not a UI preference: a tool that silently replaces what she wrote with our version
+ * of it is the thing FTC 16 CFR Part 465 reaches, and a tool that offers it beside hers is not.
+ *
+ * ‼️ OFFERED AT EVERY RATING, AND THE FUNCTION CANNOT KNOW THE RATING. There is no rating
+ * argument here and there must never be one. Offering a better-reading review to five stars and
+ * not to two is review shaping with a nicer name, and it is the exact funnel
+ * scripts/_probe-review-gating.ts exists to keep rebuilt-proof.
+ *
+ * ‼️ NOTHING SHE TYPED IS EVER DROPPED, INCLUDING A KEY THIS FUNCTION HAS NEVER HEARD OF. The
+ * non-v6 loop runs first in ALL_REVIEW_QUESTIONS order, so a stored v3, v4 or v5 row handed to
+ * this comes out as its own sentences with no join applied to any of them, rather than as the
+ * empty string a v6-only implementation would have returned. Nothing calls it that way today.
+ *
+ * Pure, no network, no imports: ReviewAnswers in, a string out.
+ */
+export function assembleJoined(answers: ReviewAnswers): string {
+  const sentences: string[] = [];
+
+  const lead = assembleLead(answers);
+  if (lead) sentences.push(lead);
+
+  // Everything outside the v6 narrative, in the pinned order, untouched. See the docstring: this
+  // is what keeps an older stored row readable rather than empty.
+  for (const question of ALL_REVIEW_QUESTIONS) {
+    if (V6_KEYS.includes(question.key)) continue;
+    if (lead && LEAD_KEYS.includes(question.key)) continue;
+    const text = assembleBullet(answers[question.key]);
+    if (text) sentences.push(text);
+  }
+
+  // 1. motivation + nerves, merged with the one conjunction that asserts nothing.
+  const motivation = assembleFragment(answers.motivation);
+  const nerves = assembleFragment(answers.nerves);
+  if (motivation && nerves && canMergeMotivationAndNerves(motivation, nerves)) {
+    const merged = assembleBullet(
+      motivation + JOIN_MOTIVATION_NERVES + midSentence(nerves, answers)
+    );
+    if (merged) sentences.push(merged);
+  } else {
+    const first = assembleBullet(answers.motivation);
+    if (first) sentences.push(first);
+    const second = assembleBullet(answers.nerves);
+    if (second) sentences.push(second);
+  }
+
+  // 2. walkout, with the question's own verb carried onto a fragment.
+  const walkout = assembleFragment(answers.walkout);
+  if (walkout) {
+    const carried = canCarryWalkout(walkout)
+      ? assembleBullet(CARRY_WALKOUT + midSentence(walkout, answers))
+      : assembleBullet(answers.walkout);
+    if (carried) sentences.push(carried);
+  }
+
+  // 3. friend, split where she already put the break.
+  const friend = assembleFragment(answers.friend);
+  if (friend) {
+    const split = splitFriendClause(friend, answers) ?? assembleBullet(answers.friend);
+    if (split) sentences.push(split);
+  }
+
+  return sentences.join(" ");
 }
