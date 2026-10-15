@@ -7,8 +7,8 @@
 //
 // ‼️ THREE BEATS AFTER THE INTAKE. The intake is one question per screen (typeform style, no
 // headline). Then the card alone with a Next button, then the live walkthrough alone with the
-// download button and the custom-design door under it; that button opens the chat UNDER the
-// walkthrough rather than replacing it. Matthew, 2026-10-15: "just leave one and a next button
+// download button and the custom-design door under it; that button replaces the whole page with
+// the chat, so there is nothing to scroll back to. Matthew, 2026-10-15: "just leave one and a next button
 // at the bottom and once they click next the button becomes download with the other buttons
 // underneath it".
 //
@@ -104,8 +104,10 @@ export function V2Client(props: V2ClientProps) {
     if (stage === "page") window.scrollTo({ top: 0 });
   }, [stage, view]);
 
+  // ‼️ THE CHAT TAKES THE WHOLE PAGE. Matthew, 2026-10-15: once they tap the button there is
+  // nothing to scroll back up to, so the only way forward is finishing the conversation.
   useEffect(() => {
-    if (chatOpen) chatRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (chatOpen) window.scrollTo({ top: 0 });
   }, [chatOpen]);
 
   /** Fire and forget. The next question is already on screen; a failure costs the early card only. */
@@ -268,7 +270,7 @@ export function V2Client(props: V2ClientProps) {
         </section>
       )}
 
-      {view === "inside" && (
+      {view === "inside" && !chatOpen && (
         <section className="v2-section">
           <p className="cd-open-eyebrow">{PREVIEW_V2_PAGE.insideEyebrow}</p>
           <h2 className="cp-title">{PREVIEW_INSIDE.title}</h2>

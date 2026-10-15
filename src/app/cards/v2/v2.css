@@ -124,9 +124,9 @@
 .v2-cta .cd-open-foot { margin: 0; text-align: center; }
 .v2-cta .cp-mini { align-self: center; }
 
-.v2-chat {
-  margin-top: 2.5rem;
-  padding-top: 2rem;
-  border-top: 1px solid var(--cd-line);
-  scroll-margin-top: 1rem;
+/* The chat owns the page once it opens: no preview above it, and the transcript grows to the
+   screen instead of the 24rem box /cards/p uses under its screens. */
+.v2-chat .cd-msgs {
+  min-height: calc(100vh - 16rem);
+  max-height: calc(100vh - 12rem);
 }
