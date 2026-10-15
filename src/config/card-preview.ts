@@ -473,3 +473,151 @@ export const PREVIEW_IDS: readonly string[] = [
  * onto the other. CARDS_CALENDLY_KIND's own header records the six weeks that fault survived.
  */
 export { CARDS_CALENDLY_KIND } from "./onboarding-cards";
+
+// ── /cards/v2: details first, then the card, then the call ──────────────────
+//
+// ‼️ A SECOND DOOR, NOT A CHANGE TO /cards/p. Matthew, 2026-10-15: the original stays as it is.
+// v2 collects the lead BEFORE it shows anything (typeform style, one question per screen, no
+// headline), then shows the card wearing their own clinic name and the live walkthrough on one
+// page, and its green button opens the chat that explains why the card needs a short call.
+//
+// ‼️ THE GREEN BUTTON SAYS DOWNLOAD AND DOWNLOADS NOTHING, AND THE CHAT IS WHY THAT IS HONEST.
+// The card a generator makes today carries OUR sample figure and points at our demo (see
+// PREVIEW_CLOSE.ready for why the download went). The first bubble after the tap says exactly
+// that and names what the call changes, so the button is the start of getting their card rather
+// than a promise of a file.
+
+/** One question of the intake. The keys are what the route reads. */
+export interface IntakeStep {
+  key: "firstName" | "lastName" | "businessName" | "email" | "phone";
+  prompt: string;
+  placeholder: string;
+  hint?: string;
+}
+
+/**
+ * The intake, in Matthew's order: the person, then the clinic right after, then how to reach them.
+ *
+ * ‼️ THE CLINIC NAME COMES RIGHT AFTER THE NAME because the very next screen is a card with that
+ * name printed on it. Asking it last would put the one answer the card needs behind the two that
+ * it does not.
+ */
+export const PREVIEW_V2_INTAKE: readonly IntakeStep[] = [
+  {
+    key: "firstName",
+    prompt: guard("v2 q first", "What is your first name?"),
+    placeholder: guard("v2 q first hint", "First name"),
+  },
+  {
+    key: "lastName",
+    prompt: guard("v2 q last", "And your last name?"),
+    placeholder: guard("v2 q last hint", "Last name"),
+  },
+  {
+    key: "businessName",
+    prompt: guard("v2 q clinic", "What is the name of your clinic?"),
+    placeholder: guard("v2 q clinic hint", "Your clinic name"),
+    hint: guard("v2 q clinic note", "It goes on your card."),
+  },
+  {
+    key: "email",
+    prompt: guard("v2 q email", "Your best email?"),
+    placeholder: guard("v2 q email hint", "you@yourclinic.com"),
+  },
+  {
+    key: "phone",
+    prompt: guard("v2 q phone", "And your mobile number?"),
+    placeholder: guard("v2 q phone hint", "(555) 555-5555"),
+    hint: guard("v2 q phone note", "Only to set up your card. No spam."),
+  },
+];
+
+export const PREVIEW_V2_FORM = {
+  /** The one small line above the questions. Not a headline: it says what the form is for. */
+  eyebrow: guard("v2 eyebrow", "Your free QR referral card"),
+  next: guard("v2 next", "OK"),
+  last: guard("v2 last", "See my card"),
+  back: guard("v2 back", "Back"),
+  enterHint: guard("v2 enter hint", "press Enter"),
+} as const;
+
+/** The page after the intake. Both sections stay on screen; nothing swaps. */
+export const PREVIEW_V2_PAGE = {
+  scanEyebrow: guard("v2 scan eyebrow", "Your card"),
+  insideEyebrow: guard("v2 inside eyebrow", "What they see"),
+  cta: guard("v2 cta", "Download my custom QR"),
+  foot: guard("v2 foot", "Free. Finished with you on a 10 minute call."),
+} as const;
+
+/**
+ * The chat after the green button. It explains first and asks second.
+ *
+ * ‼️ THE SAY STEPS ARE THE OFFER, SPELLED OUT. Matthew: "we need to make sure this new landing
+ * page explains the offer well so they understand we need to arrange some stuff so we do a phone
+ * call." Three facts, each one a thing that genuinely differs between the card on screen and the
+ * card they get: the figure, the link, and where the referred patients go.
+ *
+ * ‼️ NO EMAIL AND NO NAME IN HERE. The intake already has both and asking again is the form
+ * forgetting what it was told a minute ago.
+ */
+export const PREVIEW_V2_SCRIPT: readonly PreviewStep[] = [
+  {
+    kind: "say",
+    id: "v2_mine",
+    text: guard("v2 say mine", "Before we send your card, we make it yours."),
+  },
+  {
+    kind: "say",
+    id: "v2_what",
+    text: guard(
+      "v2 say what",
+      "Right now it shows our sample offer and the code opens our demo. On yours, the offer is your own and the code opens your own page, on your own website."
+    ),
+  },
+  {
+    kind: "say",
+    id: "v2_where",
+    text: guard(
+      "v2 say where",
+      "That page is set up in your branding, and every patient who gets referred is sent straight to you."
+    ),
+  },
+  {
+    kind: "say",
+    id: "v2_call",
+    text: guard(
+      "v2 say call",
+      "Setting that up takes a 10 minute call so we get your details right. Two quick questions first."
+    ),
+  },
+  {
+    kind: "ask",
+    id: "v2_product",
+    key: "topProduct",
+    prompt: guard("v2 q product", "What is your best seller, the one treatment you do most?"),
+    placeholder: guard("v2 q product hint", "Botox, facials, lip filler..."),
+    validate: "free",
+  },
+  {
+    kind: "ask",
+    id: "v2_offer",
+    key: "referralOffer",
+    prompt: guard("v2 q offer", "What do you want a referred patient to get on their first visit?"),
+    placeholder: guard("v2 q offer hint", "20% off, a free consult, not decided yet..."),
+    validate: "free",
+    skip: {
+      label: guard("v2 q offer skip", "Not sure yet"),
+      value: guard("v2 q offer skip value", "Not decided yet"),
+    },
+  },
+];
+
+/** v2's closing bubbles. Nothing was downloaded, so nothing here says it was. */
+export const PREVIEW_V2_CLOSE = {
+  sent: guard("v2 close sent", "Perfect, that is everything we need for now."),
+  ready: guard(
+    "v2 close ready",
+    "Your card is drafted with your clinic name. On the call we add your offer and your own link, then email you the finished card."
+  ),
+  ask: guard("v2 close ask", "When works better for the 10 minute call?"),
+} as const;
