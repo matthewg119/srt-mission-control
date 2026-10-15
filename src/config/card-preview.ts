@@ -541,10 +541,12 @@ export const PREVIEW_V2_FORM = {
   enterHint: guard("v2 enter hint", "press Enter"),
 } as const;
 
-/** The page after the intake. Both sections stay on screen; nothing swaps. */
+/** The page after the intake: the card with Next, then the walkthrough with the download button. */
 export const PREVIEW_V2_PAGE = {
   scanEyebrow: guard("v2 scan eyebrow", "Your card"),
   insideEyebrow: guard("v2 inside eyebrow", "What they see"),
+  /** Under the card. Moves to the walkthrough; the download button only appears there. */
+  next: guard("v2 next page", "Next"),
   cta: guard("v2 cta", "Download my custom QR"),
   foot: guard("v2 foot", "Free. Finished with you on a 10 minute call."),
 } as const;

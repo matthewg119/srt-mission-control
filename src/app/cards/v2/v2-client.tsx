@@ -5,10 +5,12 @@
 // ‼️ READ THE PREVIEW_V2 BLOCK IN src/config/card-preview.ts FIRST. Every word on this screen
 // lives there; this file only walks it.
 //
-// ‼️ TWO STAGES, AND THE SECOND NEVER SWAPS. The intake is one question per screen (typeform
-// style, no headline). After it, the card and the live walkthrough sit on one page together, and
-// the green button opens the chat UNDER them rather than replacing them: Matthew, 2026-10-15,
-// "leave them both there, dont change the screen".
+// ‼️ THREE BEATS AFTER THE INTAKE. The intake is one question per screen (typeform style, no
+// headline). Then the card alone with a Next button, then the live walkthrough alone with the
+// download button and the custom-design door under it; that button opens the chat UNDER the
+// walkthrough rather than replacing it. Matthew, 2026-10-15: "just leave one and a next button
+// at the bottom and once they click next the button becomes download with the other buttons
+// underneath it".
 //
 // ‼️ THE LEAD LANDS BEFORE THE CARD DOES. A partial POST fires the moment the email is in (name,
 // clinic, email) and again when the phone lands, both through /api/cards/preview's partial path,
@@ -80,6 +82,7 @@ export function V2Client(props: V2ClientProps) {
   const [draft, setDraft] = useState(() => props.prefill[steps[0].key] ?? "");
   const [error, setError] = useState<string | null>(null);
 
+  const [view, setView] = useState<"card" | "inside">("card");
   const [insideLive, setInsideLive] = useState(false);
   const [wantsCustom, setWantsCustom] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
@@ -99,7 +102,7 @@ export function V2Client(props: V2ClientProps) {
 
   useEffect(() => {
     if (stage === "page") window.scrollTo({ top: 0 });
-  }, [stage]);
+  }, [stage, view]);
 
   useEffect(() => {
     if (chatOpen) chatRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -237,55 +240,62 @@ export function V2Client(props: V2ClientProps) {
     );
   }
 
-  // ── Stage two: the card and the walkthrough, together, then the chat ──────
+  // ── Stage two: the card, then the walkthrough, then the chat under it ─────
   const clinicName = details.businessName || props.fallbackName;
   return (
     <div className="cp-screen v2-page">
-      <section className="v2-section">
-        <p className="cd-open-eyebrow">{PREVIEW_V2_PAGE.scanEyebrow}</p>
-        <h1 className="cp-title">{PREVIEW_SCAN.title}</h1>
-        <p className="cd-open-lede">{PREVIEW_SCAN.lede}</p>
-        <div className="cp-stage">
-          <div className="v2-card">
-            <CardFront
-              design={design}
-              copy={copy}
-              clinicName={clinicName}
-              qrDataUrl={props.qrDataUrl}
-              reviewsHost={props.reviewsHost}
-            />
+      {view === "card" && (
+        <section className="v2-section">
+          <p className="cd-open-eyebrow">{PREVIEW_V2_PAGE.scanEyebrow}</p>
+          <h1 className="cp-title">{PREVIEW_SCAN.title}</h1>
+          <p className="cd-open-lede">{PREVIEW_SCAN.lede}</p>
+          <div className="cp-stage">
+            <div className="v2-card">
+              <CardFront
+                design={design}
+                copy={copy}
+                clinicName={clinicName}
+                qrDataUrl={props.qrDataUrl}
+                reviewsHost={props.reviewsHost}
+              />
+            </div>
+            <ScanHand design={design} />
           </div>
-          <ScanHand design={design} />
-        </div>
-        <p className="cp-note">{PREVIEW_SCAN.qrNote}</p>
-      </section>
+          <p className="cp-note">{PREVIEW_SCAN.qrNote}</p>
+          <button type="button" className="cd-primary cp-cta" onClick={() => setView("inside")}>
+            {PREVIEW_V2_PAGE.next}
+          </button>
+        </section>
+      )}
 
-      <section className="v2-section">
-        <p className="cd-open-eyebrow">{PREVIEW_V2_PAGE.insideEyebrow}</p>
-        <h2 className="cp-title">{PREVIEW_INSIDE.title}</h2>
-        <p className="cd-open-lede">{PREVIEW_INSIDE.lede}</p>
-        <div className="cp-phone">
-          <div className="cp-phone-screen">
-            <iframe
-              title={PREVIEW_INSIDE.title}
-              src={props.insideSrc}
-              loading="lazy"
-              className="cp-frame"
-              tabIndex={insideLive ? undefined : -1}
-            />
-            {!insideLive && (
-              <button type="button" className="cp-veil" onClick={() => setInsideLive(true)}>
-                <span className="cp-tap" style={{ background: design.accent, color: design.onAccent }}>
-                  {PREVIEW_INSIDE.tap}
-                </span>
-              </button>
-            )}
+      {view === "inside" && (
+        <section className="v2-section">
+          <p className="cd-open-eyebrow">{PREVIEW_V2_PAGE.insideEyebrow}</p>
+          <h2 className="cp-title">{PREVIEW_INSIDE.title}</h2>
+          <p className="cd-open-lede">{PREVIEW_INSIDE.lede}</p>
+          <div className="cp-phone">
+            <div className="cp-phone-screen">
+              <iframe
+                title={PREVIEW_INSIDE.title}
+                src={props.insideSrc}
+                loading="lazy"
+                className="cp-frame"
+                tabIndex={insideLive ? undefined : -1}
+              />
+              {!insideLive && (
+                <button type="button" className="cp-veil" onClick={() => setInsideLive(true)}>
+                  <span className="cp-tap" style={{ background: design.accent, color: design.onAccent }}>
+                    {PREVIEW_INSIDE.tap}
+                  </span>
+                </button>
+              )}
+            </div>
           </div>
-        </div>
-        {insideLive && <p className="cp-note v2-live">{PREVIEW_INSIDE.live}</p>}
-      </section>
+          {insideLive && <p className="cp-note v2-live">{PREVIEW_INSIDE.live}</p>}
+        </section>
+      )}
 
-      {!chatOpen && (
+      {view === "inside" && !chatOpen && (
         <div className="v2-cta">
           <button type="button" className="cd-primary" onClick={() => openChat(false)}>
             {PREVIEW_V2_PAGE.cta}
