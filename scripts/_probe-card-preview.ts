@@ -33,6 +33,9 @@ import {
   PREVIEW_OFFER_SAMPLE,
   PREVIEW_SCAN,
   PREVIEW_SCRIPT,
+  PREVIEW_V2_CLOSE,
+  PREVIEW_V2_INTAKE,
+  PREVIEW_V2_SCRIPT,
 } from "../src/config/card-preview";
 import { CARD_DESIGNS, OFFERED_DESIGNS, designByKey } from "../src/config/card-designs";
 import { REVIEW_CARD_COPY } from "../src/lib/hub/review-card-copy";
@@ -42,6 +45,11 @@ const CONFIG = "src/config/card-preview.ts";
 const DESIGNS = "src/config/card-designs.ts";
 const ART = "src/app/cards/p/card-art.tsx";
 const CLIENT = "src/app/cards/p/preview-client.tsx";
+// The chat half moved out of CLIENT on 2026-10-15 so /cards/v2 could share it. The checks below
+// that read "the client" read both, because together they are what /cards/p renders.
+const CHAT = "src/app/cards/p/preview-chat.tsx";
+const V2_CLIENT = "src/app/cards/v2/v2-client.tsx";
+const V2_PAGE = "src/app/cards/v2/[[...token]]/page.tsx";
 const ROUTE = "src/app/api/cards/preview/route.ts";
 const PAGE = "src/app/cards/p/[[...token]]/page.tsx";
 const LINK = "src/lib/cards/preview-link.ts";
@@ -71,7 +79,8 @@ function stripComments(src: string): string {
 const configSrc = stripComments(read(CONFIG));
 const designSrc = stripComments(read(DESIGNS));
 const artSrc = stripComments(read(ART));
-const clientSrc = stripComments(read(CLIENT));
+const clientSrc = [read(CLIENT), read(CHAT)].map(stripComments).join("\n");
+const v2Src = [read(V2_CLIENT), read(V2_PAGE)].map(stripComments).join("\n");
 const routeSrc = stripComments(read(ROUTE));
 const pageSrc = stripComments(read(PAGE));
 const linkSrc = stripComments(read(LINK));
@@ -305,6 +314,7 @@ for (const [label, src] of [
   ["the client", clientSrc],
   ["the route", routeSrc],
   ["the page", pageSrc],
+  ["the v2 page", v2Src],
 ] as const) {
   const money = (src.match(/\$\d/g) ?? []).length;
   check(money === 0, `${label} quotes no price`, money ? `${money} figures found` : "no figures at all");
@@ -521,6 +531,39 @@ check(
   /insideLive/.test(clientSrc) && /cp-veil/.test(clientSrc),
   "and the live frame starts inert, so going inside is a decision"
 );
+
+// ── 9. /cards/v2. ─────────────────────────────────────────────────────────
+console.log("\n9. /cards/v2: details first, and its download button downloads nothing");
+
+for (const rule of ["validEmail", "validName", "normalizePhone"]) {
+  check(v2Src.includes(rule), `the v2 intake checks ${rule}`);
+}
+check(routeSrc.includes("normalizePhone"), "and the route re-checks the phone it is sent");
+check(
+  PREVIEW_V2_INTAKE.map((x) => x.key).join(",") === "firstName,lastName,businessName,email,phone",
+  "the intake asks the person, then the clinic, then how to reach them",
+  PREVIEW_V2_INTAKE.map((x) => x.key).join(",")
+);
+// ‼️ THE GREEN BUTTON SAYS DOWNLOAD AND MUST NOT FETCH A PDF. It opens the call chat, whose
+// opening bubbles say the card still carries our sample offer and our demo link.
+check(
+  !/api\/cards\/pdf|cardPdf|<a [^>]*download/.test(v2Src),
+  "v2 links no PDF and offers no file"
+);
+check(
+  !PREVIEW_V2_SCRIPT.some((x) => x.kind === "ask" && (x.key === "email" || x.key === "firstName" || x.key === "lastName")),
+  "the v2 chat never asks again for what the intake already has"
+);
+check(
+  PREVIEW_V2_SCRIPT.some((x) => x.kind === "say" && /sample offer/.test(x.text)),
+  "and it says the card on screen carries our sample offer before it asks for the call"
+);
+check(
+  !/download|attached|in your inbox/i.test(PREVIEW_V2_CLOSE.ready + PREVIEW_V2_CLOSE.sent),
+  "the v2 close promises no file now",
+  PREVIEW_V2_CLOSE.ready
+);
+check(/robots: \{ index: false/.test(v2Src), "and v2 is noindex too");
 
 console.log("");
 if (failures > 0) {

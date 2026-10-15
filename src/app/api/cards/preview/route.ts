@@ -22,7 +22,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { ingestLead, pageFromRequest } from "@/lib/lead-intake";
-import { validEmail, validName } from "@/lib/medspa/validate";
+import { normalizePhone, validEmail, validName } from "@/lib/medspa/validate";
 import { supabaseAdmin } from "@/lib/db";
 import { slack } from "@/lib/slack-bot";
 import { bookingPageUrl, calendlyEmbedUrl } from "@/lib/calendly";
@@ -67,6 +67,18 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: false, error: "That does not look like an email address." }, { status: 400 });
   }
 
+  // ‼️ /cards/v2 ASKS THE PHONE AND THE CLINIC NAME UP FRONT; /cards/p asks neither. Both are
+  // optional here so the original door is unchanged, but a phone that IS sent must parse, because
+  // it is written to contacts.phone and pushed to the CRM as E.164.
+  const variant = body.variant === "v2" ? "v2" : "p";
+  const page = variant === "v2" ? "/cards/v2" : "/cards/p";
+  const phoneRaw = clean(body.phone, 40);
+  const phone = phoneRaw ? normalizePhone(phoneRaw) : null;
+  if (phoneRaw && !phone) {
+    return NextResponse.json({ ok: false, error: "Enter a 10 digit US mobile number." }, { status: 400 });
+  }
+  const typedBusiness = clean(body.businessName, 120);
+
   // ‼️ FREE TEXT, NOT A LIST, AND NEITHER IS EVER CHECKED AGAINST ONE. "20% off" and "a free
   // consult" and "we have not decided" are all real answers from a clinic that has never run a
   // referral programme, and a validator here would turn the easiest question on the page into a
@@ -105,7 +117,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const fromLead = await leadFromCardToken(rawToken);
 
   const leadName = [firstName, lastName].filter(Boolean).join(" ");
-  const business = fromLead?.businessName || "";
+  // The link's own lead wins: that name came out of the thread Matthew is already in.
+  const business = fromLead?.businessName || typedBusiness;
 
   // ‼️ RENDERED ONCE, HERE, AND USED THREE TIMES: the Slack card says whether it exists, the
   // email attaches it, and the page offers the same bytes behind its download button. Rendering
@@ -120,7 +133,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const headline = partial
     ? `CARD PREVIEW, still answering: ${leadName}` +
       (business ? ` · ${business}` : "") +
-      " · they have given their name and email, nothing else yet"
+      (phone ? ` · ${phone}` : "") +
+      (variant === "v2"
+        ? phone
+          ? " · gave their details, now looking at their card"
+          : " · gave name, clinic and email, no phone yet"
+        : " · they have given their name and email, nothing else yet")
     : `CARD PREVIEW: ${leadName}` +
     (business ? ` · ${business}` : "") +
     (topProduct ? ` · best seller: ${topProduct}` : "") +
@@ -135,19 +153,22 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     firstName,
     lastName,
     email,
+    phone: phone || undefined,
     // Carried from the lead the link was minted for, never asked for again. They have already
     // told us their company once, in the email thread this link came out of.
     businessName: business || undefined,
     website: fromLead?.website || undefined,
     city: fromLead?.city || undefined,
     source: CARD_PREVIEW_SOURCE,
-    sourcePage: pageFromRequest(req, "/cards/p"),
+    sourcePage: pageFromRequest(req, page),
     noteTitle: "AI Referral Engine card preview",
     headline,
     detailLines: partial
       ? [
-          "They are mid-walk on /cards/p. The rest of this card fills in when they finish.",
-          "If nothing follows, they stopped after the email and are worth a chase.",
+          `They are mid-walk on ${page}. The rest of this card fills in when they finish.`,
+          phone
+            ? "If nothing follows, they saw their card and did not book. Call them."
+            : "If nothing follows, they stopped after the email and are worth a chase.",
         ]
       : [
       // First, because it is the line that decides whether anybody owes them anything.
@@ -175,7 +196,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       // forget that these two answers are already a service offer in all but the row.
       "Those two are the setup call's homework: they become the service label and the friend's " +
         "offer on client_service_offers.",
-      "They have seen the card and walked the patient side of it.",
+      phone ? `Mobile: ${phone}` : "",
+      variant === "v2"
+        ? "Came in through /cards/v2: details first, then saw their card with their clinic name on it."
+        : "They have seen the card and walked the patient side of it.",
         ],
   });
 

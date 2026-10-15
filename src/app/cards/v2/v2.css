@@ -1,0 +1,132 @@
+/* /cards/v2, and nothing else. Loads cards.css and p/preview.css and adds only what v2 has:
+ * the typeform intake and the stacked page. cd- and cp- classes are not redefined here. */
+
+/* ── The intake: one question per screen, no headline ───────────────────── */
+
+.v2-intake {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: var(--cd-frame-w);
+  margin: 0 auto;
+  min-height: 60vh;
+  justify-content: center;
+}
+
+.v2-progress {
+  height: 3px;
+  width: 100%;
+  margin-bottom: 2rem;
+  border-radius: 999px;
+  background: var(--cd-line);
+  overflow: hidden;
+}
+.v2-progress span {
+  display: block;
+  height: 100%;
+  background: var(--cd-accent);
+  transition: width 0.25s ease;
+}
+
+.v2-q {
+  display: flex;
+  flex-direction: column;
+  animation: v2In 0.28s ease;
+}
+@keyframes v2In {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .v2-q { animation: none; }
+}
+
+.v2-prompt {
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+  margin: 0.25rem 0 1.25rem;
+  font-family: var(--cd-display, Georgia), "Times New Roman", serif;
+  font-size: clamp(1.5rem, 6.5vw, 1.875rem);
+  line-height: 1.2;
+  color: var(--cd-ink);
+}
+.v2-num {
+  flex: 0 0 auto;
+  font-family: var(--cd-text, ui-sans-serif), system-ui, sans-serif;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--cd-accent);
+}
+
+/* A typeform line, not a box: the answer is the biggest thing on the screen. 16px+ or iOS zooms. */
+.v2-input {
+  width: 100%;
+  font: inherit;
+  font-size: 1.375rem;
+  color: var(--cd-ink);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid var(--cd-line);
+  border-radius: 0;
+  padding: 0.5rem 0;
+  outline: none;
+}
+.v2-input:focus { border-bottom-color: var(--cd-accent); }
+.v2-input::placeholder { color: var(--cd-faint); opacity: 0.6; }
+
+.v2-hint {
+  margin: 0.6rem 0 0;
+  font-size: 0.875rem;
+  color: var(--cd-faint);
+}
+.v2-error { margin-top: 0.6rem; }
+
+.v2-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+.v2-ok { min-height: 3rem; padding: 0.5rem 1.5rem; }
+.v2-ok:disabled { opacity: 0.45; cursor: not-allowed; }
+.v2-enter { font-size: 0.8125rem; color: var(--cd-faint); }
+@media (hover: none) {
+  .v2-enter { display: none; }
+}
+
+.v2-back { margin-top: 1.25rem; }
+
+/* ── The page: both sections stay, the chat lands under them ────────────── */
+
+.v2-section + .v2-section {
+  margin-top: 3rem;
+  padding-top: 2.5rem;
+  border-top: 1px solid var(--cd-line);
+}
+
+/* Same geometry as the tappable card on /cards/p, without being a button. */
+.v2-card {
+  position: relative;
+  width: 100%;
+  container-type: inline-size;
+}
+
+.v2-live { text-align: center; }
+
+.v2-cta {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.75rem;
+  margin-top: 2.5rem;
+}
+.v2-cta .cd-open-foot { margin: 0; text-align: center; }
+.v2-cta .cp-mini { align-self: center; }
+
+/* The chat owns the page once it opens: no preview above it, and the transcript grows to the
+   screen instead of the 24rem box /cards/p uses under its screens. */
+.v2-chat .cd-msgs {
+  min-height: calc(100vh - 16rem);
+  max-height: calc(100vh - 12rem);
+}
