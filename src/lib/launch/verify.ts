@@ -32,6 +32,8 @@ import { supabaseAdmin } from "@/lib/db";
 import { LAUNCH_STEPS, launchStepNumber, type LaunchStepKey } from "@/config/launch-steps";
 import { readDay0 } from "@/lib/clients/day-zero";
 import { faultsInStoredIntake } from "@/lib/validate/intake-fields";
+// The same registry the walk reads, so "a link is configured" means the same thing in both places.
+import { REVIEW_PLATFORMS } from "@/lib/hub/review-destinations";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The verdict
@@ -713,7 +715,44 @@ export const LAUNCH_VERIFIERS: Record<LaunchStepKey, LaunchVerifier> = {
       return notYet(
         "the reviews host row",
         "the review surface is not attached yet",
-        "Attach the reviews hostname for this client so the referral engine has somewhere to live."
+        // ‼️ THE CONSEQUENCE IS NAMED SINCE 2026-10-13, BECAUSE IT IS NOW A REAL ONE. Until this
+        // host is attached, referralConfigFor() suppresses the referral steps entirely: the walk
+        // still collects a review, and nobody is asked to refer a friend. That is deliberate
+        // (absent beats wrong) and it is the kind of silent state somebody has to be told about,
+        // or the step reads as paperwork rather than as a thing blocking the feature.
+        "Attach the reviews hostname for this client so the referral engine has somewhere to " +
+          "live. Until it is attached the walk asks for a review but never for a referral, " +
+          "because the claim link would otherwise point at our domain instead of theirs."
+      );
+    }
+
+    // ‼️ AT LEAST ONE PLACE TO POST, OR THE WALK HAS NOWHERE TO SEND HER (2026-10-13). His call:
+    // "lets leave it only as copy and go so for it to go live we need to give it at least one link
+    // for it to be able to go somewhere after its done."
+    //
+    // The row of destination links became one "Copy and go" button that opens the clinic's primary
+    // platform. With no link configured that button can only copy, which is a worse walk than the
+    // one we sold and is invisible from Mission Control. It is observable from here, so it is
+    // checked here rather than left to somebody noticing.
+    const { data: client, error: clientError } = await supabaseAdmin
+      .from("clients")
+      .select("review_workflow")
+      .eq("id", ctx.clientId)
+      .maybeSingle();
+
+    if (clientError) return dbUnreachable("clients");
+    const workflow = (client?.review_workflow ?? {}) as Record<string, unknown>;
+    const links = REVIEW_PLATFORMS.filter((p) => {
+      const raw = workflow[p.field];
+      return typeof raw === "string" && raw.trim().length > 0;
+    });
+    if (links.length === 0) {
+      return notYet(
+        "a review destination",
+        "the walk has nowhere to send her after she copies her review",
+        "Add at least one review link (Google, Yelp, Facebook and the rest live on the review " +
+          "workflow panel). The patient's last step opens that page for her, so without one the " +
+          "button can only copy."
       );
     }
 
@@ -722,15 +761,24 @@ export const LAUNCH_VERIFIERS: Record<LaunchStepKey, LaunchVerifier> = {
     if (artifacts.length === 0) {
       return artifactRefusal(
         ctx.stepKey,
-        `${host.host as string} is attached, but nothing is filed to say the cards were handed over`,
-        "File a photo of the printed cards with the client. The hostname is something we can " +
-          "observe; the handover is not."
+        `${host.host as string} is attached and ${links.length} review link(s) are set, but ` +
+          "nothing is filed to say the cards were handed over",
+        "File a photo of the printed cards with the client. The hostname and the links are things " +
+          "we can observe; the handover is not."
       );
     }
     // ‼️ MIXED EVIDENCE RESOLVES TO THE WEAKER TIER. Half of this was observed and half was
     // filed, and a verdict may never claim the stronger of the two.
+    //
+    // ‼️ THE CLAIM LINK IS ON THE EVIDENCE LINE SO SOMEBODY CAN EYEBALL IT ONCE, 2026-10-13. This
+    // is the shape a patient's friend actually receives, and until now the only way to see it was
+    // to walk the whole flow on a live clinic. The code is shown as CODE rather than a real one:
+    // a genuine code belongs to one invite, expires in 14 days, and reading one out of
+    // referral_invites here would also mean this file touching a table that
+    // scripts/_probe-referral-invite.ts fences per column. The host is the half that goes wrong.
     return filedOk(
       `${host.host as string} is attached`,
+      `patients will send https://${host.host as string}/r/CODE`,
       `${artifacts.length} artifact(s) filed against this step, most recent: ${artifacts[0].filename}`
     );
   },

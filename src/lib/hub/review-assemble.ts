@@ -386,7 +386,9 @@ export const LEAD_KEYS: ReadonlyArray<ReviewQuestion["key"]> = ["service", "prov
 export function assembleFragment(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const collapsed = raw.replace(/\s+/g, " ").trim().replace(/[.]+$/, "").trim();
-  return collapsed || null;
+  // The one typo fix in the file, added in v8. See fixStandaloneI: it capitalises her lone
+  // pronoun and touches nothing else.
+  return collapsed ? fixStandaloneI(collapsed) : null;
 }
 
 /**
@@ -427,8 +429,13 @@ export function assembleLead(answers: ReviewAnswers): string | null {
 export function assembleBullet(raw: string | null | undefined): string | null {
   if (!raw) return null;
 
-  const collapsed = raw.replace(/\s+/g, " ").trim();
-  if (!collapsed) return null;
+  const squashed = raw.replace(/\s+/g, " ").trim();
+  if (!squashed) return null;
+  // ‼️ THE ONE ADDITION v8 MADE TO THIS FUNCTION, AND IT IS A TYPO FIX, NOT A TRANSFORMATION.
+  // Everything the docstring above refuses is still refused. It applies here as well as in
+  // assembleFragment so that HER version and the joined version agree about her pronoun: fixing
+  // it in one and not the other would put a difference on the screen that she did not make.
+  const collapsed = fixStandaloneI(squashed);
 
   const first = collapsed[0];
   // Only when it is LOWERCASE. Leaving an already-capitalised or non-alphabetic opener
@@ -566,16 +573,24 @@ export function isEmpty(answers: ReviewAnswers): boolean {
 // the Rytr complaint turned on a generator producing "material details unrelated to user input".
 // ", and" asserts no detail. It names a relationship between two answers she gave in the order she
 // gave them. An adjective, a result, a duration, a price or a staff name she did not type is a
-// detail, and none of them can reach the output: the only words this section can insert are in the
-// two literals below, and the probe reads them out of this module to build its vocabulary.
+// detail, and none of them can reach the output: the only words this section can insert are in
+// JOIN_MOTIVATION_NERVES and CARRIES below, and the probe reads them out of this module to build
+// its vocabulary.
+//
+// ‼️ v8 WIDENED WHAT THIS SECTION INSERTS AND NARROWED WHERE IT MAY COME FROM, IN THE SAME
+// COMMIT. There are now four carries with alternate wordings instead of one fixed verb, which is
+// more of our words in her review than v7 put there. What makes that the safer trade is the fence
+// on CARRIES: every one of those words has to appear in the question she was answering. v7 could
+// have put any 24-character string in that literal and only a hand-written list of banned
+// adjectives stood in the way. v8 cannot put a word there that the question does not contain.
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
 
 /**
- * ‼️ THE ONLY TWO STRINGS v7 CAN PUT IN HER REVIEW, AND BOTH ARE EXPORTED SO A PROBE CAN FENCE
- * THEM. scripts/_probe-review-v7.ts builds its allowed vocabulary out of these plus the lead
- * templates plus her own answers, and fails on any other word in the output. That makes adding a
- * word to this file the only way to widen what we can say, which is a line in a diff somebody
- * reviews rather than a behaviour somebody discovers.
+ * ‼️ EVERY STRING THIS FILE CAN PUT IN HER REVIEW IS EXPORTED SO A PROBE CAN FENCE IT.
+ * scripts/_probe-review-v7.ts builds its allowed vocabulary out of this constant plus CARRIES
+ * plus the lead templates plus her own answers, and fails on any other word in the output. That
+ * makes adding a word to this file the only way to widen what we can say, which is a line in a
+ * diff somebody reviews rather than a behaviour somebody discovers.
  *
  * ‼️ "and" IS THE ONLY CONJUNCTION, AND THE BRIEF ALLOWED FIVE. "but" asserts contrast, "so",
  * "because" and "which is why" assert causation: each of them is a claim about the relationship
@@ -583,17 +598,195 @@ export function isEmpty(answers: ReviewAnswers): boolean {
  * understands her meaning, which is the rewriter this is not. "and" asserts addition, which is
  * the one relationship the question order already establishes. Narrowing five to one is the
  * single most load-bearing decision in this section.
+ *
+ * ‼️ AND IT IS THE ONE LITERAL REGENERATE DOES NOT VARY. v8 offers alternate wordings for every
+ * carry below, because a carry is built from its own question's words and a question has more
+ * than one grammatical shape. There is no alternate for ", and ": the four other conjunctions
+ * are the ones this docstring just refused, so a "synonym" here could only be a word that
+ * asserts something she did not. One wording, permanently.
  */
 export const JOIN_MOTIVATION_NERVES = ", and ";
 
 /**
- * The verb carried from "How did you feel walking out?" so a fragment becomes a sentence.
+ * ═══════════════════════════════════════════════════════════════════════════════════════════════
+ * THE CARRIES: one question's own words, lent back to a dry answer so it becomes a sentence.
+ * ═══════════════════════════════════════════════════════════════════════════════════════════════
  *
- * This is the one transformation the brief named by example: her "like myself again" plus the
- * question's own verb is "I walked out feeling like myself again". The words are the question's,
- * not ours, and the question is fixed, sentiment-neutral and identical for every business.
+ * ‼️ v8 REVERSES v7's REFUSAL TO TOUCH ONE-WORD ANSWERS, AND THE REVERSAL WAS DELIBERATE. Both
+ * positions, because the next reader deserves the argument and not just the outcome:
+ *
+ *   v7 (the original brief's own words): "A joiner that produces 'I started looking because of
+ *   wrinkles and walked out feeling good' has invented a sentence around two words. Decide what
+ *   it does here; most likely, leave them alone." v7 left them alone, and said so in capitals.
+ *
+ *   v8 (Matthew, 2026-10-13, having walked the v7 preview): "where the customer said 'great only'
+ *   we can add something for that section if the customer is not specific we can add context from
+ *   the same question, how did you feel leaving? 'great' so we transform that in the review to 'I
+ *   felt great after leaving'". He typed four honest answers, and `Great.` sat in the middle of
+ *   his own paragraph as a dead one-word sentence. That is what the review reading like a form
+ *   actually looks like.
+ *
+ * ‼️ THIS IS STILL NOT A REWRITER, AND THE REASON IS LOAD BEARING. The words that turn "great"
+ * into "I walked out feeling great" come from THE QUESTION SHE WAS ANSWERING. "How did you feel
+ * walking out?" is fixed, sentiment-neutral, identical for every business, and contains no
+ * adjective about her visit. Carrying its own verb back onto her answer asserts nothing she did
+ * not assert. It is the transformation the v7 brief named BY EXAMPLE, and v7 already did it for
+ * the walkout: v8 changes two parameters, not the principle. The floor drops from two words to
+ * one, and there is a carry per question instead of only the walkout.
+ *
+ * ‼️ THE FENCE, WHICH IS WHAT MAKES THIS SAFE AND IS STRICTER THAN THE BANNED-WORD LIST IT SITS
+ * BESIDE. Every content word in every variant below must appear in THAT KEY'S OWN QUESTION
+ * PROMPT (inflection allowed: start/started, feel/felt/feeling), plus a closed list of function
+ * words. scripts/_probe-review-v7.ts asserts it against REVIEW_QUESTIONS_V6, so nobody can add
+ * "I absolutely loved that {x}" unless the question itself contains "absolutely loved", which it
+ * never will. A hand-written list of banned adjectives can only forbid the adjectives somebody
+ * thought of; this forbids every word the question does not already contain.
+ *
+ * ‼️ AND IT IS WHY THE OLD 24-CHARACTER CAP ON SCAFFOLDING ROSE RATHER THAN BEING DELETED.
+ * That cap was a crude proxy for "this is scaffolding, not prose" at a time when nothing checked
+ * WHICH words were in it. The fence is the real thing, and it is tighter: a 42-character string
+ * built only from the question's own words can say less than a 24-character string built from
+ * anything. The cap stays as a blunt backstop against a paragraph, at 48.
+ *
+ * ‼️ ONE TABLE FOR EVERY CLIENT, WHICH IS WHAT HE ASKED FOR. "it should give sinonims in
+ * connection words for every client". Nothing here is per clinic, and nothing can be: this module
+ * imports nothing, so it cannot read a client row even by accident. One fence over one set of
+ * literals is also the only version of this a probe can hold.
+ *
+ * ‼️ FIXTURE 4 IS THE REGRESSION GUARD FOR ALL OF IT. "a bit sore and the wait was long" holds a
+ * conjunction, so no carry ever reaches it. See CONJUNCTIONS below.
  */
-export const CARRY_WALKOUT = "I walked out feeling ";
+export const CARRIES: Readonly<Record<"motivation" | "nerves" | "walkout" | "friend", readonly string[]>> = {
+  // "What made you start looking for a place like this?"
+  motivation: [
+    "I started looking because of ",
+    "What made me start looking was ",
+    "I was looking for a place like this because of ",
+  ],
+  // "What were you nervous about?"
+  //
+  // Two wordings, not three, and an unequal row is fine: assembleJoined indexes each key modulo
+  // its own length. A third variant here would have to reach outside five short question words
+  // for a word the fence would then refuse, which is the fence working rather than a gap.
+  nerves: [
+    "I was nervous about ",
+    "What I was nervous about was ",
+  ],
+  // "How did you feel walking out?"
+  //
+  // Variant 0 is v7's CARRY_WALKOUT byte for byte, so the wording she saw before this change is
+  // still the one she sees first.
+  walkout: [
+    "I walked out feeling ",
+    "Walking out, I felt ",
+    "I felt ",
+  ],
+  // "What would you tell a friend who is on the fence about coming in?"
+  //
+  // ‼️ "If you are on the fence," IS THE HALF OF HIS ORIGINAL TARGET OUTPUT v7 DECLINED TO BUILD,
+  // on the grounds that it is a CLAUSE lifted from our question rather than "a verb carried". The
+  // fence is what changed: a clause made only of the question's own words is the same kind of
+  // thing as a verb made of them, and it is checkable in a way "is this a verb" was not.
+  friend: [
+    "If you are on the fence, ",
+    "What I would tell a friend on the fence is ",
+    "If you are on the fence about coming in, ",
+  ],
+};
+
+/**
+ * The keys in the order their digits are read out of a variant number. V6 narrative order.
+ *
+ * ‼️ CHANGING THIS ORDER RE-MAPS EVERY VARIANT NUMBER, which is harmless today (nothing stores a
+ * variant) and would not be if one were ever persisted.
+ */
+const CARRY_ORDER = ["motivation", "nerves", "walkout", "friend"] as const;
+
+/**
+ * How many distinct shapes a review can take: 3 x 2 x 3 x 3 = 54.
+ *
+ * ‼️ EVERY KEY PICKS ITS WORDING INDEPENDENTLY, AND THAT IS THE WHOLE POINT OF THIS NUMBER.
+ * Matthew, 2026-10-13, looking at the preview: "all of the reviews will have the same format, the
+ * dots are in the same spot and the commas, so we need to create some randommness in that
+ * formatting to not create a pattern".
+ *
+ * He is right, and it is not only a cosmetic problem. Every review this tool produced opened with
+ * the same lead line and then ran four sentences in the same order with the same punctuation
+ * rhythm, because a single wording index moved all four carries together and everybody started at
+ * index 0. A clinic's profile would have filled with reviews sharing a visible skeleton, which is
+ * what a reader and a spam filter both call a template.
+ *
+ * A single index gave 3 shapes. Reading the number as a MIXED-RADIX digit string, one digit per
+ * key, gives 54: "I walked out feeling good." and "Walking out, I felt good." put the full stop
+ * and the comma in different places, and they now vary independently of the sentence before them.
+ *
+ * ‼️ THE ORDER OF THE SENTENCES CANNOT BE PART OF THE VARIATION, AND THAT IS A HARD CONSTRAINT
+ * RATHER THAN A CHOICE. scripts/_probe-review-v7.ts requires her own assembly's word sequence to
+ * survive in the output AS A SUBSEQUENCE, so shuffling her answers would fail the invariant that
+ * proves nothing was moved. What varies is how each answer is dressed, never where it sits.
+ *
+ * Derived from the table, so adding a wording to any row widens the space without anybody
+ * remembering to update a number (onboarding2's scar: it typed "Six" over an array of seven).
+ */
+export const CARRY_COMBINATIONS: number = CARRY_ORDER.reduce(
+  (total, key) => total * CARRIES[key].length,
+  1
+);
+
+/**
+ * How far Regenerate jumps.
+ *
+ * ‼️ NOT 1, AND IT HAS TO BE COPRIME WITH CARRY_COMBINATIONS. Adding 1 changes only the first
+ * digit most of the time, so the review would look almost identical to the one before it and the
+ * button would read as broken. 7 is coprime with 54, so repeated presses still reach all 54 shapes
+ * before repeating, and each press moves more than one key.
+ */
+export const CARRY_STRIDE = 7;
+
+/**
+ * The orders her four answers may appear in.
+ *
+ * ‼️ CURATED, NOT ALL 24 PERMUTATIONS, AND THAT IS THE POINT RATHER THAN A SHORTCUT. Matthew asked
+ * to "randomize the order in which we say the started looking nervous about and how it felt and
+ * then fence, mix it up". All 24 would include orders that read like a shuffled deck ("If you are
+ * on the fence, just go. I was nervous about bruising. I started looking because of wrinkles."),
+ * and a review that reads wrong is the same problem as a review that reads templated. These six
+ * are orders a person actually writes in.
+ *
+ * ‼️ REORDERING WHOLE ANSWERS IS NOT THE SAME THING AS MOVING HER WORDS, AND THE DIFFERENCE IS THE
+ * WHOLE LICENCE FOR THIS. Each answer stays intact and entire; nothing is lifted out of one
+ * sentence and dropped into another. The thing v7's subsequence check was built to catch was the
+ * brief's own suggestion of moving her "honestly" from the walkout answer into the nerves clause,
+ * which changes what the hedge modifies. That is still impossible: scripts/_probe-review-v7.ts now
+ * requires every answer to appear as a CONTIGUOUS run of words, which is stricter within an answer
+ * than the subsequence rule it replaced, and separately requires that nothing is dropped.
+ *
+ * ‼️ THE RECOMMENDATION CLOSES FIVE OF THE SIX. It is the sentence a reader acts on, and burying
+ * it mid-review is the one reordering that costs the clinic something real.
+ */
+export const SENTENCE_ORDERS: ReadonlyArray<ReadonlyArray<(typeof CARRY_ORDER)[number]>> = [
+  // The order the questions are asked in: why I came, what worried me, how it went, what I'd say.
+  ["motivation", "nerves", "walkout", "friend"],
+  // Opens on the worry, which is the shape of a reassurance review.
+  ["nerves", "motivation", "walkout", "friend"],
+  // Opens on the outcome. A great many real reviews start with how it turned out.
+  ["walkout", "motivation", "nerves", "friend"],
+  // Why, then how it went, with the worry as an aside before the advice.
+  ["motivation", "walkout", "nerves", "friend"],
+  // Outcome first, then the backstory behind it.
+  ["walkout", "nerves", "motivation", "friend"],
+  // The one that opens on the recommendation, which is also a shape people write in.
+  ["friend", "walkout", "motivation", "nerves"],
+];
+
+/**
+ * Every distinct review this module can produce from one set of answers: 54 wordings x 6 orders.
+ *
+ * ‼️ 324, AND HE ASKED FOR 52. The number is not the point; the absence of a repeating skeleton is.
+ * Two reviews on the same clinic's profile now differ in which sentence opens, whether the first
+ * two are merged into one, and where the commas fall inside each.
+ */
+export const REVIEW_SHAPES: number = CARRY_COMBINATIONS * SENTENCE_ORDERS.length;
 
 /** The four keys v7 joins. Derived, so it cannot drift from the question set. */
 export const V6_KEYS: ReadonlyArray<ReviewQuestion["key"]> = REVIEW_QUESTIONS_V6.map((q) => q.key);
@@ -629,6 +822,28 @@ const CLAUSE_OPENERS: ReadonlySet<string> = new Set([
  */
 const CONJUNCTIONS: ReadonlySet<string> = new Set([
   "and", "but", "so", "because", "which", "though", "although", "plus", "also", "then", "however",
+]);
+
+/**
+ * The two carries whose wording ends in a preposition and therefore takes a noun phrase.
+ *
+ * "I started looking because of ___" and "I was nervous about ___". A determiner is the natural
+ * next word in both. The other two take a complement ("I walked out feeling ___") or a clause
+ * ("If you are on the fence, ___"), where a determiner reads as a fragment.
+ */
+const NOUN_FRAME_KEYS: ReadonlySet<string> = new Set(["motivation", "nerves"]);
+
+/**
+ * Determiners, which open a noun phrase rather than a clause.
+ *
+ * ‼️ EVERY ONE OF THESE IS ALSO IN CLAUSE_OPENERS, AND THAT IS NOT A CONTRADICTION. There they are
+ * refused because they open a clause in the walkout and friend frames; here they are allowed back
+ * in the two frames that want a noun. No PRONOUN appears below, so the double-subject failure
+ * CLAUSE_OPENERS exists to prevent is untouched in all four frames.
+ */
+const DETERMINERS: ReadonlySet<string> = new Set([
+  "the", "this", "that", "these", "those",
+  "my", "our", "his", "her", "their", "your",
 ]);
 
 /** A word reduced to letters for a closed-list lookup, so a trailing comma cannot miss. */
@@ -706,25 +921,101 @@ function canMergeMotivationAndNerves(motivation: string, nerves: string): boolea
   return true;
 }
 
-/** A carried verb is for a short complement phrase. Longer than this and she wrote a sentence. */
-const CARRY_MIN_WORDS = 2;
+/**
+ * A carried phrase is for a short complement. Longer than this and she wrote a sentence.
+ *
+ * ‼️ THE FLOOR IS 1 IN v8 AND WAS 2 IN v7, AND THAT ONE DIGIT IS THE WHOLE OF HIS COMPLAINT.
+ * v7's docstring here read: "One word ('good') is left alone: 'I walked out feeling good' is a
+ * sentence built around one word she typed." That is exactly the output he walked into and
+ * rejected. The answer to "is this a sentence we invented" is no longer the word count; it is the
+ * fence on CARRIES, which proves every word we contribute came from the question she was reading
+ * when she typed that one word. See the CARRIES docstring for both positions.
+ */
+const CARRY_MIN_WORDS = 1;
 const CARRY_MAX_WORDS = 6;
 
 /**
- * Whether "How did you feel walking out?" may lend its verb to her answer.
+ * Whether a question may lend its own words to her answer.
  *
- * One word ("good") is left alone: "I walked out feeling good" is a sentence built around one word
- * she typed. Seven or more, or anything holding a conjunction or opening its own clause, is
- * already a sentence and gets nothing added. What is left is the shape the carry was designed for:
- * "like myself again, honestly".
+ * ‼️ KEY-INDEPENDENT ON PURPOSE. The four preconditions are about the SHAPE of what she typed,
+ * not about which question she was answering, so one function serves all four carries and there
+ * is no per-key loophole to audit. Seven or more words, two sentences, a conjunction anywhere, or
+ * a first word that already opens a clause: each means she wrote a sentence and gets nothing
+ * added. What is left is the shape the carry was designed for: "great", "like myself again,
+ * honestly", "go for it".
+ *
+ * ‼️ CLAUSE_OPENERS STAYS GLOBAL AND THEREFORE DECLINES SOME CARRIES THAT WOULD HAVE READ WELL.
+ * "my smile lines" is refused because "my" is in that set, even though "I started looking because
+ * of my smile lines" is good English. Over-inclusion only ever makes a rule DECLINE, and a
+ * declined carry is v6 byte for byte, so the conservative direction is the safe one. Per-key
+ * opener lists would buy a few nicer sentences and cost the one-function guarantee above.
  */
-function canCarryWalkout(walkout: string): boolean {
-  const words = wordsOf(walkout);
+function canCarry(answer: string, key: (typeof CARRY_ORDER)[number]): boolean {
+  const words = wordsOf(answer);
   if (words.length < CARRY_MIN_WORDS || words.length > CARRY_MAX_WORDS) return false;
-  if (!isSingleSentence(walkout)) return false;
-  if (CLAUSE_OPENERS.has(token(words[0]))) return false;
+  if (!isSingleSentence(answer)) return false;
   if (words.some((word) => CONJUNCTIONS.has(token(word)))) return false;
-  return true;
+
+  const first = token(words[0]);
+  if (!CLAUSE_OPENERS.has(first)) return true;
+  // ‼️ A DETERMINER IS NOT A CLAUSE OPENER IN A NOUN FRAME, AND TREATING IT AS ONE LEFT BARE
+  // FRAGMENTS ON THE SCREEN. Matthew answered "the food" to the nerves question and got back the
+  // sentence `The food.` sitting on its own, which is the same defect as the `Great.` this release
+  // was built to fix.
+  //
+  // The reason is that CLAUSE_OPENERS was tuned for ONE carry. "I walked out feeling the food" is
+  // nonsense, so "the" belongs on that list; but the four carries do not all end in the same part
+  // of speech. The motivation and nerves wordings end in a preposition and take a NOUN PHRASE
+  // ("because of the food", "nervous about the food"), where a determiner is exactly what should
+  // follow. The walkout and friend wordings take a complement or a clause, where it should not.
+  //
+  // So the list is per frame rather than global. What it still refuses everywhere is the thing it
+  // was always for: a pronoun subject, which would make a double subject ("I walked out feeling I
+  // felt fine", "I was nervous about we were late").
+  return NOUN_FRAME_KEYS.has(key) && DETERMINERS.has(first);
+}
+
+/**
+ * The wording this key uses at this variant number.
+ *
+ * ‼️ THE VARIANT IS A MIXED-RADIX NUMBER, NOT AN INDEX, AND THAT IS WHAT BREAKS THE PATTERN. Each
+ * key reads its OWN digit: divide out the radices of the keys before it, then take the remainder
+ * modulo this key's own row length. So variant 17 might be motivation wording 2, nerves 0,
+ * walkout 2, friend 0, and variant 18 a different combination again. See CARRY_COMBINATIONS.
+ *
+ * Before this, one index moved all four carries in lockstep and there were three possible reviews.
+ *
+ * Negative and out-of-range numbers are folded back in, so no caller can land on undefined however
+ * it arrives at a number.
+ */
+function carryFor(key: (typeof CARRY_ORDER)[number], variant: number): string {
+  const wordings = CARRIES[key];
+  let divisor = 1;
+  for (const earlier of CARRY_ORDER) {
+    if (earlier === key) break;
+    divisor *= CARRIES[earlier].length;
+  }
+  const whole = Math.trunc(variant);
+  const folded = ((whole % CARRY_COMBINATIONS) + CARRY_COMBINATIONS) % CARRY_COMBINATIONS;
+  return wordings[Math.floor(folded / divisor) % wordings.length];
+}
+
+/**
+ * Her lone lowercase "i", capitalised.
+ *
+ * He typed "i was nervous about if it would hurt my skin" and the review printed the lowercase i.
+ * MAY ADD covers obvious typos, and this is the most obvious one there is.
+ *
+ * ‼️ ONLY THE STANDALONE PRONOUN. Not "i'm", not "ive", not the i in a word: the lookahead
+ * excludes letters AND apostrophes, so the only thing that matches is the single-letter word.
+ * Widening it to contractions would mean deciding that "ive" is "I've" rather than a word she
+ * meant, which is a guess about her meaning rather than a typo nobody disputes.
+ *
+ * Invisible to both probe invariants by construction: the probe's words() lowercases before it
+ * compares, so this changes no word and moves nothing.
+ */
+function fixStandaloneI(text: string): string {
+  return text.replace(/(^|[^A-Za-z'])i(?=[^A-Za-z']|$)/g, (_m, before: string) => `${before}I`);
 }
 
 const SPLIT_MIN_HEAD_WORDS = 2;
@@ -763,15 +1054,32 @@ function splitFriendClause(friend: string, answers: ReviewAnswers): string | nul
 /**
  * HER ANSWERS, JOINED. The v7 option, offered beside the version this file has always produced.
  *
- * ‼️ IT IS AN OPTION AND assemblePlain IS STILL THE DEFAULT, IN THIS FILE AND ON THE SCREEN. The
- * component holds both, hers is selected, and the joined one is a radio she has to choose. That
- * ordering is not a UI preference: a tool that silently replaces what she wrote with our version
- * of it is the thing FTC 16 CFR Part 465 reaches, and a tool that offers it beside hers is not.
+ * ‼️ IN v8 THIS IS THE VERSION SHE COPIES, AND IN v7 IT WAS NOT. THE REVERSAL WAS DELIBERATE.
+ * v7's docstring here read: "IT IS AN OPTION AND assemblePlain IS STILL THE DEFAULT, IN THIS FILE
+ * AND ON THE SCREEN. The component holds both, hers is selected, and the joined one is a radio
+ * she has to choose." Matthew, 2026-10-13: "I want them to see original, and retouched version so
+ * they can copy the retouched only. and modify if they want in that same box where the retouched
+ * is".
+ *
+ * ‼️ WHAT SURVIVES OF THE OLD RULE IS THE MITIGATION, NOT THE WORDING, AND IT IS WHY THIS IS
+ * STILL NOT THE THING FTC 16 CFR Part 465 REACHES. The original stays on the screen beside this
+ * one, read-only, so the difference between what she typed and what she is about to post is
+ * always visible rather than remembered. This box is fully editable, so her exact words are one
+ * deletion away. And she ticks an attestation before the clipboard will take it. A tool that
+ * SILENTLY replaces her words is what the rule reaches; one that shows her both and asks her to
+ * approve one is not.
  *
  * ‼️ OFFERED AT EVERY RATING, AND THE FUNCTION CANNOT KNOW THE RATING. There is no rating
  * argument here and there must never be one. Offering a better-reading review to five stars and
  * not to two is review shaping with a nicer name, and it is the exact funnel
  * scripts/_probe-review-gating.ts exists to keep rebuilt-proof.
+ *
+ * ‼️ THE SECOND PARAMETER IS A WORDING INDEX AND IT IS NOT THE RATING. v7 had arity 1 and a probe
+ * asserted it, precisely so that a second argument could not become a rating without somebody
+ * arguing for it. This is that argument: `variant` selects which of CARRIES' wordings each key
+ * uses, it comes from a button she presses, and nothing derives it from the stars. The probe now
+ * asserts arity 2 AND that this function's body contains no `rating` at all, which is the half
+ * that was ever load-bearing.
  *
  * ‼️ NOTHING SHE TYPED IS EVER DROPPED, INCLUDING A KEY THIS FUNCTION HAS NEVER HEARD OF. The
  * non-v6 loop runs first in ALL_REVIEW_QUESTIONS order, so a stored v3, v4 or v5 row handed to
@@ -780,8 +1088,28 @@ function splitFriendClause(friend: string, answers: ReviewAnswers): string | nul
  *
  * Pure, no network, no imports: ReviewAnswers in, a string out.
  */
-export function assembleJoined(answers: ReviewAnswers): string {
+export function assembleJoined(answers: ReviewAnswers, variant = 0): string {
   const sentences: string[] = [];
+
+  // One fold for the whole number, so the order digit and the wording digits are read off the
+  // same value. Negatives and out-of-range numbers come back inside the space.
+  const whole = Math.trunc(variant);
+  const folded = ((whole % REVIEW_SHAPES) + REVIEW_SHAPES) % REVIEW_SHAPES;
+
+  /**
+   * One key's sentence: her answer with its own question's words carried onto it when the shape
+   * allows, and the bullet v6 produced when it does not.
+   *
+   * ‼️ THE FALLBACK IS THE POINT. Every precondition that fails lands on assembleBullet, which
+   * is v6 byte for byte, so the worst case of this whole feature is today's output.
+   */
+  const carried = (key: (typeof CARRY_ORDER)[number]): string | null => {
+    const fragment = assembleFragment(answers[key]);
+    if (!fragment) return null;
+    return canCarry(fragment, key)
+      ? assembleBullet(carryFor(key, folded) + midSentence(fragment, answers))
+      : assembleBullet(answers[key]);
+  };
 
   const lead = assembleLead(answers);
   if (lead) sentences.push(lead);
@@ -795,35 +1123,55 @@ export function assembleJoined(answers: ReviewAnswers): string {
     if (text) sentences.push(text);
   }
 
-  // 1. motivation + nerves, merged with the one conjunction that asserts nothing.
+  // ── Her four answers, in one of the orders a person writes in ──
+  //
+  // ‼️ THE ORDER IS PART OF THE VARIANT NUMBER, which is what stops every review on a clinic's
+  // profile sharing a skeleton. See SENTENCE_ORDERS for why six curated orders and not all 24.
+  const order = SENTENCE_ORDERS[Math.floor(folded / CARRY_COMBINATIONS) % SENTENCE_ORDERS.length];
+
+  // ‼️ THE MERGE NEEDS THE PAIR ADJACENT AND IN THAT ORDER, AND NOW IT IS NOT ALWAYS. ", and "
+  // asserts addition between two answers the question order already put side by side. Across a
+  // gap, or reversed, it would be asserting a relationship she did not make and the reader cannot
+  // check. So the merge fires only in the orders that keep motivation immediately before nerves,
+  // and in the others both answers simply get their own sentence. That is not a loss: it is one
+  // more axis on which two reviews differ.
+  const motivationAt = order.indexOf("motivation");
+  const pairIsAdjacent = motivationAt >= 0 && order[motivationAt + 1] === "nerves";
+
   const motivation = assembleFragment(answers.motivation);
   const nerves = assembleFragment(answers.nerves);
-  if (motivation && nerves && canMergeMotivationAndNerves(motivation, nerves)) {
-    const merged = assembleBullet(
-      motivation + JOIN_MOTIVATION_NERVES + midSentence(nerves, answers)
-    );
-    if (merged) sentences.push(merged);
-  } else {
-    const first = assembleBullet(answers.motivation);
-    if (first) sentences.push(first);
-    const second = assembleBullet(answers.nerves);
-    if (second) sentences.push(second);
-  }
+  const merging =
+    pairIsAdjacent &&
+    Boolean(motivation) &&
+    Boolean(nerves) &&
+    canMergeMotivationAndNerves(motivation as string, nerves as string);
 
-  // 2. walkout, with the question's own verb carried onto a fragment.
-  const walkout = assembleFragment(answers.walkout);
-  if (walkout) {
-    const carried = canCarryWalkout(walkout)
-      ? assembleBullet(CARRY_WALKOUT + midSentence(walkout, answers))
-      : assembleBullet(answers.walkout);
-    if (carried) sentences.push(carried);
-  }
+  for (const key of order) {
+    // The merged pair is emitted once, at the motivation's position, and the nerves slot is then
+    // already spent.
+    if (merging && key === "nerves") continue;
 
-  // 3. friend, split where she already put the break.
-  const friend = assembleFragment(answers.friend);
-  if (friend) {
-    const split = splitFriendClause(friend, answers) ?? assembleBullet(answers.friend);
-    if (split) sentences.push(split);
+    if (merging && key === "motivation") {
+      const merged = assembleBullet(
+        (motivation as string) + JOIN_MOTIVATION_NERVES + midSentence(nerves as string, answers)
+      );
+      if (merged) sentences.push(merged);
+      continue;
+    }
+
+    if (key === "friend") {
+      // The split is tried first because it adds NO word at all, so where both are eligible the
+      // cheaper transformation wins.
+      const friend = assembleFragment(answers.friend);
+      if (friend) {
+        const split = splitFriendClause(friend, answers) ?? carried("friend");
+        if (split) sentences.push(split);
+      }
+      continue;
+    }
+
+    const sentence = carried(key);
+    if (sentence) sentences.push(sentence);
   }
 
   return sentences.join(" ");

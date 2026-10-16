@@ -41,6 +41,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  CARRY_STRIDE,
+  REVIEW_SHAPES,
   QUESTION_SET_VERSION_V6,
   assembleJoined,
   assemblePlain,
@@ -72,7 +74,6 @@ import {
   type InviteChannel,
   type InviteMode,
 } from "@/lib/hub/referral-invite";
-import { analyse, mergeMarks } from "@/lib/hub/readability";
 
 export interface ReviewDestination {
   key: string;
@@ -147,22 +148,33 @@ interface Props {
 const BUBBLE_GAP_MS = { min: 400, max: 900 } as const;
 
 /**
- * The two versions of her review, in the order they appear on screen.
+ * The two panels, in the order they appear on screen.
  *
- * ‼️ HERS IS FIRST AND THAT IS NOT A LAYOUT PREFERENCE. First and selected is the version she
- * typed; the joined one sits beside it as the option. Reversing this array would put our joined
- * draft in the reading position and make hers the alternative, which is the same product as a
- * tidy-up button with extra steps. scripts/_probe-review-v7.ts pins the order and the default.
+ * ‼️ THE RETOUCHED ONE IS FIRST IN v8 AND HERS WAS FIRST IN v7. THE REVERSAL WAS DELIBERATE.
+ * v7's comment here read: "HERS IS FIRST AND THAT IS NOT A LAYOUT PREFERENCE. First and selected
+ * is the version she typed; the joined one sits beside it as the option. Reversing this array
+ * would put our joined draft in the reading position and make hers the alternative, which is the
+ * same product as a tidy-up button with extra steps."
  *
- * ‼️ THE LABELS CLAIM EXACTLY WHAT THE CODE DOES AND NOT A WORD MORE. "Joined up" and "Same
- * words, joined into sentences" are true of assembleJoined: the only strings it can insert are
- * JOIN_MOTIVATION_NERVES and CARRY_WALKOUT. "Tidied", "improved", "better" or "polished" would be
- * us advertising a rewrite we do not perform and must never perform, and the honest label is also
- * the one that tells her what she is choosing between.
+ * Matthew, 2026-10-13: "I want them to see original, and retouched version so they can copy the
+ * retouched only. and modify if they want in that same box where the retouched is".
+ *
+ * ‼️ WHAT SURVIVES OF THE OLD RULE IS THE MITIGATION AND IT IS LOAD BEARING. v7's fear was a tool
+ * that replaces her words and hopes she does not mind. Three things stop that being what this is,
+ * and all three are on this screen rather than in a comment: the original is beside it, always,
+ * unedited and visible, so the difference is shown rather than remembered; the retouched box is
+ * fully editable, so her exact words are one deletion away; and she ticks an attestation before
+ * the clipboard will take anything. What she cannot do any more is COPY the unjoined one, which
+ * is the single thing he asked to change.
+ *
+ * ‼️ THE LABELS CLAIM EXACTLY WHAT THE CODE DOES AND NOT A WORD MORE. "Joined into sentences" is
+ * true of assembleJoined: every word it inserts is in CARRIES, and every content word of those is
+ * in the question she answered. "Tidied", "improved", "better" or "polished" would be us
+ * advertising a rewrite we do not perform and must never perform.
  */
 const VERSIONS = [
-  { key: "hers", name: "Your words", note: "Exactly what you typed" },
-  { key: "joined", name: "Joined up", note: "Same words, joined into sentences" },
+  { key: "joined", name: "Your review", note: "Your answers, joined into sentences" },
+  { key: "hers", name: "What you typed", note: "Your answers exactly as you wrote them" },
 ] as const;
 
 type Stage = "intro" | "connecting" | "chat";
@@ -179,10 +191,46 @@ type Stage = "intro" | "connecting" | "chat";
  */
 type Awaiting = "none" | "text" | "gate" | "stars" | "refer" | "invite";
 
+/**
+ * A control set she has already answered, kept in the transcript.
+ *
+ * ‼️ IT IS A RECORD OF A CHOICE, NOT A CONTROL. Matthew, 2026-10-13: "you remove the whole texting
+ * buttons after we finish it, make them part as the conversation but gray out the options that
+ * they didnt pick leaving the button dead but visible in the history". Before this the live
+ * controls simply vanished when the step completed, so the transcript lost the fact that she had
+ * been asked anything at all, and a chat that shows her answers but not the questions reads as
+ * half a conversation.
+ *
+ * ‼️ AND NOTHING HERE IS AN ANSWER IN THE SENSE THAT MATTERS. These strings are chip LABELS, ours,
+ * and the rule they sit under has not moved: a chip's text may never become review text. This is
+ * display. `_probe-review-gating.ts` separately asserts that no "Yes" is assignable to
+ * ReviewAnswers, and nothing below changes what reaches the clipboard.
+ */
+interface AnsweredChips {
+  /** What she was asked, in her own transcript's voice. */
+  label: string;
+  /** Every option she was shown, in the order she saw them. */
+  options: readonly string[];
+  /** The one she picked. Rendered solid; the rest are greyed and dead. */
+  chosen: string;
+}
+
 interface Bubble {
   id: number;
   from: "them" | "her";
   text: string;
+  /** Present instead of `text` when this entry records a control set she answered. */
+  chips?: AnsweredChips;
+  /**
+   * Present instead of `text` when this entry records a block she was SHOWN and acted on.
+   *
+   * ‼️ THE MESSAGE SHE COPIED IS THE ONE THAT MATTERS AND IT USED TO VANISH. Matthew, 2026-10-13:
+   * "after we click copy the message it gets rid of the original message i need all of it to stay
+   * and just gray out and continue the conversation no dissappearing." The preview lived inside
+   * the `send` phase, so advancing to the hand-off took it off the screen, and the one thing she
+   * might want to re-read while pasting into another app was the thing we had just removed.
+   */
+  quote?: { label: string; body: string };
 }
 
 export function VirtualAgentClient({
@@ -194,31 +242,70 @@ export function VirtualAgentClient({
   referral = null,
 }: Props) {
   const [answers, setAnswers] = useState<ReviewAnswers>({});
-  const [edited, setEdited] = useState<string | null>(null);
 
   /**
-   * ‼️ "hers" IS THE INITIAL VALUE AND THAT IS THE WHOLE v7 SAFETY PROPERTY ON THIS SCREEN.
+   * Which wording the carries use. Regenerate advances it.
    *
-   * v7 offers a joined-up version of her four answers beside the version she typed. Which one is
-   * SELECTED WHEN THE SCREEN OPENS is the difference between offering her a tidier draft and
-   * replacing her review with ours and hoping she does not mind. She has to choose the joined one.
-   * It is never chosen for her, there is no "remember my choice", and nothing about the clinic or
-   * her rating can flip this default. scripts/_probe-review-v7.ts reads this line.
-   *
-   * ‼️ AND IT IS OFFERED AT EVERY RATING, WHICH IS NOT A COURTESY. Showing the better-reading
-   * option to five stars and withholding it from two is review shaping: the output she is nudged
-   * toward would depend on how happy she is. `rating` must never appear in this choice, in the
-   * panel that renders it, or in assembleJoined, and the probe asserts all three.
+   * ‼️ IT IS A WORDING INDEX AND IT IS NOT THE RATING, AND THE DISTANCE BETWEEN THOSE TWO IS THE
+   * WHOLE OF WHY THIS IS ALLOWED TO EXIST. It starts at 0 for everybody, it moves only when she
+   * presses the button, and nothing about the clinic, the stars or the answers can move it.
+   * Offering a better-reading review to five stars and not to two is review shaping with a nicer
+   * name; `rating` must never appear in this, in the panel below, or in assembleJoined, and
+   * _probe-review-v7.ts asserts all three.
    */
-  const [version, setVersion] = useState<"hers" | "joined">("hers");
+  /**
+   * ‼️ RANDOM PER WALK, NOT 0, AND THIS IS THE HALF THAT ACTUALLY BREAKS THE PATTERN. A table of
+   * 54 shapes is worth nothing if every patient starts on the same one, and before this they did:
+   * everybody who never pressed Regenerate got the identical skeleton, so a clinic's profile would
+   * have filled with reviews whose full stops and commas landed in the same places. See
+   * CARRY_COMBINATIONS in review-assemble.ts for his words on it.
+   *
+   * ‼️ A LAZY useState INITIALISER, NOT Math.random() IN THE RENDER BODY, and not a ref either.
+   * This component is server rendered before it hydrates; a random value computed during render
+   * would be computed twice and disagree, which is the hydration mismatch the invite code's own
+   * docstring was written about. It is safe here for the additional reason that the seed is only
+   * ever READ inside the review step, which renders when `revealed` is true and is therefore never
+   * part of the server's output.
+   *
+   * ‼️ AND THE RANDOMNESS IS IN THE COMPONENT, NEVER IN review-assemble.ts. That module stays pure
+   * and deterministic: the same answers and the same variant always produce the same string, which
+   * is what lets the probe sweep all 54 shapes over fixtures. A module that rolled its own dice
+   * could not be tested at all.
+   */
+  const [variant, setVariant] = useState(() => Math.floor(Math.random() * REVIEW_SHAPES));
 
   /**
-   * Her edits to the joined version, kept SEPARATE from `edited` on purpose.
+   * How many times she pressed Regenerate. Counted, never routed.
    *
-   * Both panels are editable and both keep what she typed in them, so switching between them is
-   * not destructive and she can start from whichever reads closer and fix it. One shared buffer
-   * would mean selecting the joined version silently discarded her own edits, which is the same
-   * harm as defaulting to it.
+   * Separate from `variant` because that one cycles: with three wordings, four presses leaves it
+   * at 1. This is the press count, which is the thing worth knowing. A high number across many
+   * patients means our connectives read badly, which is a fact about us.
+   */
+  const [regenerateCount, setRegenerateCount] = useState(0);
+
+  /**
+   * Her wording from before the last press of "Try another wording", or null.
+   *
+   * ‼️ THIS EXISTS SO THE BUTTON CAN BE PERMANENT. The previous design withdrew the button once
+   * she had edited the box, on the grounds that regenerating would discard what she wrote. The
+   * reasoning was right and the remedy was wrong: it protected her text by removing the feature,
+   * and Matthew hit exactly that on 2026-10-16, wanting to shuffle a review he had already
+   * touched and finding the control gone. Keeping what it would have overwritten is the answer
+   * that costs her nothing.
+   */
+  const [undoable, setUndoable] = useState<string | null>(null);
+
+  /**
+   * Her edits to the retouched box. `null` means she has not touched it.
+   *
+   * ‼️ null IS LOAD BEARING AND NOT MERELY AN EMPTY VALUE. It is what Regenerate checks: once she
+   * has edited the box, pressing it again would silently throw away what she wrote, so the button
+   * is replaced by a line telling her the wording is hers now. See the panel below.
+   *
+   * ‼️ AND THERE IS NO SECOND BUFFER ANY MORE. v7 kept `edited` beside this one because both
+   * panels were editable and switching between them had to be non-destructive. The original panel
+   * is read-only in v8, so it has nothing to keep and a buffer for it would be a buffer nothing
+   * can ever fill.
    */
   const [editedJoined, setEditedJoined] = useState<string | null>(null);
   const [revealed, setRevealed] = useState(false);
@@ -278,38 +365,45 @@ export function VirtualAgentClient({
    * means this page may have been unloaded and restored; asking is how she finds out whether the
    * thing she copied survived, before she is looking at an empty box wondering what she did wrong.
    */
-  const [invitePhase, setInvitePhase] = useState<
-    "instruct" | "confirm" | "enter" | "send"
-  >("instruct");
   /**
-   * Which friend she is on, 1 or 2.
+   * ‼️ "handoff" IS NEW IN v8 AND IT IS WHERE SHE ACTUALLY SENDS THE MESSAGE. Before it, "Copy the
+   * message" copied and the step ended, which left her holding a clipboard on a screen that had
+   * moved on. He asked for her to be held in frame: copy, then "open your texting app and paste...
+   * come back when you are finished", then a Done button she presses herself.
    *
-   * ‼️ TWO IS THE CEILING AND IT IS NOT AN OVERSIGHT. The second ask is paid for by a
-   * specific deal, the two-for-one, and there is no third deal to pay for a third ask. A loop that
-   * kept offering would be this tool pressing somebody who has already said yes twice, at a
-   * counter, which is the one thing the whole handover was shaped to avoid.
+   * ‼️ AND "Done" IS NOT A DELIVERY CONFIRMATION. We are not the sender and cannot be: see the
+   * module header in referral-invite.ts. It advances the walk and it is recorded as "she got as
+   * far as her own keyboard", which is exactly what referral_invites.sent_at's comment already
+   * says it means. Nothing here may claim her friend received anything.
    */
-  const [inviteRound, setInviteRound] = useState<1 | 2>(1);
+  const [invitePhase, setInvitePhase] = useState<
+    "instruct" | "confirm" | "enter" | "send" | "handoff"
+  >("instruct");
   const [inviteError, setInviteError] = useState<string | null>(null);
   /**
-   * Minted once per visit, so the message she previews carries the code that gets stored.
+   * The invite code for this visit. One friend, one code.
+   *
+   * ‼️ THE SECOND FRIEND WAS DROPPED ENTIRELY ON 2026-10-13, HIS CALL, AND THE REASON IT IS A
+   * CLEAN DELETION RATHER THAN A LOSS IS WORTH WRITING DOWN. Round two existed to spend a
+   * two-for-one deal, and its only exit was a "That is enough" button. He asked for that button to
+   * go. Removing the button without removing the round would have trapped her in a loop she had
+   * opted into, with the rest of the walk behind it; removing the round removes the need for the
+   * exit. One friend per visit.
+   *
+   * What v7's comment here argued still holds and is now enforced by there being no mechanism:
+   * "A loop that kept offering would be this tool pressing somebody who has already said yes
+   * twice, at a counter, which is the one thing the whole handover was shaped to avoid."
+   *
+   * ‼️ clients.review_workflow.referral_offer.default_pair_offer IS LEFT ALONE IN THE CONFIG AND
+   * IN referral-config.ts. It is simply no longer read here. Ripping a key out of a bag a clinic
+   * may already have filled in is a separate decision from not asking a second time.
    *
    * A lazy useState initialiser rather than a ref assigned during render: this component is
    * server rendered before it hydrates, and a ref written in the render body would be computed
    * on both sides from Math.random and disagree. useState's initialiser runs once per mount on
    * the client, which is the only place the code is ever read.
    */
-  const [codes] = useState(() => [inviteCode(), inviteCode()]);
-  /**
-   * The code for the friend she is on.
-   *
-   * ‼️ ONE PER FRIEND, MINTED TOGETHER AND UP FRONT. Both rows are real invites with real
-   * expiries, so the second friend cannot be handed the first friend's link: whoever claimed it
-   * first would close it for the other, and the clinic would see one referral where there were
-   * two. Minted in the same lazy initialiser for the reason above: a code computed during render
-   * disagrees between the server pass and hydration.
-   */
-  const code = codes[inviteRound - 1];
+  const [code] = useState(() => inviteCode());
 
   // ── The walk ───────────────────────────────────────────────────────────────
   const [stage, setStage] = useState<Stage>("intro");
@@ -342,25 +436,78 @@ export function VirtualAgentClient({
   const assembled = useMemo(() => assemblePlain(answers, { lead: true }), [answers]);
 
   /**
-   * ‼️ THE v7 OPTION, COMPUTED ALONGSIDE HERS AND NEVER INSTEAD OF IT. Both exist on every render
-   * and `version` decides which one is copied. assembleJoined takes answers and nothing else: no
-   * rating, no client, no business name, no destination. See the v7 banner in review-assemble.ts.
+   * ‼️ COMPUTED ALONGSIDE HERS AND NEVER INSTEAD OF IT. Both exist on every render, both are on
+   * the screen, and the difference between them is a thing she can see rather than a thing she is
+   * told about. assembleJoined takes answers and a wording index and nothing else: no rating, no
+   * client, no business name, no destination. See the banner in review-assemble.ts.
    */
-  const joined = useMemo(() => assembleJoined(answers), [answers]);
+  const joined = useMemo(() => assembleJoined(answers, variant), [answers, variant]);
 
-  const hersText = edited ?? assembled;
-  const joinedText = editedJoined ?? joined;
+  /** The original, read-only. No edit buffer, because nothing can edit it. */
+  const hersText = assembled;
 
   /**
-   * What the rail reads, the mirror highlights, the copy button copies and the attestation covers.
+   * What the copy button copies and the attestation covers.
    *
-   * ‼️ ONE VARIABLE FOR ALL FOUR, SO THE SELECTED VERSION IS THE COPIED VERSION BY CONSTRUCTION.
-   * The alternative shape, where the pair of panels is separate from the box that gets copied,
-   * is how a tool ends up copying the version she did not pick.
+   * ‼️ ONE VARIABLE FOR BOTH, SO WHAT SHE APPROVED IS WHAT REACHES HER CLIPBOARD BY CONSTRUCTION.
+   * The alternative shape, where the box on screen is separate from the string the button reads,
+   * is how a tool ends up copying something she never saw.
    */
-  const text = version === "joined" ? joinedText : hersText;
+  const text = editedJoined ?? joined;
   const nothingTyped = isEmpty(answers);
-  const reading = useMemo(() => analyse(text), [text]);
+
+  /**
+   * Where "Copy and go" takes her.
+   *
+   * ‼️ destinationsFor() ALREADY PUTS THE CLINIC'S CHOSEN PLATFORM FIRST, so this is their
+   * decision and not ours: `review_destination_primary`, then the rest in declaration order. Null
+   * when the clinic has configured no link at all, which the launch lane is supposed to prevent.
+   */
+  const primaryDestination = destinations[0] ?? null;
+
+  /**
+   * Another wording for our connecting words. Hers never move.
+   *
+   * ‼️ IT RE-RUNS A PURE FUNCTION OVER A TABLE OF LITERALS. No network, no model, no request. All
+   * it changes is which entry of CARRIES each key uses, and every entry is fenced by
+   * _probe-review-v7.ts section 1b to the words of the question that key asked. Pressing it
+   * cannot reach a word she did not type and the question did not contain.
+   *
+   * ‼️ AND IT CANNOT SOFTEN A COMPLAINT, WHICH IS THE ONE THING A "TRY AGAIN" BUTTON MUST NOT DO.
+   * An answer holding a conjunction is never carried at all, so "a bit sore and the wait was long"
+   * is byte identical at every index. Fixture 4 asserts exactly that, at every index.
+   */
+  const regenerate = () => {
+    // ‼️ HER EDIT IS PUT SOMEWHERE RECOVERABLE BEFORE IT IS REPLACED, AND THAT IS WHAT LETS THE
+    // BUTTON STAY. See the panel below for the whole argument: the rule this replaces hid the
+    // button after her first edit, which protected her text by taking the feature away.
+    // `editedJoined` is null when she has not touched the box, and then there is nothing to
+    // recover and no Undo is offered.
+    setUndoable(editedJoined);
+    if (editedJoined !== null) setEditedJoined(null);
+
+    setVariant((at) => (at + CARRY_STRIDE) % REVIEW_SHAPES);
+    // ‼️ A SEPARATE COUNTER, BECAUSE `variant` WRAPS AND WOULD BE A WRONG NUMBER. With three
+    // wordings, four presses leaves `variant` at 1. Storing that as "how many wordings she tried"
+    // would under-report every patient who went round more than once, and a metric that is wrong
+    // in one direction only is worse than no metric.
+    setRegenerateCount((n) => n + 1);
+    setCopied(false);
+  };
+
+  /**
+   * Put her own wording back after a press she did not mean.
+   *
+   * ‼️ ONE PRESS, NO DIALOG, AND NOTHING IS EVER LOST SILENTLY. A confirm box on a patient-facing
+   * walk at a counter is friction she did not ask for, and "are you sure" is a worse answer than
+   * "here it is back". Offered only when there is an edit of hers to restore.
+   */
+  const undoRegenerate = () => {
+    if (undoable === null) return;
+    setEditedJoined(undoable);
+    setUndoable(null);
+    setCopied(false);
+  };
 
   /**
    * The deal for the service she named.
@@ -395,15 +542,17 @@ export function VirtualAgentClient({
 
   const offerText = resolvedOffer.friend;
   const referrerOffer = resolvedOffer.referrer;
-  /** The two-for-one, offered once, for a second friend. Null means she is never asked. */
-  const pairOffer = referral?.defaultPairOffer ?? null;
-  /**
-   * ‼️ ASKED ONLY AFTER A FIRST INVITE ACTUALLY WENT, AND ONLY WHERE THERE IS A DEAL. Not
-   * after a skip: she declined to send one, and following that with a better deal for sending two
-   * is haggling. The reward she is shown here is the pair offer and never the first one, because
-   * they are earned by different things.
-   */
-  const canOfferSecond = inviteRound === 1 && Boolean(pairOffer);
+  // ‼️ THE TWO-FOR-ONE AND THE SECOND-FRIEND ASK WERE DELETED HERE, 2026-10-13. What stood here
+  // was `pairOffer` (read from review_workflow.referral_offer.default_pair_offer) and
+  // `canOfferSecond`, with this argument attached to it: "ASKED ONLY AFTER A FIRST INVITE ACTUALLY
+  // WENT, AND ONLY WHERE THERE IS A DEAL. Not after a skip: she declined to send one, and
+  // following that with a better deal for sending two is haggling."
+  //
+  // That reasoning was sound and the ask is gone anyway, because he asked for the "That is enough"
+  // exit to go and the round cannot survive without it. See the `code` docstring above.
+  //
+  // The config key and the column are untouched. referral-config.ts still reads
+  // default_pair_offer into the config object; nothing on this screen consumes it.
 
   /**
    * Whether the referral half of the walk happens at all.
@@ -437,6 +586,40 @@ export function VirtualAgentClient({
     bubbleId.current += 1;
     const id = bubbleId.current;
     setBubbles((prev) => [...prev, { id, from, text: body }]);
+  }, []);
+
+  /**
+   * Keep an answered control set in the transcript, greyed and dead.
+   *
+   * ‼️ ITS OWN FUNCTION, DELIBERATELY, AND THE REASON IS A PROBE AND NOT TASTE.
+   * `scripts/_probe-review-gating.ts` cuts `answerGate()` and `answerRefer()` out of this file by
+   * name and fails the build if `rev-private`, `privateNote`, `setRevealed`, `destinations`,
+   * `rating`, `store(` or `setAnswers` appears inside either of them. Those two handlers must stay
+   * small enough to read in one go, because what they are NOT allowed to do is the whole point of
+   * them. Transcript bookkeeping lives here instead of being inlined there.
+   *
+   * ‼️ AND IT CARRIES NO VALUE THE WALK CAN READ BACK. It writes to `bubbles`, which nothing
+   * stores, nothing assembles and nothing posts: store() sends `answers`. A greyed chip is a thing
+   * she can see and nothing else can use.
+   */
+  const pushChips = useCallback((label: string, options: readonly string[], chosen: string) => {
+    bubbleId.current += 1;
+    const id = bubbleId.current;
+    setBubbles((prev) => [...prev, { id, from: "her", text: chosen, chips: { label, options, chosen } }]);
+  }, []);
+
+  /**
+   * Keep a block she was shown in the transcript, greyed and dead.
+   *
+   * Same rule as pushChips and the same reason it is its own function: `bubbles` is display, and
+   * nothing stores, assembles or posts it. What it holds here is the message SHE is about to send
+   * from her own phone, which is the one thing she may want to re-read while pasting it somewhere
+   * else, and which used to be removed from the screen at exactly that moment.
+   */
+  const pushQuote = useCallback((label: string, body: string) => {
+    bubbleId.current += 1;
+    const id = bubbleId.current;
+    setBubbles((prev) => [...prev, { id, from: "her", text: body, quote: { label, body } }]);
   }, []);
 
   /**
@@ -542,9 +725,19 @@ export function VirtualAgentClient({
     if (body) {
       push("her", body);
       setAnswers((prev) => ({ ...prev, [current.key]: body }));
-      // Her edits are hers. Re-assembling over them would discard what she typed in the box.
-      setEdited(null);
+      // ‼️ HER EDITS TO THE REVIEW BOX ARE NOT RESET HERE, AND THAT IS THE SAME RULE v7 HAD.
+      // v7 cleared `edited` at this point, because answering another question re-assembled HER
+      // version and an edit buffer over it would have gone stale. There is no such buffer now:
+      // the original panel is read-only and recomputes from `answers` on its own. `editedJoined`
+      // is deliberately left alone, because it holds words she typed into the review box and
+      // answering a later question is not a reason to throw them away.
       setCopied(false);
+      // ‼️ THE PROGRESS WRITE, AND THIS IS THE ONLY REASON AN ABANDONED WALK EXISTS AT ALL.
+      // Before 2026-10-13 the row appeared only at reveal(), so somebody who answered two
+      // questions and put the phone down was in no table and "where do we lose people" could not
+      // be answered. The answer she just gave is passed explicitly: setAnswers has not flushed
+      // yet when this runs, so reading `answers` here would store the state one question behind.
+      void store({ alsoAnswer: { key: current.key, value: body } });
     }
     setComposed("");
     setAwaiting("none");
@@ -568,7 +761,7 @@ export function VirtualAgentClient({
   function answerGate(saidYes: boolean) {
     const current = REVIEW_SCRIPT[index];
     if (!current || current.kind !== "gate") return;
-    push("her", saidYes ? current.yes : current.no);
+    pushChips(current.prompt, [current.yes, current.no], saidYes ? current.yes : current.no);
     setAwaiting("none");
     setIndex(stepAfter(index, saidYes));
   }
@@ -580,11 +773,33 @@ export function VirtualAgentClient({
    * already in state by the time this runs (the row's own onClick put it there, unchanged from
    * the five pinned expressions); this function does not read it, and must not. A branch here on
    * what she tapped would be review gating with the branch moved one function along.
+   *
+   * ‼️ AND THE STARS ARE DELIBERATELY LEFT OUT OF THE GREYED-TRANSCRIPT WORK, 2026-10-13. This is
+   * an exclusion with a reason, not a row somebody forgot.
+   *
+   * The gates, the message-style chips and the send buttons all keep an answered copy of
+   * themselves in the transcript now (see pushChips). The star row cannot join them without
+   * reading `rating` to know which star to render solid, and `_probe-review-gating.ts` section 1
+   * subtracts five exact `rating` expressions from this file and fails on any residue, section 1b
+   * requires all five present byte for byte, and one of the five is the literal
+   * `onClick={() => setRating(n)}`. So a greyed star row means either a sixth read of `rating` or
+   * an edit to a pinned expression, and both fail the build.
+   *
+   * That probe is the FTC rail on this surface: it is what proves no path behaves differently for
+   * a 1 than for a 5. His ask named the texting buttons. Trading the rail for a cosmetic row would
+   * be the wrong way round, so the stars simply advance as they always did. If he wants them in
+   * the history, the honest route is a sixth allowed expression added to that probe WITH the
+   * argument written beside it, in its own commit.
    */
   function leaveStars() {
     if (!starsAnswered) return;
     setAwaiting("none");
     setIndex((i) => i + 1);
+    // ‼️ IT STILL DOES NOT READ WHAT SHE TAPPED. store() sends `rating` because the column exists
+    // and has since 2026-09-04; this function neither reads it nor branches on it, and the five
+    // pinned `rating` expressions in this file are unchanged. What it records is that she got
+    // PAST the stars, which is a step and not a score.
+    void store();
   }
 
   /**
@@ -602,7 +817,7 @@ export function VirtualAgentClient({
   function answerRefer(saidYes: boolean) {
     const current = REVIEW_SCRIPT[index];
     if (!current || current.kind !== "refer") return;
-    push("her", saidYes ? current.yes : current.no);
+    pushChips(current.prompt, [current.yes, current.no], saidYes ? current.yes : current.no);
     setAwaiting("none");
     setIndex(stepAfter(index, saidYes));
   }
@@ -644,12 +859,38 @@ export function VirtualAgentClient({
       setInviteError(result.reason);
       return;
     }
+    // ‼️ THE TWO ANSWERED CHIP ROWS GO INTO THE TRANSCRIPT HERE, AND THIS IS THE LAST MOMENT BOTH
+    // ARE STILL TRUE. The style row and the channel row both disappear with the `send` phase, and
+    // his ask was that they stay in the history with the unpicked options greyed. Recorded in the
+    // order she answered them: she chose the wording first, then how to send it.
+    pushChips(
+      "Select message style",
+      INVITE_TEMPLATES.map((t) => t.label),
+      templateByKey(templateKey).label
+    );
+    // ‼️ IN THE ORDER SHE MET THEM: the wording she chose, the message that wording produced, then
+    // how she sent it. The message is the block that used to disappear at this exact moment.
+    if (inviteMode === "text") pushQuote("The message you copied", inviteMessage);
+    pushChips(
+      "How to send it",
+      INVITE_CHANNELS.map((c) => c.label),
+      INVITE_CHANNELS.find((c) => c.key === channel)?.label ?? channel
+    );
+
     if (result.kind === "clipboard") {
       void navigator.clipboard.writeText(result.text).catch(() => {});
-    } else {
-      window.open(result.href, "_self");
+      setInviteSent(true);
+      void storeInvite("text", channel);
+      // ‼️ THE COPY PATH NOW HOLDS HER IN FRAME, AND THE WHATSAPP PATH CANNOT. His ask: after
+      // "Copy the message", "open your texting app and paste the copied message into your friend's
+      // chat. Come back when you are finished" and a Done button. That only works for the channel
+      // that LEAVES HER HERE. The branch below calls window.open(_, "_self"), which navigates this
+      // page away, so a hand-off screen behind it would be a screen nobody is ever on.
+      setInvitePhase("handoff");
+      return;
     }
 
+    window.open(result.href, "_self");
     setInviteSent(true);
     void storeInvite("text", channel);
   }
@@ -680,23 +921,9 @@ export function VirtualAgentClient({
     setInvitePhase("send");
   }
 
-  /**
-   * The two-for-one: a second friend, on a deal that is about both of them coming in together.
-   *
-   * ‼️ IT RESETS THE FRIEND AND NOTHING ELSE. templateKey stays, because she has already
-   * chosen how she wants to sound, and her own email stays, because it is hers and she gave it
-   * once. inviteRound moves the code to the second one, so the second friend gets a link of their
-   * own rather than one that the first friend can close by claiming it.
-   */
-  function addSecondFriend() {
-    push("her", "Yes, I will add one more.");
-    setFriendName("");
-    setFriendContact("");
-    setInviteError(null);
-    setInviteSent(false);
-    setInviteRound(2);
-    setInvitePhase("instruct");
-  }
+  // ‼️ addSecondFriend() WAS DELETED HERE, 2026-10-13, WITH THE ROUND IT STARTED. See the `code`
+  // docstring: his call was to drop the "That is enough" button, and that button was round two's
+  // only exit.
 
   /**
    * The `internal` shape: record the referral and send nothing.
@@ -755,11 +982,15 @@ export function VirtualAgentClient({
     }
   }
 
-  /** Move past the invite without sending one. A command, not an answer. */
-  function skipInvite() {
-    setAwaiting("none");
-    setIndex((i) => i + 1);
-  }
+  // ‼️ skipInvite() WAS DELETED HERE, 2026-10-13, BECAUSE NOTHING CALLED IT ANY MORE. It moved
+  // past the invite without sending one, and its last caller was round two's "That is enough"
+  // button. Round one has not been skippable since 2026-10-12, so with round two gone there is no
+  // surface that skips this step at all.
+  //
+  // Left as a comment rather than as an uncalled function on purpose: an unreferenced handler on a
+  // regulated surface reads as a way out that exists and is merely unwired, which is the thing
+  // somebody re-wires in six months without finding the argument. The way out is the recommend
+  // gate one step earlier. If this is ever needed again, it is four lines.
 
   /** She sent it, so carry on to the review questions. */
   function finishInvite() {
@@ -781,20 +1012,63 @@ export function VirtualAgentClient({
     setIndex((i) => i + 1);
   }
 
-  async function store(postedDestination?: string) {
+  /**
+   * Write what we have so far.
+   *
+   * ‼️ CALLED AS SHE GOES SINCE 2026-10-13, NOT ONCE AT THE END, AND THAT IS WHAT MAKES A FUNNEL
+   * POSSIBLE. Before this the row appeared only when she reached her finished review, so a walk
+   * abandoned at the stars existed nowhere and "where do we lose people" was unanswerable. The
+   * first call inserts, every later one patches.
+   *
+   * ‼️ AND IT IS WHY ANYTHING COUNTING ROWS IN THAT TABLE IS NOW COUNTING ATTEMPTS. `completed_at`
+   * is the column that means "she got a review out of it". weekly-report.ts moved to it in the
+   * same release; a future reader that counts rows instead will quietly report abandoned walks to
+   * a client as reviews collected.
+   *
+   * ‼️ NO session id, NO ip, NO user agent, EVER. docs/2026-08-18-client-hub.sql: "THE ABSENCE OF
+   * THE COLUMN IS THE ENFORCEMENT... Adding one of these columns later is a spec violation, not a
+   * feature." The funnel is built from how far THIS ROW got, which is weaker than joining page
+   * views to submissions and is the measurement we are allowed to take.
+   */
+  async function store(opts?: {
+    postedDestination?: string;
+    completed?: boolean;
+    /**
+     * The answer she gave in the same tick as this call.
+     *
+     * ‼️ REQUIRED WHEN CALLING FROM commit(), AND LEAVING IT OUT IS A SILENT OFF-BY-ONE. React
+     * has not flushed setAnswers by the time the handler calls this, so `answers` is still the
+     * state from before her latest answer. The first call would insert a row missing the only
+     * answer she had given, which is also the call that decides whether a row exists at all: the
+     * route refuses an insert with nothing in it.
+     */
+    alsoAnswer?: { key: keyof ReviewAnswers; value: string };
+  }) {
+    const sending: ReviewAnswers = opts?.alsoAnswer
+      ? { ...answers, [opts.alsoAnswer.key]: opts.alsoAnswer.value }
+      : answers;
     try {
       const res = await fetch("/api/hub/reviews/submit", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           clientId,
-          answers,
+          answers: sending,
           submissionId,
-          postedDestination,
+          postedDestination: opts?.postedDestination,
           rating,
           privateNote: privateNote.trim() || undefined,
           attested,
           questionSetVersion: QUESTION_SET_VERSION_V6,
+          // ── The funnel, counted and never routed ──
+          lastStep: REVIEW_SCRIPT[index]?.id ?? null,
+          completed: opts?.completed === true,
+          // ‼️ "SHE CHANGED IT", NOT "WHAT SHE CHANGED IT TO". editedJoined holds her text and it
+          // is already stored, in `answers`, as the answers she typed. A second copy of her prose
+          // under a different column would be the same words stored twice with no reader for the
+          // duplicate.
+          copiedEdited: editedJoined !== null,
+          regenerateCount,
         }),
       });
       const json = (await res.json()) as { id?: string };
@@ -831,13 +1105,18 @@ export function VirtualAgentClient({
           // Snapshotted beside the friend's, so a later edit to the clinic's deals cannot change
           // what either of them was promised.
           //
-          // ‼️ THE SECOND FRIEND'S ROW CARRIES THE PAIR OFFER, NOT THE FIRST REWARD. They are
-          // earned by different things: the first is earned when that friend books, the two-for-one
-          // when she and the second friend come in together. Storing the first reward on both rows
-          // would have the clinic honouring the wrong one at the desk.
-          referrerOfferText: inviteRound === 1 ? referrerOffer : pairOffer,
+          // ‼️ ONE REWARD NOW, BECAUSE THERE IS ONE FRIEND. This read
+          // `inviteRound === 1 ? referrerOffer : pairOffer` while a second round existed, because
+          // the two were earned by different things: the first when that friend books, the
+          // two-for-one when she and a second friend came in together. With the round gone there
+          // is only the first, which is the one the copy on screen promises her.
+          referrerOfferText: referrerOffer,
           templateKey,
-          round: inviteRound,
+          // ‼️ CONSTANT 1 SINCE 2026-10-13, AND IT IS SENT ANYWAY. The route writes it into
+          // offer_snapshot and the column shape stays as it was, so no migration and no reader
+          // changes. A row that says round 1 is true; dropping the field would make every stored
+          // invite indistinguishable from the two-round ones already in the table.
+          round: 1,
           code,
           friendName: friendName.trim() || null,
           friendContact: friendContact.trim() || null,
@@ -856,9 +1135,27 @@ export function VirtualAgentClient({
   function reveal() {
     setRevealed(true);
     // Stored whether or not she goes on to post. The language is the asset either way.
-    void store();
+    //
+    // ‼️ THIS IS WHERE completed_at IS SET, AND "COMPLETED" MEANS SHE GOT A REVIEW OUT OF THE
+    // WALK. It does not mean she posted one: no code path can observe a review appearing on
+    // Google, which is what posted_destination's own comment says. Reaching her finished review
+    // is the furthest thing this tool can honestly claim to have achieved.
+    void store({ completed: true });
   }
 
+  /**
+   * Copy her review, record where she is going, and take her there.
+   *
+   * ‼️ THE OPEN HAPPENS IN THE SAME USER GESTURE AS THE COPY, AND IT HAS TO. A popup blocker
+   * allows window.open only while a click is still being handled, so awaiting the store() round
+   * trip first would get the tab blocked for some patients and not others. The store is fired and
+   * not awaited for the same reason it is everywhere else in this file: recording is for SRT's
+   * benefit and must never stand between her and posting her own words.
+   *
+   * ‼️ AND IT IS STILL THE SAME PATH FOR EVERY RATING. One button, one destination, no branch on
+   * the stars anywhere in it. The destination is whichever platform the clinic named as primary,
+   * which is a fact about the clinic and not about her.
+   */
   async function copy() {
     try {
       await navigator.clipboard.writeText(text);
@@ -866,33 +1163,34 @@ export function VirtualAgentClient({
     } catch {
       setCopied(false);
     }
+    if (primaryDestination) {
+      void store({ postedDestination: primaryDestination.key });
+      // noopener for the usual reason: the page we are opening gets no handle on this one.
+      window.open(primaryDestination.url, "_blank", "noopener,noreferrer");
+    }
   }
 
-  const highlighted = useMemo(() => mergeMarks(text, reading), [text, reading]);
-
-  /**
-   * The rail beside her words. Counts and consequences, never replacements.
-   *
-   * ‼️ EVERY ROW IS A COUNT OF SOMETHING IN HER SENTENCE. "2 sentences run long" is an
-   * observation. "Try this instead" is us writing her review, and there is no button that does
-   * it. Read the header of src/lib/hub/readability.ts before adding a row.
-   */
-  const rail = useMemo(() => {
-    const kinds = new Map<string, number>();
-    for (const flag of reading.flags) kinds.set(flag.kind, (kinds.get(flag.kind) ?? 0) + 1);
-    const long = reading.hard.filter((h) => h.reason === "long").length;
-    const dense = reading.hard.length - long;
-    return [
-      { key: "long", mark: "long", label: "Sentences that run long", n: long },
-      { key: "dense", mark: "dense", label: "Sentences packed tight", n: dense },
-      { key: "adverb", mark: "adverb", label: "Adverbs", n: kinds.get("adverb") ?? 0 },
-      { key: "passive", mark: "passive", label: "Passive phrases", n: kinds.get("passive") ?? 0 },
-      { key: "qualifier", mark: "qualifier", label: "Hedges", n: kinds.get("qualifier") ?? 0 },
-      { key: "complex", mark: "complex", label: "Long words", n: kinds.get("complex") ?? 0 },
-    ];
-  }, [reading]);
-
-  const clean = rail.every((row) => row.n === 0);
+  // ‼️ THE READABILITY RAIL WAS DELETED HERE, 2026-10-13. Matthew: "Get rid of the grammaryl tab".
+  //
+  // What stood here was `highlighted` (a mirror div under a transparent textarea, so a highlight
+  // could land under the sentence it was about), a `rail` memo counting long sentences, adverbs,
+  // passives, hedges and long words, and a `clean` flag. It pointed at her writing and never
+  // rewrote it, which was its whole defence, and that defence still holds. It went because he did
+  // not want it, not because it was wrong.
+  //
+  // ‼️ AND ITS REMOVAL IS WHAT MAKES THE TWO PANELS SYMMETRIC, which is the thing he actually
+  // asked for. With no mirror to line up, both panels are plain textareas with the same
+  // typography, so the side-by-side finally looks like a comparison instead of one real box and
+  // one shadow of it.
+  //
+  // ‼️ src/lib/hub/readability.ts IS DELIBERATELY STILL THERE. It now has no caller in the app,
+  // but scripts/test-onboarding-artifacts.ts (the FIRST script in CI) imports it and asserts it
+  // imports nothing and exports no rewriter. Deleting the module belongs in its own commit, if at
+  // all: one commit doing two things is how this deletion gets blamed for that probe going red.
+  //
+  // ‼️ THE PROMISE COPY THAT LIVED IN THE RAIL'S FOOT MOVED, IT DID NOT GO. See .rev2-promise
+  // below. Shipping a joiner with no on-screen statement of what it does is a deception problem
+  // of its own, separate from the review rule and not cured by any of it.
 
   const step = REVIEW_SCRIPT[index];
   const canSend = composed.trim().length > 0;
@@ -1029,14 +1327,17 @@ export function VirtualAgentClient({
       {chatting && (
         /*
           The panel opens OVER the page and closes when the walk ends, so the masthead, her stars
-          and the client's mark stay where they were, and her notes land on a normal page with room
-          for the reading rail beside them.
+          and the client's mark stay where they were, and her review lands on a normal page with
+          room for the original beside it.
 
           ‼️ A FULL-SCREEN VARIANT WAS BUILT, WALKED AND REJECTED (2026-09-24). It deleted the
           masthead and the client's mark, which are the only things making reviews.{domain} look
-          like the same business as learn.{domain}, and it put the notes step, the rail, the
-          attestation, the destination links and the private note inside one fixed scrolling
-          column. If somebody proposes it again, that is what it costs.
+          like the same business as learn.{domain}, and it put the review step, the attestation,
+          the destination links and the private note inside one fixed scrolling column. If
+          somebody proposes it again, that is what it costs.
+
+          (The rail this comment used to name was deleted on 2026-10-13. The two-column room it
+          describes is now the review and the original, which needs it for the same reason.)
         */
         <div className="va-shell">
           <div className="va-scrim" aria-hidden="true" />
@@ -1080,14 +1381,64 @@ export function VirtualAgentClient({
             ) : (
               <>
                 <div className="va-msgs">
-                  {bubbles.map((bubble) => (
-                    <div
-                      key={bubble.id}
-                      className={bubble.from === "her" ? "va-msg is-her" : "va-msg is-them"}
-                    >
-                      {bubble.text}
-                    </div>
-                  ))}
+                  {bubbles.map((bubble) =>
+                    bubble.quote ? (
+                      /*
+                        A block she was shown and acted on. Dimmed to the muted token, selectable,
+                        never a control: there is nothing to press and nothing to undo. It is here
+                        so the message she is pasting into another app is still on screen while she
+                        pastes it.
+                      */
+                      <div key={bubble.id} className="va-answered">
+                        <p className="va-answered-q">{bubble.quote.label}</p>
+                        <p className="va-answered-quote">{bubble.quote.body}</p>
+                      </div>
+                    ) : bubble.chips ? (
+                      /*
+                        ‼️ THE ANSWERED CONTROL SET, DEAD AND VISIBLE. His ask: "gray out the
+                        options that they didnt pick leaving the button dead but visible in the
+                        history". Rendered as real <button> elements so the row looks like the one
+                        she tapped rather than like a sentence about it, and every one of them is
+                        `disabled`, so there is nothing to tap and nothing to tab to.
+
+                        ‼️ `disabled` IS CORRECT HERE AND IS FORBIDDEN IN THE REVIEW PANEL, which
+                        is not a contradiction. There, a disabled control would be a live choice
+                        withheld from her. Here the choice is already made and the only honest
+                        state for the row is inert.
+
+                        ‼️ aria-disabled AS WELL AS disabled, and the label says so. A screen
+                        reader walking back through the transcript should hear "Warm, selected" and
+                        "Short, dimmed", not two buttons it might try to press.
+                      */
+                      <div key={bubble.id} className="va-answered">
+                        <p className="va-answered-q">{bubble.chips.label}</p>
+                        <div className="va-chips is-pair va-answered-row">
+                          {bubble.chips.options.map((option) => {
+                            const picked = option === bubble.chips?.chosen;
+                            return (
+                              <button
+                                key={option}
+                                type="button"
+                                disabled
+                                aria-disabled="true"
+                                className={picked ? "va-chip is-on" : "va-chip is-dim"}
+                              >
+                                {option}
+                                <span className="va-sr">{picked ? " selected" : " not selected"}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : (
+                      <div
+                        key={bubble.id}
+                        className={bubble.from === "her" ? "va-msg is-her" : "va-msg is-them"}
+                      >
+                        {bubble.text}
+                      </div>
+                    )
+                  )}
 
                   {typing && (
                     // Three dots, never a sentence about what is happening. Nothing is happening.
@@ -1219,12 +1570,7 @@ export function VirtualAgentClient({
                       <>
                         <p className="va-invite-note">
                           Did you copy their number?
-                          {inviteRound === 1 && referrerOffer
-                            ? ` You get ${referrerOffer} once they book.`
-                            : ""}
-                          {inviteRound === 2 && pairOffer
-                            ? ` You both get ${pairOffer} when you come in together.`
-                            : ""}
+                          {referrerOffer ? ` You get ${referrerOffer} once they book.` : ""}
                         </p>
                         <div className="va-chips is-pair">
                           <button
@@ -1333,7 +1679,15 @@ export function VirtualAgentClient({
                       <>
                         {inviteMode === "text" ? (
                           <>
-                            <div className="va-chips" role="group" aria-label="Message wording">
+                            {/*
+                              ‼️ THE HEADING IS THE FIX, AND THE CHIPS WERE NEVER THE PROBLEM.
+                              He walked the preview and could not tell what four unlabelled chips
+                              were offering. A row of bare words above a message preview could
+                              plausibly be the recipient, the service, or a filter. One line of
+                              copy saying what the row IS costs nothing and was the whole defect.
+                            */}
+                            <p className="va-invite-note">Select message style</p>
+                            <div className="va-chips" role="group" aria-label="Message style">
                               {INVITE_TEMPLATES.map((t) => (
                                 <button
                                   key={t.key}
@@ -1394,70 +1748,66 @@ export function VirtualAgentClient({
                     )}
 
                     {/*
-                      ── Beat five: it went. The two-for-one, or the way on ──
+                      ── Beat five: she has the message. Now she sends it. ──
 
-                      ‼️ THE SECOND ASK IS PAID FOR, AND IT IS ASKED ONCE. Matthew, 2026-10-07: a
-                      second friend earns a two-for-one so she comes in WITH them, which puts two
-                      people through the door on one visit. It appears only where the clinic has
-                      agreed one (see defaultPairOffer) and only after a first invite actually went,
-                      never after a skip.
+                      ‼️ THIS SCREEN IS WHERE THE REFERRAL ACTUALLY HAPPENS AND IT DID NOT EXIST
+                      BEFORE v8. "Copy the message" copied and the step ended, which left her
+                      holding a clipboard on a screen that had already moved on; whether she ever
+                      pasted it was a thing nobody on either side could know. His ask, in his
+                      words: stay in the same frame, "open your texting app and paste the copied
+                      message into your friend's chat. Come back when you are finished", and a Done
+                      button.
 
-                      ‼️ AND IT IS NOT TIED TO WHAT SHE WRITES. The deal is earned by the two of them
-                      turning up. Tying any reward to a review is what the FTC endorsement rules
-                      reach and what _probe-review-gating.ts fails the build over.
+                      ‼️ "Done" IS NOT A DELIVERY CONFIRMATION AND MUST NEVER BE WORDED AS ONE. We
+                      are not the sender and cannot observe anything: see the module header in
+                      referral-invite.ts. She is telling us she is finished, which is what
+                      referral_invites.sent_at already means ("she got as far as her own
+                      keyboard"). "Sent" or "Delivered" here would be a claim we cannot make.
+
+                      ‼️ AND IT IS NOT A SECOND ASK. The two-for-one and the whole second-friend
+                      round were deleted on 2026-10-13: see the `code` docstring. What stood here
+                      offered "Add a second friend and you both get {pairOffer}". One friend per
+                      visit now, and the only button is the way on.
                     */}
-                    {inviteSent &&
-                      (canOfferSecond ? (
-                        <>
-                          <p className="va-invite-note">
-                            Add a second friend and you both get {pairOffer} when you come in
-                            together.
-                          </p>
-                          <div className="va-chips is-pair">
-                            <button
-                              type="button"
-                              className="va-chip"
-                              onClick={addSecondFriend}
-                            >
-                              Yes, add one more
-                            </button>
-                            <button type="button" className="va-chip" onClick={finishInvite}>
-                              No thanks
-                            </button>
-                          </div>
-                        </>
-                      ) : (
+                    {invitePhase === "handoff" && (
+                      <>
+                        <p className="va-invite-note">
+                          Open your texting app and paste the copied message into your friend&apos;s
+                          chat. Come back when you are finished.
+                        </p>
                         <button type="button" className="va-send is-wide" onClick={finishInvite}>
-                          Done, next question
+                          Done
                         </button>
-                      ))}
+                      </>
+                    )}
 
-                    {/*
-                      Gone once something has been sent: there is nothing left to skip.
-
-                      The label changes in round two because by then she has already sent one, and
-                      "Skip this one" would read as undoing it rather than stopping here.
-                    */}
-                    {/*
-                      ‼️ ROUND ONE CANNOT BE SKIPPED SINCE 2026-10-12, AND ROUND TWO STILL CAN.
-                      Matthew: "get rid of it so they are not able to just skip this option, and
-                      they actually have to go all the way through it."
-
-                      ‼️ THE OPT OUT DID NOT DISAPPEAR, IT MOVED UP ONE STEP. "Would you recommend
-                      this service to a friend?" is immediately before this and a No counts past
-                      the invite entirely. That gate is now the ONLY way out of the referral, which
-                      is the whole reason it is safe to remove the second one: somebody who does
-                      not want to refer anybody answers the question that asks them.
-
-                      ‼️ ROUND TWO KEEPS "That is enough" AND MUST. She opted into a second friend
-                      by tapping "Yes, add one more"; removing her way out would leave her inside a
-                      loop she chose, with the rest of the walk behind it.
-                    */}
-                    {!inviteSent && inviteRound > 1 && (
-                      <button type="button" className="va-skip" onClick={skipInvite}>
-                        That is enough
+                    {/* The WhatsApp path navigates away and returns here, so it still needs a
+                        plain way on. Suppressed during the hand-off, which has its own. */}
+                    {inviteSent && invitePhase !== "handoff" && (
+                      <button type="button" className="va-send is-wide" onClick={finishInvite}>
+                        Done, next question
                       </button>
                     )}
+
+                    {/*
+                      ‼️ "That is enough" WAS HERE AND WENT ON 2026-10-13 WITH THE ROUND IT EXITED.
+                      His call. It rendered only in round two, and v7's comment said in capitals
+                      that round two "KEEPS 'That is enough' AND MUST. She opted into a second
+                      friend by tapping 'Yes, add one more'; removing her way out would leave her
+                      inside a loop she chose, with the rest of the walk behind it."
+
+                      That was correct, and it is exactly why dropping the second friend entirely
+                      was the right way to honour the ask. Deleting the button alone would have
+                      built the trap the comment described. Deleting the round removes the need for
+                      an exit from it.
+
+                      ‼️ THE OPT OUT STILL EXISTS AND IT IS ONE STEP EARLIER. "Would you recommend
+                      this service to a friend?" sits immediately before the invite and a No counts
+                      past the whole referral. That gate is the only way out, which is what makes
+                      it safe for this step to have none: somebody who does not want to refer
+                      anybody answers the question that asks them, rather than being asked to send
+                      something and then given a way to back out of it.
+                    */}
                   </div>
                 ) : awaiting === "text" ? (
                   <div className="va-composer">
@@ -1522,99 +1872,106 @@ export function VirtualAgentClient({
           */}
           <h2>Your review</h2>
           <p className="rev-hint">
-            Edit anything below before you copy it. These are your words, and only your words get
-            copied.
+            Edit it however you like before you copy it. Every word in it is a word you typed or a
+            word from the question you were answering.
           </p>
 
           <div className="rev2-read">
             {/*
-              ‼️ TWO VERSIONS, SIDE BY SIDE, HERS SELECTED. NOT ONE BOX WITH A TIDY-UP BUTTON.
-              A button that rewrites the box in place takes her words away and puts ours in their
-              place; she then has to remember what she wrote to judge the swap. Side by side she
-              reads both and picks, which is the difference between an option and a replacement,
-              and it is the form of this feature that FTC 16 CFR Part 465 does not reach.
+              ‼️ TWO PANELS, SIDE BY SIDE, AND ONLY ONE OF THEM IS COPYABLE. NOT ONE BOX WITH A
+              TIDY-UP BUTTON. A single box that rewrites itself in place takes her words away and
+              puts ours where they were; she then has to remember what she wrote in order to judge
+              the swap. Side by side she can see both, which is the difference between a tool that
+              shows its work and one that hides it.
 
-              ‼️ BOTH PANELS ARE EDITABLE AND BOTH ARE SHOWN AT EVERY RATING. The joined panel is
-              not gated, not collapsed behind a disclosure and not withheld from a low rating.
+              ‼️ THE ORIGINAL IS READ-ONLY, AND THAT IS THE ONE THING v8 CHANGED HERE. Matthew:
+              "so they can copy the retouched only". It is still rendered, still complete, still
+              beside the box she posts, so what we added is always visible by comparison. What she
+              cannot do is post the unjoined version, and that was his decision.
 
-              ‼️ THE SELECTED PANEL CARRIES THE MIRROR, THE OTHER IS A PLAIN TEXTAREA. The
-              readability rail counts and shades the text that is going to be COPIED, so the marks
-              and the numbers always describe the same characters. Two mirrors would mean shading
-              a version she is not posting, and the rail's own rule is that it points at what she
-              is about to put on a public profile.
+              ‼️ BOTH PANELS ARE SHOWN AT EVERY RATING AND NEITHER IS GATED. Not collapsed behind
+              a disclosure, not withheld from a low rating, not reordered by it. `rating` must not
+              appear anywhere between this comment and .rev2-promise below, and
+              scripts/_probe-review-v7.ts slices exactly that range and fails if it does.
+
+              ‼️ BOTH ARE PLAIN TEXTAREAS SINCE THE RAIL WENT, which is what makes them symmetric.
+              There is no mirror div to keep aligned any more, so there is no reason for one panel
+              to be built differently from the other.
             */}
-            <div className="rev2-versions" role="radiogroup" aria-label="Which version to copy">
+            <div className="rev2-versions">
               {VERSIONS.map((panel) => {
-                const chosen = version === panel.key;
+                const isJoined = panel.key === "joined";
                 return (
                   <div
                     key={panel.key}
-                    className={`rev2-version${chosen ? " rev2-version-on" : ""}`}
+                    className={`rev2-version${isJoined ? " rev2-version-on" : " rev2-version-off"}`}
                   >
-                    <label className="rev2-version-head">
-                      <input
-                        type="radio"
-                        name="rev2-version"
-                        checked={chosen}
-                        onChange={() => {
-                          setVersion(panel.key);
-                          setCopied(false);
-                        }}
-                      />
+                    <div className="rev2-version-head">
                       <span className="rev2-version-name">{panel.name}</span>
                       <span className="rev2-version-note">{panel.note}</span>
-                    </label>
+                    </div>
 
-                    {chosen ? (
-                      /*
-                        The textarea is transparent and sits on a mirror div holding the same
-                        characters, so a highlight lands under the sentence it is about. The two
-                        MUST keep identical text and identical typography or the words separate.
-                        Only background and text-decoration may be added to a mark.
-                      */
-                      <div className="rev-editor">
-                        <div className="rev-mirror" aria-hidden="true">
-                          {highlighted.map((part, i) => {
-                            const flagClass = part.flag ? ` rev-flag rev-flag-${part.flag}` : "";
-                            if (part.hard) {
-                              return (
-                                <mark
-                                  key={i}
-                                  className={`rev-hard rev-hard-${part.hard}${flagClass}`}
-                                >
-                                  {part.text}
-                                </mark>
-                              );
-                            }
-                            return (
-                              <span key={i} className={flagClass.trim() || undefined}>
-                                {part.text}
-                              </span>
-                            );
-                          })}
-                          {"\n"}
-                        </div>
+                    {isJoined ? (
+                      <>
                         <textarea
                           className="rev-out"
                           rows={10}
                           value={text}
+                          aria-label="Your review, which you can edit"
                           onChange={(e) => {
-                            if (panel.key === "joined") setEditedJoined(e.target.value);
-                            else setEdited(e.target.value);
+                            setEditedJoined(e.target.value);
                             setCopied(false);
                           }}
                         />
-                      </div>
+                        {/*
+                          ‼️ THE BUTTON IS PERMANENT SINCE 2026-10-16, AND IT USED TO DISAPPEAR.
+                          What stood here hid it once `editedJoined !== null` and replaced it with
+                          "This is your wording now, so we have stopped suggesting others", because
+                          regenerating over her edit would discard what she wrote.
+
+                          The reasoning was right and the remedy was wrong. It protected her text
+                          by taking the feature away, and Matthew hit it immediately: he typed in
+                          the box, then wanted to shuffle the review, and the control was gone. A
+                          tool with 324 arrangements and no way to reach them has 1.
+
+                          The honest fix is to keep what the press would have overwritten. Undo
+                          appears beside it only when there is an edit of hers to restore, puts it
+                          back in one press, and asks her nothing.
+
+                          ‼️ STILL NO `disabled` ANYWHERE IN THIS BLOCK. The panel slice in
+                          scripts/_probe-review-v7.ts fails on that attribute, which is how the
+                          no-gating rule stays enforceable, and a greyed control is a puzzle where
+                          a present one is an offer.
+                        */}
+                        <div className="rev2-regen-row">
+                          <button type="button" className="rev2-regen" onClick={regenerate}>
+                            Try another wording
+                          </button>
+                          {undoable !== null && (
+                            <button
+                              type="button"
+                              className="rev2-regen"
+                              onClick={undoRegenerate}
+                            >
+                              Undo, put my wording back
+                            </button>
+                          )}
+                        </div>
+                      </>
                     ) : (
+                      /*
+                        ‼️ SHORTER THAN THE REVIEW BOX, AND ONLY BECAUSE THEY ARE STACKED NOW.
+                        Side by side they were equals; one above the other, two ten-row boxes put
+                        the attestation and the Copy button a long way down a 26rem frame. This one
+                        is reference material and scrolls internally, so six rows costs her nothing
+                        and keeps the thing she has to press on the screen.
+                      */
                       <textarea
-                        className="rev-out rev2-version-off"
-                        rows={10}
-                        value={panel.key === "joined" ? joinedText : hersText}
-                        onChange={(e) => {
-                          if (panel.key === "joined") setEditedJoined(e.target.value);
-                          else setEdited(e.target.value);
-                          setCopied(false);
-                        }}
+                        className="rev-out"
+                        rows={6}
+                        value={hersText}
+                        readOnly
+                        aria-label="What you typed, for comparison"
                       />
                     )}
                   </div>
@@ -1623,59 +1980,37 @@ export function VirtualAgentClient({
             </div>
 
             {/*
-              ‼️ THE RAIL POINTS. IT DOES NOT REWRITE, AND THERE IS NO BUTTON THAT DOES.
-              "This sentence runs long" is a fact about her sentence. "Try this instead" is us
-              writing her review, which is the thing this tool exists not to do. That holds for
-              every row below exactly as it holds for the marks they count.
+              ‼️ THE PROMISE. IT MOVED HERE FROM THE RAIL'S FOOT AND MOVING IT WAS A SHIPPING
+              CONDITION, NOT A TIDY-UP.
+
+              Deleting the rail deleted the home of the only on-screen sentence saying what this
+              tool does to her words. Shipping a joiner with no such sentence is a deception
+              problem of its own: separate from FTC 16 CFR Part 465, not cured by any of the
+              fences, and not something a comment in a source file can answer for.
+
+              Its wording has now changed twice, each time because the feature changed under it:
+
+                v6: "We point at what is shaded. We never write a replacement. Your call, and
+                     your words either way." False the moment a joined panel existed.
+                v7: "We point at what is shaded. We tidy the grammar and join your answers up.
+                     We never add words you did not say." Its first sentence died with the rail.
+                v8: below. "with words from our own questions" is the new clause and it is the
+                     honest description of CARRIES: there are more of our words in her review
+                     than in v7, and every one of them comes from a question she read.
+
+              ‼️ THE THIRD SENTENCE EXISTS BECAUSE THE BUTTON EXISTS. A control labelled "Try
+              another wording" invites exactly one wrong assumption, which is that it is rewriting
+              what she said. Saying what it actually varies is cheaper than letting her guess.
+
+              ‼️ DO NOT RESTORE EITHER OLD WORDING. scripts/_probe-review-v7.ts fails on the v6
+              sentence by exact match, and this class name is the end marker for the panel slice
+              above, so renaming it silently empties that check instead of failing it.
             */}
-            <aside className="rev2-rail" aria-label="Readability">
-              <p className="rev2-rail-head">
-                {reading.words} word{reading.words === 1 ? "" : "s"}
-                {reading.words > 0 ? ` · grade ${Math.round(reading.grade)}` : ""}
-              </p>
-
-              {clean ? (
-                <p className="rev2-rail-clear">
-                  {reading.words > 0
-                    ? "Nothing here is hard to read. It is ready."
-                    : "Your words will be checked here as you write."}
-                </p>
-              ) : (
-                <ul className="rev2-rail-rows">
-                  {rail
-                    .filter((row) => row.n > 0)
-                    .map((row) => (
-                      <li key={row.key}>
-                        <span className={`rev2-key rev2-key-${row.mark}`} aria-hidden="true" />
-                        <span className="rev2-rail-label">{row.label}</span>
-                        <span className="rev2-rail-n">{row.n}</span>
-                      </li>
-                    ))}
-                </ul>
-              )}
-
-              {/*
-                ‼️ THIS SENTENCE CHANGED IN THE SAME COMMIT AS THE JOINER, AND THAT WAS A CONDITION
-                OF SHIPPING IT RATHER THAN A TIDY-UP. It used to read "We point at what is shaded.
-                We never write a replacement. Your call, and your words either way." The joined
-                panel beside this rail IS a replacement on offer, so that sentence became a false
-                claim about our own product the moment the panel existed: a deception problem of
-                its own, separate from the review rule and not cured by any of it.
-
-                What it says now is the smaller thing that is true. "We tidy the grammar and join
-                your answers up" describes exactly the two literals in review-assemble.ts, and "we
-                never add words you did not say" is the one the probe can hold: every word in the
-                joined version is hers, or it is in one of those literals.
-
-                ‼️ DO NOT RESTORE THE OLD WORDING WHILE THE JOINED PANEL EXISTS.
-                scripts/_probe-review-v7.ts fails on the old sentence by exact match, which is the
-                only reason that instruction is worth writing down.
-              */}
-              <p className="rev2-rail-foot">
-                We point at what is shaded. We tidy the grammar and join your answers up. We never
-                add words you did not say.
-              </p>
-            </aside>
+            <p className="rev2-promise">
+              We tidy the grammar and join your answers up with words from our own questions. We
+              never add words you did not say about your visit. Try another wording only rephrases
+              our joining words, never yours.
+            </p>
           </div>
 
           {/*
@@ -1692,35 +2027,54 @@ export function VirtualAgentClient({
                 setCopied(false);
               }}
             />
-            <span>I am a real customer of this business and these are my own words.</span>
+            {/*
+              ‼️ "I APPROVE THESE WORDS AS MY OWN" REPLACED "THESE ARE MY OWN WORDS", AND THE
+              CHANGE IS FOR ACCURACY RATHER THAN STYLE. With four carries in play the box holds a
+              few words of our questions as well as hers, so the old sentence asked her to certify
+              something that is not quite true, on the one control whose entire job is to be a
+              truthful record of her approval. His own compliance note calls this step "the
+              customer approves it"; approval is exactly what this now says. "A real customer of
+              this business" is untouched, because that half is the half that matters most and it
+              was always hers to assert.
+            */}
+            <span>I am a real customer of this business and I approve these words as my own.</span>
           </label>
 
+          {/*
+            ‼️ ONE BUTTON. THE ROW OF DESTINATION LINKS IS GONE, 2026-10-13, HIS CALL: "remove the
+            post on google button lets leave it only as copy and go".
+
+            It used to be Copy, then a row of links she had to tap second. Two taps for one
+            intention, and the second one is the one people forget: she copies, the step looks
+            finished, and the review never reaches a profile. Copy and go does both.
+
+            ‼️ THE DESTINATION ROW IS STILL NAMED .rev-dests AND STILL SITS ABOVE THE PRIVATE BOX,
+            WHICH IS NOT COSMETIC. scripts/_probe-review-gating.ts section 5 compares where
+            "rev-dests" and "rev-private" appear IN THIS FILE and fails if the private box comes
+            first. The rule it enforces is the one this whole tool is built around: the public
+            route is offered to everybody, above the private one, and never instead of it. A single
+            button is still the public route, so the element stays and keeps the name.
+
+            ‼️ AND SHE IS TOLD WHERE IT GOES BEFORE SHE PRESSES IT. A button that silently opens a
+            new tab is a dark pattern, and this one opens somebody else's website.
+          */}
           <button type="button" className="rev-primary" onClick={copy} disabled={!attested}>
-            {copied ? "Copied" : "Copy and go leave review"}
+            {copied
+              ? "Copied"
+              : primaryDestination
+                ? `Copy and go to ${primaryDestination.label}`
+                : "Copy my review"}
           </button>
 
-          {destinations.length > 0 ? (
-            <>
-              <p className="rev-hint">Then paste it wherever you would like to post it.</p>
-              <div className="rev-dests">
-                {destinations.map((destination) => (
-                  <a
-                    key={destination.key}
-                    href={destination.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={() => void store(destination.key)}
-                  >
-                    {destination.label}
-                  </a>
-                ))}
-              </div>
-            </>
-          ) : (
-            <p className="rev-hint">
-              Copy your words, then paste them into your review on Google.
-            </p>
-          )}
+          <p className="rev-dests rev-hint">
+            {primaryDestination
+              ? `Opens ${primaryDestination.label} in a new tab. Paste your review there.`
+              : // ‼️ ABSENT BEATS WRONG, SAME AS THE REFERRAL STEP. With no link configured there
+                // is nowhere to send her, so the button copies and says so rather than inventing a
+                // destination. A clinic in this state should not be live: the reviews_live step in
+                // src/lib/launch/verify.ts refuses until at least one link exists.
+                "Copy your words, then paste them wherever you leave reviews."}
+          </p>
 
           {/*
             ‼️ AFTER THE DESTINATION LINKS, NEVER INSTEAD OF THEM, AND OFFERED TO EVERYONE.

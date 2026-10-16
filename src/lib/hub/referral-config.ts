@@ -124,6 +124,37 @@ export async function referralConfigFor(client: HubClient): Promise<ReferralConf
     console.error("[hub/referral-config] reviews host read threw:", (e as Error).message);
   }
 
+  // ‼️ NO ATTACHED REVIEWS HOST MEANS NO REFERRAL AT ALL. ABSENT BEATS WRONG, 2026-10-13.
+  //
+  // This is the fix for a defect that was live and silent. claimUrl() falls back to the app's own
+  // origin when there is no host, which was written as a kindness ("a referral that produces an
+  // unopenable link is worse than an off-brand one"). On a REAL clinic it means a patient at a
+  // counter texts her friend a mission.srtagency.com link while vouching for the clinic, the
+  // friend sees an agency domain in a personal recommendation, and nothing anywhere warns anybody.
+  // Nobody would have found that except by watching somebody send one.
+  //
+  // So the question is not which URL to substitute, it is whether to ask at all. The same rule
+  // this lane already applies twice: with no destination link configured the destinations are not
+  // shown, and with no offer on file the recommend question and the invite are not asked. A step
+  // that cannot be completed honestly is not offered.
+  //
+  // ‼️ THE LAUNCH LANE ALREADY GATES ON EXACTLY THIS, so nothing new has to be configured and no
+  // onboarding field is needed. `reviews_live` (src/config/launch-steps.ts) is refused by
+  // verify.ts until vercel_attached_at is set on the reviews host, which is the same column read
+  // above. The sequence was always right; the walk just was not waiting for it.
+  //
+  // ‼️ AND IT DOES NOT TOUCH /demo/agent OR /c/{token}. Both pass a literal `referral` prop, so
+  // referralConfigFor() is never called for them (see referral-engine.tsx: `referral === undefined`
+  // is the only path that reads the database). The demo keeps its referral with reviewsHost: null,
+  // which is correct, because the demo clinic does not exist and nobody is texting anybody.
+  if (!reviewsHost) {
+    console.warn(
+      `[hub/referral-config] client ${client.id} has offers but no ATTACHED reviews host: ` +
+        "referral steps suppressed rather than pointing a patient's friend at the agency domain"
+    );
+    return null;
+  }
+
   return {
     offers,
     defaultOffer,

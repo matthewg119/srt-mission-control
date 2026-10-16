@@ -1,5 +1,40 @@
 # Referral Engine v8: the review stops reading like a form
 
+## ‼️ BUILT 2026-10-13 ON `feat/review-v8`. THIS FILE IS THE PLAN, NOT THE RECORD.
+
+v7 was merged first (PR #42, `866d83f`) and v8 branched off main, which was his call. Six commits,
+all 31 CI scripts green on each. **Read the commit messages for what was actually decided**; they
+carry the arguments and the reversals. What changed from the plan below:
+
+- **One migration is OWED and must run BEFORE the deploy**: `docs/2026-10-13-review-funnel.sql`.
+  PostgREST fails a whole select on one unknown column, so a deploy landing first does not degrade,
+  it silences the walk's own storage.
+- **Two more of his asks arrived after this file was written** and are built: the retouched review
+  is the only copyable panel with the original read-only beside it, and a **Regenerate** button
+  cycling alternate carry wordings. The plan's "her version stays the selected panel" invariant is
+  therefore REVERSED, recorded in `review-assemble.ts`, `virtual-agent-client.tsx` and probe
+  section 5 with both positions.
+- **Conversion per step of the walk, per form**, which this file did not cover at all. No new table.
+- **Section 1's 24-character cap on our scaffolding rose to 48**, because three carry wordings are
+  longer than that. The fence (section 1b) is the real limit and it is tighter.
+- **The plan was WRONG about two things.** Reading `referral_invites.channel` / `.sent_at` does NOT
+  resolve their `OWED` entries, because `_probe-dead-wires.ts` greps TypeScript and the aggregation
+  is in SQL; the entries stay with corrected text. And deleting `promo` does NOT orphan `{days}`,
+  because `warm` carries it too.
+- **The stars are excluded from the greyed-chip work**, with the reason written beside
+  `leaveStars()`: a greyed star row needs a sixth read of `rating` or an edit to one of the five
+  pinned expressions, and both fail the gating probe, which is the FTC rail on that surface.
+- **Three live defects were found and fixed** on the way, all the same plumbing as the dataset
+  work: `attested_at` was null on every row ever written, a private note was silently dropped, and
+  the claim page was uncounted. See the Part 7 commit.
+- **Still out of scope, deliberately**: the launch-lane referrals panel (five `referral_invites`
+  columns stay owed to it), conversion for the demo and preview surfaces (no view counter exists on
+  internal hosts), and deleting `src/lib/hub/readability.ts`.
+
+Original plan follows, unedited.
+
+---
+
 Written 2026-10-13, from Matthew's walkthrough of the v7 preview. v7 is on branch
 `feat/review-assembler-v7` (commit `56c74aa`), pushed, CI green, not merged.
 
