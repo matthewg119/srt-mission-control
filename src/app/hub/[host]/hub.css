@@ -1246,11 +1246,19 @@ body:has(.hub-root) {
   cursor: pointer;
 }
 .rev2-regen:hover { color: var(--hub-fg); border-color: var(--hub-fg); }
-.rev2-regen-off {
-  margin: 0.5rem 0 0;
-  font-size: 0.8125rem;
-  color: var(--hub-muted);
+
+/* The button and its Undo, which appears only when there is an edit of hers to put back. Wraps on
+   a narrow frame rather than squeezing, because 26rem is the whole width this ever gets. */
+.rev2-regen-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
 }
+
+/* ‼️ .rev2-regen-off WAS DELETED HERE, 2026-10-16, WITH THE RULE THAT USED IT. It styled "This is
+   your wording now, so we have stopped suggesting others", the line that replaced the button once
+   she had edited the box. The button is permanent now and Undo protects her text instead. */
 
 /* ‼️ THE PROMISE. It sits under the pair and above the attestation, which is the order she reads
    in: here is your review, here is what we did to it, now confirm it is yours. It used to live in

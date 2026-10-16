@@ -284,6 +284,18 @@ export function VirtualAgentClient({
   const [regenerateCount, setRegenerateCount] = useState(0);
 
   /**
+   * Her wording from before the last press of "Try another wording", or null.
+   *
+   * ‼️ THIS EXISTS SO THE BUTTON CAN BE PERMANENT. The previous design withdrew the button once
+   * she had edited the box, on the grounds that regenerating would discard what she wrote. The
+   * reasoning was right and the remedy was wrong: it protected her text by removing the feature,
+   * and Matthew hit exactly that on 2026-10-16, wanting to shuffle a review he had already
+   * touched and finding the control gone. Keeping what it would have overwritten is the answer
+   * that costs her nothing.
+   */
+  const [undoable, setUndoable] = useState<string | null>(null);
+
+  /**
    * Her edits to the retouched box. `null` means she has not touched it.
    *
    * ‼️ null IS LOAD BEARING AND NOT MERELY AN EMPTY VALUE. It is what Regenerate checks: once she
@@ -466,12 +478,34 @@ export function VirtualAgentClient({
    * is byte identical at every index. Fixture 4 asserts exactly that, at every index.
    */
   const regenerate = () => {
+    // ‼️ HER EDIT IS PUT SOMEWHERE RECOVERABLE BEFORE IT IS REPLACED, AND THAT IS WHAT LETS THE
+    // BUTTON STAY. See the panel below for the whole argument: the rule this replaces hid the
+    // button after her first edit, which protected her text by taking the feature away.
+    // `editedJoined` is null when she has not touched the box, and then there is nothing to
+    // recover and no Undo is offered.
+    setUndoable(editedJoined);
+    if (editedJoined !== null) setEditedJoined(null);
+
     setVariant((at) => (at + CARRY_STRIDE) % REVIEW_SHAPES);
     // ‼️ A SEPARATE COUNTER, BECAUSE `variant` WRAPS AND WOULD BE A WRONG NUMBER. With three
     // wordings, four presses leaves `variant` at 1. Storing that as "how many wordings she tried"
     // would under-report every patient who went round more than once, and a metric that is wrong
     // in one direction only is worse than no metric.
     setRegenerateCount((n) => n + 1);
+    setCopied(false);
+  };
+
+  /**
+   * Put her own wording back after a press she did not mean.
+   *
+   * ‼️ ONE PRESS, NO DIALOG, AND NOTHING IS EVER LOST SILENTLY. A confirm box on a patient-facing
+   * walk at a counter is friction she did not ask for, and "are you sure" is a worse answer than
+   * "here it is back". Offered only when there is an edit of hers to restore.
+   */
+  const undoRegenerate = () => {
+    if (undoable === null) return;
+    setEditedJoined(undoable);
+    setUndoable(null);
     setCopied(false);
   };
 
@@ -1890,22 +1924,39 @@ export function VirtualAgentClient({
                           }}
                         />
                         {/*
-                          ‼️ THE BUTTON GOES AWAY ONCE SHE HAS EDITED THE BOX, AND IT IS NOT
-                          DISABLED. Two reasons, and the second one is a probe. Regenerating over
-                          her edit would silently discard what she wrote, which is the one harm
-                          this screen exists to prevent; and a `disabled` attribute anywhere in
-                          this block fails the panel slice, which is how the gating rule is kept
-                          enforceable. A swap is honest and a greyed button is a puzzle.
+                          ‼️ THE BUTTON IS PERMANENT SINCE 2026-10-16, AND IT USED TO DISAPPEAR.
+                          What stood here hid it once `editedJoined !== null` and replaced it with
+                          "This is your wording now, so we have stopped suggesting others", because
+                          regenerating over her edit would discard what she wrote.
+
+                          The reasoning was right and the remedy was wrong. It protected her text
+                          by taking the feature away, and Matthew hit it immediately: he typed in
+                          the box, then wanted to shuffle the review, and the control was gone. A
+                          tool with 324 arrangements and no way to reach them has 1.
+
+                          The honest fix is to keep what the press would have overwritten. Undo
+                          appears beside it only when there is an edit of hers to restore, puts it
+                          back in one press, and asks her nothing.
+
+                          ‼️ STILL NO `disabled` ANYWHERE IN THIS BLOCK. The panel slice in
+                          scripts/_probe-review-v7.ts fails on that attribute, which is how the
+                          no-gating rule stays enforceable, and a greyed control is a puzzle where
+                          a present one is an offer.
                         */}
-                        {editedJoined === null ? (
+                        <div className="rev2-regen-row">
                           <button type="button" className="rev2-regen" onClick={regenerate}>
                             Try another wording
                           </button>
-                        ) : (
-                          <p className="rev2-regen-off">
-                            This is your wording now, so we have stopped suggesting others.
-                          </p>
-                        )}
+                          {undoable !== null && (
+                            <button
+                              type="button"
+                              className="rev2-regen"
+                              onClick={undoRegenerate}
+                            >
+                              Undo, put my wording back
+                            </button>
+                          )}
+                        </div>
                       </>
                     ) : (
                       /*

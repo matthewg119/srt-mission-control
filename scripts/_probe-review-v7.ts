@@ -1006,10 +1006,26 @@ check(
   "and nothing near it reads the rating, posts anything, or rewrites her answers",
   "a pure function over a table of literals, re-run"
 );
+// ‼️ THIS ASSERTION REVERSED ON 2026-10-16 AND THE REVERSAL WAS THE RIGHT WAY ROUND. It read:
+//
+//     clientSrc.includes("{editedJoined === null ? (")
+//     "and it is withdrawn once she has edited the box"
+//     "regenerating over her edit would silently discard what she wrote"
+//
+// The danger was real and the remedy was wrong: it protected her text by removing the control, so
+// a patient who typed one character could no longer reach any of the other 323 arrangements.
+// Matthew hit it on his own walk-through. What replaces it keeps her text recoverable instead,
+// which is strictly better for her AND leaves the feature usable.
 check(
-  clientSrc.includes("{editedJoined === null ? ("),
-  "and it is withdrawn once she has edited the box",
-  "regenerating over her edit would silently discard what she wrote"
+  !clientSrc.includes("we have stopped suggesting others"),
+  "the button is not withdrawn after she edits the box",
+  "a tool with 324 arrangements and no way to reach them has 1"
+);
+check(
+  clientSrc.includes("setUndoable(editedJoined)") &&
+    clientSrc.includes("setEditedJoined(undoable)"),
+  "and her wording is kept and restorable instead of overwritten",
+  "Undo appears only when there is an edit of hers to put back, and puts it back in one press"
 );
 
 // Nothing persists the choice, so it is her words again on the next visit and for the next patient
