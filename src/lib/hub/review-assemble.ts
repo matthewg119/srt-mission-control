@@ -1140,11 +1140,39 @@ export function assembleJoined(answers: ReviewAnswers, variant = 0): string {
 
   const motivation = assembleFragment(answers.motivation);
   const nerves = assembleFragment(answers.nerves);
+
+  /**
+   * The framed form of one answer, without the capital and the full stop.
+   *
+   * ‼️ THIS IS WHAT LETS TWO SHORT ANSWERS MERGE, AND IT IS WHY EVERY REVIEW USED TO HAVE EXACTLY
+   * FIVE SENTENCES. Measured 2026-10-18 on his own answers (`no ass`, `me not liking my ass
+   * after`): all 324 shapes produced five full stops, because the merge below compares RAW
+   * fragments against a four-word floor and `no ass` is two. Short answers are the common case, so
+   * in practice the merge almost never fired and the sentence count never moved. The wording and
+   * the order varied; the skeleton did not, and the skeleton is what reads as a template.
+   *
+   * A framed answer is already an independent clause ("I was nervous about me not liking my ass
+   * after"), so two of them join with ", and " into ordinary English no matter how short her own
+   * words were. The floor existed to stop "Wrinkles, and bruising", which is a sentence built
+   * around two words; it has nothing to say about two real clauses.
+   */
+  const framed = (key: "motivation" | "nerves"): string | null => {
+    const fragment = key === "motivation" ? motivation : nerves;
+    if (!fragment) return null;
+    return canCarry(fragment, key) ? carryFor(key, folded) + midSentence(fragment, answers) : null;
+  };
+
+  const framedMotivation = framed("motivation");
+  const framedNerves = framed("nerves");
+  // Both framed: merge as clauses, no floor. Otherwise fall back to v7's raw merge and its floor,
+  // which is still the right rule for two bare fragments.
+  const mergingFramed = pairIsAdjacent && Boolean(framedMotivation) && Boolean(framedNerves);
   const merging =
-    pairIsAdjacent &&
-    Boolean(motivation) &&
-    Boolean(nerves) &&
-    canMergeMotivationAndNerves(motivation as string, nerves as string);
+    mergingFramed ||
+    (pairIsAdjacent &&
+      Boolean(motivation) &&
+      Boolean(nerves) &&
+      canMergeMotivationAndNerves(motivation as string, nerves as string));
 
   for (const key of order) {
     // The merged pair is emitted once, at the motivation's position, and the nerves slot is then
@@ -1152,9 +1180,18 @@ export function assembleJoined(answers: ReviewAnswers, variant = 0): string {
     if (merging && key === "nerves") continue;
 
     if (merging && key === "motivation") {
-      const merged = assembleBullet(
-        (motivation as string) + JOIN_MOTIVATION_NERVES + midSentence(nerves as string, answers)
-      );
+      // midSentence on the SECOND clause either way: after ", and " a leading "What" has to become
+      // "what", while a leading "I" is her pronoun and stays. That is the same grammar rule the
+      // raw merge already applied, now applied to a framed clause.
+      const merged = mergingFramed
+        ? assembleBullet(
+            (framedMotivation as string) +
+              JOIN_MOTIVATION_NERVES +
+              midSentence(framedNerves as string, answers)
+          )
+        : assembleBullet(
+            (motivation as string) + JOIN_MOTIVATION_NERVES + midSentence(nerves as string, answers)
+          );
       if (merged) sentences.push(merged);
       continue;
     }

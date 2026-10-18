@@ -566,7 +566,7 @@ const F2: ReviewAnswers = {
 const f2 = assertInvariants("fixture 2 (one-word answers)", F2);
 check(
   f2 ===
-    "Got botox with Sarah today. I started looking because of wrinkles. I was nervous about " +
+    "Got botox with Sarah today. I started looking because of wrinkles, and I was nervous about " +
       "bruising. I walked out feeling good. If you are on the fence, go.",
   "fixture 2: every one-word answer is carried into a sentence by its own question",
   f2
@@ -576,11 +576,50 @@ check(
   "fixture 2: and it is NOT what v6 produced, which is the point of v8",
   `v6 gave: ${assemblePlain(F2, { lead: true })}`
 );
+// ‼️ THIS ASSERTION INVERTED ON 2026-10-18 AND IT IS THE SENTENCE-COUNT FIX. It read:
+//
+//     !f2.includes(JOIN_MOTIVATION_NERVES)
+//     "fixture 2: the MERGE still declines, because one word each is under its floor"
+//     "the carries fired; the merge did not. Two separate sentences, not one run-on."
+//
+// That was correct while the merge compared RAW fragments: "Wrinkles, and bruising" is a sentence
+// built around two words, and the four-word floor existed to refuse it. But short answers are the
+// common case, so the merge almost never fired, and EVERY review came out with exactly five
+// sentences. Measured on Matthew's own answers: all 324 shapes, five full stops, every time. The
+// wording and the order varied and the skeleton did not, which is what reads as a template.
+//
+// A FRAMED answer is already an independent clause, so two of them join into ordinary English no
+// matter how short her words were. The floor still governs two bare fragments, which is the case
+// it was written for.
 check(
-  !f2.includes(JOIN_MOTIVATION_NERVES),
-  "fixture 2: the MERGE still declines, because one word each is under its floor",
-  "the carries fired; the merge did not. Two separate sentences, not one run-on."
+  f2.includes(JOIN_MOTIVATION_NERVES),
+  "fixture 2: and the two framed clauses merge into one sentence",
+  "two independent clauses joined by ', and ', not two words with a comma between them"
 );
+// The floor it replaced still applies where it always did: to raw fragments that got no frame.
+{
+  const noFrames: ReviewAnswers = { motivation: "it", nerves: "it" };
+  check(
+    !assembleJoined(noFrames).includes(JOIN_MOTIVATION_NERVES),
+    "fixture 2: but two UNFRAMED fragments still refuse to merge",
+    "both start with a pronoun so neither takes a frame, and the four-word floor refuses the rest"
+  );
+}
+
+// ‼️ AND THE SENTENCE COUNT NOW ACTUALLY MOVES, WHICH IS THE WHOLE POINT OF THE CHANGE. Half the
+// shapes keep the pair apart and run five sentences; half put it adjacent and run four. A single
+// skeleton across every shape is the thing a reader and a spam filter both recognise.
+{
+  const shapes = new Set<number>();
+  for (let variant = 0; variant < REVIEW_SHAPES; variant += 1) {
+    shapes.add(sentencesOf(assembleJoined(F2, variant)).length);
+  }
+  check(
+    shapes.size > 1,
+    `fixture 2: the number of sentences varies across the ${REVIEW_SHAPES} shapes`,
+    `sentence counts seen: ${[...shapes].sort().join(", ")}`
+  );
+}
 
 // ‼️ AND THE REGENERATE BUTTON CHANGES OUR WORDS AND ONLY OUR WORDS.
 // Every variant must hold both invariants, and her own words must come out byte for byte identical
