@@ -26,25 +26,30 @@ import {
 } from "next/font/google";
 import type { HubUniverse } from "@/lib/hub/universes";
 
-const bigShoulders = Big_Shoulders_Display({ subsets: ["latin"], weight: ["600", "800"], variable: "--u-display", display: "swap" });
-const archivo = Archivo({ subsets: ["latin"], weight: ["400", "600"], variable: "--u-text", display: "swap" });
+// ‼️ NO `weight` ON A VARIABLE FAMILY. A weight array on one throws "Cannot read properties of null
+// (reading '1')" inside next/font and kills the production build. It broke on DM Sans on 2026-10-07,
+// then here on 2026-10-16 with this file unchanged since 09-28, because what Google answers moved.
+// Variable families load their whole weight range in one file. Static families (Archivo Black,
+// Cormorant Garamond, IBM Plex Mono, Space Mono, DM Serif Display) still need their weights.
+const bigShoulders = Big_Shoulders_Display({ subsets: ["latin"], variable: "--u-display", display: "swap" });
+const archivo = Archivo({ subsets: ["latin"], variable: "--u-text", display: "swap" });
 const plexMono = IBM_Plex_Mono({ subsets: ["latin"], weight: ["400", "600"], variable: "--u-mono", display: "swap" });
 
 const cormorant = Cormorant_Garamond({ subsets: ["latin"], weight: ["300", "500"], style: ["normal", "italic"], variable: "--u-display", display: "swap" });
-const karla = Karla({ subsets: ["latin"], weight: ["400", "600"], variable: "--u-text", display: "swap" });
+const karla = Karla({ subsets: ["latin"], variable: "--u-text", display: "swap" });
 
-const playfair = Playfair_Display({ subsets: ["latin"], weight: ["700", "900"], style: ["normal", "italic"], variable: "--u-display", display: "swap" });
-const sourceSerif = Source_Serif_4({ subsets: ["latin"], weight: ["400", "600"], variable: "--u-text", display: "swap" });
+const playfair = Playfair_Display({ subsets: ["latin"], style: ["normal", "italic"], variable: "--u-display", display: "swap" });
+const sourceSerif = Source_Serif_4({ subsets: ["latin"], variable: "--u-text", display: "swap" });
 
 const archivoBlack = Archivo_Black({ subsets: ["latin"], weight: ["400"], variable: "--u-display", display: "swap" });
-const spaceGrotesk = Space_Grotesk({ subsets: ["latin"], weight: ["400", "600"], variable: "--u-text", display: "swap" });
+const spaceGrotesk = Space_Grotesk({ subsets: ["latin"], variable: "--u-text", display: "swap" });
 const spaceMono = Space_Mono({ subsets: ["latin"], weight: ["400", "700"], variable: "--u-mono", display: "swap" });
 
-const sora = Sora({ subsets: ["latin"], weight: ["300", "600", "700"], variable: "--u-display", display: "swap" });
-const jetbrains = JetBrains_Mono({ subsets: ["latin"], weight: ["400", "600"], variable: "--u-mono", display: "swap" });
+const sora = Sora({ subsets: ["latin"], variable: "--u-display", display: "swap" });
+const jetbrains = JetBrains_Mono({ subsets: ["latin"], variable: "--u-mono", display: "swap" });
 
-const fraunces = Fraunces({ subsets: ["latin"], weight: ["400", "600"], variable: "--u-display", display: "swap" });
-const nunito = Nunito_Sans({ subsets: ["latin"], weight: ["400", "600"], variable: "--u-text", display: "swap", adjustFontFallback: false });
+const fraunces = Fraunces({ subsets: ["latin"], variable: "--u-display", display: "swap" });
+const nunito = Nunito_Sans({ subsets: ["latin"], variable: "--u-text", display: "swap", adjustFontFallback: false });
 const dmSerif = DM_Serif_Display({ subsets: ["latin"], weight: ["400"], variable: "--u-mono", display: "swap" });
 
 const FONTS: Record<HubUniverse, string> = {
