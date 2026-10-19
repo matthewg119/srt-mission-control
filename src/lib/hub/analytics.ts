@@ -17,6 +17,7 @@ import { supabaseAdmin } from "@/lib/db";
 import type { HubKind } from "@/lib/hub/resolve";
 import type { BotClass } from "@/lib/hub/bot-classify";
 import { classifyUserAgent } from "@/lib/hub/bot-classify";
+import type { ReferralFunnelRow, WalkFunnelRow } from "@/lib/hub/review-funnel";
 
 export interface HitInput {
   clientId: string;
@@ -191,6 +192,46 @@ function densify(days: number, rows: Map<string, DayRow>): DayRow[] {
 }
 
 const n = (v: unknown): number => Number(v ?? 0);
+
+/**
+ * The walk's own funnel, beside the traffic.
+ *
+ * ‼️ A SEPARATE FUNCTION AND A SEPARATE AWAIT, NOT A FOURTH rpc IN loadHubMetrics. That one
+ * THROWS when any of its three reads fails, deliberately, because an empty traffic chart reads as
+ * "no AI engine has ever fetched your pages" and somebody would repeat that on a call. The funnel
+ * has no such failure mode: a missing funnel is a missing section, not a false finding. Folding it
+ * in would mean a funnel outage taking the traffic chart down with it.
+ *
+ * ‼️ RETURNS null RATHER THAN THROWING OR RETURNING ZEROES. Zeroes would be a lie (it says "nobody
+ * walked it" when the truth is "we could not read it"), and throwing would couple it to the chart.
+ * The caller renders nothing. This is also what makes the page survive the migration not having
+ * been run yet: PostgREST answers an unknown function with an error, and the section is absent
+ * instead of the page being broken.
+ */
+export async function loadReviewFunnel(
+  clientId: string,
+  days = 30
+): Promise<{ walk: WalkFunnelRow[]; referral: ReferralFunnelRow[] } | null> {
+  const to = hubDayKey();
+  const from = hubDayKey(new Date(Date.now() - (days - 1) * 86_400_000));
+  const args = { p_client_id: clientId, p_from: from, p_to: to };
+
+  const [walk, referral] = await Promise.all([
+    supabaseAdmin.rpc("review_walk_funnel", args),
+    supabaseAdmin.rpc("referral_funnel", args),
+  ]);
+
+  const failed = [walk, referral].find((r) => r.error);
+  if (failed?.error) {
+    console.error("[hub-analytics] funnel read failed:", failed.error.message);
+    return null;
+  }
+
+  return {
+    walk: (walk.data ?? []) as WalkFunnelRow[],
+    referral: (referral.data ?? []) as ReferralFunnelRow[],
+  };
+}
 
 export async function loadHubMetrics(clientId: string, days = 30): Promise<HubMetrics> {
   const to = hubDayKey();

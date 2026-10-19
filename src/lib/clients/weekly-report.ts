@@ -98,10 +98,23 @@ export async function buildWeeklyReport(
     return at ? new Date(at) >= weekAgo : false;
   });
 
+  // ‼️ COMPLETED WALKS, NOT ROWS, AND THIS CHANGED ON 2026-10-13 OUT OF NECESSITY.
+  //
+  // The walk now writes its row at her FIRST answer instead of at the end, which is what makes an
+  // abandoned walk countable in the funnel on /dashboard/clients/[id]/metrics. A plain row count
+  // here would therefore have started telling the CLIENT that somebody who typed one word and put
+  // the phone down was a review they collected, in a message that goes out automatically every
+  // week. `completed_at` is the column that means she reached a finished review.
+  //
+  // ‼️ IT IS NOT JUST A SMALLER NUMBER, IT IS A DIFFERENT CLAIM. Had this been left as a row
+  // count, the figure would have silently inflated the week the deploy landed, with nothing in the
+  // message to say why, and the first person to notice would have been a client comparing it to
+  // last month.
   const { count: reviewCount } = await supabaseAdmin
     .from("review_tool_submissions")
     .select("id", { count: "exact", head: true })
     .eq("client_id", clientId)
+    .not("completed_at", "is", null)
     .gte("created_at", weekAgo.toISOString());
 
   const answerAgents = metrics.agents

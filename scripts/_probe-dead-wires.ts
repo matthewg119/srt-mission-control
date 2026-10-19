@@ -936,6 +936,29 @@ const WRITE_ONLY: Record<string, string> = {
   "review_tool_submissions.posted_destination": "which destination she said she posted to, self-reported. Nothing verifies or branches on it: no code path can observe a Google review being published.",
   "review_tool_submissions.question_set_version": "which wording she answered, so a later reading of the corpus knows what was asked. The answers themselves are what the tool reads back.",
 
+  // ── READ BY A POSTGRES FUNCTION, WHICH THIS PROBE CANNOT SEE (2026-10-13) ─────────────────────
+  //
+  // ‼️ THESE THREE HAVE A REAL READER AND IT IS NOT IN src/. docs/2026-10-13-review-funnel.sql
+  // adds review_walk_funnel(), which groups by last_step and counts copied_edited and
+  // regenerate_count; src/lib/hub/review-funnel.ts folds its OUTPUT onto
+  // /dashboard/clients/[id]/metrics. isRead() greps TypeScript for a column name, so a column read
+  // inside a SQL function reads as dead from here. The entries are the honest way to say that.
+  //
+  // ‼️ AND THE AGGREGATION CANNOT MOVE INTO TYPESCRIPT TO SATISFY THE GREP.
+  // docs/2026-08-21-hub-analytics.sql: PostgREST applies a server-side row ceiling, so a raw
+  // select would quietly return the newest N rows and draw a plausible, wrong chart. Pulling rows
+  // into JS to make this probe happy would trade a correct number for a visible one.
+  //
+  // ‼️ NONE OF THEM IS A BRANCH, WHICH IS THE OTHER HALF OF WHY THEY ARE SAFE. Same posture as
+  // `rating` above: captured, counted, never routed. No code path varies what a patient is shown
+  // based on any of these, and the functions that read them are granted to service_role only.
+  "review_tool_submissions.last_step":
+    "the furthest step she reached. READ BY review_walk_funnel(), which groups by it, so the dashboard can say where the walk loses people. Deliberately unconstrained: a renamed step must leave old rows readable, and an unrecognised id folds into 'unknown' rather than failing a read. Nothing branches on it.",
+  "review_tool_submissions.copied_edited":
+    "whether she changed the review box before copying. READ BY review_walk_funnel(). Two things at once: how often our joining needs fixing, and evidence she read what she posted. Written by the submit route's patch branch as a conditional field, which is why no writer is visible to this grep either.",
+  "review_tool_submissions.regenerate_count":
+    "how many times she pressed 'Try another wording'. READ BY review_walk_funnel(). A high number across many patients means our connectives read badly, which is a fact about us and not about her. Written by the submit route's patch branch as a conditional field.",
+
   // ── WRITTEN FOR THE RECORD, READ BY A PERSON ───────────────────────────────────────────────────
   "client_pages.section_keywords":
     "per-H2 long-tail phrases. Its comment states where they go: copied into the page_dataset corpus snapshot and passed to the body prompt as 'what the reader typed to get here'. It also states the negative, which is the part worth keeping: NOT read by keyword-placement.ts.",
@@ -1048,8 +1071,15 @@ const OWED: Record<string, string> = {
   // the clinic at the moment it happens, which is why friend_name, friend_contact, service_label,
   // mode and referrer_email came OFF this list; an email is not a record you can come back to a
   // week later, so the panel is still the thing that closes these.
-  "referral_invites.channel": "how the message was opened: sms, whatsapp or copy. Owed the panel, and it is the measurement that decides whether the whatsapp button is worth keeping, since only sms is genuinely three-way.",
-  "referral_invites.sent_at": "when she got as far as her own keyboard. NOT a delivery confirmation, because we are not the sender and cannot know. Owed the panel.",
+  // ‼️ THESE TWO ARE NOW AGGREGATED IN SQL AND STILL COUNT AS UNREAD HERE, WHICH IS THIS PROBE
+  // BEING RIGHT RATHER THAN STALE. docs/2026-10-13-review-funnel.sql adds referral_funnel(), which
+  // groups by channel and counts sent_at, and src/lib/hub/review-funnel.ts folds its output onto
+  // /dashboard/clients/[id]/metrics. isRead() greps TypeScript for a column name, and neither name
+  // appears there: the database does the reading. So the honest status is "the measurement exists,
+  // the column still has no reader in src/", and the entries stay with their descriptions
+  // corrected. Deleting them would claim a TS reader that does not exist.
+  "referral_invites.channel": "how the message was opened: whatsapp or copy. THE MEASUREMENT IS DELIVERED as of 2026-10-13: referral_funnel() groups by it, so whether the whatsapp button is worth keeping is now answerable from the metrics page. What is still owed is the PANEL, which would show one named referral rather than a count.",
+  "referral_invites.sent_at": "when she got as far as her own keyboard. NOT a delivery confirmation, because we are not the sender and cannot know. Counted per channel by referral_funnel() since 2026-10-13; still owed the panel, which would show WHEN a particular invite went.",
   "referral_invites.submission_id": "the review she went on to write, when there is one. Owed the panel that would show a referral beside it; null is ordinary, because the referral is settled before the questions are asked.",
   "referral_invites.claimed_name": "what the FRIEND typed, as against what the patient said. Emailed to the clinic the moment it is claimed, so it is not lost; owed the panel, because a mismatch between the two names is worth seeing later and not only once.",
   "referral_invites.claimed_contact": "how the friend asked to be reached. Emailed to the clinic on the claim; owed the panel for the same reason as claimed_name.",

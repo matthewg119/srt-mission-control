@@ -159,24 +159,31 @@ export interface InviteTemplate {
  * the offer to the review she is about to write, it becomes an incentivised review with an
  * undisclosed material connection, and that is the line this lane does not cross.
  */
+/**
+ * ‼️ TWO WORDINGS SINCE 2026-10-13, AND THERE WERE FOUR. His call, after walking the preview:
+ * keep `warm` and `short`, delete `promo` ("Limited time") and `intro` ("Introduction").
+ *
+ * Four unlabelled chips with no heading above them was the actual complaint; he could not tell
+ * what they were for. The fix is two obvious choices and a "Select message style" line above
+ * them, in virtual-agent-client.tsx.
+ *
+ * ‼️ AND DELETING `intro` REMOVED THE ONE TEMPLATE THAT PUT AN OPINION IN HER MOUTH. Its body
+ * read "I had {service} done with them and it was great." SHE did not type "it was great"; we
+ * wrote it and attributed it to her, in a message going to somebody who trusts her. That is the
+ * same prohibition the whole review half of this lane is built around, sitting unnoticed in an
+ * invite template, and it is a better reason for the deletion than the layout was. `warm` says
+ * "I really liked it", which is the same shape of problem in a smaller size; it survives because
+ * he picked it, and it is worth revisiting.
+ *
+ * ‼️ `{days}` SURVIVES THE CUT. `promo` was not its only user: `warm` carries "it is good for
+ * {days} days" too, so fillInvite's substitution and INVITE_TTL_DAYS stay live. If `warm` is ever
+ * reworded without it, the token, its substitution and section 3 of the invite probe go together.
+ *
+ * ‼️ `warm` IS FIRST, AND templateByKey FALLS BACK TO THE FIRST. An unrecognised key from an old
+ * client bundle lands on the warmest wording rather than the terse one, which is the safer of the
+ * two defaults for a message somebody sends to a friend.
+ */
 export const INVITE_TEMPLATES: readonly InviteTemplate[] = [
-  {
-    // ‼️ FIRST, AND IT IS THE ONE WITH A CLOCK IN IT. Matthew asked for a limited time promotion
-    // option above the other three on 2026-10-12. The urgency is REAL and not invented: claimUrl
-    // mints a link that genuinely expires, and {days} is that number rather than a figure in this
-    // file, so the message cannot promise a deadline the link does not have.
-    //
-    // ‼️ THE DEADLINE IS THE LINK'S, NOT THE OFFER'S. "They are only doing this for a few days"
-    // would be the patient making a claim about the clinic's pricing on the clinic's behalf. What
-    // she can truthfully say is when HER link stops working.
-    key: "promo",
-    label: guard("invite promo label", "Limited time"),
-    body: guard(
-      "invite promo",
-      "{friend}, I just had {service} at {business} and they are giving you {offer}. " +
-        "My link only works for {days} days so grab it now: {link}"
-    ),
-  },
   {
     key: "warm",
     label: guard("invite warm label", "Warm"),
@@ -191,16 +198,6 @@ export const INVITE_TEMPLATES: readonly InviteTemplate[] = [
     key: "short",
     label: guard("invite short label", "Short"),
     body: guard("invite short", "{friend}, you should try {business}. {offer}: {link}"),
-  },
-  {
-    key: "intro",
-    label: guard("invite intro label", "Introduction"),
-    body: guard(
-      "invite intro",
-      "{friend}, meet {business}. I had {service} done with them and it was great. " +
-        "They are giving you {offer}. Fill this in and they will look after you: {link}. " +
-        "I will let you two take it from here."
-    ),
   },
 ] as const;
 
@@ -282,8 +279,20 @@ export const CLAIM_PATH_PREFIX = "/r/";
  * forwarded advert and is the single easiest thing for the friend to distrust. The host is the
  * one their QR cards already resolve to.
  *
- * Falls back to the app's own origin when the clinic has no reviews host attached, because a
- * referral that produces an unopenable link is worse than an off-brand one.
+ * ‼️ THE FALLBACK IS NO LONGER REACHABLE FOR A REAL CLINIC, AND THAT IS THE 2026-10-13 FIX.
+ *
+ * It used to read: "Falls back to the app's own origin when the clinic has no reviews host
+ * attached, because a referral that produces an unopenable link is worse than an off-brand one."
+ * True as far as it went, and it quietly produced the worse outcome: a patient vouching for her
+ * clinic texting her friend a mission.srtagency.com link, with nothing warning anybody.
+ *
+ * referralConfigFor() now returns null when there is no ATTACHED reviews host, so the referral is
+ * not offered at all rather than offered with the wrong URL. Absent beats wrong.
+ *
+ * ‼️ THE PARAMETER STAYS, AND IT IS NOT DEAD. Three callers pass it, and two of them are reached
+ * by surfaces that legitimately have no host: /demo/agent and /c/{token} hand the component a
+ * literal referral config and never consult the database. The fallback is what keeps the demo's
+ * preview link openable. What changed is that a LIVE clinic can no longer get here.
  */
 export function claimUrl(host: string | null, code: string, fallbackOrigin: string): string {
   const base = host ? `https://${host}` : fallbackOrigin.replace(/\/+$/, "");
